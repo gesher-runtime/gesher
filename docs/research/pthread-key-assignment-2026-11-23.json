@@ -1,0 +1,5115 @@
+{
+  "schema": 1,
+  "scope": "#56 T12; pthread_setspecific only, dependent on published #384 live generations",
+  "baseline": {
+    "public_commit": "8b3f0bc299ec16141012b1ae2bc2a07358d078cf",
+    "measured_local_commit": "5f3eb58710b71dbf2f6d039ce8bcec4afdb19a42",
+    "tree": "b56335c8f947c05cea71ae98df3afde79fb8561c",
+    "ordered_parents": [
+      "92c64a1dfc8b0c1a78fcadb234b3b6e90a1c8d8e",
+      "e505ad227523aaca566d05b8af6e466495c819cc"
+    ],
+    "canonical_merge_without_manual_source_change": true
+  },
+  "source_sha256": {
+    "compat/arm64/include/gesher/arm64_va_list.h": "2a688196bb4926b29f034c70b9bc97e96f9a7cb963d0b77942d0d9f2b26111d6",
+    "compat/arm64/include/gesher/symbol_table.h": "0142e694541611f3882df10096efae8c815de0ca06ce3410a9c5f7e0748c71bb",
+    "compat/bionic/abi_types.h": "c4741d16db9c20fcb5655c81f4d720b5def9fc3e1f9eea057dc530cf02d1c1cd",
+    "compat/bionic/pthread_bionic.cc": "f40ce16ef94a1315093fc2285bb6f4e1ac82eb969a10733797436ce36668dd3d",
+    "compat/bionic/pthread_cleanup.h": "7cf05841916603895ef7c39cfb6317800d42c8c206c70be3e1f08be83bfa6975",
+    "compat/bionic/shim_internal.h": "eac2550acbd74dd5da75f5087860748e45ef3115a7e3276e00e00ac441283f6d",
+    "tests/native/bionic_key_exit_test.cc": "e9a8dce6de326a7868e078ddb7f416e4da2222b594af42a85d814c4c41529f00",
+    "tests/native/pthread_key_contract_host_test.cc.in": "34fc08518bc15468683be9d51100512059d7a7211376ee0155b5e5e9469d136c",
+    "tests/native/pthread_key_contract_test.inc": "8f41486c47ff744b04914c7477e367927bf8166b0de5fc5ed5e0389dc36db613",
+    "tests/native/pthread_key_measurement.h": "b1366b2a2f1ca2967820b7ccea28c769f45a25f9d43a4ed2fa2269e33fed8e1a",
+    "tests/native/pthread_set_measurement.cc": "2e9ce3de986df30efc81e59a1a650da526b678a18aed4dcf6275dea913ec51bc",
+    "tests/windows/tracks/40-native-libs.ps1": "e7e1f212076ae3faa556e4c7d49efeedcf90011bba30b9d99479f35dd647f56a",
+    "tools/measure_bionic_key_assignment.py": "b6f2894d16d4024358e330aa374eed3c6ba4e71582c8822e7e1087a956648fa0",
+    "tools/measure_bionic_key_lookup.py": "cb54540bdb80835ae7d0e52c2ebe02b1d169ceba588d34c742c0e3281394bbe0",
+    "tools/summarize_bionic_key_assignment.py": "af5a6b77b144c3c29fade3f27ee14fc33d10cc72a975a87cffc98d1f23d776a5",
+    "tools/test_bionic_key_contracts.py": "d3c88c29c5ed34b3141aa3aa7f6a47cff5f3e860f370bfcc99f95b9e2ac6eaff"
+  },
+  "final_measurements": {
+    "schema": 1,
+    "method": "Median of within-process steady medians, with samples 0/1 retained as warmups; first sample separately retained. Cold-single runs only once per fresh process.",
+    "campaigns": [
+      {
+        "path": "pthread-set-final-block0/raw.json",
+        "sha256": "79cc988407e7da1d3db374730e18864a5e16674c0103a9d009ddb38c9b888e6c",
+        "method": {
+          "rounds": 3,
+          "order": "ABBA",
+          "samples_per_case": 9,
+          "warmup_samples": [
+            0,
+            1
+          ],
+          "first_stream_per_process": true,
+          "separate_counted_binaries": true,
+          "cases": [
+            "cold-single",
+            "single",
+            "shared2",
+            "shared8",
+            "distinct8",
+            "distinct32",
+            "clear8",
+            "churn8",
+            "tiny-lifecycle",
+            "no-set-lifecycle",
+            "create-delete-control",
+            "read-only-control"
+          ],
+          "fresh_process_per_workload": true,
+          "worker_cpu_receipts": "assigned workers: entry through actual TLS destructor; no-set/churn workers: entry through return",
+          "process_cpu_consistency": "must cover caller thread plus all measured worker CPU"
+        },
+        "started_utc": "2026-11-23T17:26:59.199632+00:00",
+        "ended_utc": "2026-11-23T17:27:25.205288+00:00",
+        "processes": 144,
+        "observations": 1200,
+        "counted_observations": 24
+      },
+      {
+        "path": "pthread-set-final-block1/raw.json",
+        "sha256": "0c6437e0c00c591f10bffc67b8e77b3103b130f5d76606ab5075c1d5ffa59eb9",
+        "method": {
+          "rounds": 3,
+          "order": "ABBA",
+          "samples_per_case": 9,
+          "warmup_samples": [
+            0,
+            1
+          ],
+          "first_stream_per_process": true,
+          "separate_counted_binaries": true,
+          "cases": [
+            "cold-single",
+            "single",
+            "shared2",
+            "shared8",
+            "distinct8",
+            "distinct32",
+            "clear8",
+            "churn8",
+            "tiny-lifecycle",
+            "no-set-lifecycle",
+            "create-delete-control",
+            "read-only-control"
+          ],
+          "fresh_process_per_workload": true,
+          "worker_cpu_receipts": "assigned workers: entry through actual TLS destructor; no-set/churn workers: entry through return",
+          "process_cpu_consistency": "must cover caller thread plus all measured worker CPU"
+        },
+        "started_utc": "2026-11-23T17:35:39.051812+00:00",
+        "ended_utc": "2026-11-23T17:36:05.606006+00:00",
+        "processes": 144,
+        "observations": 1200,
+        "counted_observations": 24
+      }
+    ],
+    "builds": {
+      "baseline": {
+        "source_ref": "5f3eb587",
+        "production_sha256": "ce833eb1e951fb10ed42235e73c66a074acf57586572188b8dd7d1da5eb8a223",
+        "registry_lock_sites": 4,
+        "inputs": {
+          "tests/native/pthread_set_measurement.cc": "2e9ce3de986df30efc81e59a1a650da526b678a18aed4dcf6275dea913ec51bc",
+          "tests/native/pthread_key_measurement.h": "b1366b2a2f1ca2967820b7ccea28c769f45a25f9d43a4ed2fa2269e33fed8e1a",
+          "tools/measure_bionic_key_lookup.py": "cb54540bdb80835ae7d0e52c2ebe02b1d169ceba588d34c742c0e3281394bbe0",
+          "tools/test_bionic_key_contracts.py": "d3c88c29c5ed34b3141aa3aa7f6a47cff5f3e860f370bfcc99f95b9e2ac6eaff",
+          "compat/bionic/shim_internal.h": "eac2550acbd74dd5da75f5087860748e45ef3115a7e3276e00e00ac441283f6d",
+          "compat/bionic/abi_types.h": "c4741d16db9c20fcb5655c81f4d720b5def9fc3e1f9eea057dc530cf02d1c1cd",
+          "compat/bionic/pthread_cleanup.h": "7cf05841916603895ef7c39cfb6317800d42c8c206c70be3e1f08be83bfa6975",
+          "compat/arm64/include/gesher/arm64_va_list.h": "2a688196bb4926b29f034c70b9bc97e96f9a7cb963d0b77942d0d9f2b26111d6",
+          "compat/arm64/include/gesher/symbol_table.h": "0142e694541611f3882df10096efae8c815de0ca06ce3410a9c5f7e0748c71bb",
+          "tools/measure_bionic_key_assignment.py": "b6f2894d16d4024358e330aa374eed3c6ba4e71582c8822e7e1087a956648fa0"
+        },
+        "compiler": "c++ (Debian 14.2.0-19) 14.2.0\nCopyright (C) 2024 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\n",
+        "builds": [
+          {
+            "name": "timed",
+            "command": [
+              "c++",
+              "-std=c++20",
+              "-O2",
+              "-g",
+              "-Wall",
+              "-Wextra",
+              "-Werror",
+              "-fno-exceptions",
+              "-fno-builtin",
+              "-fno-lto",
+              "-pthread",
+              "-I",
+              "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-set/compat/bionic",
+              "-I",
+              "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-set/compat/arm64/include",
+              "-I",
+              "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-set/tests/native",
+              "/workspace/scratch/aa09b1a0dc1f/pthread-set-measure-before/timed-production.cc",
+              "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-set/tests/native/pthread_set_measurement.cc",
+              "-o",
+              "/workspace/scratch/aa09b1a0dc1f/pthread-set-measure-before/timed"
+            ],
+            "instrumented": false,
+            "generated_sha256": "251fa852a24e89afc121b1f72d55b78cafc436b4dce87d7c5bac28fb260ad737",
+            "executable_sha256": "c2e8805954ee50f3cff1f04722307336f0b4dbd4689e31e16b877717462147c4"
+          },
+          {
+            "name": "counted",
+            "command": [
+              "c++",
+              "-std=c++20",
+              "-O2",
+              "-g",
+              "-Wall",
+              "-Wextra",
+              "-Werror",
+              "-fno-exceptions",
+              "-fno-builtin",
+              "-fno-lto",
+              "-pthread",
+              "-I",
+              "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-set/compat/bionic",
+              "-I",
+              "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-set/compat/arm64/include",
+              "-I",
+              "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-set/tests/native",
+              "/workspace/scratch/aa09b1a0dc1f/pthread-set-measure-before/counted-production.cc",
+              "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-set/tests/native/pthread_set_measurement.cc",
+              "-o",
+              "/workspace/scratch/aa09b1a0dc1f/pthread-set-measure-before/counted"
+            ],
+            "instrumented": true,
+            "generated_sha256": "d65bd3b43fcd27d3f121ae494767fe6a81e8869fce51af5809a6390a81c4ec1d",
+            "executable_sha256": "d8d7a1108f70e8e1717e7568392149eef7baa94c71ae2472e2676154c83fec96"
+          }
+        ]
+      },
+      "candidate": {
+        "source_ref": null,
+        "production_sha256": "f40ce16ef94a1315093fc2285bb6f4e1ac82eb969a10733797436ce36668dd3d",
+        "registry_lock_sites": 3,
+        "inputs": {
+          "tests/native/pthread_set_measurement.cc": "2e9ce3de986df30efc81e59a1a650da526b678a18aed4dcf6275dea913ec51bc",
+          "tests/native/pthread_key_measurement.h": "b1366b2a2f1ca2967820b7ccea28c769f45a25f9d43a4ed2fa2269e33fed8e1a",
+          "tools/measure_bionic_key_lookup.py": "cb54540bdb80835ae7d0e52c2ebe02b1d169ceba588d34c742c0e3281394bbe0",
+          "tools/test_bionic_key_contracts.py": "d3c88c29c5ed34b3141aa3aa7f6a47cff5f3e860f370bfcc99f95b9e2ac6eaff",
+          "compat/bionic/shim_internal.h": "eac2550acbd74dd5da75f5087860748e45ef3115a7e3276e00e00ac441283f6d",
+          "compat/bionic/abi_types.h": "c4741d16db9c20fcb5655c81f4d720b5def9fc3e1f9eea057dc530cf02d1c1cd",
+          "compat/bionic/pthread_cleanup.h": "7cf05841916603895ef7c39cfb6317800d42c8c206c70be3e1f08be83bfa6975",
+          "compat/arm64/include/gesher/arm64_va_list.h": "2a688196bb4926b29f034c70b9bc97e96f9a7cb963d0b77942d0d9f2b26111d6",
+          "compat/arm64/include/gesher/symbol_table.h": "0142e694541611f3882df10096efae8c815de0ca06ce3410a9c5f7e0748c71bb",
+          "tools/measure_bionic_key_assignment.py": "b6f2894d16d4024358e330aa374eed3c6ba4e71582c8822e7e1087a956648fa0"
+        },
+        "compiler": "c++ (Debian 14.2.0-19) 14.2.0\nCopyright (C) 2024 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\n",
+        "builds": [
+          {
+            "name": "timed",
+            "command": [
+              "c++",
+              "-std=c++20",
+              "-O2",
+              "-g",
+              "-Wall",
+              "-Wextra",
+              "-Werror",
+              "-fno-exceptions",
+              "-fno-builtin",
+              "-fno-lto",
+              "-pthread",
+              "-I",
+              "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-set/compat/bionic",
+              "-I",
+              "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-set/compat/arm64/include",
+              "-I",
+              "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-set/tests/native",
+              "/workspace/scratch/aa09b1a0dc1f/pthread-set-measure-after/timed-production.cc",
+              "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-set/tests/native/pthread_set_measurement.cc",
+              "-o",
+              "/workspace/scratch/aa09b1a0dc1f/pthread-set-measure-after/timed"
+            ],
+            "instrumented": false,
+            "generated_sha256": "13cc85d9ded9a1a1b6527710cf169dc5532513313a5111eb3c7e71912a0e0094",
+            "executable_sha256": "02d7f4fb1451d4073985f5aeb6db6c39c09d27e29aaf96ed219071d57e0ac819"
+          },
+          {
+            "name": "counted",
+            "command": [
+              "c++",
+              "-std=c++20",
+              "-O2",
+              "-g",
+              "-Wall",
+              "-Wextra",
+              "-Werror",
+              "-fno-exceptions",
+              "-fno-builtin",
+              "-fno-lto",
+              "-pthread",
+              "-I",
+              "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-set/compat/bionic",
+              "-I",
+              "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-set/compat/arm64/include",
+              "-I",
+              "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-set/tests/native",
+              "/workspace/scratch/aa09b1a0dc1f/pthread-set-measure-after/counted-production.cc",
+              "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-set/tests/native/pthread_set_measurement.cc",
+              "-o",
+              "/workspace/scratch/aa09b1a0dc1f/pthread-set-measure-after/counted"
+            ],
+            "instrumented": true,
+            "generated_sha256": "b3334d875e78e5aba1a658f2fe5902ebf66e50042f3697a3a2781dff49779df0",
+            "executable_sha256": "775083658608c627914461305c978ea3929191e3dc9b4f7ed57cc25332b60b9e"
+          }
+        ]
+      }
+    },
+    "results": {
+      "cold-single": {
+        "first": {
+          "cpu_ns": {
+            "process_medians_ns": {
+              "baseline": [
+                486752,
+                237107,
+                181511,
+                217815,
+                280060,
+                226604,
+                235568,
+                369207,
+                227356,
+                205331,
+                241372,
+                222105
+              ],
+              "candidate": [
+                362705,
+                281974,
+                204242,
+                203050,
+                216247,
+                382280,
+                256811,
+                265301,
+                195326,
+                295058,
+                350739,
+                359412
+              ]
+            },
+            "baseline_ns": 231462.0,
+            "candidate_ns": 273637.5,
+            "change_percent": 18.221349508774654,
+            "absolute_change_ns": 42175.5,
+            "paired_rounds": [
+              {
+                "campaign": 0,
+                "round": 0,
+                "baseline_ns": 361929.5,
+                "candidate_ns": 322339.5,
+                "change_percent": -10.938594394764722
+              },
+              {
+                "campaign": 0,
+                "round": 1,
+                "baseline_ns": 199663.0,
+                "candidate_ns": 203646.0,
+                "change_percent": 1.994861341360199
+              },
+              {
+                "campaign": 0,
+                "round": 2,
+                "baseline_ns": 253332.0,
+                "candidate_ns": 299263.5,
+                "change_percent": 18.130950689214153
+              },
+              {
+                "campaign": 1,
+                "round": 0,
+                "baseline_ns": 302387.5,
+                "candidate_ns": 261056.0,
+                "change_percent": -13.668389070315412
+              },
+              {
+                "campaign": 1,
+                "round": 1,
+                "baseline_ns": 216343.5,
+                "candidate_ns": 245192.0,
+                "change_percent": 13.334581348642317
+              },
+              {
+                "campaign": 1,
+                "round": 2,
+                "baseline_ns": 231738.5,
+                "candidate_ns": 355075.5,
+                "change_percent": 53.22249000489776
+              }
+            ],
+            "paired_median_percent": 7.664721345001258,
+            "paired_bootstrap_median_95_percent": [
+              -12.303491732540067,
+              35.676720347055955
+            ],
+            "bootstrap_caveat": "Descriptive resampling of a small fixed set of ABBA rounds, not application or scheduler generalization."
+          },
+          "wall_ns": {
+            "process_medians_ns": {
+              "baseline": [
+                307610,
+                223106,
+                178623,
+                213520,
+                280542,
+                343061,
+                220239,
+                398288,
+                262158,
+                194783,
+                222720,
+                212918
+              ],
+              "candidate": [
+                353744,
+                275888,
+                194731,
+                196632,
+                194831,
+                1647559,
+                248882,
+                272051,
+                201435,
+                293658,
+                457590,
+                259999
+              ]
+            },
+            "baseline_ns": 222913.0,
+            "candidate_ns": 266025.0,
+            "change_percent": 19.34028073732801,
+            "absolute_change_ns": 43112.0,
+            "paired_rounds": [
+              {
+                "campaign": 0,
+                "round": 0,
+                "baseline_ns": 265358.0,
+                "candidate_ns": 314816.0,
+                "change_percent": 18.638217050173722
+              },
+              {
+                "campaign": 0,
+                "round": 1,
+                "baseline_ns": 196071.5,
+                "candidate_ns": 195681.5,
+                "change_percent": -0.19890703136355992
+              },
+              {
+                "campaign": 0,
+                "round": 2,
+                "baseline_ns": 311801.5,
+                "candidate_ns": 921195.0,
+                "change_percent": 195.44277368774686
+              },
+              {
+                "campaign": 1,
+                "round": 0,
+                "baseline_ns": 309263.5,
+                "candidate_ns": 260466.5,
+                "change_percent": -15.778454295447087
+              },
+              {
+                "campaign": 1,
+                "round": 1,
+                "baseline_ns": 228470.5,
+                "candidate_ns": 247546.5,
+                "change_percent": 8.349436798186204
+              },
+              {
+                "campaign": 1,
+                "round": 2,
+                "baseline_ns": 217819.0,
+                "candidate_ns": 358794.5,
+                "change_percent": 64.72139712329962
+              }
+            ],
+            "paired_median_percent": 13.493826924179963,
+            "paired_bootstrap_median_95_percent": [
+              -7.988680663405324,
+              130.08208540552323
+            ],
+            "bootstrap_caveat": "Descriptive resampling of a small fixed set of ABBA rounds, not application or scheduler generalization."
+          }
+        },
+        "steady": {
+          "cpu_ns": {
+            "process_medians_ns": {
+              "baseline": [
+                486752,
+                237107,
+                181511,
+                217815,
+                280060,
+                226604,
+                235568,
+                369207,
+                227356,
+                205331,
+                241372,
+                222105
+              ],
+              "candidate": [
+                362705,
+                281974,
+                204242,
+                203050,
+                216247,
+                382280,
+                256811,
+                265301,
+                195326,
+                295058,
+                350739,
+                359412
+              ]
+            },
+            "baseline_ns": 231462.0,
+            "candidate_ns": 273637.5,
+            "change_percent": 18.221349508774654,
+            "absolute_change_ns": 42175.5,
+            "paired_rounds": [
+              {
+                "campaign": 0,
+                "round": 0,
+                "baseline_ns": 361929.5,
+                "candidate_ns": 322339.5,
+                "change_percent": -10.938594394764722
+              },
+              {
+                "campaign": 0,
+                "round": 1,
+                "baseline_ns": 199663.0,
+                "candidate_ns": 203646.0,
+                "change_percent": 1.994861341360199
+              },
+              {
+                "campaign": 0,
+                "round": 2,
+                "baseline_ns": 253332.0,
+                "candidate_ns": 299263.5,
+                "change_percent": 18.130950689214153
+              },
+              {
+                "campaign": 1,
+                "round": 0,
+                "baseline_ns": 302387.5,
+                "candidate_ns": 261056.0,
+                "change_percent": -13.668389070315412
+              },
+              {
+                "campaign": 1,
+                "round": 1,
+                "baseline_ns": 216343.5,
+                "candidate_ns": 245192.0,
+                "change_percent": 13.334581348642317
+              },
+              {
+                "campaign": 1,
+                "round": 2,
+                "baseline_ns": 231738.5,
+                "candidate_ns": 355075.5,
+                "change_percent": 53.22249000489776
+              }
+            ],
+            "paired_median_percent": 7.664721345001258,
+            "paired_bootstrap_median_95_percent": [
+              -12.303491732540067,
+              35.676720347055955
+            ],
+            "bootstrap_caveat": "Descriptive resampling of a small fixed set of ABBA rounds, not application or scheduler generalization."
+          },
+          "wall_ns": {
+            "process_medians_ns": {
+              "baseline": [
+                307610,
+                223106,
+                178623,
+                213520,
+                280542,
+                343061,
+                220239,
+                398288,
+                262158,
+                194783,
+                222720,
+                212918
+              ],
+              "candidate": [
+                353744,
+                275888,
+                194731,
+                196632,
+                194831,
+                1647559,
+                248882,
+                272051,
+                201435,
+                293658,
+                457590,
+                259999
+              ]
+            },
+            "baseline_ns": 222913.0,
+            "candidate_ns": 266025.0,
+            "change_percent": 19.34028073732801,
+            "absolute_change_ns": 43112.0,
+            "paired_rounds": [
+              {
+                "campaign": 0,
+                "round": 0,
+                "baseline_ns": 265358.0,
+                "candidate_ns": 314816.0,
+                "change_percent": 18.638217050173722
+              },
+              {
+                "campaign": 0,
+                "round": 1,
+                "baseline_ns": 196071.5,
+                "candidate_ns": 195681.5,
+                "change_percent": -0.19890703136355992
+              },
+              {
+                "campaign": 0,
+                "round": 2,
+                "baseline_ns": 311801.5,
+                "candidate_ns": 921195.0,
+                "change_percent": 195.44277368774686
+              },
+              {
+                "campaign": 1,
+                "round": 0,
+                "baseline_ns": 309263.5,
+                "candidate_ns": 260466.5,
+                "change_percent": -15.778454295447087
+              },
+              {
+                "campaign": 1,
+                "round": 1,
+                "baseline_ns": 228470.5,
+                "candidate_ns": 247546.5,
+                "change_percent": 8.349436798186204
+              },
+              {
+                "campaign": 1,
+                "round": 2,
+                "baseline_ns": 217819.0,
+                "candidate_ns": 358794.5,
+                "change_percent": 64.72139712329962
+              }
+            ],
+            "paired_median_percent": 13.493826924179963,
+            "paired_bootstrap_median_95_percent": [
+              -7.988680663405324,
+              130.08208540552323
+            ],
+            "bootstrap_caveat": "Descriptive resampling of a small fixed set of ABBA rounds, not application or scheduler generalization."
+          }
+        },
+        "counted_work": {
+          "verified": 1,
+          "sets": 1,
+          "reads": 1,
+          "exits": 1,
+          "created": 1,
+          "global_array_bytes": 3072,
+          "thread_array_bytes": 2048,
+          "baseline_registry_locks": 4,
+          "candidate_registry_locks": 3
+        }
+      },
+      "single": {
+        "first": {
+          "cpu_ns": {
+            "process_medians_ns": {
+              "baseline": [
+                15783413,
+                16305123,
+                15618425,
+                15049506,
+                15097298,
+                20257292,
+                15553930,
+                20675625,
+                16006951,
+                15804009,
+                19655147,
+                16593647
+              ],
+              "candidate": [
+                3760877,
+                3640360,
+                4091964,
+                3661525,
+                3810086,
+                3863392,
+                4030598,
+                4798639,
+                3851192,
+                4445498,
+                4379459,
+                3988398
+              ]
+            },
+            "baseline_ns": 15905480.0,
+            "candidate_ns": 3925895.0,
+            "change_percent": -75.31734345646909,
+            "absolute_change_ns": -11979585.0,
+            "paired_rounds": [
+              {
+                "campaign": 0,
+                "round": 0,
+                "baseline_ns": 16044268.0,
+                "candidate_ns": 3700618.5,
+                "change_percent": -76.93494960318539
+              },
+              {
+                "campaign": 0,
+                "round": 1,
+                "baseline_ns": 15333965.5,
+                "candidate_ns": 3876744.5,
+                "change_percent": -74.71792603159307
+              },
+              {
+                "campaign": 0,
+                "round": 2,
+                "baseline_ns": 17677295.0,
+                "candidate_ns": 3836739.0,
+                "change_percent": -78.29566684269284
+              },
+              {
+                "campaign": 1,
+                "round": 0,
+                "baseline_ns": 18114777.5,
+                "candidate_ns": 4414618.5,
+                "change_percent": -75.62973931090238
+              },
+              {
+                "campaign": 1,
+                "round": 1,
+                "baseline_ns": 15905480.0,
+                "candidate_ns": 4148345.0,
+                "change_percent": -73.91876887714172
+              },
+              {
+                "campaign": 1,
+                "round": 2,
+                "baseline_ns": 18124397.0,
+                "candidate_ns": 4183928.5,
+                "change_percent": -76.91548855390886
+              }
+            ],
+            "paired_median_percent": -76.27261393240562,
+            "paired_bootstrap_median_95_percent": [
+              -77.61530822293912,
+              -74.3183474543674
+            ],
+            "bootstrap_caveat": "Descriptive resampling of a small fixed set of ABBA rounds, not application or scheduler generalization."
+          },
+          "wall_ns": {
+            "process_medians_ns": {
+              "baseline": [
+                15869764,
+                16308290,
+                15618043,
+                15060344,
+                15171027,
+                20408121,
+                15602354,
+                20673935,
+                16002069,
+                15816784,
+                19655739,
+                16593885
+              ],
+              "candidate": [
+                3744290,
+                3639776,
+                4089729,
+                3663386,
+                3810961,
+                3861013,
+                4071420,
+                4800947,
+                3858371,
+                4447745,
+                4417355,
+                3988804
+              ]
+            },
+            "baseline_ns": 15935916.5,
+            "candidate_ns": 3924908.5,
+            "change_percent": -75.37067604489519,
+            "absolute_change_ns": -12011008.0,
+            "paired_rounds": [
+              {
+                "campaign": 0,
+                "round": 0,
+                "baseline_ns": 16089027.0,
+                "candidate_ns": 3692033.0,
+                "change_percent": -77.05247806470832
+              },
+              {
+                "campaign": 0,
+                "round": 1,
+                "baseline_ns": 15339193.5,
+                "candidate_ns": 3876557.5,
+                "change_percent": -74.72776192568404
+              },
+              {
+                "campaign": 0,
+                "round": 2,
+                "baseline_ns": 17789574.0,
+                "candidate_ns": 3835987.0,
+                "change_percent": -78.43688106303163
+              },
+              {
+                "campaign": 1,
+                "round": 0,
+                "baseline_ns": 18138144.5,
+                "candidate_ns": 4436183.5,
+                "change_percent": -75.54224193108617
+              },
+              {
+                "campaign": 1,
+                "round": 1,
+                "baseline_ns": 15909426.5,
+                "candidate_ns": 4153058.0,
+                "change_percent": -73.8956146533629
+              },
+              {
+                "campaign": 1,
+                "round": 2,
+                "baseline_ns": 18124812.0,
+                "candidate_ns": 4203079.5,
+                "change_percent": -76.81035532947872
+              }
+            ],
+            "paired_median_percent": -76.17629863028245,
+            "paired_bootstrap_median_95_percent": [
+              -77.74467956386998,
+              -74.31168828952346
+            ],
+            "bootstrap_caveat": "Descriptive resampling of a small fixed set of ABBA rounds, not application or scheduler generalization."
+          }
+        },
+        "steady": {
+          "cpu_ns": {
+            "process_medians_ns": {
+              "baseline": [
+                16215213,
+                15329692,
+                16489859,
+                16083101,
+                15980462,
+                16259598,
+                16435094,
+                16013063,
+                16069058,
+                15718437,
+                16385013,
+                16587408
+              ],
+              "candidate": [
+                3621463,
+                3610905,
+                3821928,
+                3684586,
+                3755608,
+                3669801,
+                3846956,
+                4081402,
+                3684110,
+                3780212,
+                3692510,
+                3736944
+              ]
+            },
+            "baseline_ns": 16149157.0,
+            "candidate_ns": 3714727.0,
+            "change_percent": -76.99739373392678,
+            "absolute_change_ns": -12434430.0,
+            "paired_rounds": [
+              {
+                "campaign": 0,
+                "round": 0,
+                "baseline_ns": 15772452.5,
+                "candidate_ns": 3616184.0,
+                "change_percent": -77.07278560515557
+              },
+              {
+                "campaign": 0,
+                "round": 1,
+                "baseline_ns": 16286480.0,
+                "candidate_ns": 3753257.0,
+                "change_percent": -76.95476861789656
+              },
+              {
+                "campaign": 0,
+                "round": 2,
+                "baseline_ns": 16120030.0,
+                "candidate_ns": 3712704.5,
+                "change_percent": -76.96837723006719
+              },
+              {
+                "campaign": 1,
+                "round": 0,
+                "baseline_ns": 16224078.5,
+                "candidate_ns": 3964179.0,
+                "change_percent": -75.5660760640427
+              },
+              {
+                "campaign": 1,
+                "round": 1,
+                "baseline_ns": 15893747.5,
+                "candidate_ns": 3732161.0,
+                "change_percent": -76.5180552918687
+              },
+              {
+                "campaign": 1,
+                "round": 2,
+                "baseline_ns": 16486210.5,
+                "candidate_ns": 3714727.0,
+                "change_percent": -77.46767214940024
+              }
+            ],
+            "paired_median_percent": -76.96157292398188,
+            "paired_bootstrap_median_95_percent": [
+              -77.2702288772779,
+              -76.0420656779557
+            ],
+            "bootstrap_caveat": "Descriptive resampling of a small fixed set of ABBA rounds, not application or scheduler generalization."
+          },
+          "wall_ns": {
+            "process_medians_ns": {
+              "baseline": [
+                16236146,
+                15350671,
+                16534064,
+                17475026,
+                16023603,
+                16293467,
+                16518234,
+                16434874,
+                16088754,
+                15974294,
+                16426005,
+                16609021
+              ],
+              "candidate": [
+                3639394,
+                3621542,
+                3891272,
+                3712698,
+                3773530,
+                3684622,
+                3864590,
+                4098040,
+                3702415,
+                3788350,
+                3712124,
+                3760028
+              ]
+            },
+            "baseline_ns": 16359736.0,
+            "candidate_ns": 3736363.0,
+            "change_percent": -77.16122680708295,
+            "absolute_change_ns": -12623373.0,
+            "paired_rounds": [
+              {
+                "campaign": 0,
+                "round": 0,
+                "baseline_ns": 15793408.5,
+                "candidate_ns": 3630468.0,
+                "change_percent": -77.0127645340143
+              },
+              {
+                "campaign": 0,
+                "round": 1,
+                "baseline_ns": 17004545.0,
+                "candidate_ns": 3801985.0,
+                "change_percent": -77.64136000110558
+              },
+              {
+                "campaign": 0,
+                "round": 2,
+                "baseline_ns": 16158535.0,
+                "candidate_ns": 3729076.0,
+                "change_percent": -76.92194249045473
+              },
+              {
+                "campaign": 1,
+                "round": 0,
+                "baseline_ns": 16476554.0,
+                "candidate_ns": 3981315.0,
+                "change_percent": -75.83648255575771
+              },
+              {
+                "campaign": 1,
+                "round": 1,
+                "baseline_ns": 16031524.0,
+                "candidate_ns": 3745382.5,
+                "change_percent": -76.6373895582229
+              },
+              {
+                "campaign": 1,
+                "round": 2,
+                "baseline_ns": 16517513.0,
+                "candidate_ns": 3736076.0,
+                "change_percent": -77.38112269080702
+              }
+            ],
+            "paired_median_percent": -76.96735351223451,
+            "paired_bootstrap_median_95_percent": [
+              -77.51124134595631,
+              -76.23693605699032
+            ],
+            "bootstrap_caveat": "Descriptive resampling of a small fixed set of ABBA rounds, not application or scheduler generalization."
+          }
+        },
+        "counted_work": {
+          "verified": 786432,
+          "sets": 786432,
+          "reads": 786432,
+          "exits": 1,
+          "created": 1,
+          "global_array_bytes": 3072,
+          "thread_array_bytes": 2048,
+          "baseline_registry_locks": 786435,
+          "candidate_registry_locks": 3
+        }
+      },
+      "shared2": {
+        "first": {
+          "cpu_ns": {
+            "process_medians_ns": {
+              "baseline": [
+                43091814,
+                79085054,
+                77575220,
+                70663474,
+                88645136,
+                93056379,
+                81602616,
+                68584214,
+                49584068,
+                96633963,
+                80193526,
+                84195265
+              ],
+              "candidate": [
+                3743356,
+                4730362,
+                4526765,
+                3842639,
+                4721577,
+                8063891,
+                3898160,
+                3836046,
+                10022586,
+                17142428,
+                5294899,
+                4005121
+              ]
+            },
+            "baseline_ns": 79639290.0,
+            "candidate_ns": 4624171.0,
+            "change_percent": -94.19360594500529,
+            "absolute_change_ns": -75015119.0,
+            "paired_rounds": [
+              {
+                "campaign": 0,
+                "round": 0,
+                "baseline_ns": 61088434.0,
+                "candidate_ns": 4236859.0,
+                "change_percent": -93.06438433173783
+              },
+              {
+                "campaign": 0,
+                "round": 1,
+                "baseline_ns": 74119347.0,
+                "candidate_ns": 4184702.0,
+                "change_percent": -94.35410298474432
+              },
+              {
+                "campaign": 0,
+                "round": 2,
+                "baseline_ns": 90850757.5,
+                "candidate_ns": 6392734.0,
+                "change_percent": -92.96347749219372
+              },
+              {
+                "campaign": 1,
+                "round": 0,
+                "baseline_ns": 75093415.0,
+                "candidate_ns": 3867103.0,
+                "change_percent": -94.8502768185466
+              },
+              {
+                "campaign": 1,
+                "round": 1,
+                "baseline_ns": 73109015.5,
+                "candidate_ns": 13582507.0,
+                "change_percent": -81.4215703670637
+              },
+              {
+                "campaign": 1,
+                "round": 2,
+                "baseline_ns": 82194395.5,
+                "candidate_ns": 4650010.0,
+                "change_percent": -94.34266780391371
+              }
+            ],
+            "paired_median_percent": -93.70352606782578,
+            "paired_bootstrap_median_95_percent": [
+              -94.60218990164546,
+              -87.1925239296287
+            ],
+            "bootstrap_caveat": "Descriptive resampling of a small fixed set of ABBA rounds, not application or scheduler generalization."
+          },
+          "wall_ns": {
+            "process_medians_ns": {
+              "baseline": [
+                31898922,
+                43336674,
+                42624440,
+                37611578,
+                45720955,
+                48537113,
+                43627828,
+                37318382,
+                28449778,
+                49105663,
+                42717499,
+                44148256
+              ],
+              "candidate": [
+                2008477,
+                2468765,
+                2656412,
+                2034651,
+                2567382,
+                6045200,
+                2030983,
+                2049481,
+                7377562,
+                14856446,
+                2815705,
+                2042038
+              ]
+            },
+            "baseline_ns": 43027086.5,
+            "candidate_ns": 2518073.5,
+            "change_percent": -94.1477015879288,
+            "absolute_change_ns": -40509013.0,
+            "paired_rounds": [
+              {
+                "campaign": 0,
+                "round": 0,
+                "baseline_ns": 37617798.0,
+                "candidate_ns": 2238621.0,
+                "change_percent": -94.04903763904522
+              },
+              {
+                "campaign": 0,
+                "round": 1,
+                "baseline_ns": 40118009.0,
+                "candidate_ns": 2345531.5,
+                "change_percent": -94.15341997654969
+              },
+              {
+                "campaign": 0,
+                "round": 2,
+                "baseline_ns": 47129034.0,
+                "candidate_ns": 4306291.0,
+                "change_percent": -90.86276412964457
+              },
+              {
+                "campaign": 1,
+                "round": 0,
+                "baseline_ns": 40473105.0,
+                "candidate_ns": 2040232.0,
+                "change_percent": -94.9590425543086
+              },
+              {
+                "campaign": 1,
+                "round": 1,
+                "baseline_ns": 38777720.5,
+                "candidate_ns": 11117004.0,
+                "change_percent": -71.3314659638129
+              },
+              {
+                "campaign": 1,
+                "round": 2,
+                "baseline_ns": 43432877.5,
+                "candidate_ns": 2428871.5,
+                "change_percent": -94.40775827021822
+              }
+            ],
+            "paired_median_percent": -94.10122880779745,
+            "paired_bootstrap_median_95_percent": [
+              -94.68340041226341,
+              -81.09711504672873
+            ],
+            "bootstrap_caveat": "Descriptive resampling of a small fixed set of ABBA rounds, not application or scheduler generalization."
+          }
+        },
+        "steady": {
+          "cpu_ns": {
+            "process_medians_ns": {
+              "baseline": [
+                87799647,
+                77790010,
+                86071921,
+                81505557,
+                91910795,
+                98358837,
+                93158086,
+                64792857,
+                91946933,
+                93328069,
+                85094594,
+                72770341
+              ],
+              "candidate": [
+                3919943,
+                4614986,
+                3725603,
+                3587601,
+                3858720,
+                3622538,
+                3728972,
+                3893892,
+                4411918,
+                3860345,
+                4208551,
+                3582187
+              ]
+            },
+            "baseline_ns": 86935784.0,
+            "candidate_ns": 3859532.5,
+            "change_percent": -95.56047887024289,
+            "absolute_change_ns": -83076251.5,
+            "paired_rounds": [
+              {
+                "campaign": 0,
+                "round": 0,
+                "baseline_ns": 82794828.5,
+                "candidate_ns": 4267464.5,
+                "change_percent": -94.84573544348848
+              },
+              {
+                "campaign": 0,
+                "round": 1,
+                "baseline_ns": 83788739.0,
+                "candidate_ns": 3656602.0,
+                "change_percent": -95.63592668461092
+              },
+              {
+                "campaign": 0,
+                "round": 2,
+                "baseline_ns": 95134816.0,
+                "candidate_ns": 3740629.0,
+                "change_percent": -96.0680756454083
+              },
+              {
+                "campaign": 1,
+                "round": 0,
+                "baseline_ns": 78975471.5,
+                "candidate_ns": 3811432.0,
+                "change_percent": -95.17390408995531
+              },
+              {
+                "campaign": 1,
+                "round": 1,
+                "baseline_ns": 92637501.0,
+                "candidate_ns": 4136131.5,
+                "change_percent": -95.53514348363089
+              },
+              {
+                "campaign": 1,
+                "round": 2,
+                "baseline_ns": 78932467.5,
+                "candidate_ns": 3895369.0,
+                "change_percent": -95.06493446438881
+              }
+            ],
+            "paired_median_percent": -95.3545237867931,
+            "paired_bootstrap_median_95_percent": [
+              -95.85200116500961,
+              -94.95533495393865
+            ],
+            "bootstrap_caveat": "Descriptive resampling of a small fixed set of ABBA rounds, not application or scheduler generalization."
+          },
+          "wall_ns": {
+            "process_medians_ns": {
+              "baseline": [
+                45788688,
+                41957396,
+                44392387,
+                42644369,
+                47734850,
+                52327286,
+                48555507,
+                38120483,
+                49472775,
+                49024336,
+                45731659,
+                39020099
+              ],
+              "candidate": [
+                2203015,
+                2909911,
+                1967158,
+                1919114,
+                2144213,
+                1934782,
+                1964508,
+                2170928,
+                3424290,
+                2135412,
+                2258841,
+                1862388
+              ]
+            },
+            "baseline_ns": 45760173.5,
+            "candidate_ns": 2139812.5,
+            "change_percent": -95.32385404963554,
+            "absolute_change_ns": -43620361.0,
+            "paired_rounds": [
+              {
+                "campaign": 0,
+                "round": 0,
+                "baseline_ns": 43873042.0,
+                "candidate_ns": 2556463.0,
+                "change_percent": -94.17304366540164
+              },
+              {
+                "campaign": 0,
+                "round": 1,
+                "baseline_ns": 43518378.0,
+                "candidate_ns": 1943136.0,
+                "change_percent": -95.53490711441496
+              },
+              {
+                "campaign": 0,
+                "round": 2,
+                "baseline_ns": 50031068.0,
+                "candidate_ns": 2039497.5,
+                "change_percent": -95.9235379504591
+              },
+              {
+                "campaign": 1,
+                "round": 0,
+                "baseline_ns": 43337995.0,
+                "candidate_ns": 2067718.0,
+                "change_percent": -95.22885634187737
+              },
+              {
+                "campaign": 1,
+                "round": 1,
+                "baseline_ns": 49248555.5,
+                "candidate_ns": 2779851.0,
+                "change_percent": -94.35546693344132
+              },
+              {
+                "campaign": 1,
+                "round": 2,
+                "baseline_ns": 42375879.0,
+                "candidate_ns": 2060614.5,
+                "change_percent": -95.13729378923325
+              }
+            ],
+            "paired_median_percent": -95.18307506555531,
+            "paired_bootstrap_median_95_percent": [
+              -95.72922253243703,
+              -94.26425529942148
+            ],
+            "bootstrap_caveat": "Descriptive resampling of a small fixed set of ABBA rounds, not application or scheduler generalization."
+          }
+        },
+        "counted_work": {
+          "verified": 786432,
+          "sets": 786432,
+          "reads": 786432,
+          "exits": 2,
+          "created": 1,
+          "global_array_bytes": 3072,
+          "thread_array_bytes": 2048,
+          "baseline_registry_locks": 786436,
+          "candidate_registry_locks": 4
+        }
+      },
+      "shared8": {
+        "first": {
+          "cpu_ns": {
+            "process_medians_ns": {
+              "baseline": [
+                206137977,
+                316770782,
+                327083044,
+                363048063,
+                308016200,
+                328481996,
+                269546828,
+                359266121,
+                374221962,
+                355071661,
+                286652051,
+                284160522
+              ],
+              "candidate": [
+                8466144,
+                8799917,
+                5464466,
+                5248725,
+                5995346,
+                5189364,
+                6011258,
+                18251401,
+                5082146,
+                5573848,
+                5598129,
+                5223290
+              ]
+            },
+            "baseline_ns": 321926913.0,
+            "candidate_ns": 5585988.5,
+            "change_percent": -98.26482711620945,
+            "absolute_change_ns": -316340924.5,
+            "paired_rounds": [
+              {
+                "campaign": 0,
+                "round": 0,
+                "baseline_ns": 261454379.5,
+                "candidate_ns": 8633030.5,
+                "change_percent": -96.69807386033861
+              },
+              {
+                "campaign": 0,
+                "round": 1,
+                "baseline_ns": 345065553.5,
+                "candidate_ns": 5356595.5,
+                "change_percent": -98.44765858380588
+              },
+              {
+                "campaign": 0,
+                "round": 2,
+                "baseline_ns": 318249098.0,
+                "candidate_ns": 5592355.0,
+                "change_percent": -98.24277428117016
+              },
+              {
+                "campaign": 1,
+                "round": 0,
+                "baseline_ns": 314406474.5,
+                "candidate_ns": 12131329.5,
+                "change_percent": -96.14151409595098
+              },
+              {
+                "campaign": 1,
+                "round": 1,
+                "baseline_ns": 364646811.5,
+                "candidate_ns": 5327997.0,
+                "change_percent": -98.53886093831922
+              },
+              {
+                "campaign": 1,
+                "round": 2,
+                "baseline_ns": 285406286.5,
+                "candidate_ns": 5410709.5,
+                "change_percent": -98.10420801645516
+              }
+            ],
+            "paired_median_percent": -98.17349114881266,
+            "paired_bootstrap_median_95_percent": [
+              -98.49325976106255,
+              -96.4197939781448
+            ],
+            "bootstrap_caveat": "Descriptive resampling of a small fixed set of ABBA rounds, not application or scheduler generalization."
+          },
+          "wall_ns": {
+            "process_medians_ns": {
+              "baseline": [
+                55125182,
+                62804169,
+                66790286,
+                69220364,
+                65747961,
+                64668097,
+                60026263,
+                70050468,
+                69899336,
+                67356125,
+                62914443,
+                67611483
+              ],
+              "candidate": [
+                2562080,
+                3201551,
+                1396703,
+                1596716,
+                1465762,
+                1598977,
+                2051243,
+                9480109,
+                1482830,
+                1356100,
+                1359937,
+                1844061
+              ]
+            },
+            "baseline_ns": 66269123.5,
+            "candidate_ns": 1597846.5,
+            "change_percent": -97.58885222014443,
+            "absolute_change_ns": -64671277.0,
+            "paired_rounds": [
+              {
+                "campaign": 0,
+                "round": 0,
+                "baseline_ns": 58964675.5,
+                "candidate_ns": 2881815.5,
+                "change_percent": -95.11264078778827
+              },
+              {
+                "campaign": 0,
+                "round": 1,
+                "baseline_ns": 68005325.0,
+                "candidate_ns": 1496709.5,
+                "change_percent": -97.79912896526854
+              },
+              {
+                "campaign": 0,
+                "round": 2,
+                "baseline_ns": 65208029.0,
+                "candidate_ns": 1532369.5,
+                "change_percent": -97.65002941585614
+              },
+              {
+                "campaign": 1,
+                "round": 0,
+                "baseline_ns": 65038365.5,
+                "candidate_ns": 5765676.0,
+                "change_percent": -91.13496171732668
+              },
+              {
+                "campaign": 1,
+                "round": 1,
+                "baseline_ns": 68627730.5,
+                "candidate_ns": 1419465.0,
+                "change_percent": -97.93164513869506
+              },
+              {
+                "campaign": 1,
+                "round": 2,
+                "baseline_ns": 65262963.0,
+                "candidate_ns": 1601999.0,
+                "change_percent": -97.54531678250649
+              }
+            ],
+            "paired_median_percent": -97.59767309918132,
+            "paired_bootstrap_median_95_percent": [
+              -97.8653870519818,
+              -93.12380125255747
+            ],
+            "bootstrap_caveat": "Descriptive resampling of a small fixed set of ABBA rounds, not application or scheduler generalization."
+          }
+        },
+        "steady": {
+          "cpu_ns": {
+            "process_medians_ns": {
+              "baseline": [
+                314758277,
+                302404020,
+                300953409,
+                209763428,
+                285344416,
+                262725740,
+                273804586,
+                203502117,
+                256244838,
+                286578460,
+                304232441,
+                295386977
+              ],
+              "candidate": [
+                4839238,
+                5079087,
+                4390389,
+                4874283,
+                4613096,
+                4626876,
+                5224154,
+                12413503,
+                4459219,
+                4732241,
+                4908058,
+                4159708
+              ]
+            },
+            "baseline_ns": 285961438.0,
+            "candidate_ns": 4785739.5,
+            "change_percent": -98.32643886061308,
+            "absolute_change_ns": -281175698.5,
+            "paired_rounds": [
+              {
+                "campaign": 0,
+                "round": 0,
+                "baseline_ns": 308581148.5,
+                "candidate_ns": 4959162.5,
+                "change_percent": -98.39291462744686
+              },
+              {
+                "campaign": 0,
+                "round": 1,
+                "baseline_ns": 255358418.5,
+                "candidate_ns": 4632336.0,
+                "change_percent": -98.18594741179444
+              },
+              {
+                "campaign": 0,
+                "round": 2,
+                "baseline_ns": 274035078.0,
+                "candidate_ns": 4619986.0,
+                "change_percent": -98.31408955608231
+              },
+              {
+                "campaign": 1,
+                "round": 0,
+                "baseline_ns": 238653351.5,
+                "candidate_ns": 8818828.5,
+                "change_percent": -96.30475396864477
+              },
+              {
+                "campaign": 1,
+                "round": 1,
+                "baseline_ns": 271411649.0,
+                "candidate_ns": 4595730.0,
+                "change_percent": -98.30673074758114
+              },
+              {
+                "campaign": 1,
+                "round": 2,
+                "baseline_ns": 299809709.0,
+                "candidate_ns": 4533883.0,
+                "change_percent": -98.48774643919221
+              }
+            ],
+            "paired_median_percent": -98.31041015183172,
+            "paired_bootstrap_median_95_percent": [
+              -98.44033053331952,
+              -97.24535069021961
+            ],
+            "bootstrap_caveat": "Descriptive resampling of a small fixed set of ABBA rounds, not application or scheduler generalization."
+          },
+          "wall_ns": {
+            "process_medians_ns": {
+              "baseline": [
+                75936791,
+                64436188,
+                64211859,
+                55695210,
+                62636111,
+                63740732,
+                62188683,
+                54562810,
+                60790789,
+                61605703,
+                64750409,
+                62710396
+              ],
+              "candidate": [
+                1973683,
+                1986736,
+                1466876,
+                1678456,
+                1451796,
+                1532913,
+                1828153,
+                6425232,
+                1414994,
+                1531685,
+                1691615,
+                1402859
+              ]
+            },
+            "baseline_ns": 62673253.5,
+            "candidate_ns": 1605684.5,
+            "change_percent": -97.43800678865348,
+            "absolute_change_ns": -61067569.0,
+            "paired_rounds": [
+              {
+                "campaign": 0,
+                "round": 0,
+                "baseline_ns": 70186489.5,
+                "candidate_ns": 1980209.5,
+                "change_percent": -97.17864575631752
+              },
+              {
+                "campaign": 0,
+                "round": 1,
+                "baseline_ns": 59953534.5,
+                "candidate_ns": 1572666.0,
+                "change_percent": -97.37685857370094
+              },
+              {
+                "campaign": 0,
+                "round": 2,
+                "baseline_ns": 63188421.5,
+                "candidate_ns": 1492354.5,
+                "change_percent": -97.63824690572464
+              },
+              {
+                "campaign": 1,
+                "round": 0,
+                "baseline_ns": 58375746.5,
+                "candidate_ns": 4126692.5,
+                "change_percent": -92.93080988694508
+              },
+              {
+                "campaign": 1,
+                "round": 1,
+                "baseline_ns": 61198246.0,
+                "candidate_ns": 1473339.5,
+                "change_percent": -97.59251351746258
+              },
+              {
+                "campaign": 1,
+                "round": 2,
+                "baseline_ns": 63730402.5,
+                "candidate_ns": 1547237.0,
+                "change_percent": -97.57221523902976
+              }
+            ],
+            "paired_median_percent": -97.47453690636536,
+            "paired_bootstrap_median_95_percent": [
+              -97.61538021159362,
+              -95.0547278216313
+            ],
+            "bootstrap_caveat": "Descriptive resampling of a small fixed set of ABBA rounds, not application or scheduler generalization."
+          }
+        },
+        "counted_work": {
+          "verified": 786432,
+          "sets": 786432,
+          "reads": 786432,
+          "exits": 8,
+          "created": 1,
+          "global_array_bytes": 3072,
+          "thread_array_bytes": 2048,
+          "baseline_registry_locks": 786442,
+          "candidate_registry_locks": 10
+        }
+      },
+      "distinct8": {
+        "first": {
+          "cpu_ns": {
+            "process_medians_ns": {
+              "baseline": [
+                360803764,
+                357393725,
+                371876728,
+                299798038,
+                363227520,
+                333453704,
+                318522511,
+                281561132,
+                352276693,
+                272416090,
+                330023361,
+                293227580
+              ],
+              "candidate": [
+                9865577,
+                6624516,
+                5576444,
+                5848915,
+                5214827,
+                5347095,
+                6725962,
+                5896983,
+                6381868,
+                5131601,
+                5890205,
+                5828958
+              ]
+            },
+            "baseline_ns": 331738532.5,
+            "candidate_ns": 5869560.0,
+            "change_percent": -98.23066679780408,
+            "absolute_change_ns": -325868972.5,
+            "paired_rounds": [
+              {
+                "campaign": 0,
+                "round": 0,
+                "baseline_ns": 359098744.5,
+                "candidate_ns": 8245046.5,
+                "change_percent": -97.70396120112306
+              },
+              {
+                "campaign": 0,
+                "round": 1,
+                "baseline_ns": 335837383.0,
+                "candidate_ns": 5712679.5,
+                "change_percent": -98.29897450695654
+              },
+              {
+                "campaign": 0,
+                "round": 2,
+                "baseline_ns": 348340612.0,
+                "candidate_ns": 5280961.0,
+                "change_percent": -98.48396631972388
+              },
+              {
+                "campaign": 1,
+                "round": 0,
+                "baseline_ns": 300041821.5,
+                "candidate_ns": 6311472.5,
+                "change_percent": -97.89646907606179
+              },
+              {
+                "campaign": 1,
+                "round": 1,
+                "baseline_ns": 312346391.5,
+                "candidate_ns": 5756734.5,
+                "change_percent": -98.1569390085302
+              },
+              {
+                "campaign": 1,
+                "round": 2,
+                "baseline_ns": 311625470.5,
+                "candidate_ns": 5859581.5,
+                "change_percent": -98.11967183215211
+              }
+            ],
+            "paired_median_percent": -98.13830542034115,
+            "paired_bootstrap_median_95_percent": [
+              -98.39147041334022,
+              -97.80021513859242
+            ],
+            "bootstrap_caveat": "Descriptive resampling of a small fixed set of ABBA rounds, not application or scheduler generalization."
+          },
+          "wall_ns": {
+            "process_medians_ns": {
+              "baseline": [
+                67343318,
+                69679075,
+                68029628,
+                62864452,
+                68156532,
+                66764375,
+                64439577,
+                60889432,
+                67404775,
+                58058109,
+                65595227,
+                61624842
+              ],
+              "candidate": [
+                5436074,
+                2684239,
+                1525981,
+                1607281,
+                1267928,
+                1439866,
+                1889437,
+                2234719,
+                1681167,
+                1669809,
+                1674370,
+                1903920
+              ]
+            },
+            "baseline_ns": 66179801.0,
+            "candidate_ns": 1677768.5,
+            "change_percent": -97.46483296315745,
+            "absolute_change_ns": -64502032.5,
+            "paired_rounds": [
+              {
+                "campaign": 0,
+                "round": 0,
+                "baseline_ns": 68511196.5,
+                "candidate_ns": 4060156.5,
+                "change_percent": -94.07373289707472
+              },
+              {
+                "campaign": 0,
+                "round": 1,
+                "baseline_ns": 65447040.0,
+                "candidate_ns": 1566631.0,
+                "change_percent": -97.60626149020644
+              },
+              {
+                "campaign": 0,
+                "round": 2,
+                "baseline_ns": 67460453.5,
+                "candidate_ns": 1353897.0,
+                "change_percent": -97.99305084719006
+              },
+              {
+                "campaign": 1,
+                "round": 0,
+                "baseline_ns": 62664504.5,
+                "candidate_ns": 2062078.0,
+                "change_percent": -96.70933646335622
+              },
+              {
+                "campaign": 1,
+                "round": 1,
+                "baseline_ns": 62731442.0,
+                "candidate_ns": 1675488.0,
+                "change_percent": -97.32910969908838
+              },
+              {
+                "campaign": 1,
+                "round": 2,
+                "baseline_ns": 63610034.5,
+                "candidate_ns": 1789145.0,
+                "change_percent": -97.18732270142064
+              }
+            ],
+            "paired_median_percent": -97.25821620025451,
+            "paired_bootstrap_median_95_percent": [
+              -97.79965616869825,
+              -95.39153468021547
+            ],
+            "bootstrap_caveat": "Descriptive resampling of a small fixed set of ABBA rounds, not application or scheduler generalization."
+          }
+        },
+        "steady": {
+          "cpu_ns": {
+            "process_medians_ns": {
+              "baseline": [
+                301751752,
+                290940085,
+                315391619,
+                252349311,
+                286682519,
+                267510927,
+                244320900,
+                300996162,
+                243558825,
+                236159819,
+                243372887,
+                289212827
+              ],
+              "candidate": [
+                5836159,
+                4649263,
+                4806820,
+                5328527,
+                4365583,
+                4667836,
+                4835505,
+                5343442,
+                5376840,
+                4697659,
+                5171005,
+                4795159
+              ]
+            },
+            "baseline_ns": 277096723.0,
+            "candidate_ns": 4821162.5,
+            "change_percent": -98.26011565643813,
+            "absolute_change_ns": -272275560.5,
+            "paired_rounds": [
+              {
+                "campaign": 0,
+                "round": 0,
+                "baseline_ns": 296345918.5,
+                "candidate_ns": 5242711.0,
+                "change_percent": -98.23088132054028
+              },
+              {
+                "campaign": 0,
+                "round": 1,
+                "baseline_ns": 283870465.0,
+                "candidate_ns": 5067673.5,
+                "change_percent": -98.2147936735863
+              },
+              {
+                "campaign": 0,
+                "round": 2,
+                "baseline_ns": 277096723.0,
+                "candidate_ns": 4516709.5,
+                "change_percent": -98.36998812144017
+              },
+              {
+                "campaign": 1,
+                "round": 0,
+                "baseline_ns": 272658531.0,
+                "candidate_ns": 5089473.5,
+                "change_percent": -98.1333892318227
+              },
+              {
+                "campaign": 1,
+                "round": 1,
+                "baseline_ns": 239859322.0,
+                "candidate_ns": 5037249.5,
+                "change_percent": -97.89991505937802
+              },
+              {
+                "campaign": 1,
+                "round": 2,
+                "baseline_ns": 266292857.0,
+                "candidate_ns": 4983082.0,
+                "change_percent": -98.12872111699188
+              }
+            ],
+            "paired_median_percent": -98.1740914527045,
+            "paired_bootstrap_median_95_percent": [
+              -98.30043472099022,
+              -98.01431808818495
+            ],
+            "bootstrap_caveat": "Descriptive resampling of a small fixed set of ABBA rounds, not application or scheduler generalization."
+          },
+          "wall_ns": {
+            "process_medians_ns": {
+              "baseline": [
+                64615588,
+                65656557,
+                63969860,
+                60323209,
+                62851532,
+                61664987,
+                59144671,
+                64710959,
+                58005728,
+                55618956,
+                59588675,
+                64083528
+              ],
+              "candidate": [
+                2329553,
+                1809894,
+                1560263,
+                1843534,
+                1473319,
+                1504972,
+                1777053,
+                2076922,
+                1955177,
+                1500136,
+                2198115,
+                1566197
+              ]
+            },
+            "baseline_ns": 62258259.5,
+            "candidate_ns": 1793473.5,
+            "change_percent": -97.11930029139346,
+            "absolute_change_ns": -60464786.0,
+            "paired_rounds": [
+              {
+                "campaign": 0,
+                "round": 0,
+                "baseline_ns": 65136072.5,
+                "candidate_ns": 2069723.5,
+                "change_percent": -96.82246193152035
+              },
+              {
+                "campaign": 0,
+                "round": 1,
+                "baseline_ns": 62146534.5,
+                "candidate_ns": 1701898.5,
+                "change_percent": -97.26147481320942
+              },
+              {
+                "campaign": 0,
+                "round": 2,
+                "baseline_ns": 62258259.5,
+                "candidate_ns": 1489145.5,
+                "change_percent": -97.60811575530794
+              },
+              {
+                "campaign": 1,
+                "round": 0,
+                "baseline_ns": 61927815.0,
+                "candidate_ns": 1926987.5,
+                "change_percent": -96.88833281135464
+              },
+              {
+                "campaign": 1,
+                "round": 1,
+                "baseline_ns": 56812342.0,
+                "candidate_ns": 1727656.5,
+                "change_percent": -96.95901200482106
+              },
+              {
+                "campaign": 1,
+                "round": 2,
+                "baseline_ns": 61836101.5,
+                "candidate_ns": 1882156.0,
+                "change_percent": -96.9562182053149
+              }
+            ],
+            "paired_median_percent": -96.95761510506799,
+            "paired_bootstrap_median_95_percent": [
+              -97.43479528425868,
+              -96.8553973714375
+            ],
+            "bootstrap_caveat": "Descriptive resampling of a small fixed set of ABBA rounds, not application or scheduler generalization."
+          }
+        },
+        "counted_work": {
+          "verified": 786432,
+          "sets": 786432,
+          "reads": 786432,
+          "exits": 8,
+          "created": 8,
+          "global_array_bytes": 3072,
+          "thread_array_bytes": 2048,
+          "baseline_registry_locks": 786456,
+          "candidate_registry_locks": 24
+        }
+      },
+      "distinct32": {
+        "first": {
+          "cpu_ns": {
+            "process_medians_ns": {
+              "baseline": [
+                371971640,
+                401171416,
+                393117028,
+                388208725,
+                328697178,
+                383259019,
+                398291292,
+                395766070,
+                355986896,
+                422948639,
+                328361669,
+                284836560
+              ],
+              "candidate": [
+                11633446,
+                11911733,
+                11469847,
+                21784622,
+                21527305,
+                13291872,
+                11146075,
+                13930835,
+                12968159,
+                9939238,
+                11840567,
+                9803084
+              ]
+            },
+            "baseline_ns": 385733872.0,
+            "candidate_ns": 11876150.0,
+            "change_percent": -96.92115448964253,
+            "absolute_change_ns": -373857722.0,
+            "paired_rounds": [
+              {
+                "campaign": 0,
+                "round": 0,
+                "baseline_ns": 386571528.0,
+                "candidate_ns": 11772589.5,
+                "change_percent": -96.95461547287051
+              },
+              {
+                "campaign": 0,
+                "round": 1,
+                "baseline_ns": 390662876.5,
+                "candidate_ns": 16627234.5,
+                "change_percent": -95.74384066155311
+              },
+              {
+                "campaign": 0,
+                "round": 2,
+                "baseline_ns": 355978098.5,
+                "candidate_ns": 17409588.5,
+                "change_percent": -95.10936527461675
+              },
+              {
+                "campaign": 1,
+                "round": 0,
+                "baseline_ns": 397028681.0,
+                "candidate_ns": 12538455.0,
+                "change_percent": -96.84192714530869
+              },
+              {
+                "campaign": 1,
+                "round": 1,
+                "baseline_ns": 389467767.5,
+                "candidate_ns": 11453698.5,
+                "change_percent": -97.05914084404944
+              },
+              {
+                "campaign": 1,
+                "round": 2,
+                "baseline_ns": 306599114.5,
+                "candidate_ns": 10821825.5,
+                "change_percent": -96.4703663552166
+              }
+            ],
+            "paired_median_percent": -96.65614675026265,
+            "paired_bootstrap_median_95_percent": [
+              -97.00687815845998,
+              -95.42660296808492
+            ],
+            "bootstrap_caveat": "Descriptive resampling of a small fixed set of ABBA rounds, not application or scheduler generalization."
+          },
+          "wall_ns": {
+            "process_medians_ns": {
+              "baseline": [
+                59782014,
+                62271496,
+                62274050,
+                64135062,
+                57095728,
+                61057269,
+                63403478,
+                62962319,
+                56629699,
+                64675383,
+                56852041,
+                55329966
+              ],
+              "candidate": [
+                4575205,
+                4263101,
+                3645840,
+                11632998,
+                11573057,
+                6271334,
+                3590040,
+                6714233,
+                5094949,
+                3154725,
+                3979608,
+                3768305
+              ]
+            },
+            "baseline_ns": 61664382.5,
+            "candidate_ns": 4419153.0,
+            "change_percent": -92.83354049641217,
+            "absolute_change_ns": -57245229.5,
+            "paired_rounds": [
+              {
+                "campaign": 0,
+                "round": 0,
+                "baseline_ns": 61026755.0,
+                "candidate_ns": 4419153.0,
+                "change_percent": -92.75866298314567
+              },
+              {
+                "campaign": 0,
+                "round": 1,
+                "baseline_ns": 63204556.0,
+                "candidate_ns": 7639419.0,
+                "change_percent": -87.91318303066633
+              },
+              {
+                "campaign": 0,
+                "round": 2,
+                "baseline_ns": 59076498.5,
+                "candidate_ns": 8922195.5,
+                "change_percent": -84.897216784099
+              },
+              {
+                "campaign": 1,
+                "round": 0,
+                "baseline_ns": 63182898.5,
+                "candidate_ns": 5152136.5,
+                "change_percent": -91.84567877967802
+              },
+              {
+                "campaign": 1,
+                "round": 1,
+                "baseline_ns": 60652541.0,
+                "candidate_ns": 4124837.0,
+                "change_percent": -93.19923463717703
+              },
+              {
+                "campaign": 1,
+                "round": 2,
+                "baseline_ns": 56091003.5,
+                "candidate_ns": 3873956.5,
+                "change_percent": -93.09344412067793
+              }
+            ],
+            "paired_median_percent": -92.30217088141185,
+            "paired_bootstrap_median_95_percent": [
+              -93.14633937892748,
+              -86.40519990738267
+            ],
+            "bootstrap_caveat": "Descriptive resampling of a small fixed set of ABBA rounds, not application or scheduler generalization."
+          }
+        },
+        "steady": {
+          "cpu_ns": {
+            "process_medians_ns": {
+              "baseline": [
+                370922304,
+                355831656,
+                395439798,
+                409020924,
+                393106341,
+                389646068,
+                411279376,
+                398914956,
+                384792893,
+                399588842,
+                383847881,
+                385275162
+              ],
+              "candidate": [
+                10813083,
+                11495328,
+                8222968,
+                9992550,
+                25634118,
+                10846765,
+                9609793,
+                10108022,
+                7844674,
+                8299835,
+                9192389,
+                8406846
+              ]
+            },
+            "baseline_ns": 391376204.5,
+            "candidate_ns": 9801171.5,
+            "change_percent": -97.49571604320671,
+            "absolute_change_ns": -381575033.0,
+            "paired_rounds": [
+              {
+                "campaign": 0,
+                "round": 0,
+                "baseline_ns": 363376980.0,
+                "candidate_ns": 11154205.5,
+                "change_percent": -96.93040392927476
+              },
+              {
+                "campaign": 0,
+                "round": 1,
+                "baseline_ns": 402230361.0,
+                "candidate_ns": 9107759.0,
+                "change_percent": -97.73568584495789
+              },
+              {
+                "campaign": 0,
+                "round": 2,
+                "baseline_ns": 391376204.5,
+                "candidate_ns": 18240441.5,
+                "change_percent": -95.33940968043703
+              },
+              {
+                "campaign": 1,
+                "round": 0,
+                "baseline_ns": 405097166.0,
+                "candidate_ns": 9858907.5,
+                "change_percent": -97.56628573896269
+              },
+              {
+                "campaign": 1,
+                "round": 1,
+                "baseline_ns": 392190867.5,
+                "candidate_ns": 8072254.5,
+                "change_percent": -97.94175357742108
+              },
+              {
+                "campaign": 1,
+                "round": 2,
+                "baseline_ns": 384561521.5,
+                "candidate_ns": 8799617.5,
+                "change_percent": -97.71177899814919
+              }
+            ],
+            "paired_median_percent": -97.63903236855595,
+            "paired_bootstrap_median_95_percent": [
+              -97.83871971118948,
+              -96.13490680485589
+            ],
+            "bootstrap_caveat": "Descriptive resampling of a small fixed set of ABBA rounds, not application or scheduler generalization."
+          },
+          "wall_ns": {
+            "process_medians_ns": {
+              "baseline": [
+                63377310,
+                60509382,
+                61607645,
+                62297908,
+                60302623,
+                61593527,
+                63831525,
+                63872329,
+                59525603,
+                62773194,
+                61626106,
+                61941794
+              ],
+              "candidate": [
+                4474598,
+                4454381,
+                2572094,
+                3938524,
+                17414918,
+                4544451,
+                3960571,
+                4410495,
+                2379212,
+                2729900,
+                3097978,
+                2460262
+              ]
+            },
+            "baseline_ns": 61783950.0,
+            "candidate_ns": 3949547.5,
+            "change_percent": -93.60748624845125,
+            "absolute_change_ns": -57834402.5,
+            "paired_rounds": [
+              {
+                "campaign": 0,
+                "round": 0,
+                "baseline_ns": 61943346.0,
+                "candidate_ns": 4464489.5,
+                "change_percent": -92.7926245702
+              },
+              {
+                "campaign": 0,
+                "round": 1,
+                "baseline_ns": 61952776.5,
+                "candidate_ns": 3255309.0,
+                "change_percent": -94.74549942083709
+              },
+              {
+                "campaign": 0,
+                "round": 2,
+                "baseline_ns": 60948075.0,
+                "candidate_ns": 10979684.5,
+                "change_percent": -81.98518246884746
+              },
+              {
+                "campaign": 1,
+                "round": 0,
+                "baseline_ns": 63851927.0,
+                "candidate_ns": 4185533.0,
+                "change_percent": -93.44493863121782
+              },
+              {
+                "campaign": 1,
+                "round": 1,
+                "baseline_ns": 61149398.5,
+                "candidate_ns": 2554556.0,
+                "change_percent": -95.82243478650079
+              },
+              {
+                "campaign": 1,
+                "round": 2,
+                "baseline_ns": 61783950.0,
+                "candidate_ns": 2779120.0,
+                "change_percent": -95.50187386853706
+              }
+            ],
+            "paired_median_percent": -94.09521902602745,
+            "paired_bootstrap_median_95_percent": [
+              -95.66215432751892,
+              -87.38890351952372
+            ],
+            "bootstrap_caveat": "Descriptive resampling of a small fixed set of ABBA rounds, not application or scheduler generalization."
+          }
+        },
+        "counted_work": {
+          "verified": 786432,
+          "sets": 786432,
+          "reads": 786432,
+          "exits": 32,
+          "created": 32,
+          "global_array_bytes": 3072,
+          "thread_array_bytes": 2048,
+          "baseline_registry_locks": 786528,
+          "candidate_registry_locks": 96
+        }
+      },
+      "clear8": {
+        "first": {
+          "cpu_ns": {
+            "process_medians_ns": {
+              "baseline": [
+                118714357,
+                59820688,
+                117378791,
+                78958599,
+                114075443,
+                94686274,
+                106894719,
+                79516331,
+                121608972,
+                74647384,
+                75270868,
+                96320830
+              ],
+              "candidate": [
+                3256429,
+                3230807,
+                3945626,
+                3052169,
+                3696737,
+                3321762,
+                2675475,
+                3044843,
+                3177868,
+                2758592,
+                3279503,
+                4521995
+              ]
+            },
+            "baseline_ns": 95503552.0,
+            "candidate_ns": 3243618.0,
+            "change_percent": -96.60366768348051,
+            "absolute_change_ns": -92259934.0,
+            "paired_rounds": [
+              {
+                "campaign": 0,
+                "round": 0,
+                "baseline_ns": 89267522.5,
+                "candidate_ns": 3243618.0,
+                "change_percent": -96.36640750279588
+              },
+              {
+                "campaign": 0,
+                "round": 1,
+                "baseline_ns": 98168695.0,
+                "candidate_ns": 3498897.5,
+                "change_percent": -96.43583170785757
+              },
+              {
+                "campaign": 0,
+                "round": 2,
+                "baseline_ns": 104380858.5,
+                "candidate_ns": 3509249.5,
+                "change_percent": -96.6380334953846
+              },
+              {
+                "campaign": 1,
+                "round": 0,
+                "baseline_ns": 93205525.0,
+                "candidate_ns": 2860159.0,
+                "change_percent": -96.93134178472789
+              },
+              {
+                "campaign": 1,
+                "round": 1,
+                "baseline_ns": 98128178.0,
+                "candidate_ns": 2968230.0,
+                "change_percent": -96.9751501958999
+              },
+              {
+                "campaign": 1,
+                "round": 2,
+                "baseline_ns": 85795849.0,
+                "candidate_ns": 3900749.0,
+                "change_percent": -95.45345253241797
+              }
+            ],
+            "paired_median_percent": -96.53693260162109,
+            "paired_bootstrap_median_95_percent": [
+              -96.95324599031389,
+              -95.90993001760692
+            ],
+            "bootstrap_caveat": "Descriptive resampling of a small fixed set of ABBA rounds, not application or scheduler generalization."
+          },
+          "wall_ns": {
+            "process_medians_ns": {
+              "baseline": [
+                22680509,
+                17513033,
+                23020701,
+                19645547,
+                22485296,
+                20938189,
+                21467205,
+                20253603,
+                24773648,
+                18142996,
+                18899877,
+                21628204
+              ],
+              "candidate": [
+                1380629,
+                1468399,
+                1171262,
+                1248841,
+                1692375,
+                1278378,
+                1006277,
+                1210317,
+                1087195,
+                1042862,
+                1393968,
+                2416704
+              ]
+            },
+            "baseline_ns": 21202697.0,
+            "candidate_ns": 1263609.5,
+            "change_percent": -94.04033600065124,
+            "absolute_change_ns": -19939087.5,
+            "paired_rounds": [
+              {
+                "campaign": 0,
+                "round": 0,
+                "baseline_ns": 20096771.0,
+                "candidate_ns": 1424514.0,
+                "change_percent": -92.91172696350075
+              },
+              {
+                "campaign": 0,
+                "round": 1,
+                "baseline_ns": 21333124.0,
+                "candidate_ns": 1210051.5,
+                "change_percent": -94.32782793556161
+              },
+              {
+                "campaign": 0,
+                "round": 2,
+                "baseline_ns": 21711742.5,
+                "candidate_ns": 1485376.5,
+                "change_percent": -93.15864905822275
+              },
+              {
+                "campaign": 1,
+                "round": 0,
+                "baseline_ns": 20860404.0,
+                "candidate_ns": 1108297.0,
+                "change_percent": -94.6870779683845
+              },
+              {
+                "campaign": 1,
+                "round": 1,
+                "baseline_ns": 21458322.0,
+                "candidate_ns": 1065028.5,
+                "change_percent": -95.03675776698663
+              },
+              {
+                "campaign": 1,
+                "round": 2,
+                "baseline_ns": 20264040.5,
+                "candidate_ns": 1905336.0,
+                "change_percent": -90.59745266498061
+              }
+            ],
+            "paired_median_percent": -93.74323849689219,
+            "paired_bootstrap_median_95_percent": [
+              -94.86191786768556,
+              -91.75458981424069
+            ],
+            "bootstrap_caveat": "Descriptive resampling of a small fixed set of ABBA rounds, not application or scheduler generalization."
+          }
+        },
+        "steady": {
+          "cpu_ns": {
+            "process_medians_ns": {
+              "baseline": [
+                81226609,
+                93492117,
+                100893106,
+                90424637,
+                96312573,
+                75658503,
+                90691121,
+                95501397,
+                87569466,
+                77104008,
+                87263371,
+                85404399
+              ],
+              "candidate": [
+                1896006,
+                1858149,
+                1852452,
+                1940223,
+                1951220,
+                1954562,
+                1697829,
+                1932053,
+                1852777,
+                1908151,
+                1820852,
+                2069972
+              ]
+            },
+            "baseline_ns": 88997051.5,
+            "candidate_ns": 1902078.5,
+            "change_percent": -97.86276234106475,
+            "absolute_change_ns": -87094973.0,
+            "paired_rounds": [
+              {
+                "campaign": 0,
+                "round": 0,
+                "baseline_ns": 87359363.0,
+                "candidate_ns": 1877077.5,
+                "change_percent": -97.8513150330549
+              },
+              {
+                "campaign": 0,
+                "round": 1,
+                "baseline_ns": 95658871.5,
+                "candidate_ns": 1896337.5,
+                "change_percent": -98.01760414871714
+              },
+              {
+                "campaign": 0,
+                "round": 2,
+                "baseline_ns": 85985538.0,
+                "candidate_ns": 1952891.0,
+                "change_percent": -97.72881458274995
+              },
+              {
+                "campaign": 1,
+                "round": 0,
+                "baseline_ns": 93096259.0,
+                "candidate_ns": 1814941.0,
+                "change_percent": -98.05046838670499
+              },
+              {
+                "campaign": 1,
+                "round": 1,
+                "baseline_ns": 82336737.0,
+                "candidate_ns": 1880464.0,
+                "change_percent": -97.71613004289932
+              },
+              {
+                "campaign": 1,
+                "round": 2,
+                "baseline_ns": 86333885.0,
+                "candidate_ns": 1945412.0,
+                "change_percent": -97.74664142590132
+              }
+            ],
+            "paired_median_percent": -97.79897822947811,
+            "paired_bootstrap_median_95_percent": [
+              -98.03403626771106,
+              -97.72247231282464
+            ],
+            "bootstrap_caveat": "Descriptive resampling of a small fixed set of ABBA rounds, not application or scheduler generalization."
+          },
+          "wall_ns": {
+            "process_medians_ns": {
+              "baseline": [
+                20247700,
+                21149928,
+                21089131,
+                21656966,
+                20742956,
+                18880277,
+                20525897,
+                23412319,
+                22324070,
+                18987917,
+                19894609,
+                19987354
+              ],
+              "candidate": [
+                729546,
+                670668,
+                681990,
+                889810,
+                824878,
+                736139,
+                699952,
+                849615,
+                719326,
+                777054,
+                718428,
+                912892
+              ]
+            },
+            "baseline_ns": 20634426.5,
+            "candidate_ns": 732842.5,
+            "change_percent": -96.44844745261032,
+            "absolute_change_ns": -19901584.0,
+            "paired_rounds": [
+              {
+                "campaign": 0,
+                "round": 0,
+                "baseline_ns": 20698814.0,
+                "candidate_ns": 700107.0,
+                "change_percent": -96.61764678884501
+              },
+              {
+                "campaign": 0,
+                "round": 1,
+                "baseline_ns": 21373048.5,
+                "candidate_ns": 785900.0,
+                "change_percent": -96.32293914459605
+              },
+              {
+                "campaign": 0,
+                "round": 2,
+                "baseline_ns": 19811616.5,
+                "candidate_ns": 780508.5,
+                "change_percent": -96.06034924005317
+              },
+              {
+                "campaign": 1,
+                "round": 0,
+                "baseline_ns": 21969108.0,
+                "candidate_ns": 774783.5,
+                "change_percent": -96.47330469675875
+              },
+              {
+                "campaign": 1,
+                "round": 1,
+                "baseline_ns": 20655993.5,
+                "candidate_ns": 748190.0,
+                "change_percent": -96.37785517312444
+              },
+              {
+                "campaign": 1,
+                "round": 2,
+                "baseline_ns": 19940981.5,
+                "candidate_ns": 815660.0,
+                "change_percent": -95.90962962379761
+              }
+            ],
+            "paired_median_percent": -96.35039715886025,
+            "paired_bootstrap_median_95_percent": [
+              -96.54547574280187,
+              -95.98498943192538
+            ],
+            "bootstrap_caveat": "Descriptive resampling of a small fixed set of ABBA rounds, not application or scheduler generalization."
+          }
+        },
+        "counted_work": {
+          "verified": 262144,
+          "sets": 262160,
+          "reads": 262144,
+          "exits": 8,
+          "created": 1,
+          "global_array_bytes": 3072,
+          "thread_array_bytes": 2048,
+          "baseline_registry_locks": 262170,
+          "candidate_registry_locks": 10
+        }
+      },
+      "churn8": {
+        "first": {
+          "cpu_ns": {
+            "process_medians_ns": {
+              "baseline": [
+                351019157,
+                382446498,
+                392896226,
+                347974149,
+                345119482,
+                326029014,
+                353736565,
+                345834557,
+                354685695,
+                376218610,
+                343123976,
+                190390897
+              ],
+              "candidate": [
+                15273971,
+                11863455,
+                9649399,
+                12541275,
+                13832007,
+                12986550,
+                13470168,
+                14208260,
+                12004265,
+                12335392,
+                12764381,
+                6937274
+              ]
+            },
+            "baseline_ns": 349496653.0,
+            "candidate_ns": 12652828.0,
+            "change_percent": -96.37969980788343,
+            "absolute_change_ns": -336843825.0,
+            "paired_rounds": [
+              {
+                "campaign": 0,
+                "round": 0,
+                "baseline_ns": 366732827.5,
+                "candidate_ns": 13568713.0,
+                "change_percent": -96.3001095122852
+              },
+              {
+                "campaign": 0,
+                "round": 1,
+                "baseline_ns": 370435187.5,
+                "candidate_ns": 11095337.0,
+                "change_percent": -97.00478319166157
+              },
+              {
+                "campaign": 0,
+                "round": 2,
+                "baseline_ns": 335574248.0,
+                "candidate_ns": 13409278.5,
+                "change_percent": -96.00407999722314
+              },
+              {
+                "campaign": 1,
+                "round": 0,
+                "baseline_ns": 349785561.0,
+                "candidate_ns": 13839214.0,
+                "change_percent": -96.04351478647799
+              },
+              {
+                "campaign": 1,
+                "round": 1,
+                "baseline_ns": 365452152.5,
+                "candidate_ns": 12169828.5,
+                "change_percent": -96.66992562042715
+              },
+              {
+                "campaign": 1,
+                "round": 2,
+                "baseline_ns": 266757436.5,
+                "candidate_ns": 9850827.5,
+                "change_percent": -96.30719666928573
+              }
+            ],
+            "paired_median_percent": -96.30365309078547,
+            "paired_bootstrap_median_95_percent": [
+              -96.83735440604437,
+              -96.02379739185056
+            ],
+            "bootstrap_caveat": "Descriptive resampling of a small fixed set of ABBA rounds, not application or scheduler generalization."
+          },
+          "wall_ns": {
+            "process_medians_ns": {
+              "baseline": [
+                66920249,
+                78061781,
+                74140229,
+                65920079,
+                68360768,
+                70546935,
+                68264450,
+                66896083,
+                68925333,
+                71805363,
+                66556105,
+                51166032
+              ],
+              "candidate": [
+                2843074,
+                2429647,
+                2105221,
+                2526430,
+                2311525,
+                2725253,
+                2814366,
+                2635565,
+                2375679,
+                3102620,
+                3646283,
+                1954617
+              ]
+            },
+            "baseline_ns": 68312609.0,
+            "candidate_ns": 2580997.5,
+            "change_percent": -96.22178461958612,
+            "absolute_change_ns": -65731611.5,
+            "paired_rounds": [
+              {
+                "campaign": 0,
+                "round": 0,
+                "baseline_ns": 72491015.0,
+                "candidate_ns": 2636360.5,
+                "change_percent": -96.36318997602669
+              },
+              {
+                "campaign": 0,
+                "round": 1,
+                "baseline_ns": 70030154.0,
+                "candidate_ns": 2315825.5,
+                "change_percent": -96.69310237415728
+              },
+              {
+                "campaign": 0,
+                "round": 2,
+                "baseline_ns": 69453851.5,
+                "candidate_ns": 2518389.0,
+                "change_percent": -96.3740110222685
+              },
+              {
+                "campaign": 1,
+                "round": 0,
+                "baseline_ns": 67580266.5,
+                "candidate_ns": 2724965.5,
+                "change_percent": -95.967808886933
+              },
+              {
+                "campaign": 1,
+                "round": 1,
+                "baseline_ns": 70365348.0,
+                "candidate_ns": 2739149.5,
+                "change_percent": -96.1072465668755
+              },
+              {
+                "campaign": 1,
+                "round": 2,
+                "baseline_ns": 58861068.5,
+                "candidate_ns": 2800450.0,
+                "change_percent": -95.2422712136121
+              }
+            ],
+            "paired_median_percent": -96.23521827145109,
+            "paired_bootstrap_median_95_percent": [
+              -96.53355669821289,
+              -95.60504005027255
+            ],
+            "bootstrap_caveat": "Descriptive resampling of a small fixed set of ABBA rounds, not application or scheduler generalization."
+          }
+        },
+        "steady": {
+          "cpu_ns": {
+            "process_medians_ns": {
+              "baseline": [
+                278647956,
+                289501754,
+                268355436,
+                277414118,
+                293415094,
+                297467731,
+                312473630,
+                300737782,
+                301718986,
+                261350711,
+                271046716,
+                317917890
+              ],
+              "candidate": [
+                10722810,
+                9634218,
+                9218692,
+                9063013,
+                9873564,
+                10740011,
+                10933019,
+                10571333,
+                9143480,
+                9913414,
+                10156738,
+                10329736
+              ]
+            },
+            "baseline_ns": 291458424.0,
+            "candidate_ns": 10035076.0,
+            "change_percent": -96.55694425905493,
+            "absolute_change_ns": -281423348.0,
+            "paired_rounds": [
+              {
+                "campaign": 0,
+                "round": 0,
+                "baseline_ns": 284074855.0,
+                "candidate_ns": 10178514.0,
+                "change_percent": -96.41696059300989
+              },
+              {
+                "campaign": 0,
+                "round": 1,
+                "baseline_ns": 272884777.0,
+                "candidate_ns": 9140852.5,
+                "change_percent": -96.65028859414903
+              },
+              {
+                "campaign": 0,
+                "round": 2,
+                "baseline_ns": 295441412.5,
+                "candidate_ns": 10306787.5,
+                "change_percent": -96.51139377760725
+              },
+              {
+                "campaign": 1,
+                "round": 0,
+                "baseline_ns": 306605706.0,
+                "candidate_ns": 10752176.0,
+                "change_percent": -96.49315854545773
+              },
+              {
+                "campaign": 1,
+                "round": 1,
+                "baseline_ns": 281534848.5,
+                "candidate_ns": 9528447.0,
+                "change_percent": -96.61553550092752
+              },
+              {
+                "campaign": 1,
+                "round": 2,
+                "baseline_ns": 294482303.0,
+                "candidate_ns": 10243237.0,
+                "change_percent": -96.52161203045196
+              }
+            ],
+            "paired_median_percent": -96.51650290402961,
+            "paired_bootstrap_median_95_percent": [
+              -96.63291204753827,
+              -96.45505956923381
+            ],
+            "bootstrap_caveat": "Descriptive resampling of a small fixed set of ABBA rounds, not application or scheduler generalization."
+          },
+          "wall_ns": {
+            "process_medians_ns": {
+              "baseline": [
+                60651635,
+                62994330,
+                64892306,
+                62659908,
+                66489371,
+                66779775,
+                65421196,
+                63505631,
+                64897954,
+                60265567,
+                60076547,
+                67485135
+              ],
+              "candidate": [
+                2592389,
+                2544856,
+                2581526,
+                2148826,
+                2695279,
+                2586431,
+                2485622,
+                2477980,
+                2633686,
+                2557154,
+                2909127,
+                2946419
+              ]
+            },
+            "baseline_ns": 64198968.5,
+            "candidate_ns": 2583978.5,
+            "change_percent": -95.97504670187963,
+            "absolute_change_ns": -61614990.0,
+            "paired_rounds": [
+              {
+                "campaign": 0,
+                "round": 0,
+                "baseline_ns": 61822982.5,
+                "candidate_ns": 2568622.5,
+                "change_percent": -95.8451980216257
+              },
+              {
+                "campaign": 0,
+                "round": 1,
+                "baseline_ns": 63776107.0,
+                "candidate_ns": 2365176.0,
+                "change_percent": -96.29143873582625
+              },
+              {
+                "campaign": 0,
+                "round": 2,
+                "baseline_ns": 66634573.0,
+                "candidate_ns": 2640855.0,
+                "change_percent": -96.03680960032564
+              },
+              {
+                "campaign": 1,
+                "round": 0,
+                "baseline_ns": 64463413.5,
+                "candidate_ns": 2481801.0,
+                "change_percent": -96.1500627018456
+              },
+              {
+                "campaign": 1,
+                "round": 1,
+                "baseline_ns": 62581760.5,
+                "candidate_ns": 2595420.0,
+                "change_percent": -95.85275329542704
+              },
+              {
+                "campaign": 1,
+                "round": 2,
+                "baseline_ns": 63780841.0,
+                "candidate_ns": 2927773.0,
+                "change_percent": -95.40963563023574
+              }
+            ],
+            "paired_median_percent": -95.94478144787634,
+            "paired_bootstrap_median_95_percent": [
+              -96.22075071883592,
+              -95.62741682593072
+            ],
+            "bootstrap_caveat": "Descriptive resampling of a small fixed set of ABBA rounds, not application or scheduler generalization."
+          }
+        },
+        "counted_work": {
+          "verified": 786432,
+          "sets": 786432,
+          "reads": 786432,
+          "exits": 8,
+          "created": 4001,
+          "global_array_bytes": 3072,
+          "thread_array_bytes": 2048,
+          "baseline_registry_locks": 794442,
+          "candidate_registry_locks": 8010
+        }
+      },
+      "tiny-lifecycle": {
+        "first": {
+          "cpu_ns": {
+            "process_medians_ns": {
+              "baseline": [
+                31398718,
+                18378780,
+                44008429,
+                18966050,
+                20821247,
+                20494117,
+                26957819,
+                15708116,
+                30894943,
+                16150690,
+                19366750,
+                30322738
+              ],
+              "candidate": [
+                27034717,
+                22931252,
+                21703520,
+                19225993,
+                19343147,
+                18707423,
+                27208815,
+                15890291,
+                24121202,
+                18637465,
+                28276903,
+                24101941
+              ]
+            },
+            "baseline_ns": 20657682.0,
+            "candidate_ns": 22317386.0,
+            "change_percent": 8.034318661696904,
+            "absolute_change_ns": 1659704.0,
+            "paired_rounds": [
+              {
+                "campaign": 0,
+                "round": 0,
+                "baseline_ns": 24888749.0,
+                "candidate_ns": 24982984.5,
+                "change_percent": 0.37862690487175943
+              },
+              {
+                "campaign": 0,
+                "round": 1,
+                "baseline_ns": 31487239.5,
+                "candidate_ns": 20464756.5,
+                "change_percent": -35.00619036483017
+              },
+              {
+                "campaign": 0,
+                "round": 2,
+                "baseline_ns": 20657682.0,
+                "candidate_ns": 19025285.0,
+                "change_percent": -7.902130548819564
+              },
+              {
+                "campaign": 1,
+                "round": 0,
+                "baseline_ns": 21332967.5,
+                "candidate_ns": 21549553.0,
+                "change_percent": 1.0152619414059538
+              },
+              {
+                "campaign": 1,
+                "round": 1,
+                "baseline_ns": 23522816.5,
+                "candidate_ns": 21379333.5,
+                "change_percent": -9.11235693225767
+              },
+              {
+                "campaign": 1,
+                "round": 2,
+                "baseline_ns": 24844744.0,
+                "candidate_ns": 26189422.0,
+                "change_percent": 5.4123238299416565
+              }
+            ],
+            "paired_median_percent": -3.761751821973902,
+            "paired_bootstrap_median_95_percent": [
+              -22.05927364854392,
+              3.213792885673805
+            ],
+            "bootstrap_caveat": "Descriptive resampling of a small fixed set of ABBA rounds, not application or scheduler generalization."
+          },
+          "wall_ns": {
+            "process_medians_ns": {
+              "baseline": [
+                25028040,
+                13227639,
+                36970108,
+                12874026,
+                15556511,
+                14632021,
+                20174418,
+                11665457,
+                24064061,
+                11431708,
+                13790808,
+                29713823
+              ],
+              "candidate": [
+                21158314,
+                18036863,
+                16931044,
+                14185443,
+                16177092,
+                13003126,
+                20922180,
+                10926776,
+                16203998,
+                12826121,
+                21919289,
+                15988148
+              ]
+            },
+            "baseline_ns": 15094266.0,
+            "candidate_ns": 16190545.0,
+            "change_percent": 7.262883799715736,
+            "absolute_change_ns": 1096279.0,
+            "paired_rounds": [
+              {
+                "campaign": 0,
+                "round": 0,
+                "baseline_ns": 19127839.5,
+                "candidate_ns": 19597588.5,
+                "change_percent": 2.4558393016628877
+              },
+              {
+                "campaign": 0,
+                "round": 1,
+                "baseline_ns": 24922067.0,
+                "candidate_ns": 15558243.5,
+                "change_percent": -37.57241925398884
+              },
+              {
+                "campaign": 0,
+                "round": 2,
+                "baseline_ns": 15094266.0,
+                "candidate_ns": 14590109.0,
+                "change_percent": -3.34005641612517
+              },
+              {
+                "campaign": 1,
+                "round": 0,
+                "baseline_ns": 15919937.5,
+                "candidate_ns": 15924478.0,
+                "change_percent": 0.028520840612600296
+              },
+              {
+                "campaign": 1,
+                "round": 1,
+                "baseline_ns": 17747884.5,
+                "candidate_ns": 14515059.5,
+                "change_percent": -18.215269543815204
+              },
+              {
+                "campaign": 1,
+                "round": 2,
+                "baseline_ns": 21752315.5,
+                "candidate_ns": 18953718.5,
+                "change_percent": -12.865742959640325
+              }
+            ],
+            "paired_median_percent": -8.102899687882747,
+            "paired_bootstrap_median_95_percent": [
+              -27.893844398902022,
+              1.242180071137744
+            ],
+            "bootstrap_caveat": "Descriptive resampling of a small fixed set of ABBA rounds, not application or scheduler generalization."
+          }
+        },
+        "steady": {
+          "cpu_ns": {
+            "process_medians_ns": {
+              "baseline": [
+                26110531,
+                17138282,
+                25529352,
+                15075961,
+                24024636,
+                18546498,
+                24166044,
+                18835962,
+                28127861,
+                21470039,
+                27456867,
+                22517916
+              ],
+              "candidate": [
+                23369245,
+                18506335,
+                23907325,
+                19248869,
+                20188515,
+                22198171,
+                21351975,
+                27459464,
+                22689955,
+                24915209,
+                24838602,
+                28711002
+              ]
+            },
+            "baseline_ns": 23271276.0,
+            "candidate_ns": 23029600.0,
+            "change_percent": -1.0385163237288775,
+            "absolute_change_ns": -241676.0,
+            "paired_rounds": [
+              {
+                "campaign": 0,
+                "round": 0,
+                "baseline_ns": 21624406.5,
+                "candidate_ns": 20937790.0,
+                "change_percent": -3.1751923457413733
+              },
+              {
+                "campaign": 0,
+                "round": 1,
+                "baseline_ns": 20302656.5,
+                "candidate_ns": 21578097.0,
+                "change_percent": 6.282136034759778
+              },
+              {
+                "campaign": 0,
+                "round": 2,
+                "baseline_ns": 21285567.0,
+                "candidate_ns": 21193343.0,
+                "change_percent": -0.43327011209051136
+              },
+              {
+                "campaign": 1,
+                "round": 0,
+                "baseline_ns": 21501003.0,
+                "candidate_ns": 24405719.5,
+                "change_percent": 13.509679060088509
+              },
+              {
+                "campaign": 1,
+                "round": 1,
+                "baseline_ns": 24798950.0,
+                "candidate_ns": 23802582.0,
+                "change_percent": -4.017783010974252
+              },
+              {
+                "campaign": 1,
+                "round": 2,
+                "baseline_ns": 24987391.5,
+                "candidate_ns": 26774802.0,
+                "change_percent": 7.153249669938533
+              }
+            ],
+            "paired_median_percent": 2.924432961334633,
+            "paired_bootstrap_median_95_percent": [
+              -3.596487678357813,
+              10.33146436501352
+            ],
+            "bootstrap_caveat": "Descriptive resampling of a small fixed set of ABBA rounds, not application or scheduler generalization."
+          },
+          "wall_ns": {
+            "process_medians_ns": {
+              "baseline": [
+                21488174,
+                12433387,
+                21225280,
+                11061846,
+                19294113,
+                13715961,
+                19039914,
+                14233149,
+                22776400,
+                17157812,
+                24004147,
+                20119370
+              ],
+              "candidate": [
+                17743207,
+                13832946,
+                18908887,
+                16435077,
+                15568868,
+                18170473,
+                16906564,
+                23523227,
+                18351122,
+                20460666,
+                20956916,
+                21296521
+              ]
+            },
+            "baseline_ns": 19167013.5,
+            "candidate_ns": 18260797.5,
+            "change_percent": -4.727997922054994,
+            "absolute_change_ns": -906216.0,
+            "paired_rounds": [
+              {
+                "campaign": 0,
+                "round": 0,
+                "baseline_ns": 16960780.5,
+                "candidate_ns": 15788076.5,
+                "change_percent": -6.914210109611407
+              },
+              {
+                "campaign": 0,
+                "round": 1,
+                "baseline_ns": 16143563.0,
+                "candidate_ns": 17671982.0,
+                "change_percent": 9.467668320803767
+              },
+              {
+                "campaign": 0,
+                "round": 2,
+                "baseline_ns": 16505037.0,
+                "candidate_ns": 16869670.5,
+                "change_percent": 2.209225583680907
+              },
+              {
+                "campaign": 1,
+                "round": 0,
+                "baseline_ns": 16636531.5,
+                "candidate_ns": 20214895.5,
+                "change_percent": 21.509074773188154
+              },
+              {
+                "campaign": 1,
+                "round": 1,
+                "baseline_ns": 19967106.0,
+                "candidate_ns": 19405894.0,
+                "change_percent": -2.8106827298858383
+              },
+              {
+                "campaign": 1,
+                "round": 2,
+                "baseline_ns": 22061758.5,
+                "candidate_ns": 21126718.5,
+                "change_percent": -4.23828408782555
+              }
+            ],
+            "paired_median_percent": -0.3007285731024656,
+            "paired_bootstrap_median_95_percent": [
+              -5.576247098718478,
+              15.48837154699596
+            ],
+            "bootstrap_caveat": "Descriptive resampling of a small fixed set of ABBA rounds, not application or scheduler generalization."
+          }
+        },
+        "counted_work": {
+          "verified": 256,
+          "sets": 256,
+          "reads": 256,
+          "exits": 256,
+          "created": 256,
+          "global_array_bytes": 3072,
+          "thread_array_bytes": 2048,
+          "baseline_registry_locks": 1024,
+          "candidate_registry_locks": 768
+        }
+      },
+      "no-set-lifecycle": {
+        "first": {
+          "cpu_ns": {
+            "process_medians_ns": {
+              "baseline": [
+                16243606,
+                25579876,
+                17463744,
+                17149008,
+                15993745,
+                20924765,
+                21597640,
+                20446222,
+                25409484,
+                15491511,
+                21431466,
+                15944162
+              ],
+              "candidate": [
+                22580843,
+                19298440,
+                19402513,
+                17361680,
+                23121706,
+                16194598,
+                14881331,
+                20144033,
+                25013972,
+                18251980,
+                23715968,
+                31102781
+              ]
+            },
+            "baseline_ns": 18954983.0,
+            "candidate_ns": 19773273.0,
+            "change_percent": 4.317017852244964,
+            "absolute_change_ns": 818290.0,
+            "paired_rounds": [
+              {
+                "campaign": 0,
+                "round": 0,
+                "baseline_ns": 20911741.0,
+                "candidate_ns": 20939641.5,
+                "change_percent": 0.1334202637647497
+              },
+              {
+                "campaign": 0,
+                "round": 1,
+                "baseline_ns": 17306376.0,
+                "candidate_ns": 18382096.5,
+                "change_percent": 6.215746728257843
+              },
+              {
+                "campaign": 0,
+                "round": 2,
+                "baseline_ns": 18459255.0,
+                "candidate_ns": 19658152.0,
+                "change_percent": 6.494828745797165
+              },
+              {
+                "campaign": 1,
+                "round": 0,
+                "baseline_ns": 21021931.0,
+                "candidate_ns": 17512682.0,
+                "change_percent": -16.693276179053196
+              },
+              {
+                "campaign": 1,
+                "round": 1,
+                "baseline_ns": 20450497.5,
+                "candidate_ns": 21632976.0,
+                "change_percent": 5.782150287541898
+              },
+              {
+                "campaign": 1,
+                "round": 2,
+                "baseline_ns": 18687814.0,
+                "candidate_ns": 27409374.5,
+                "change_percent": 46.66977368246494
+              }
+            ],
+            "paired_median_percent": 5.99894850789987,
+            "paired_bootstrap_median_95_percent": [
+              -8.279927957644222,
+              26.582301214131054
+            ],
+            "bootstrap_caveat": "Descriptive resampling of a small fixed set of ABBA rounds, not application or scheduler generalization."
+          },
+          "wall_ns": {
+            "process_medians_ns": {
+              "baseline": [
+                12121891,
+                18114426,
+                12226841,
+                12538968,
+                14015904,
+                15270373,
+                17412509,
+                14970810,
+                22999271,
+                10759953,
+                15984880,
+                11276472
+              ],
+              "candidate": [
+                17077680,
+                14411238,
+                13680731,
+                12771521,
+                17327327,
+                11939009,
+                10191086,
+                14188610,
+                16052107,
+                14269866,
+                18645537,
+                25749604
+              ]
+            },
+            "baseline_ns": 14493357.0,
+            "candidate_ns": 14340552.0,
+            "change_percent": -1.0543106058865437,
+            "absolute_change_ns": -152805.0,
+            "paired_rounds": [
+              {
+                "campaign": 0,
+                "round": 0,
+                "baseline_ns": 15118158.5,
+                "candidate_ns": 15744459.0,
+                "change_percent": 4.142703623592792
+              },
+              {
+                "campaign": 0,
+                "round": 1,
+                "baseline_ns": 12382904.5,
+                "candidate_ns": 13226126.0,
+                "change_percent": 6.809561520885499
+              },
+              {
+                "campaign": 0,
+                "round": 2,
+                "baseline_ns": 14643138.5,
+                "candidate_ns": 14633168.0,
+                "change_percent": -0.06808991118946173
+              },
+              {
+                "campaign": 1,
+                "round": 0,
+                "baseline_ns": 16191659.5,
+                "candidate_ns": 12189848.0,
+                "change_percent": -24.71526467067814
+              },
+              {
+                "campaign": 1,
+                "round": 1,
+                "baseline_ns": 16879612.0,
+                "candidate_ns": 15160986.5,
+                "change_percent": -10.181664720729366
+              },
+              {
+                "campaign": 1,
+                "round": 2,
+                "baseline_ns": 13630676.0,
+                "candidate_ns": 22197570.5,
+                "change_percent": 62.850107360779475
+              }
+            ],
+            "paired_median_percent": 2.037306856201665,
+            "paired_bootstrap_median_95_percent": [
+              -17.448464695703752,
+              34.829834440832485
+            ],
+            "bootstrap_caveat": "Descriptive resampling of a small fixed set of ABBA rounds, not application or scheduler generalization."
+          }
+        },
+        "steady": {
+          "cpu_ns": {
+            "process_medians_ns": {
+              "baseline": [
+                19999568,
+                19451940,
+                22060913,
+                16517758,
+                16855939,
+                17333893,
+                22897492,
+                22687602,
+                19958420,
+                19621668,
+                20649842,
+                17152344
+              ],
+              "candidate": [
+                19142128,
+                22418920,
+                20052756,
+                20029615,
+                16902571,
+                18393205,
+                17791946,
+                22149433,
+                17661785,
+                21694714,
+                21982787,
+                19827626
+              ]
+            },
+            "baseline_ns": 19790044.0,
+            "candidate_ns": 19928620.5,
+            "change_percent": 0.7002334102945929,
+            "absolute_change_ns": 138576.5,
+            "paired_rounds": [
+              {
+                "campaign": 0,
+                "round": 0,
+                "baseline_ns": 19725754.0,
+                "candidate_ns": 20780524.0,
+                "change_percent": 5.347172026985625
+              },
+              {
+                "campaign": 0,
+                "round": 1,
+                "baseline_ns": 19289335.5,
+                "candidate_ns": 20041185.5,
+                "change_percent": 3.897749614028956
+              },
+              {
+                "campaign": 0,
+                "round": 2,
+                "baseline_ns": 17094916.0,
+                "candidate_ns": 17647888.0,
+                "change_percent": 3.2347160992192148
+              },
+              {
+                "campaign": 1,
+                "round": 0,
+                "baseline_ns": 22792547.0,
+                "candidate_ns": 19970689.5,
+                "change_percent": -12.380615031747
+              },
+              {
+                "campaign": 1,
+                "round": 1,
+                "baseline_ns": 19790044.0,
+                "candidate_ns": 19678249.5,
+                "change_percent": -0.5649027359413639
+              },
+              {
+                "campaign": 1,
+                "round": 2,
+                "baseline_ns": 18901093.0,
+                "candidate_ns": 20905206.5,
+                "change_percent": 10.603161944126715
+              }
+            ],
+            "paired_median_percent": 3.5662328566240853,
+            "paired_bootstrap_median_95_percent": [
+              -6.4727588838441825,
+              7.97516698555617
+            ],
+            "bootstrap_caveat": "Descriptive resampling of a small fixed set of ABBA rounds, not application or scheduler generalization."
+          },
+          "wall_ns": {
+            "process_medians_ns": {
+              "baseline": [
+                15691319,
+                15819570,
+                17804661,
+                12656800,
+                12339718,
+                13150856,
+                18054076,
+                18001365,
+                15412274,
+                15159459,
+                16532965,
+                13048563
+              ],
+              "candidate": [
+                14417255,
+                17542198,
+                16065008,
+                15445163,
+                12525105,
+                14011104,
+                13532682,
+                16357924,
+                13673938,
+                16975731,
+                15985801,
+                15408731
+              ]
+            },
+            "baseline_ns": 15551796.5,
+            "candidate_ns": 15426947.0,
+            "change_percent": -0.8027979275577635,
+            "absolute_change_ns": -124849.5,
+            "paired_rounds": [
+              {
+                "campaign": 0,
+                "round": 0,
+                "baseline_ns": 15755444.5,
+                "candidate_ns": 15979726.5,
+                "change_percent": 1.423520612192175
+              },
+              {
+                "campaign": 0,
+                "round": 1,
+                "baseline_ns": 15230730.5,
+                "candidate_ns": 15755085.5,
+                "change_percent": 3.4427436031384095
+              },
+              {
+                "campaign": 0,
+                "round": 2,
+                "baseline_ns": 12745287.0,
+                "candidate_ns": 13268104.5,
+                "change_percent": 4.1020457209006045
+              },
+              {
+                "campaign": 1,
+                "round": 0,
+                "baseline_ns": 18027720.5,
+                "candidate_ns": 14945303.0,
+                "change_percent": -17.09820994839586
+              },
+              {
+                "campaign": 1,
+                "round": 1,
+                "baseline_ns": 15285866.5,
+                "candidate_ns": 15324834.5,
+                "change_percent": 0.25492830255975374
+              },
+              {
+                "campaign": 1,
+                "round": 2,
+                "baseline_ns": 14790764.0,
+                "candidate_ns": 15697266.0,
+                "change_percent": 6.128838239863743
+              }
+            ],
+            "paired_median_percent": 2.4331321076652923,
+            "paired_bootstrap_median_95_percent": [
+              -8.421640822918052,
+              5.115441980382174
+            ],
+            "bootstrap_caveat": "Descriptive resampling of a small fixed set of ABBA rounds, not application or scheduler generalization."
+          }
+        },
+        "counted_work": {
+          "verified": 0,
+          "sets": 0,
+          "reads": 0,
+          "exits": 0,
+          "created": 256,
+          "global_array_bytes": 3072,
+          "thread_array_bytes": 2048,
+          "baseline_registry_locks": 512,
+          "candidate_registry_locks": 512
+        }
+      },
+      "create-delete-control": {
+        "first": {
+          "cpu_ns": {
+            "process_medians_ns": {
+              "baseline": [
+                674572,
+                769652,
+                753112,
+                682982,
+                648371,
+                765308,
+                696541,
+                694509,
+                997503,
+                713072,
+                665244,
+                788431
+              ],
+              "candidate": [
+                803865,
+                695123,
+                702521,
+                753670,
+                1042461,
+                663470,
+                663107,
+                769662,
+                772964,
+                688377,
+                713326,
+                763786
+              ]
+            },
+            "baseline_ns": 704806.5,
+            "candidate_ns": 733498.0,
+            "change_percent": 4.070833625966852,
+            "absolute_change_ns": 28691.5,
+            "paired_rounds": [
+              {
+                "campaign": 0,
+                "round": 0,
+                "baseline_ns": 722112.0,
+                "candidate_ns": 749494.0,
+                "change_percent": 3.7919325533989134
+              },
+              {
+                "campaign": 0,
+                "round": 1,
+                "baseline_ns": 718047.0,
+                "candidate_ns": 728095.5,
+                "change_percent": 1.399420929270656
+              },
+              {
+                "campaign": 0,
+                "round": 2,
+                "baseline_ns": 706839.5,
+                "candidate_ns": 852965.5,
+                "change_percent": 20.673151401414323
+              },
+              {
+                "campaign": 1,
+                "round": 0,
+                "baseline_ns": 695525.0,
+                "candidate_ns": 716384.5,
+                "change_percent": 2.9991013982243686
+              },
+              {
+                "campaign": 1,
+                "round": 1,
+                "baseline_ns": 855287.5,
+                "candidate_ns": 730670.5,
+                "change_percent": -14.570188386945915
+              },
+              {
+                "campaign": 1,
+                "round": 2,
+                "baseline_ns": 726837.5,
+                "candidate_ns": 738556.0,
+                "change_percent": 1.6122585859975613
+              }
+            ],
+            "paired_median_percent": 2.305679992110965,
+            "paired_bootstrap_median_95_percent": [
+              -6.58538372883763,
+              12.232541977406619
+            ],
+            "bootstrap_caveat": "Descriptive resampling of a small fixed set of ABBA rounds, not application or scheduler generalization."
+          },
+          "wall_ns": {
+            "process_medians_ns": {
+              "baseline": [
+                669861,
+                765609,
+                747343,
+                677170,
+                643708,
+                759601,
+                692188,
+                689998,
+                992227,
+                708698,
+                658986,
+                784055
+              ],
+              "candidate": [
+                799775,
+                691068,
+                698480,
+                749467,
+                1037998,
+                658701,
+                658953,
+                763338,
+                769097,
+                683938,
+                708233,
+                759324
+              ]
+            },
+            "baseline_ns": 700443.0,
+            "candidate_ns": 728850.0,
+            "change_percent": 4.055576256740379,
+            "absolute_change_ns": 28407.0,
+            "paired_rounds": [
+              {
+                "campaign": 0,
+                "round": 0,
+                "baseline_ns": 717735.0,
+                "candidate_ns": 745421.5,
+                "change_percent": 3.857482218367503
+              },
+              {
+                "campaign": 0,
+                "round": 1,
+                "baseline_ns": 712256.5,
+                "candidate_ns": 723973.5,
+                "change_percent": 1.6450534322958177
+              },
+              {
+                "campaign": 0,
+                "round": 2,
+                "baseline_ns": 701654.5,
+                "candidate_ns": 848349.5,
+                "change_percent": 20.907013352012992
+              },
+              {
+                "campaign": 1,
+                "round": 0,
+                "baseline_ns": 691093.0,
+                "candidate_ns": 711145.5,
+                "change_percent": 2.9015631760124894
+              },
+              {
+                "campaign": 1,
+                "round": 1,
+                "baseline_ns": 850462.5,
+                "candidate_ns": 726517.5,
+                "change_percent": -14.573834825168664
+              },
+              {
+                "campaign": 1,
+                "round": 2,
+                "baseline_ns": 721520.5,
+                "candidate_ns": 733778.5,
+                "change_percent": 1.698912227719096
+              }
+            ],
+            "paired_median_percent": 2.3002377018657927,
+            "paired_bootstrap_median_95_percent": [
+              -6.464390696436423,
+              12.382247785190248
+            ],
+            "bootstrap_caveat": "Descriptive resampling of a small fixed set of ABBA rounds, not application or scheduler generalization."
+          }
+        },
+        "steady": {
+          "cpu_ns": {
+            "process_medians_ns": {
+              "baseline": [
+                689557,
+                781250,
+                743486,
+                859882,
+                780387,
+                693157,
+                695344,
+                738361,
+                804673,
+                732654,
+                753000,
+                733985
+              ],
+              "candidate": [
+                773817,
+                683866,
+                681932,
+                704580,
+                789721,
+                755761,
+                683817,
+                697631,
+                679995,
+                681589,
+                746222,
+                783768
+              ]
+            },
+            "baseline_ns": 740923.5,
+            "candidate_ns": 701105.5,
+            "change_percent": -5.374104074172303,
+            "absolute_change_ns": -39818.0,
+            "paired_rounds": [
+              {
+                "campaign": 0,
+                "round": 0,
+                "baseline_ns": 735403.5,
+                "candidate_ns": 728841.5,
+                "change_percent": -0.8922992615618464
+              },
+              {
+                "campaign": 0,
+                "round": 1,
+                "baseline_ns": 801684.0,
+                "candidate_ns": 693256.0,
+                "change_percent": -13.525029812245226
+              },
+              {
+                "campaign": 0,
+                "round": 2,
+                "baseline_ns": 736772.0,
+                "candidate_ns": 772741.0,
+                "change_percent": 4.881971627586279
+              },
+              {
+                "campaign": 1,
+                "round": 0,
+                "baseline_ns": 716852.5,
+                "candidate_ns": 690724.0,
+                "change_percent": -3.644892080309403
+              },
+              {
+                "campaign": 1,
+                "round": 1,
+                "baseline_ns": 768663.5,
+                "candidate_ns": 680792.0,
+                "change_percent": -11.431725325841546
+              },
+              {
+                "campaign": 1,
+                "round": 2,
+                "baseline_ns": 743492.5,
+                "candidate_ns": 764995.0,
+                "change_percent": 2.8920937332925334
+              }
+            ],
+            "paired_median_percent": -2.2685956709356248,
+            "paired_bootstrap_median_95_percent": [
+              -12.478377569043385,
+              3.887032680439406
+            ],
+            "bootstrap_caveat": "Descriptive resampling of a small fixed set of ABBA rounds, not application or scheduler generalization."
+          },
+          "wall_ns": {
+            "process_medians_ns": {
+              "baseline": [
+                689493,
+                781266,
+                743353,
+                859846,
+                780157,
+                692874,
+                695294,
+                738354,
+                804716,
+                732624,
+                753015,
+                733986
+              ],
+              "candidate": [
+                773895,
+                683811,
+                681961,
+                704590,
+                789362,
+                755483,
+                683735,
+                697575,
+                679941,
+                681495,
+                746148,
+                783684
+              ]
+            },
+            "baseline_ns": 740853.5,
+            "candidate_ns": 701082.5,
+            "change_percent": -5.368267815431793,
+            "absolute_change_ns": -39771.0,
+            "paired_rounds": [
+              {
+                "campaign": 0,
+                "round": 0,
+                "baseline_ns": 735379.5,
+                "candidate_ns": 728853.0,
+                "change_percent": -0.8875009433904513
+              },
+              {
+                "campaign": 0,
+                "round": 1,
+                "baseline_ns": 801599.5,
+                "candidate_ns": 693275.5,
+                "change_percent": -13.51348148296001
+              },
+              {
+                "campaign": 0,
+                "round": 2,
+                "baseline_ns": 736515.5,
+                "candidate_ns": 772422.5,
+                "change_percent": 4.875253813395641
+              },
+              {
+                "campaign": 1,
+                "round": 0,
+                "baseline_ns": 716824.0,
+                "candidate_ns": 690655.0,
+                "change_percent": -3.650686918964763
+              },
+              {
+                "campaign": 1,
+                "round": 1,
+                "baseline_ns": 768670.0,
+                "candidate_ns": 680718.0,
+                "change_percent": -11.442101291841755
+              },
+              {
+                "campaign": 1,
+                "round": 2,
+                "baseline_ns": 743500.5,
+                "candidate_ns": 764916.0,
+                "change_percent": 2.880361210248017
+              }
+            ],
+            "paired_median_percent": -2.269093931177607,
+            "paired_bootstrap_median_95_percent": [
+              -12.477791387400883,
+              3.877807511821829
+            ],
+            "bootstrap_caveat": "Descriptive resampling of a small fixed set of ABBA rounds, not application or scheduler generalization."
+          }
+        },
+        "counted_work": {
+          "verified": 0,
+          "sets": 0,
+          "reads": 0,
+          "exits": 0,
+          "created": 40000,
+          "global_array_bytes": 3072,
+          "thread_array_bytes": 2048,
+          "baseline_registry_locks": 80000,
+          "candidate_registry_locks": 80000
+        }
+      },
+      "read-only-control": {
+        "first": {
+          "cpu_ns": {
+            "process_medians_ns": {
+              "baseline": [
+                1894418,
+                1927672,
+                1968928,
+                2070306,
+                2479426,
+                1842460,
+                2159339,
+                1868050,
+                2123908,
+                1877239,
+                2037809,
+                2019963
+              ],
+              "candidate": [
+                1959031,
+                2083963,
+                1830377,
+                2087573,
+                2012740,
+                1824266,
+                3708558,
+                2261760,
+                2340233,
+                2145607,
+                2035456,
+                51594012
+              ]
+            },
+            "baseline_ns": 1994445.5,
+            "candidate_ns": 2085768.0,
+            "change_percent": 4.578841587799709,
+            "absolute_change_ns": 91322.5,
+            "paired_rounds": [
+              {
+                "campaign": 0,
+                "round": 0,
+                "baseline_ns": 1911045.0,
+                "candidate_ns": 2021497.0,
+                "change_percent": 5.779665052366645
+              },
+              {
+                "campaign": 0,
+                "round": 1,
+                "baseline_ns": 2019617.0,
+                "candidate_ns": 1958975.0,
+                "change_percent": -3.00264852197224
+              },
+              {
+                "campaign": 0,
+                "round": 2,
+                "baseline_ns": 2160943.0,
+                "candidate_ns": 1918503.0,
+                "change_percent": -11.21917607266828
+              },
+              {
+                "campaign": 1,
+                "round": 0,
+                "baseline_ns": 2013694.5,
+                "candidate_ns": 2985159.0,
+                "change_percent": 48.24289384511901
+              },
+              {
+                "campaign": 1,
+                "round": 1,
+                "baseline_ns": 2000573.5,
+                "candidate_ns": 2242920.0,
+                "change_percent": 12.113851353124483
+              },
+              {
+                "campaign": 1,
+                "round": 2,
+                "baseline_ns": 2028886.0,
+                "candidate_ns": 26814734.0,
+                "change_percent": 1221.6481359721543
+              }
+            ],
+            "paired_median_percent": 8.946758202745563,
+            "paired_bootstrap_median_95_percent": [
+              -7.11091229732026,
+              634.9455149086366
+            ],
+            "bootstrap_caveat": "Descriptive resampling of a small fixed set of ABBA rounds, not application or scheduler generalization."
+          },
+          "wall_ns": {
+            "process_medians_ns": {
+              "baseline": [
+                1891392,
+                1925734,
+                1935509,
+                2068829,
+                2505808,
+                1834888,
+                2096026,
+                1877301,
+                2125067,
+                1862491,
+                2035845,
+                2012000
+              ],
+              "candidate": [
+                1959656,
+                2084752,
+                1820290,
+                2084860,
+                2013391,
+                1823320,
+                3779993,
+                2258383,
+                2319526,
+                2347453,
+                2031921,
+                51696209
+              ]
+            },
+            "baseline_ns": 1973754.5,
+            "candidate_ns": 2084806.0,
+            "change_percent": 5.6264089581556265,
+            "absolute_change_ns": 111051.5,
+            "paired_rounds": [
+              {
+                "campaign": 0,
+                "round": 0,
+                "baseline_ns": 1908563.0,
+                "candidate_ns": 2022204.0,
+                "change_percent": 5.954270307032039
+              },
+              {
+                "campaign": 0,
+                "round": 1,
+                "baseline_ns": 2002169.0,
+                "candidate_ns": 1952575.0,
+                "change_percent": -2.477013678665485
+              },
+              {
+                "campaign": 0,
+                "round": 2,
+                "baseline_ns": 2170348.0,
+                "candidate_ns": 1918355.5,
+                "change_percent": -11.610695611947941
+              },
+              {
+                "campaign": 1,
+                "round": 0,
+                "baseline_ns": 1986663.5,
+                "candidate_ns": 3019188.0,
+                "change_percent": 51.97279257408211
+              },
+              {
+                "campaign": 1,
+                "round": 1,
+                "baseline_ns": 1993779.0,
+                "candidate_ns": 2333489.5,
+                "change_percent": 17.03852332680804
+              },
+              {
+                "campaign": 1,
+                "round": 2,
+                "baseline_ns": 2023922.5,
+                "candidate_ns": 26864065.0,
+                "change_percent": 1227.3267627589496
+              }
+            ],
+            "paired_median_percent": 11.49639681692004,
+            "paired_bootstrap_median_95_percent": [
+              -7.043854645306713,
+              639.6497776665159
+            ],
+            "bootstrap_caveat": "Descriptive resampling of a small fixed set of ABBA rounds, not application or scheduler generalization."
+          }
+        },
+        "steady": {
+          "cpu_ns": {
+            "process_medians_ns": {
+              "baseline": [
+                1810810,
+                1838401,
+                1849023,
+                1977710,
+                1825377,
+                2889704,
+                1786421,
+                2114360,
+                1849655,
+                1798547,
+                1845561,
+                1887392
+              ],
+              "candidate": [
+                1790697,
+                1820172,
+                1958159,
+                1856332,
+                1865635,
+                1904833,
+                1853140,
+                1748917,
+                1848233,
+                1931000,
+                1757443,
+                2253541
+              ]
+            },
+            "baseline_ns": 1847292.0,
+            "candidate_ns": 1854736.0,
+            "change_percent": 0.40296823674870197,
+            "absolute_change_ns": 7444.0,
+            "paired_rounds": [
+              {
+                "campaign": 0,
+                "round": 0,
+                "baseline_ns": 1824605.5,
+                "candidate_ns": 1805434.5,
+                "change_percent": -1.0506928758024725
+              },
+              {
+                "campaign": 0,
+                "round": 1,
+                "baseline_ns": 1913366.5,
+                "candidate_ns": 1907245.5,
+                "change_percent": -0.31990734655383823
+              },
+              {
+                "campaign": 0,
+                "round": 2,
+                "baseline_ns": 2357540.5,
+                "candidate_ns": 1885234.0,
+                "change_percent": -20.03386580209332
+              },
+              {
+                "campaign": 1,
+                "round": 0,
+                "baseline_ns": 1950390.5,
+                "candidate_ns": 1801028.5,
+                "change_percent": -7.658056168751848
+              },
+              {
+                "campaign": 1,
+                "round": 1,
+                "baseline_ns": 1824101.0,
+                "candidate_ns": 1889616.5,
+                "change_percent": 3.5916596723536642
+              },
+              {
+                "campaign": 1,
+                "round": 2,
+                "baseline_ns": 1866476.5,
+                "candidate_ns": 2005492.0,
+                "change_percent": 7.448017695374154
+              }
+            ],
+            "paired_median_percent": -0.6853001111781554,
+            "paired_bootstrap_median_95_percent": [
+              -13.845960985422584,
+              5.5198386838639095
+            ],
+            "bootstrap_caveat": "Descriptive resampling of a small fixed set of ABBA rounds, not application or scheduler generalization."
+          },
+          "wall_ns": {
+            "process_medians_ns": {
+              "baseline": [
+                1854133,
+                1851154,
+                1979424,
+                2010875,
+                1842814,
+                2874057,
+                1803500,
+                2135665,
+                1863675,
+                1823858,
+                1857228,
+                1907429
+              ],
+              "candidate": [
+                1800202,
+                1833674,
+                1967079,
+                1869843,
+                1878185,
+                1916487,
+                1869408,
+                1760679,
+                1865126,
+                1943558,
+                1789888,
+                2292455
+              ]
+            },
+            "baseline_ns": 1860451.5,
+            "candidate_ns": 1869625.5,
+            "change_percent": 0.493106108920327,
+            "absolute_change_ns": 9174.0,
+            "paired_rounds": [
+              {
+                "campaign": 0,
+                "round": 0,
+                "baseline_ns": 1852643.5,
+                "candidate_ns": 1816938.0,
+                "change_percent": -1.9272731100182017
+              },
+              {
+                "campaign": 0,
+                "round": 1,
+                "baseline_ns": 1995149.5,
+                "candidate_ns": 1918461.0,
+                "change_percent": -3.843747047527013
+              },
+              {
+                "campaign": 0,
+                "round": 2,
+                "baseline_ns": 2358435.5,
+                "candidate_ns": 1897336.0,
+                "change_percent": -19.551075278505603
+              },
+              {
+                "campaign": 1,
+                "round": 0,
+                "baseline_ns": 1969582.5,
+                "candidate_ns": 1815043.5,
+                "change_percent": -7.846282143550731
+              },
+              {
+                "campaign": 1,
+                "round": 1,
+                "baseline_ns": 1843766.5,
+                "candidate_ns": 1904342.0,
+                "change_percent": 3.2854214457199493
+              },
+              {
+                "campaign": 1,
+                "round": 2,
+                "baseline_ns": 1882328.5,
+                "candidate_ns": 2041171.5,
+                "change_percent": 8.438643945517477
+              }
+            ],
+            "paired_median_percent": -2.885510078772607,
+            "paired_bootstrap_median_95_percent": [
+              -13.698678711028167,
+              5.862032695618713
+            ],
+            "bootstrap_caveat": "Descriptive resampling of a small fixed set of ABBA rounds, not application or scheduler generalization."
+          }
+        },
+        "counted_work": {
+          "verified": 786432,
+          "sets": 1,
+          "reads": 786432,
+          "exits": 1,
+          "created": 1,
+          "global_array_bytes": 3072,
+          "thread_array_bytes": 2048,
+          "baseline_registry_locks": 4,
+          "candidate_registry_locks": 3
+        }
+      }
+    },
+    "timed_processes": 288,
+    "timed_observations": 2400,
+    "counted_observations": 48,
+    "worker_cpu_receipts": 127848,
+    "verification_assertions": 21628
+  },
+  "pilot": {
+    "raw_archive_path": "pthread-set-pilot/raw.json",
+    "sha256": "30478314ab450425ba27402144828018a2ff399091922234b0930a99be3c92dd",
+    "processes": 96,
+    "observations": 272,
+    "counted_observations": 24,
+    "summary": [
+      {
+        "case": "cold-single",
+        "baseline": {
+          "cpu_ns": 265974.0,
+          "wall_ns": 231858.5
+        },
+        "candidate": {
+          "cpu_ns": 220938.5,
+          "wall_ns": 212444.0
+        },
+        "delta_percent": {
+          "cpu_ns": -16.932294134013105,
+          "wall_ns": -8.373426033550635
+        },
+        "first_cpu_delta_percent": -16.932294134013105
+      },
+      {
+        "case": "single",
+        "baseline": {
+          "cpu_ns": 16461899.5,
+          "wall_ns": 16526836.0
+        },
+        "candidate": {
+          "cpu_ns": 3524909.0,
+          "wall_ns": 3544145.0
+        },
+        "delta_percent": {
+          "cpu_ns": -78.58747102665764,
+          "wall_ns": -78.5552116569681
+        },
+        "first_cpu_delta_percent": -75.82476853819377
+      },
+      {
+        "case": "shared2",
+        "baseline": {
+          "cpu_ns": 88862771.5,
+          "wall_ns": 46059592.5
+        },
+        "candidate": {
+          "cpu_ns": 4225091.0,
+          "wall_ns": 2289337.5
+        },
+        "delta_percent": {
+          "cpu_ns": -95.24537561829253,
+          "wall_ns": -95.02961842313303
+        },
+        "first_cpu_delta_percent": -94.2163528738838
+      },
+      {
+        "case": "shared8",
+        "baseline": {
+          "cpu_ns": 356249507.0,
+          "wall_ns": 68566978.5
+        },
+        "candidate": {
+          "cpu_ns": 4609240.5,
+          "wall_ns": 1746166.5
+        },
+        "delta_percent": {
+          "cpu_ns": -98.70617631479277,
+          "wall_ns": -97.45334191734875
+        },
+        "first_cpu_delta_percent": -98.39331789855812
+      },
+      {
+        "case": "distinct8",
+        "baseline": {
+          "cpu_ns": 253587906.5,
+          "wall_ns": 58240071.5
+        },
+        "candidate": {
+          "cpu_ns": 4779445.0,
+          "wall_ns": 1678501.0
+        },
+        "delta_percent": {
+          "cpu_ns": -98.11527092677032,
+          "wall_ns": -97.11796198601851
+        },
+        "first_cpu_delta_percent": -98.27329158683881
+      },
+      {
+        "case": "distinct32",
+        "baseline": {
+          "cpu_ns": 383699477.5,
+          "wall_ns": 61069164.0
+        },
+        "candidate": {
+          "cpu_ns": 9046109.5,
+          "wall_ns": 3543809.5
+        },
+        "delta_percent": {
+          "cpu_ns": -97.64239723261025,
+          "wall_ns": -94.1970558169095
+        },
+        "first_cpu_delta_percent": -96.89701765910065
+      },
+      {
+        "case": "clear8",
+        "baseline": {
+          "cpu_ns": 76640067.0,
+          "wall_ns": 19876084.5
+        },
+        "candidate": {
+          "cpu_ns": 2057027.0,
+          "wall_ns": 770689.0
+        },
+        "delta_percent": {
+          "cpu_ns": -97.31599008127172,
+          "wall_ns": -96.12253107497104
+        },
+        "first_cpu_delta_percent": -96.8959117443543
+      },
+      {
+        "case": "churn8",
+        "baseline": {
+          "cpu_ns": 263886426.0,
+          "wall_ns": 60317047.5
+        },
+        "candidate": {
+          "cpu_ns": 10924053.0,
+          "wall_ns": 2652620.0
+        },
+        "delta_percent": {
+          "cpu_ns": -95.8603202273087,
+          "wall_ns": -95.60220516430284
+        },
+        "first_cpu_delta_percent": -96.21713906798364
+      },
+      {
+        "case": "tiny-lifecycle",
+        "baseline": {
+          "cpu_ns": 25099683.0,
+          "wall_ns": 20648332.0
+        },
+        "candidate": {
+          "cpu_ns": 23655685.0,
+          "wall_ns": 17734270.0
+        },
+        "delta_percent": {
+          "cpu_ns": -5.75305273775768,
+          "wall_ns": -14.112820347909938
+        },
+        "first_cpu_delta_percent": -24.313268823340593
+      },
+      {
+        "case": "no-set-lifecycle",
+        "baseline": {
+          "cpu_ns": 22927947.0,
+          "wall_ns": 19420520.5
+        },
+        "candidate": {
+          "cpu_ns": 20959023.0,
+          "wall_ns": 16493386.0
+        },
+        "delta_percent": {
+          "cpu_ns": -8.58744134396333,
+          "wall_ns": -15.072379239269107
+        },
+        "first_cpu_delta_percent": 13.721440356510172
+      },
+      {
+        "case": "create-delete-control",
+        "baseline": {
+          "cpu_ns": 692059.0,
+          "wall_ns": 692105.5
+        },
+        "candidate": {
+          "cpu_ns": 668803.5,
+          "wall_ns": 668654.5
+        },
+        "delta_percent": {
+          "cpu_ns": -3.3603348847424885,
+          "wall_ns": -3.388356254935121
+        },
+        "first_cpu_delta_percent": -6.944865247839694
+      },
+      {
+        "case": "read-only-control",
+        "baseline": {
+          "cpu_ns": 1758865.5,
+          "wall_ns": 1773953.5
+        },
+        "candidate": {
+          "cpu_ns": 1901406.5,
+          "wall_ns": 1916198.0
+        },
+        "delta_percent": {
+          "cpu_ns": 8.104144404447066,
+          "wall_ns": 8.018502176071696
+        },
+        "first_cpu_delta_percent": 6.530997334208544
+      }
+    ],
+    "source_and_binaries_identical_to_final": true
+  },
+  "validation": {
+    "actual_source_ordinary_cases": 10,
+    "scheduling_barrier_cases": 1,
+    "positive_assertions": 413,
+    "compiled_assertion_specific_mutants": 12,
+    "independent_source_sanitizer_replay": true,
+    "baseline_behavior_and_locked_setter_observation_passed": true,
+    "full_strict_windows_translation_units": [
+      {
+        "source": "compat/bionic/pthread_bionic.cc",
+        "source_sha256": "f40ce16ef94a1315093fc2285bb6f4e1ac82eb969a10733797436ce36668dd3d",
+        "target": "x86_64",
+        "command": [
+          "/workspace/scratch/aa09b1a0dc1f/toolchains/llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64/bin/x86_64-w64-mingw32-clang++",
+          "-std=gnu++20",
+          "-O2",
+          "-g",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-mno-ms-bitfields",
+          "-fsized-deallocation",
+          "-fno-exceptions",
+          "-fno-builtin",
+          "-DGESHER",
+          "-DUSE_MINGW",
+          "-DWIN32_LEAN_AND_MEAN",
+          "-DNOMINMAX",
+          "-DNOGDI",
+          "-D_USE_MATH_DEFINES",
+          "-D__STDC_FORMAT_MACROS",
+          "-D__STDC_CONSTANT_MACROS",
+          "-D__STDC_LIMIT_MACROS",
+          "-D_WIN32_WINNT=0x0A00",
+          "-DWINVER=0x0A00",
+          "-D_FILE_OFFSET_BITS=64",
+          "-D_POSIX_THREAD_SAFE_FUNCTIONS",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-set/compat/posix/include",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-set/compat/bionic/include",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-set/compat/elf/include",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-set/compat/arm64/include",
+          "-c",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-set/compat/bionic/pthread_bionic.cc",
+          "-o",
+          "/workspace/scratch/aa09b1a0dc1f/pthread-set-windows/x86_64-pthread_bionic.o"
+        ],
+        "returncode": 0,
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "source": "tests/native/bionic_key_exit_test.cc",
+        "source_sha256": "e9a8dce6de326a7868e078ddb7f416e4da2222b594af42a85d814c4c41529f00",
+        "target": "x86_64",
+        "command": [
+          "/workspace/scratch/aa09b1a0dc1f/toolchains/llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64/bin/x86_64-w64-mingw32-clang++",
+          "-std=gnu++20",
+          "-O2",
+          "-g",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-mno-ms-bitfields",
+          "-fsized-deallocation",
+          "-fno-exceptions",
+          "-fno-builtin",
+          "-DGESHER",
+          "-DUSE_MINGW",
+          "-DWIN32_LEAN_AND_MEAN",
+          "-DNOMINMAX",
+          "-DNOGDI",
+          "-D_USE_MATH_DEFINES",
+          "-D__STDC_FORMAT_MACROS",
+          "-D__STDC_CONSTANT_MACROS",
+          "-D__STDC_LIMIT_MACROS",
+          "-D_WIN32_WINNT=0x0A00",
+          "-DWINVER=0x0A00",
+          "-D_FILE_OFFSET_BITS=64",
+          "-D_POSIX_THREAD_SAFE_FUNCTIONS",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-set/compat/posix/include",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-set/compat/bionic/include",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-set/compat/elf/include",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-set/compat/arm64/include",
+          "-c",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-set/tests/native/bionic_key_exit_test.cc",
+          "-o",
+          "/workspace/scratch/aa09b1a0dc1f/pthread-set-windows/x86_64-bionic_key_exit_test.o"
+        ],
+        "returncode": 0,
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "source": "compat/bionic/pthread_bionic.cc",
+        "source_sha256": "f40ce16ef94a1315093fc2285bb6f4e1ac82eb969a10733797436ce36668dd3d",
+        "target": "aarch64",
+        "command": [
+          "/workspace/scratch/aa09b1a0dc1f/toolchains/llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64/bin/aarch64-w64-mingw32-clang++",
+          "-std=gnu++20",
+          "-O2",
+          "-g",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-mno-ms-bitfields",
+          "-fsized-deallocation",
+          "-fno-exceptions",
+          "-fno-builtin",
+          "-DGESHER",
+          "-DUSE_MINGW",
+          "-DWIN32_LEAN_AND_MEAN",
+          "-DNOMINMAX",
+          "-DNOGDI",
+          "-D_USE_MATH_DEFINES",
+          "-D__STDC_FORMAT_MACROS",
+          "-D__STDC_CONSTANT_MACROS",
+          "-D__STDC_LIMIT_MACROS",
+          "-D_WIN32_WINNT=0x0A00",
+          "-DWINVER=0x0A00",
+          "-D_FILE_OFFSET_BITS=64",
+          "-D_POSIX_THREAD_SAFE_FUNCTIONS",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-set/compat/posix/include",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-set/compat/bionic/include",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-set/compat/elf/include",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-set/compat/arm64/include",
+          "-c",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-set/compat/bionic/pthread_bionic.cc",
+          "-o",
+          "/workspace/scratch/aa09b1a0dc1f/pthread-set-windows/aarch64-pthread_bionic.o"
+        ],
+        "returncode": 0,
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "source": "tests/native/bionic_key_exit_test.cc",
+        "source_sha256": "e9a8dce6de326a7868e078ddb7f416e4da2222b594af42a85d814c4c41529f00",
+        "target": "aarch64",
+        "command": [
+          "/workspace/scratch/aa09b1a0dc1f/toolchains/llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64/bin/aarch64-w64-mingw32-clang++",
+          "-std=gnu++20",
+          "-O2",
+          "-g",
+          "-Wall",
+          "-Wextra",
+          "-Werror",
+          "-mno-ms-bitfields",
+          "-fsized-deallocation",
+          "-fno-exceptions",
+          "-fno-builtin",
+          "-DGESHER",
+          "-DUSE_MINGW",
+          "-DWIN32_LEAN_AND_MEAN",
+          "-DNOMINMAX",
+          "-DNOGDI",
+          "-D_USE_MATH_DEFINES",
+          "-D__STDC_FORMAT_MACROS",
+          "-D__STDC_CONSTANT_MACROS",
+          "-D__STDC_LIMIT_MACROS",
+          "-D_WIN32_WINNT=0x0A00",
+          "-DWINVER=0x0A00",
+          "-D_FILE_OFFSET_BITS=64",
+          "-D_POSIX_THREAD_SAFE_FUNCTIONS",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-set/compat/posix/include",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-set/compat/bionic/include",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-set/compat/elf/include",
+          "-I",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-set/compat/arm64/include",
+          "-c",
+          "/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-set/tests/native/bionic_key_exit_test.cc",
+          "-o",
+          "/workspace/scratch/aa09b1a0dc1f/pthread-set-windows/aarch64-bionic_key_exit_test.o"
+        ],
+        "returncode": 0,
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    ],
+    "source_policy_and_supplier_passed": true,
+    "local_asan_leak_detection": false,
+    "actual_windows_art_elf_execution": "pending full CI"
+  },
+  "memory": {
+    "incremental_static_bytes_from_setter_change": 0,
+    "global_array_bytes_each_variant": 3072,
+    "calling_thread_array_bytes_each_variant": 2048,
+    "inherited_reader_pr_static_increase_vs_main": 896,
+    "allocation_rss_or_commit_improvement_claim": false
+  },
+  "acceptance": {
+    "repeated_assignment_component": "substantial measured CPU and lock-work reduction",
+    "cold_and_first_lifecycle_budget": "unresolved; final cold CPU+18.221%, wall+19.340%, first tiny CPU+8.034%, first read-only wall+5.626%",
+    "universal_5_percent_or_app_performance_acceptance": false,
+    "all_pilot_final_first_warmup_and_adverse_records_retained": true
+  },
+  "aosp_reference": {
+    "commit": "f22516cbc67e81c13cf943ce02f01b8929a98726",
+    "tree": "2785efe04f43333ae6aaa11719321cf18f535398",
+    "parents": [
+      "cb4d88b11800c1c10f2ddbe9efda38562e7bd2d3",
+      "4a135a0d70daa2d84c04cf16753238de520506d1"
+    ],
+    "author": {
+      "name": "Android Build Coastguard Worker",
+      "email": "android-build-coastguard-worker@google.com",
+      "time": "Thu Oct 09 05:13:08 2025 -0700"
+    },
+    "committer": {
+      "name": "Android Build Coastguard Worker",
+      "email": "android-build-coastguard-worker@google.com",
+      "time": "Thu Oct 09 05:13:08 2025 -0700"
+    },
+    "message": "Merge cherrypicks of ['googleplex-android-review.googlesource.com/36100204'] into 25Q4-release.\n\nChange-Id: I17f44b7f5e1de035c9eeb2c7676545d06604818d\n",
+    "tree_diff": [],
+    "source_sha256": "18adb3106579c24140534295936f739fb09575247e70612284968f12daa18567"
+  },
+  "archive": {
+    "path": "docs/research/data/pthread-key-assignment-2026-11-23.tar.gz",
+    "bytes": 1271869,
+    "sha256": "91cd197cb54fd822949976caeca0d34e5e1aa37e5d70e3b8f5d520ca3ed21ade",
+    "members": 562,
+    "manifest_sha256": "3f8d7f967907dc03aa98f609fc59160e0af21c6e1dafaa05c3a16492b932d3ba"
+  },
+  "current_main_integration": {
+    "ordered_parents": [
+      "f2e88930cf1095c89af23185851ccad0cc64fa75",
+      "b2e1d97813e65e58d7e6dbd10ea21d1f821e405d"
+    ],
+    "common_base": "e505ad227523aaca566d05b8af6e466495c819cc",
+    "canonical_tree": "a08dc86d029b40bae0bedf0296ce6de30ba3a2c6",
+    "staged_tree": "a08dc86d029b40bae0bedf0296ce6de30ba3a2c6",
+    "manual_resolutions": [],
+    "all_paths_equal_automatic_merge": true,
+    "feature_only_paths_preserved": 18,
+    "incoming_only_paths_preserved": 15,
+    "only_shared_path": [
+      ".github/workflows/ci.yml"
+    ],
+    "all_measured_and_replayed_input_sha256": {
+      "compat/arm64/include/gesher/arm64_va_list.h": "2a688196bb4926b29f034c70b9bc97e96f9a7cb963d0b77942d0d9f2b26111d6",
+      "compat/arm64/include/gesher/symbol_table.h": "0142e694541611f3882df10096efae8c815de0ca06ce3410a9c5f7e0748c71bb",
+      "compat/bionic/abi_types.h": "c4741d16db9c20fcb5655c81f4d720b5def9fc3e1f9eea057dc530cf02d1c1cd",
+      "compat/bionic/pthread_bionic.cc": "f40ce16ef94a1315093fc2285bb6f4e1ac82eb969a10733797436ce36668dd3d",
+      "compat/bionic/pthread_cleanup.h": "7cf05841916603895ef7c39cfb6317800d42c8c206c70be3e1f08be83bfa6975",
+      "compat/bionic/shim_internal.h": "eac2550acbd74dd5da75f5087860748e45ef3115a7e3276e00e00ac441283f6d",
+      "tests/native/bionic_key_exit_test.cc": "e9a8dce6de326a7868e078ddb7f416e4da2222b594af42a85d814c4c41529f00",
+      "tests/native/pthread_key_contract_host_test.cc.in": "34fc08518bc15468683be9d51100512059d7a7211376ee0155b5e5e9469d136c",
+      "tests/native/pthread_key_contract_test.inc": "8f41486c47ff744b04914c7477e367927bf8166b0de5fc5ed5e0389dc36db613",
+      "tests/native/pthread_key_measurement.h": "b1366b2a2f1ca2967820b7ccea28c769f45a25f9d43a4ed2fa2269e33fed8e1a",
+      "tests/native/pthread_set_measurement.cc": "2e9ce3de986df30efc81e59a1a650da526b678a18aed4dcf6275dea913ec51bc",
+      "tests/windows/tracks/40-native-libs.ps1": "e7e1f212076ae3faa556e4c7d49efeedcf90011bba30b9d99479f35dd647f56a",
+      "tools/measure_bionic_key_assignment.py": "b6f2894d16d4024358e330aa374eed3c6ba4e71582c8822e7e1087a956648fa0",
+      "tools/measure_bionic_key_lookup.py": "cb54540bdb80835ae7d0e52c2ebe02b1d169ceba588d34c742c0e3281394bbe0",
+      "tools/summarize_bionic_key_assignment.py": "af5a6b77b144c3c29fade3f27ee14fc33d10cc72a975a87cffc98d1f23d776a5",
+      "tools/test_bionic_key_contracts.py": "d3c88c29c5ed34b3141aa3aa7f6a47cff5f3e860f370bfcc99f95b9e2ac6eaff"
+    },
+    "historical_archive_sha256": "91cd197cb54fd822949976caeca0d34e5e1aa37e5d70e3b8f5d520ca3ed21ade",
+    "historical_report_and_samples_unchanged": true,
+    "local_merge_commit": "0451b631087106122cf1f2965f1a3fcdc0835893",
+    "policy_controls": "26 original +4 repinned property +23 shared-stdio",
+    "supplier_controls": "36 semantic +1 authority",
+    "artifact_batch_cases": 34,
+    "diagnostic_cases": 22,
+    "diagnostic_baseline_parity_mutants": 564,
+    "logs": {
+      "pthread-set-main-policy.log": {
+        "command": "python3 tools/net-tcp-priority/test-selected-policy.py --selftest",
+        "sha256": "34c22ac45564b380f28360fc26640ea1db5d8112ea66d94095fb194aad165a5e",
+        "log": "TCP_SELECTED_POLICY_PASS exact_OFD_stdio_pipe_transition exact_property_revision_transition reviewed_pipe_control_errors reviewed_process_lifetime_socket_registry reviewed_outer_poll_scratch_exact reviewed_priority_wake_confirmation_only original_socket_ownership_and_native_poll=EXACT original_product3 reviewed_nested_epoll_fd reviewed_device_lookup_and_stream_retirement_only reviewed_sendmsg_control reviewed_statvfs_affinity_file_advice_allocation_writev_and_memfd_only reviewed_fcntl_argument_selection_only canonical_Recv originalworkflow other_fixture_assertions_deadlines=EXACT reviewed_select_and_calibrated_owner_census controller_execution_tail original_import_NDK_build_roles=EXACT new_two_supplier_DAG=BOUNDED source12_patch2_exact native_processes_started=0\nTCP_SELECTED_TRANSITION_NEGATIVE_CONTROLS_PASS cases=26 repinned_property_controls=4\nPASS shared-stdio source policy rejects unqualified bytes in compat/bionic/stdio_bionic.cc\nPASS shared-stdio source policy rejects unqualified bytes in compat/posix/include/gesher/stdio.h\nPASS shared-stdio source policy rejects unqualified bytes in compat/posix/include/stdio.h\nPASS shared-stdio source policy rejects unqualified bytes in compat/posix/src/stdio_output.cc\nPASS shared-stdio source policy rejects an undeclared include even with a repinned endpoint: compat/bionic/stdio_bionic.cc\nPASS shared-stdio source policy rejects an undeclared include even with a repinned endpoint: compat/posix/include/gesher/stdio.h\nPASS shared-stdio source policy rejects an undeclared transition file\nPASS shared-stdio source policy rejects an undeclared endpoint\nPASS shared-stdio source policy rejects an invented approval field\nPASS shared-stdio source policy rejects an undeclared patch path even with repinned patch and manifest\nPASS shared-stdio source policy rejects a modified before-hunk even with repinned patch and manifest\nPASS shared-stdio source policy rejects a repinned baseline identity\nPASS shared-stdio source policy rejects a repinned feature identity\nPASS shared-stdio source policy rejects a repinned baseline source digest\nPASS shared-stdio source policy rejects a repinned baseline policy\nPASS shared-stdio source policy rejects changed transition metadata without its independent pin\nPASS shared-stdio source policy rejects changed transition patch without its independent pin\nPASS shared-stdio source policy rejects unrelated protected bytes in compat/posix/src/ofd.cc\nPASS shared-stdio source policy rejects unrelated protected bytes in compat/posix/src/fd.cc\nPASS shared-stdio source policy rejects unrelated protected bytes in compat/bionic/stdio_windows_lock.h\nPASS shared-stdio source policy rejects unrelated protected bytes in compat/posix/src/stdio_stream_buffer.h\nPASS shared-stdio source policy rejects a modified original OFD receipt\nPASS shared-stdio source policy rejects a modified original OFD patch\nSHARED_STDIO_SOURCE_POLICY_PASS exact_main_round_trip=4 original_protected_digests=71 negative_controls=23\n",
+        "exit": 0
+      },
+      "pthread-set-main-supplier.log": {
+        "command": "python3 tools/net-tcp-priority/test-selected-supplier.py",
+        "sha256": "651082038c49ccb553c0e469d5a34b32689e254480339bca0cdf12d03d6c2120",
+        "log": "TCP_SELECTED_SUPPLIER_METADATA_PASS projection=SYNTHETIC_LOG_METADATA_ONLY semantic_mutants=36 authority_hash_negative=1 actual_selected_runtime_claim=false native_processes_started=0\n",
+        "exit": 0
+      },
+      "pthread-set-main-artifact.log": {
+        "command": "python3 tools/ci/test_artifact_batch.py",
+        "sha256": "15593ba2487e26ef35b99ff5cc2a0ca205804bf69121c88d5c2ec12c898bc957",
+        "log": "..................................\n----------------------------------------------------------------------\nRan 34 tests in 0.597s\n\nOK\n",
+        "exit": 0
+      },
+      "pthread-set-main-diagnostic-current.log": {
+        "command": "python3 tools/net-tcp-priority/test_fork_diagnostic.py",
+        "sha256": "ab1a90e625a137f5c6419c1058c5aa1115834c5c038959ec09ed5d52ed36b792",
+        "log": ".................CANONICAL_SUPPLIER_BASELINE_PARITY leaf_mutants=564\n.....\n----------------------------------------------------------------------\nRan 22 tests in 1.633s\n\nOK\n",
+        "exit": 0
+      }
+    },
+    "unexecuted_initial_diagnostic_path_error": "python3: can't open file '/workspace/scratch/aa09b1a0dc1f/gesher-native-pthread-set/tools/ci/test_fork_diagnostic.py': [Errno 2] No such file or directory\n",
+    "runtime_and_timing_claim": "No new runtime or timing claim from this composition; measured input identities and all old evidence remain exact."
+  }
+}

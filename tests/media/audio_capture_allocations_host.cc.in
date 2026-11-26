@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cfenv>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -436,9 +437,9 @@ int main(int argc, char** argv) {
           for (uint32_t channels : {1u, 2u, 3u, 5u, 8u}) Samples(format, src_rate, rate, src_channels, channels, file);
   Boundaries(file);
   for (PcmFormat format : {PcmFormat::kU8, PcmFormat::kS16, PcmFormat::kS24Packed, PcmFormat::kS32, PcmFormat::kFloat})
-    for (uint32_t channels : {1u, 3u, 5u, 8u}) WrapAndFull(format, channels, file);
+    for (uint32_t channels : {1u, 2u, 3u, 5u, 8u}) WrapAndFull(format, channels, file);
   for (PcmFormat format : {PcmFormat::kU8, PcmFormat::kS16, PcmFormat::kS24Packed, PcmFormat::kS32, PcmFormat::kFloat})
-    for (uint32_t channels : {3u, 5u}) ReentrantReadAndPush(format, channels, file);
+    for (uint32_t channels : {2u, 3u, 5u}) ReentrantReadAndPush(format, channels, file);
   for (uint32_t channels : {1u, 2u, 8u})
     for (uint32_t rate : {44100u, 48000u}) Measure(channels, rate, gate);
   LargeBlockAndRateChanges(file, gate);

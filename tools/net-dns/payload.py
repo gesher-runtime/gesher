@@ -208,8 +208,14 @@ def validate_payload(folder, wanted, diagnostic=None):
 
 def verify(folder, diagnostic=None):
     wanted = expected(folder, diagnostic)
+    manifest = folder / 'net-dns/manifest.json'
     if diagnostic is None:
-        wanted['context'] = producer_context.authenticate(folder / 'net-dns/manifest.json', wanted['context'], 'native2-dns')
+        wanted['context'] = producer_context.authenticate(manifest, wanted['context'], 'native2-dns')
+    else:
+        from fork_diagnostic_context import authenticate_dns_producer
+        raw = manifest.read_bytes()
+        producer = json.loads(raw.decode('utf-8'), object_pairs_hook=pairs)['context']
+        wanted['context'] = authenticate_dns_producer(manifest, raw, wanted['context'], producer)
     validate_payload(folder, wanted, diagnostic)
 
 

@@ -1,7 +1,13 @@
 """Offline versioning and release publisher state-machine regressions."""
 from copy import deepcopy
+import contextlib
 import hashlib
+import io
+import json
+import os
 from pathlib import Path
+import runpy
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -93,6 +99,119 @@ class BuildVersionTests(unittest.TestCase):
             build_version(self.env, lambda _: (_ for _ in ()).throw(GitHubReadError('unavailable')))
         with self.assertRaises(ValueError):
             build_version(dict(self.env, GITHUB_RUN_NUMBER='65536'), self.read)
+
+
+class ReleaseCatalogTransportTests(unittest.TestCase):
+    """Run the real script and bounded reader; adapt only gh's HTTP boundary."""
+
+    def setUp(self):
+        self.env = {'GITHUB_REPOSITORY': 'fork/gesher', 'GITHUB_REPOSITORY_ID': '55',
+                    'GITHUB_REF': 'refs/heads/main', 'GITHUB_EVENT_NAME': 'workflow_dispatch',
+                    'GITHUB_RUN_NUMBER': '526', 'GH_TOKEN': 'isolated-fixture-token',
+                    'GH_HOST': 'must-not-receive-the-catalog.example'}
+        self.stdout = io.StringIO()
+        self.stderr = io.StringIO()
+        self.enterContext(contextlib.redirect_stdout(self.stdout))
+        self.enterContext(contextlib.redirect_stderr(self.stderr))
+        self.run = self.enterContext(patch('github_read.subprocess.run'))
+        self.sleep = self.enterContext(patch('github_read.time.sleep'))
+        self.anonymous = self.enterContext(patch('urllib.request.urlopen',
+            side_effect=AssertionError('Release catalog bypassed the authenticated bounded reader')))
+
+    def response(self, value, *, status=200, raw=None, headers=''):
+        body = json.dumps(value).encode() if raw is None else raw
+        framed = (f'HTTP/2.0 {status}\r\nContent-Type: application/json\r\n{headers}\r\n').encode() + body
+        error = b'' if status == 200 else f'gh: request failed (HTTP {status})'.encode()
+        return subprocess.CompletedProcess([], 0 if status == 200 else 1, framed, error)
+
+    def execute(self, **overrides):
+        with patch.dict(os.environ, dict(self.env, **overrides), clear=True):
+            runpy.run_path(str(Path(__file__).with_name('release_version.py')), run_name='__main__')
+
+    def assert_requests(self, pages):
+        self.assertEqual(self.run.call_count, len(pages))
+        for invocation, page in zip(self.run.call_args_list, pages):
+            self.assertEqual(invocation.args[0], ['gh', 'api', '--method', 'GET', '--include', '--',
+                f'https://api.github.com/{API}/releases?per_page=100&page={page}'])
+            self.assertTrue(invocation.kwargs['capture_output'])
+            self.assertGreater(invocation.kwargs['timeout'], 0)
+            self.assertLessEqual(invocation.kwargs['timeout'], 60)
+            self.assertNotIn(self.env['GH_TOKEN'], repr(invocation))
+        self.anonymous.assert_not_called()
+
+    def test_fork_and_host_configuration_cannot_change_upstream_origin(self):
+        self.run.return_value = self.response([release_row(1, 'v0.2.8')])
+        self.execute(GITHUB_REPOSITORY='attacker.invalid/path', GITHUB_REF='refs/tags/v9.0.0')
+        self.assertEqual(self.stdout.getvalue(), '0.2.8.526\n')
+        self.assert_requests([1])
+        self.sleep.assert_not_called()
+
+    def test_official_non_tag_build_uses_the_same_transport(self):
+        self.run.return_value = self.response([release_row(1, 'v0.2.8')])
+        self.execute(GITHUB_REPOSITORY=REPOSITORY, GITHUB_REPOSITORY_ID=str(REPOSITORY_ID))
+        self.assertEqual(self.stdout.getvalue(), '0.2.8.526\n')
+        self.assert_requests([1])
+
+    def test_actual_tag_push_keeps_its_zero_read_path(self):
+        self.execute(GITHUB_REPOSITORY=REPOSITORY, GITHUB_REPOSITORY_ID=str(REPOSITORY_ID),
+                     GITHUB_EVENT_NAME='push', GITHUB_REF='refs/tags/v0.2.1')
+        self.assertEqual(self.stdout.getvalue(), '0.2.1\n')
+        self.assert_requests([])
+
+    def test_real_reader_keeps_catalog_pagination_and_version_selection(self):
+        self.run.side_effect = [self.response([release_row(i, 'v0.2.1') for i in range(1, 101)]),
+                                self.response([release_row(101, 'v0.3.9')])]
+        self.execute()
+        self.assertEqual(self.stdout.getvalue(), '0.3.9.526\n')
+        self.assert_requests([1, 2])
+
+    def test_ordinary_forbidden_response_is_fatal_without_anonymous_fallback(self):
+        self.run.return_value = self.response({'message': 'Resource not accessible by integration'}, status=403)
+        with self.assertRaisesRegex(GitHubReadError, r'after 1 attempt'):
+            self.execute()
+        self.assertEqual(self.stdout.getvalue(), '')
+        self.assert_requests([1])
+        self.sleep.assert_not_called()
+
+    def test_published_reachable_quota_reset_uses_existing_bounded_reader(self):
+        headers = ('Date: Wed, 01 Jan 2025 00:00:00 GMT\r\n'
+                   'X-RateLimit-Remaining: 0\r\nX-RateLimit-Reset: 1735689600\r\n')
+        self.run.side_effect = [self.response({'message': 'API rate limit exceeded for fixture'},
+                                              status=403, headers=headers), self.response([])]
+        self.execute()
+        self.assertEqual(self.stdout.getvalue(), '0.0.0.526\n')
+        self.assert_requests([1, 1])
+        self.sleep.assert_called_once_with(1)
+        self.assertIn('action=wait', self.stderr.getvalue())
+
+    def test_unusable_quota_evidence_does_not_seed_a_version(self):
+        self.run.return_value = self.response({'message': 'API rate limit exceeded for fixture'}, status=403)
+        with self.assertRaisesRegex(GitHubReadError, 'quota cannot recover'):
+            self.execute()
+        self.assertEqual(self.stdout.getvalue(), '')
+        self.assert_requests([1])
+        self.sleep.assert_not_called()
+
+    def test_malformed_json_or_catalog_remains_fatal(self):
+        for raw, error in ((b'not-json', GitHubReadError), (b'NaN', GitHubReadError), (b'{}', ValueError)):
+            with self.subTest(raw=raw):
+                self.run.reset_mock()
+                self.run.return_value = self.response(None, raw=raw)
+                with self.assertRaises(error):
+                    self.execute()
+                self.assertEqual(self.stdout.getvalue(), '')
+                self.assert_requests([1])
+        self.sleep.assert_not_called()
+
+    def test_returned_urls_are_only_validated_never_followed(self):
+        wrong_page = release_row(1, 'v9.0.0')
+        wrong_page['html_url'] = 'https://attacker.invalid/release'
+        wrong_asset = release_row(2, 'v8.0.0')
+        wrong_asset['assets'][0]['browser_download_url'] = 'https://attacker.invalid/installer'
+        self.run.return_value = self.response([wrong_page, wrong_asset, release_row(3, 'v0.2.1')])
+        self.execute()
+        self.assertEqual(self.stdout.getvalue(), '0.2.1.526\n')
+        self.assert_requests([1])
 
 
 def make_job(name, identity, steps=(), *, run=RUN, attempt=ATTEMPT, head=HEAD):
