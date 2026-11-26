@@ -48,6 +48,13 @@ class Jni32 {
                   std::string* error = nullptr,
                   uint64_t instruction_budget = 1000000);
 
+  // Execute an exported JNI_OnUnload(JavaVM*, void*) while the guest DSO is
+  // still mapped. The caller must check whether JNI_OnUnload is present and
+  // call this before Program::Shutdown; no actual ART unload is hooked here.
+  bool CallOnUnload(std::string_view library,
+                    std::string* error = nullptr,
+                    uint64_t instruction_budget = 1000000);
+
   // Enter a named ARM32 JNI method from the owning ART thread. The descriptor
   // governs every argument and the result; jobjects are copied into
   // generation-checked 32-bit guest tokens, never narrowed from 64-bit host
