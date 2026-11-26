@@ -792,6 +792,11 @@ int PollFifo(const DescriptorSnapshotPtr& snapshot, short events, short* ready) 
   return 0;
 }
 
+int FifoCapacity(const DescriptorSnapshotPtr& snapshot) {
+  FifoEndpoint* endpoint = Endpoint(snapshot);
+  return endpoint ? static_cast<int>(endpoint->ring->header->capacity) : -1;
+}
+
 int FifoBytesAvailable(const DescriptorSnapshotPtr& snapshot, int* bytes) {
   if (!bytes) return errno = EFAULT, -1;
   FifoEndpoint* endpoint = Endpoint(snapshot);

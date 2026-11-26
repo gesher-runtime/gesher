@@ -7,5 +7,6 @@ int CreatePipeDescriptors(int descriptors[2], int flags);
 int SetPipeNonBlocking(HANDLE file, bool nonblocking);
 int TransferPipe(const DescriptorSnapshotPtr& snapshot, void* bytes, unsigned count, bool writing);
 int PollPipeHandle(const DescriptorSnapshotPtr& snapshot, short events, short* ready);
+int PipeCapacity(const DescriptorSnapshotPtr& snapshot);
 int PipeBytesAvailable(const DescriptorSnapshotPtr& snapshot, int* bytes);
 }

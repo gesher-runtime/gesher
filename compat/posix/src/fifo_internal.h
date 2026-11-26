@@ -52,6 +52,7 @@ int OpenFifoHandle(HANDLE probe, int flags);
 int TransferFifo(const DescriptorSnapshotPtr& snapshot, void* bytes, unsigned count, bool writing,
                  HANDLE canceled, HANDLE interrupted);
 int PollFifo(const DescriptorSnapshotPtr& snapshot, short events, short* ready);
+int FifoCapacity(const DescriptorSnapshotPtr& snapshot);
 int FifoBytesAvailable(const DescriptorSnapshotPtr& snapshot, int* bytes);
 
 // What fstat reports for a FIFO descriptor: the FIFO file's identity and

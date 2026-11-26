@@ -11,6 +11,7 @@
 #include <bcrypt.h>
 #include <fcntl.h>
 #include <io.h>
+#include <limits.h>
 #include <poll.h>
 #include <pthread.h>
 #include <winternl.h>
@@ -527,6 +528,18 @@ int PollPipeHandle(const DescriptorSnapshotPtr& snapshot, short events, short* r
   }
   *ready = result;
   return 0;
+}
+
+int PipeCapacity(const DescriptorSnapshotPtr& snapshot) {
+  if (snapshot->kind == DescriptorKind::kFifo) return FifoCapacity(snapshot);
+  PipeAdmission admission;
+  if (admission.Acquire(snapshot, false) < 0) return -1;
+  FILE_PIPE_LOCAL_INFORMATION info{};
+  if (QueryPipe(snapshot->handle, &info, sizeof(info), FilePipeLocalInformation) < 0) return -1;
+  // Created pipes send from client to server only. The inbound allocation
+  // is the capacity even when current write quota is reserved by a reader.
+  if (info.InboundQuota > INT_MAX) return errno = EOVERFLOW, -1;
+  return static_cast<int>(info.InboundQuota);
 }
 
 int PipeBytesAvailable(const DescriptorSnapshotPtr& snapshot, int* bytes) {

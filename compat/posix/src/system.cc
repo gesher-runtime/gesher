@@ -480,6 +480,9 @@ int fcntl(int fd, int cmd, ...) {
           return gesher::FailWithLastError();
         }
         return 0;
+      case F_GETPIPE_SZ:
+        if (GetFileType(h) != FILE_TYPE_PIPE) return errno = EBADF, -1;
+        [[fallthrough]];
       case F_GETFL:
       case F_SETFL:
         status_snapshot = gesher::CaptureDescriptor(fd);
@@ -501,6 +504,7 @@ int fcntl(int fd, int cmd, ...) {
   }
   // The snapshot retains the selected object and description across concurrent
   // close/dup2. Native mode operations must not hold the publication lock.
+  if (cmd == F_GETPIPE_SZ) return gesher::PipeCapacity(status_snapshot);
   return cmd == F_GETFL ? gesher::FileDescriptionFlags(status_snapshot)
                        : gesher::SetFileDescriptionFlags(status_snapshot, arg);
 }
