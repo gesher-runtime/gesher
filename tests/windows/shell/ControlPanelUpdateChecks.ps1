@@ -319,7 +319,7 @@ try {
                         btnCheckUpdate = 'BtnCheckUpdate'; btnInstallUpdate = 'BtnInstallUpdate'; btnCancelUpdate = 'BtnCancelUpdate'
                         btnUpdateNotes = 'BtnUpdateNotes'; btnReopenPanel = 'BtnReopenPanel'; updateProgress = 'UpdateProgress'
                         btnToggleDevice = 'BtnToggleDevice'; servicesCards = 'ServicesCards'; applicationsSection = 'ApplicationsSection'
-                        panelScroll = 'PanelScroll'; panelLayout = 'PanelLayout'
+                        panelScroll = 'PanelScroll'; panelLayout = 'PanelLayout'; upperCardsRow = 'UpperCardsRow'; upperCards = 'UpperCards'; upperCardsScroll = 'UpperCardsScroll'
                     }
                     foreach ($entry in $names.GetEnumerator()) { Set-Variable -Scope Script -Name $entry.Key -Value ($window.FindName($entry.Value)) }
                     foreach ($name in 'BtnEnableMicrog', 'BtnInstallStore') { $window.FindName($name).Visibility = 'Collapsed' }

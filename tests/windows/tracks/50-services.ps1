@@ -216,6 +216,7 @@ CheckTimed 'graphics: a Surface parceled to another process: its frames, sizes, 
     'SurfaceParcelTest: an ImageReader''s Surface drawn by process',
     '64x32, 0 pixels differ, the producer''s time stamp',
     'SurfaceParcelTest: six frames through one memfd the producer reuses; the consumer keeps no descriptor',
+    'SurfaceParcelTest: acquired RGBA snapshots survive remote producer reuse and independent release',
     'SurfaceParcelTest: parceled again it stays the same producer; parceled back, the consumer''s own Surface',
     'SurfaceParcelTest: a SurfaceTexture''s Surface read into the producer''s releases the earlier one',
     'SurfaceParcelTest: SurfaceTexture.setDefaultBufferSize(48, 24) reaches the producer with its next frame',
@@ -710,7 +711,8 @@ if ($codeA -eq 0 -and $codeB -eq 0 -and $started -eq 1 -and $connected -eq 1 -an
 $initialList = RunTimed "$Dir/dalvikvm.exe" ($launcher + 'list') 300
 $initialListCode = $LASTEXITCODE
 $initialPackageCount = ([regex]::Matches($initialList, '(?m)^package:')).Count
-if ($initialListCode -ne 0 -or -not $initialList.Contains("gesher-app: $initialPackageCount installed packages") -or
+$initialPackageNoun = if ($initialPackageCount -eq 1) { 'package' } else { 'packages' }
+if ($initialListCode -ne 0 -or $initialList -notmatch "(?m)^gesher-app: $initialPackageCount installed $initialPackageNoun\r?$" -or
     $initialList -match '(?m)^package:com\.gesher\.(lifecycle|peer|components) ') {
   Write-Host "FAIL  services: initial package inventory is consistent and contains no install fixtures (exit $initialListCode)"
   Write-Host $initialList

@@ -57,6 +57,7 @@
 
 #include "event_internal.h"
 #include "internal.h"
+#include "storage_policy.h"
 
 namespace gesher {
 namespace {
@@ -864,6 +865,7 @@ int inotify_add_watch(int fd, const char* path, uint32_t mask) {
   }
   std::wstring windows;
   if (!gesher::DiskPath(path, &windows, EACCES)) return -1;
+  if (!gesher::CheckExternalStorageAccess(windows, gesher::AccessKind::kRead)) return -1;
   DWORD open_flags = FILE_FLAG_BACKUP_SEMANTICS |
                      ((mask & IN_DONT_FOLLOW) != 0 ? FILE_FLAG_OPEN_REPARSE_POINT : 0);
   auto w = std::make_unique<Watch>();

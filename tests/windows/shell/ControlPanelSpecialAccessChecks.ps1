@@ -43,7 +43,7 @@ foreach ($variable in '$script:SpecialAccessLabels', '$script:SpecialAccessTimeo
 
 # The switches the device can answer (SpecialAccess.KINDS), each with both translations.
 $expected = 'android:system_alert_window', 'android:request_install_packages',
-    'android:write_settings', 'android:get_usage_stats'
+    'android:write_settings', 'android:get_usage_stats', 'android:manage_external_storage'
 Assert-Access ((@($script:SpecialAccessLabels.Keys) -join ',') -eq ($expected -join ',')) 'The panel knows exactly the device''s switches, in Settings'' order'
 $catalog = Get-Content -LiteralPath $UiMessagesPath -Raw -Encoding UTF8 | ConvertFrom-Json
 $source = [IO.File]::ReadAllText([IO.Path]::GetFullPath(
@@ -74,8 +74,8 @@ $parsed = @(ConvertFrom-SpecialAccessOutput @(
     "xspecial-access${tab}android:manage_media${tab}allowed",
     "special-access${tab}android:request_install_packages${tab}allowed${tab}fixed",
     ''))
-Assert-Access ($parsed.Count -eq 3) "Only well-formed rows of known switches are read ($($parsed.Count))"
-Assert-Access (-not $parsed[0].Fixed -and $parsed[2].Op -eq 'android:request_install_packages' -and $parsed[2].Allowed -and $parsed[2].Fixed) 'A fixed switch is read as fixed'
+Assert-Access ($parsed.Count -eq 4) "Only well-formed rows of known switches are read ($($parsed.Count))"
+Assert-Access (-not $parsed[0].Fixed -and $parsed[3].Op -eq 'android:request_install_packages' -and $parsed[3].Allowed -and $parsed[3].Fixed) 'A fixed switch is read as fixed'
 Assert-Access ($parsed[0].Op -eq 'android:get_usage_stats' -and $parsed[0].Allowed -eq $true) 'An allowed row reads allowed'
 Assert-Access ($parsed[1].Op -eq 'android:system_alert_window' -and $parsed[1].Allowed -eq $false) 'A denied row (CRLF) reads denied'
 
@@ -94,7 +94,7 @@ foreach ($bad in '', 'a', 'com', 'bad name.app', 'com.example.app;calc', 'com.ex
     Assert-Access ($null -eq (Set-AppSpecialAccess $bad 'android:get_usage_stats' $true)) "An invalid package is not changed: $bad"
 }
 foreach ($op in 'android:camera', 'android:get_usage_stats ', 'ANDROID:GET_USAGE_STATS', '', 'allow',
-        'android:manage_external_storage', 'android:manage_media') {
+        'android:manage_media') {
     Assert-Access ($null -eq (Set-AppSpecialAccess 'com.example.app' $op $true)) "An unknown switch is refused: '$op'"
     Assert-Access ($null -eq (Set-AppSpecialAccess 'com.example.app' $op $false)) "An unknown switch cannot be revoked through this interface: '$op'"
 }

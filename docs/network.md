@@ -313,8 +313,30 @@ List Manager whether it reaches the internet, is metered (fixed or variable
 cost), roaming or congested. The active network is the one Windows routes
 8.8.8.8 (or 2001:4860:4860::8888) through, a VPN's when one is up.
 `NotifyIpInterfaceChange`, `NotifyUnicastIpAddressChange` and
-`NotifyRouteChange2` wake its watcher (and every 15 s it looks again, for the
-Network List Manager's verdicts); each new snapshot goes to its listeners. Its
+`NotifyRouteChange2` wake its watcher, and so does the Network List Manager's
+`INetworkConnectionCostEvents` (`compat/net/cost_events_win.cc`: a connection's
+cost or data plan changed, which moves no interface, address or route, e.g. the
+"Metered connection" setting of a network that stays connected). Every 15 s it
+also looks again (the fallback where the Network List Manager has no cost event
+connection point). Each new snapshot goes to its listeners; a callback then hears
+`onCapabilitiesChanged` for NET_CAPABILITY_NOT_METERED, and a polling
+`isActiveNetworkMetered` sees the new cost (the watcher owns the shared snapshot while
+there are listeners).
+
+Unknown cost does not establish that a network is free of usage limits. A missing
+Network List Manager, unmatched adapter, failed cost query, or `UNKNOWN` cost keeps
+the snapshot's metering bit set. Only a successful, explicitly `UNRESTRICTED` result
+without `FIXED` or `VARIABLE` grants `NET_CAPABILITY_NOT_METERED`. This conservative
+classification keeps unmetered-only jobs and downloads waiting when Windows cannot
+confirm the cost; it does not invent a tariff or change the network's transport,
+reachability, or the user's settings. A later confirmed unrestricted result restores
+the capability through the ordinary snapshot update.
+
+`getRestrictBackgroundStatus` is RESTRICT_BACKGROUND_STATUS_DISABLED, as on a device
+without Data Saver: Android's ENABLED means the app is blocked from background data on
+metered networks, which Gesher does not do, so Windows' "Background data" limit
+(`ConnectionCost.BackgroundDataUsageRestricted`) is not reported as it. It should be
+reported only together with that enforcement. Its
 binder interface is `com.gesher.net.IConnectivity` (written as AIDL would
 generate it).
 

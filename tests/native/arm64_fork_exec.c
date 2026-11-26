@@ -19,6 +19,7 @@
 #include <sys/prctl.h>
 #include <sys/ptrace.h>
 #include <sys/resource.h>
+#include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
 #include <spawn.h>
@@ -719,6 +720,150 @@ static void test_exec_from_child(void) {
   check(strstr(buf, "spawned-ok") != NULL, "the program the child spawned wrote to the child's pipe");
 }
 
+// --- a FIFO's descriptors across fork (ADR 0097) -----------------------------------
+// The child's descriptors are the same open file descriptions: end of file
+// comes only once every process closed its writer, EPIPE only once every
+// process closed its reader. A child opens the FIFO anew, and a child execs
+// a program with the FIFO as its standard output (the brokered spawn passes
+// the FIFO's ring with the description).
+static void test_fifo(void) {
+  char path[64];
+  snprintf(path, sizeof path, "arm64-fork-fifo-%d", (int)getpid());
+  unlink(path);
+  if (mkfifo(path, 0600) != 0) {
+    checkf(0, "fifo: mkfifo", "errno=%ld %ld", errno, 0);
+    return;
+  }
+  int reader = open(path, O_RDONLY | O_NONBLOCK);
+  int writer = open(path, O_WRONLY);
+  if (reader < 0 || writer < 0) {
+    checkf(0, "fifo: open both ends", "reader=%ld writer=%ld", reader, writer);
+    unlink(path);
+    return;
+  }
+  fflush(stdout);
+  pid_t pid = fork();
+  if (pid == 0) {
+    // Writes through the inherited writer, then exits with this process's
+    // copies closed: the parent's copies keep both ends open.
+    _exit(write(writer, "abc", 3) == 3 ? 0 : 1);
+  }
+  int status = reap(pid, 0);
+  checkf(status != -1 && WIFEXITED(status) && WEXITSTATUS(status) == 0,
+         "fifo: a forked child writes through the inherited writer", "status=0x%lx %ld", status, 0);
+  char buf[16] = {0};
+  ssize_t n = read(reader, buf, sizeof buf);
+  check(n == 3 && memcmp(buf, "abc", 3) == 0, "fifo: the parent reads the child's bytes");
+  n = read(reader, buf, sizeof buf);
+  checkf(n == -1 && errno == EAGAIN, "fifo: the parent's writer still open: EAGAIN, not end of file",
+         "n=%ld errno=%ld", (long)n, errno);
+
+  // The child holds the only writer once the parent closes its own: end of
+  // file only after the child closes it too.
+  int go[2];
+  if (pipe(go) != 0) {
+    check(0, "pipe");
+    close(reader);
+    close(writer);
+    unlink(path);
+    return;
+  }
+  fflush(stdout);
+  pid = fork();
+  if (pid == 0) {
+    close(go[1]);
+    char c;
+    if (read(go[0], &c, 1) != 1) _exit(2);
+    _exit(write(writer, "z", 1) == 1 ? 0 : 1);
+  }
+  close(go[0]);
+  close(writer);
+  usleep(100000);
+  n = read(reader, buf, sizeof buf);
+  checkf(n == -1 && errno == EAGAIN, "fifo: a writer open only in the child: no end of file yet",
+         "n=%ld errno=%ld", (long)n, errno);
+  write(go[1], "g", 1);
+  close(go[1]);
+  status = reap(pid, 0);
+  n = read(reader, buf, sizeof buf);
+  ssize_t eof = read(reader, buf + 1, sizeof buf - 1);
+  checkf(status != -1 && WIFEXITED(status) && WEXITSTATUS(status) == 0 && n == 1 && buf[0] == 'z' && eof == 0,
+         "fifo: the child's byte, then end of file once the child closed the last writer",
+         "n=%ld eof=%ld", (long)n, (long)eof);
+
+  // A writer whose only reader is a forked child's copy: EPIPE once the
+  // child has closed it (exited).
+  writer = open(path, O_WRONLY | O_NONBLOCK);
+  check(writer >= 0, "fifo: open a writer while a reader exists");
+  fflush(stdout);
+  pid = fork();
+  if (pid == 0) {
+    char c[4];
+    for (int i = 0; i < 200; ++i) {
+      ssize_t got = read(reader, c, sizeof c);
+      if (got > 0) _exit(c[0] == 'r' ? 0 : 1);
+      usleep(10000);
+    }
+    _exit(3);
+  }
+  close(reader);
+  n = write(writer, "r", 1);
+  status = reap(pid, 0);
+  checkf(n == 1 && status != -1 && WIFEXITED(status) && WEXITSTATUS(status) == 0,
+         "fifo: the child reads through its copy of the only reader", "n=%ld status=0x%lx", (long)n, status);
+  // A reader that ended without closing is counted out within the ring's
+  // sweep interval (100 ms, ADR 0097), as for any exited peer.
+  usleep(150000);
+  signal(SIGPIPE, SIG_IGN);
+  n = write(writer, "x", 1);
+  checkf(n == -1 && errno == EPIPE, "fifo: EPIPE once the child closed the last reader",
+         "n=%ld errno=%ld", (long)n, errno);
+  signal(SIGPIPE, SIG_DFL);
+  close(writer);
+
+  // A child opens the FIFO by its path (a new description) and writes.
+  reader = open(path, O_RDONLY | O_NONBLOCK);
+  fflush(stdout);
+  pid = fork();
+  if (pid == 0) {
+    int w = open(path, O_WRONLY);
+    _exit(w >= 0 && write(w, "open", 4) == 4 ? 0 : 1);
+  }
+  status = reap(pid, 0);
+  memset(buf, 0, sizeof buf);
+  n = read(reader, buf, sizeof buf);
+  checkf(status != -1 && WIFEXITED(status) && WEXITSTATUS(status) == 0 && n == 4 && memcmp(buf, "open", 4) == 0,
+         "fifo: a forked child opens the FIFO by its path and writes", "n=%ld status=0x%lx", (long)n, status);
+  // A child execs a program with the FIFO as its standard output.
+  if (g_self != NULL) {
+    fflush(stdout);
+    pid = fork();
+    if (pid == 0) {
+      int w = open(path, O_WRONLY);
+      if (w < 0 || dup2(w, 1) != 1) _exit(95);
+      close(w);
+      execl(g_self, "arm64-fork-exec", "echo", (char*)NULL);
+      _exit(94);
+    }
+    char out[64] = {0};
+    ssize_t total = 0;
+    int saw_eof = 0;
+    for (int i = 0; i < 1000; ++i) {
+      n = read(reader, out + total, sizeof out - 1 - total);
+      if (n > 0) total += n;
+      else if (n == 0 && total > 0) { saw_eof = 1; break; }
+      else usleep(10000);
+    }
+    status = reap(pid, 0);
+    checkf(status != -1 && WIFEXITED(status) && WEXITSTATUS(status) == 7 && strstr(out, "spawned-ok") != NULL &&
+               saw_eof,
+           "fifo: a forked child's exec'd program writes to the FIFO it inherited, then end of file",
+           "status=0x%lx total=%ld", status, (long)total);
+  }
+  close(reader);
+  unlink(path);
+}
+
 // --- a forked child whose root (the process that forked first) has ended ------
 // The root (this program run again, in "killroot" mode) forks a child and
 // ends; the child spawns: the spawn fails at once with ENOTSUP (ADR 0092: an
@@ -1132,6 +1277,7 @@ static int run_all(void) {
   test_buffered_once();
   test_status_and_signals();
   test_exec_from_child();
+  test_fifo();
   test_wait_interrupted();
   test_spawn_after_root_ends();
   test_memfd_lease_in_child();

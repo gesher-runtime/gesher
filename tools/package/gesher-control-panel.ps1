@@ -58,7 +58,7 @@ $flowDirection = if ($isHe) { 'RightToLeft' } else { 'LeftToRight' }
 # Hashtables are mutated in place so event handlers never need to assign script-scope variables.
 $script:IsBusy = $false
 $script:ActionState = @{ Worker = $null; Completing = $false; Closed = $false }
-$script:ViewState = @{ Device = $null; Microg = $null; Store = $null; AppsSignature = $null; AppFiles = @(); Icons = @{} }
+$script:ViewState = @{ Device = $null; Microg = $null; Store = $null; AppsSignature = $null; AppFiles = @(); Icons = @{}; AppItems = @() }
 $script:LiveState = @{ Stamp = $null; AppsStamp = $null; PendingSince = $null; PendingFirst = $null; Tick = 0; WasVisible = $false; RecoveryAt = $null }
 $script:MetadataMonitor = $null
 $script:UpdatingCameraView = $false
@@ -672,11 +672,33 @@ $btnReopenPanel = $window.FindName('BtnReopenPanel')
 $updateProgress = $window.FindName('UpdateProgress')
 $panelScroll = $window.FindName('PanelScroll')
 $panelLayout = $window.FindName('PanelLayout')
+$upperCardsRow = $window.FindName('UpperCardsRow')
+$upperCards = $window.FindName('UpperCards')
+$upperCardsScroll = $window.FindName('UpperCardsScroll')
+$appsSplitter = $window.FindName('AppsSplitter')
+$script:AppSearchView = @{
+    Box = $window.FindName('AppSearch')
+    Placeholder = $window.FindName('AppSearchPlaceholder')
+    Clear = $window.FindName('BtnClearAppSearch')
+    NoMatches = $window.FindName('AppSearchNoMatches')
+}
 
 function Update-PanelWindowLayout {
     # A short or scaled display can scroll the complete dashboard. Its app list
     # keeps a useful viewport rather than being squeezed behind the update and camera cards.
     $panelLayout.Height = [Math]::Max(740, $panelScroll.ActualHeight - 48)
+    # The cards above the applications scroll on their own rather than squeeze the
+    # applications below their minimum; the splitter moves between these bounds and
+    # never stretches the cards past their own height into empty space.
+    if ($upperCardsRow -and $upperCards -and $upperCards.ActualHeight -gt 0) {
+        $rows = $panelLayout.RowDefinitions
+        $room = $panelLayout.Height - $rows[0].ActualHeight - $rows[2].ActualHeight - $rows[4].ActualHeight - $rows[3].MinHeight
+        $room = [Math]::Max(0, $room)
+        $upperCardsRow.MaxHeight = [Math]::Min($upperCards.ActualHeight, $room)
+        # An auto-sized row would clip its cards without a scroll bar; bounding the
+        # viewer itself lets it measure against the room it really has.
+        if ($upperCardsScroll) { $upperCardsScroll.MaxHeight = $room }
+    }
 }
 
 function Set-Busy([bool] $busy, [string] $msg = '') {
@@ -830,10 +852,39 @@ function Update-AppsView($installed, [hashtable] $ReadStamps = $null) {
             ProxyVisibility = if ($proxyText) { [System.Windows.Visibility]::Visible } else { [System.Windows.Visibility]::Collapsed }
         })
     }
-    $appsList.ItemsSource = $items
+    $script:ViewState.AppItems = $items
+    Update-AppsFilter
     # Retain only icons used by the current view; removed apps release their entries.
     $script:ViewState.Icons = $icons
     $script:ViewState.AppsSignature = $signature
+}
+
+# Shows the installed applications whose name or package contains the search text.
+function Update-AppsFilter {
+    $all = $script:ViewState.AppItems
+    if ($null -eq $all) { $all = @() }
+    $view = Get-Variable -Name AppSearchView -Scope Script -ValueOnly -ErrorAction Ignore
+    $query = if ($view -and $view.Box) { ([string]$view.Box.Text).Trim() } else { '' }
+    if (-not $query) {
+        $shown = $all
+    } else {
+        $shown = [System.Collections.Generic.List[PSObject]]::new()
+        foreach ($item in $all) {
+            if (([string]$item.Label).IndexOf($query, [StringComparison]::CurrentCultureIgnoreCase) -ge 0 -or
+                ([string]$item.Package).IndexOf($query, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+                $shown.Add($item)
+            }
+        }
+    }
+    if (-not [Object]::ReferenceEquals($appsList.ItemsSource, $shown)) { $appsList.ItemsSource = $shown }
+    if ($view -and $view.Box) {
+        $hasText = [bool]$view.Box.Text
+        $view.Placeholder.Visibility = if ($hasText) { [System.Windows.Visibility]::Collapsed } else { [System.Windows.Visibility]::Visible }
+        $view.Clear.Visibility = if ($hasText) { [System.Windows.Visibility]::Visible } else { [System.Windows.Visibility]::Collapsed }
+        $view.NoMatches.Visibility = if ($query -and @($all).Count -gt 0 -and $shown.Count -eq 0) {
+            [System.Windows.Visibility]::Visible
+        } else { [System.Windows.Visibility]::Collapsed }
+    }
 }
 
 # Full re-evaluation; used at load, after every panel action and when live refresh sees a change.
@@ -1022,6 +1073,7 @@ $script:SpecialAccessLabels = [ordered]@{
     'android:request_install_packages' = 'cp_access_install'
     'android:write_settings' = 'cp_access_write_settings'
     'android:get_usage_stats' = 'cp_access_usage'
+    'android:manage_external_storage' = 'cp_access_all_files'
 }
 $script:SpecialAccessTimeoutMs = 120000
 # Background queries whose dialog closed before they answered; the live timer disposes them.
@@ -1271,6 +1323,12 @@ function Add-PanelShowingTokens([string[]] $tokens) {
 
 # FromList: the user opened it from the app list, rather than an app from Settings' screens.
 function Show-AppInfoDialog([string] $pkg, [switch] $FromList) {
+    # A request for an app the search hides shows the whole list again.
+    $search = Get-Variable -Name AppSearchView -Scope Script -ValueOnly -ErrorAction Ignore
+    if ($search -and $search.Box -and $search.Box.Text -and
+        -not ($appsList.ItemsSource | Where-Object { $_.Package -eq $pkg })) {
+        $search.Box.Clear()
+    }
     $item = $appsList.ItemsSource | Where-Object { $_.Package -eq $pkg } | Select-Object -First 1
     if (-not $item) {
         Refresh-Dashboard
@@ -1996,6 +2054,21 @@ $btnReopenPanel.Add_Click({
     } catch { Set-PanelUpdateStatus 'cp_update_reopen_failed' @() $_.Exception.Message; Update-PanelUpdateView }
 })
 $window.Add_SizeChanged({ Update-PanelWindowLayout })
+$upperCards.Add_SizeChanged({ Update-PanelWindowLayout })
+# Double-clicking the splitter gives the cards their own height again.
+$appsSplitter.Add_MouseDoubleClick({ $upperCardsRow.Height = [System.Windows.GridLength]::Auto })
+$script:AppSearchView.Box.Add_TextChanged({ Update-AppsFilter })
+$script:AppSearchView.Box.Add_PreviewKeyDown({
+    param($sender, $e)
+    if ($e.Key -eq [System.Windows.Input.Key]::Escape -and $sender.Text) {
+        $sender.Clear()
+        $e.Handled = $true
+    }
+})
+$script:AppSearchView.Clear.Add_Click({
+    $script:AppSearchView.Box.Clear()
+    [void]$script:AppSearchView.Box.Focus()
+})
 $window.Add_ContentRendered({
     Update-PanelWindowLayout
     Start-PanelUpdateCheck -Automatic
@@ -2110,8 +2183,7 @@ $btnInstallApk.Add_Click({
 })
 
 # Drag & Drop Handler
-$window.Add_Drop({
-    param($sender, $e)
+function Invoke-PanelFileDrop($e) {
     if ($script:IsBusy) { return }
     if ($e.Data.GetDataPresent([System.Windows.DataFormats]::FileDrop)) {
         $files = $e.Data.GetData([System.Windows.DataFormats]::FileDrop)
@@ -2119,6 +2191,25 @@ $window.Add_Drop({
         if ($packages.Count) {
             [void](Start-PanelAction 'Install' @{ Files = $packages } (Get-GesherText 'cp_installing' @([IO.Path]::GetFileName($packages[0]))))
         }
+    }
+}
+$window.Add_Drop({ param($sender, $e) Invoke-PanelFileDrop $e })
+# A text box refuses dropped files on its own; files dropped on the search box
+# install like anywhere else in the window, while dragged text still searches.
+$searchFileDragOver = {
+    param($sender, $e)
+    if ($e.Data.GetDataPresent([System.Windows.DataFormats]::FileDrop)) {
+        $e.Effects = if ($window.AllowDrop) { [System.Windows.DragDropEffects]::Copy } else { [System.Windows.DragDropEffects]::None }
+        $e.Handled = $true
+    }
+}
+$script:AppSearchView.Box.Add_PreviewDragEnter($searchFileDragOver)
+$script:AppSearchView.Box.Add_PreviewDragOver($searchFileDragOver)
+$script:AppSearchView.Box.Add_PreviewDrop({
+    param($sender, $e)
+    if ($e.Data.GetDataPresent([System.Windows.DataFormats]::FileDrop)) {
+        $e.Handled = $true
+        Invoke-PanelFileDrop $e
     }
 })
 

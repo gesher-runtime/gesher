@@ -7,6 +7,7 @@
 
 #include <gesher/reserved_names.h>
 #include <gesher/environment.h>
+#include <gesher/storage_policy.h>
 #include <gesher/environment_utf16.h>
 
 #include <algorithm>
@@ -559,6 +560,8 @@ DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::
     if (inherited_environment.empty()) return ERROR_NO_UNICODE_TRANSLATION;
     environment = inherited_environment.c_str();
   }
+  std::wstring storage_environment = gesher::ExternalStorageChildEnvironment(environment);
+  if (!storage_environment.empty()) environment = storage_environment.c_str();
   struct ImagePin {
     HANDLE value = nullptr;
     ~ImagePin() { if (value) CloseHandle(value); }
@@ -591,7 +594,7 @@ DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::
   // stdio placeholders and the manifest. A bookkeeping allocation must never
   // strand a newly duplicated handle outside the cleanup owner.
   const size_t selected = std::min(fds.size(), static_cast<size_t>(count));
-  owned.values.reserve(selected * (transport ? 2 : 1) + (transport ? 4 : 0));
+  owned.values.reserve(selected * (transport ? 3 : 1) + (transport ? 4 : 0));
   std::vector<gesher::DescriptorSnapshotPtr> snapshots(static_cast<size_t>(count));
   std::vector<std::unique_ptr<gesher::NativeFileDescriptionExport>> native_exports;
   for (const ChildFd& file : fds) {
@@ -637,6 +640,14 @@ DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::
     }
     entries.push_back({fd, static_cast<uint32_t>(snapshot->kind), reinterpret_cast<uintptr_t>(inherited_description),
                        reinterpret_cast<uintptr_t>(file)});
+    if (snapshot->kind == gesher::DescriptorKind::kFifo) {
+      // The child inherits a reference to the FIFO's ring with its
+      // description, so buffered bytes survive this process closing its
+      // copies or exiting before the child has bound the ring.
+      HANDLE ring = gesher::FifoRingSection(snapshot);
+      if (!ring) return errno_error();
+      if (!inheritable(ring)) return GetLastError();
+    }
   }
   uint32_t closed_stdio = 0;
   for (int fd = 0; fd < 3; ++fd) {

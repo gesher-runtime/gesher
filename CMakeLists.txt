@@ -58,6 +58,7 @@ include(cmake/aosp/boringssl.cmake)
 include(cmake/aosp/libcore_native.cmake)
 # Conscrypt's libjavacrypto and compat/net: TLS, Windows' trusted roots (docs/network.md).
 include(cmake/aosp/conscrypt.cmake)
+include(cmake/aosp/brotli.cmake)
 include(cmake/aosp/binder.cmake)
 include(cmake/aosp/servicemanager.cmake)
 include(cmake/aosp/framework.cmake)
@@ -169,6 +170,10 @@ target_link_libraries(filesystem_metadata_host_test PRIVATE gesher_posix)
 add_executable(xattr_fd_host_test tests/native/xattr_fd_host_test.cc)
 target_compile_options(xattr_fd_host_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(xattr_fd_host_test PRIVATE gesher_posix advapi32)
+
+add_executable(storage_policy_host_test tests/native/storage_policy_host_test.cc)
+target_compile_options(storage_policy_host_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(storage_policy_host_test PRIVATE gesher_posix sqlite)
 
 add_executable(sqlite_path_test tests/native/sqlite_path_test.cc)
 target_compile_options(sqlite_path_test PRIVATE -Wall -Wextra -Werror)

@@ -28,7 +28,7 @@ def main() -> None:
     parser.add_argument("--apksig-jar", type=Path, default=Path(apksig) if apksig else None)
     parser.add_argument("--source-ref")
     parser.add_argument("--cc", help="Host C compiler (llvm-mingw on Windows)")
-    parser.add_argument("--case", default="all", choices=["all", "basic", "identity", "timeouts", "teardown", "subscriptions", "pending", "pending-cancel", "freshness", "demand", "idle-trace"])
+    parser.add_argument("--case", default="all", choices=["all", "basic", "identity", "timeouts", "teardown", "subscriptions", "pending", "pending-cancel", "freshness", "cost", "demand", "idle-trace"])
     parser.add_argument("--trace-ms", type=int, default=600_000, help="No-owner trace duration (idle-trace case only)")
     args = parser.parse_args()
     cc = args.cc or shutil.which("cc")

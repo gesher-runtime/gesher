@@ -228,6 +228,15 @@ public final class Services {
         // Construct the network provider before jobs subscribe to its changes.
         ConnectivityService connectivity = new ConnectivityService(pm, atm);
         services.put(Context.CONNECTIVITY_SERVICE, connectivity);  // docs/network.md
+        // content://downloads: DownloadManager's provider and downloader (docs/downloads.md).
+        try {
+            DownloadProvider.create(am, pm, connectivity, persistentAccounts
+                    ? new java.io.File(android.os.Environment.getDataDirectory(), "system/downloads")
+                    : null);
+        } catch (RuntimeException | LinkageError e) {
+            // Without it the authority stays unknown, as before; nothing pretends to download.
+            SystemServer.log("downloads: provider unavailable: " + e);
+        }
         // Device state from Windows (devsvc track, ADR 0038): jobs, the battery.
         services.put(Context.JOB_SCHEDULER_SERVICE, StandIn.of(android.app.job.IJobScheduler.class,
                 new JobSchedulerService(am, atm, pm, connectivity)).asBinder());
@@ -635,6 +644,14 @@ public final class Services {
             return path.canWrite() ? VolumeInfo.STATE_MOUNTED : VolumeInfo.STATE_MOUNTED_READ_ONLY;
         }
 
+        private static java.io.File canonicalFile(java.io.File path) {
+            try {
+                return path.getCanonicalFile();
+            } catch (java.io.IOException e) {
+                return path.getAbsoluteFile();
+            }
+        }
+
         @Override
         public DiskInfo[] getDisks() {
             // There are no Android-managed physical/adoptable disks. The framework
@@ -658,10 +675,13 @@ public final class Services {
         public VolumeInfo[] getVolumes(int flags) {
             // The two views refer to the same backing storage. Android also includes
             // a private internal volume even though it has no DiskInfo or fsUuid.
+            // StorageManager.getUuidForPath compares File.getCanonicalPath() against
+            // VolumeInfo.path, so canonicalize non-canonical ANDROID_DATA paths
+            // (such as Windows 8.3 short paths for non-ASCII profile directories).
             VolumeInfo internal = new VolumeInfo(VolumeInfo.ID_PRIVATE_INTERNAL,
                     VolumeInfo.TYPE_PRIVATE, null, null);
             internal.state = directoryState(mDataDirectory);
-            internal.path = mDataDirectory.getAbsolutePath();
+            internal.path = canonicalFile(mDataDirectory).getPath();
 
             VolumeInfo shared = new VolumeInfo(VolumeInfo.ID_EMULATED_INTERNAL + ";0",
                     VolumeInfo.TYPE_EMULATED, null, null);
@@ -671,7 +691,7 @@ public final class Services {
             shared.state = directoryState(sharedDirectory());
             // VolumeInfo appends the user ID in getPathForUser(); StorageVolume
             // below contains that final per-user path instead.
-            shared.path = mediaRoot().getAbsolutePath();
+            shared.path = canonicalFile(mediaRoot()).getPath();
             shared.internalPath = shared.path;
             return new VolumeInfo[] {internal, shared};
         }
@@ -770,7 +790,7 @@ public final class Services {
         @Override
         public StorageVolume[] getVolumeList(int userId, String callingPackage, int flags) {
             if (userId != 0) return new StorageVolume[0];
-            java.io.File path = sharedDirectory();
+            java.io.File path = canonicalFile(sharedDirectory());
             return new StorageVolume[] {new StorageVolume("emulated;" + userId, path, path,
                     "Internal shared storage", true /* primary */, false /* removable */,
                     true /* emulated */, false /* externallyManaged */,
@@ -781,7 +801,24 @@ public final class Services {
 
         @Override
         public void mkdirs(String callingPkg, String path) {
-            new java.io.File(path).mkdirs();
+            Created created = sLast;
+            ApkPackage owner = null;
+            if (created != null) {
+                CallerIdentity callers = created.am.callers();
+                if (!callers.isSystem()) {
+                    owner = callers.requireCurrentPackage(callingPkg);
+                }
+            } else if (!android.os.UserHandle.isCore(android.os.Binder.getCallingUid())) {
+                throw new SecurityException("Cannot verify storage caller");
+            }
+            java.io.File target = ExternalStorageAccess.resolveMkdirsPath(
+                    created == null ? null : created.pm, owner, path);
+            if (!target.isDirectory()) {
+                target.mkdirs();
+                if (!target.isDirectory()) {
+                    throw new IllegalStateException("Failed to prepare " + target);
+                }
+            }
         }
     }
 

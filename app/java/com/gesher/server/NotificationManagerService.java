@@ -379,9 +379,8 @@ public final class NotificationManagerService extends INotificationManager.Defau
                     }
                 }
             }
-            StringBuilder hex = new StringBuilder();
-            for (byte b : digest.digest()) hex.append(String.format(java.util.Locale.ROOT, "%02x", b & 255));
-            return (signers == null ? "apk:" : "cert:") + hex;
+            return (signers == null ? "apk:" : "cert:")
+                    + libcore.util.HexEncoding.encodeToString(digest.digest(), false);
         } catch (Exception | LinkageError e) { return null; }
     }
 

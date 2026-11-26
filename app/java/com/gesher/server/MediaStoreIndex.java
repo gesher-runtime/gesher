@@ -816,6 +816,7 @@ final class MediaStoreIndex {
         if (!isEmpty(values.getAsString("_data"))) {
             // Force values when raw path provided
             values.put("_data", requireUnderVolume(values.getAsString("_data")).getPath());
+            enforcePrivateStorageAccess(access.caller, values.getAsString("_data"));
             computeValuesFromData(values);
         }
 
@@ -898,6 +899,7 @@ final class MediaStoreIndex {
                 throw new IllegalArgumentException("Primary directory " + primary
                         + " not allowed for " + uri + "; allowed directories are " + allowedPrimary);
             }
+            enforcePrivateStorageAccess(access.caller, res.getPath());
             File parent = res.getParentFile();
             parent.mkdirs();
             if (!parent.isDirectory()) {
@@ -928,6 +930,57 @@ final class MediaStoreIndex {
                     + " doesn't appear under [" + volumeRoot() + "]");
         }
         return new File(volumeRoot(), relative);
+    }
+
+    /**
+     * Global MediaStore access and row ownership do not authorize another UID's
+     * Android/data or Android/obb files. The system server performs the actual
+     * file operation, so enforce this boundary before handing out a descriptor
+     * or creating, moving or deleting a file on the caller's behalf. Public
+     * MediaStore-owned items retain their normal scoped-storage access rules.
+     */
+    private void enforcePrivateStorageAccess(Caller caller, String data) {
+        if (caller.self() || data == null) return;
+        File file = requireUnderVolume(data);
+        enforcePrivateStorageRelative(caller, relativeToVolume(file.getPath()));
+        try {
+            // The first insert may create the volume directory; canonicalize
+            // its trusted location without requiring that leaf to exist yet.
+            java.nio.file.Path root = volumeRoot().getCanonicalFile().toPath();
+            java.nio.file.Path target = file.toPath().toAbsolutePath().normalize();
+            // Resolve an existing ancestor for inserts into directories not yet
+            // created. A dangling link fails toRealPath instead of being treated
+            // as a new, ordinary destination below the shared volume.
+            List<java.nio.file.Path> missing = new ArrayList<>();
+            while (!java.nio.file.Files.exists(target, java.nio.file.LinkOption.NOFOLLOW_LINKS)) {
+                if (target.getParent() == null) throw new IOException("No existing storage ancestor");
+                missing.add(target.getFileName());
+                target = target.getParent();
+            }
+            target = target.toRealPath();
+            for (int i = missing.size() - 1; i >= 0; --i) target = target.resolve(missing.get(i));
+            if (!target.startsWith(root) || target.equals(root)) {
+                throw new SecurityException("Requested media path is outside the shared volume: " + data);
+            }
+            enforcePrivateStorageRelative(caller,
+                    root.relativize(target).toString().replace(File.separatorChar, '/'));
+        } catch (IOException e) {
+            throw new SecurityException("Cannot resolve media storage path: " + data, e);
+        }
+    }
+
+    private static void enforcePrivateStorageRelative(Caller caller, String relative) {
+        String[] parts = relative.split("/");
+        if (parts.length < 2 || !"Android".equalsIgnoreCase(parts[0])
+                || !("data".equalsIgnoreCase(parts[1]) || "obb".equalsIgnoreCase(parts[1]))) return;
+        String[] packages = caller.sharedPackages();
+        if (packages == null || packages.length == 0) packages = new String[] {caller.packageName()};
+        if (parts.length >= 3) {
+            for (String pkg : packages) {
+                if (pkg != null && pkg.equalsIgnoreCase(parts[2])) return;
+            }
+        }
+        throw new SecurityException(caller.packageName() + " has no access to private storage " + relative);
     }
 
     /** {@code path} relative to the volume root with '/' separators, or null if outside it. */
@@ -1326,6 +1379,7 @@ final class MediaStoreIndex {
             SQLiteQueryBuilder qb = builder(access, true, uri, match, args.matchPending,
                     args.matchTrashed, args.matchFavorite);
             List<Row> rows = rows(qb, args.selection, args.selectionArgs);
+            for (Row row : rows) enforcePrivateStorageAccess(caller, row.data);
             FileOperations ops = new FileOperations();
             try {
                 mDb.beginTransaction();
@@ -1481,6 +1535,9 @@ final class MediaStoreIndex {
             SQLiteQueryBuilder qb = builder(access, true, uri, match, args.matchPending,
                     args.matchTrashed, args.matchFavorite);
             List<Row> rows = rows(qb, args.selection, args.selectionArgs);
+            // Preflight the whole selection before deleting any file: a private
+            // row must not cause a partially applied collection delete.
+            for (Row row : rows) enforcePrivateStorageAccess(caller, row.data);
             FileOperations ops = new FileOperations();
             try {
                 for (Row row : rows) {
@@ -1561,6 +1618,7 @@ final class MediaStoreIndex {
         if (relativeToVolume(file.getPath()) == null) {
             throw new FileNotFoundException("Item " + uri + " is outside the shared volume");
         }
+        enforcePrivateStorageAccess(caller, data);
         boolean redactionNeeded = !access.self && !callerIsOwner && !access.manager
                 && !caller.permission(ACCESS_MEDIA_LOCATION)
                 && (mediaType == MEDIA_TYPE_IMAGE || mediaType == MEDIA_TYPE_VIDEO);

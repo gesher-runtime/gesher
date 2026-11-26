@@ -12,6 +12,7 @@ import android.bluetooth.BluetoothGattCharacteristic;
 import android.bluetooth.BluetoothGattDescriptor;
 import android.bluetooth.BluetoothGattService;
 import android.bluetooth.BluetoothHost;
+import android.bluetooth.BluetoothLeAudio;
 import android.bluetooth.BluetoothManager;
 import android.bluetooth.BluetoothProfile;
 import android.bluetooth.BluetoothServerSocket;
@@ -484,8 +485,33 @@ public final class BluetoothHostTest {
                 "hands-free: connected");
         check(adapter.getProfileConnectionState(BluetoothProfile.A2DP) == BluetoothProfile.STATE_CONNECTED,
                 "adapter's A2DP state");
+        check(adapter.getProfileProxy(app, listener, BluetoothProfile.LE_AUDIO), "LE Audio proxy");
+        BluetoothProfile leAudioProxy = take(proxies, "the LE Audio proxy");
+        check(leAudioProxy instanceof BluetoothLeAudio, "LE Audio proxy type");
+        BluetoothLeAudio leAudio = (BluetoothLeAudio) leAudioProxy;
+        BluetoothDevice headset = adapter.getRemoteDevice(HEADSET);
+        check(leAudio.getConnectedDevices().isEmpty(), "LE Audio: no connected devices");
+        check(leAudio.getDevicesMatchingConnectionStates(new int[] {BluetoothProfile.STATE_CONNECTED}).isEmpty(),
+                "LE Audio: no matching connected devices");
+        check(leAudio.getConnectionState(headset) == BluetoothProfile.STATE_DISCONNECTED,
+                "LE Audio: disconnected");
+        check(leAudio.getGroupId(headset) == BluetoothLeAudio.GROUP_ID_INVALID,
+                "LE Audio: invalid group id");
+        check(leAudio.getConnectedGroupLeadDevice(0) == null,
+                "LE Audio: no connected group lead device");
+        BluetoothAdapter deniedAdapter = new BluetoothManager(new App(34)).getAdapter();
+        check(deniedAdapter.getProfileProxy(new App(34), listener, BluetoothProfile.LE_AUDIO),
+                "LE Audio proxy creation");
+        BluetoothProfile deniedLeAudio = take(proxies, "denied LE Audio proxy");
+        try {
+            deniedLeAudio.getConnectedDevices();
+            check(false, "BluetoothLeAudio.getConnectedDevices without BLUETOOTH_CONNECT");
+        } catch (SecurityException expected) {
+            check(expected.getMessage().contains("BLUETOOTH_CONNECT"),
+                    "LE Audio SecurityException names BLUETOOTH_CONNECT");
+        }
         check(!adapter.getProfileProxy(app, listener, BluetoothProfile.HID_DEVICE), "no HID device profile");
-        step("profiles: A2DP and headset proxies list the connected headset");
+        step("profiles: A2DP, headset, and LE Audio proxies");
     }
 
     private static void scan(BluetoothAdapter adapter) throws Exception {

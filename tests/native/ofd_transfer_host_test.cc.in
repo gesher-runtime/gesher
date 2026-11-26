@@ -40,12 +40,12 @@ void* operator new(size_t count) {
   if (!result) throw std::bad_alloc();
   return result;
 }
-void operator delete(void* value) noexcept { std::free(value); }
-void operator delete(void* value, size_t) noexcept { std::free(value); }
+[[gnu::noinline]] void operator delete(void* value) noexcept { std::free(value); }
+[[gnu::noinline]] void operator delete(void* value, size_t) noexcept { std::free(value); }
 void* operator new(size_t count, const std::nothrow_t&) noexcept {
   try { return ::operator new(count); } catch (const std::bad_alloc&) { return nullptr; }
 }
-void operator delete(void* value, const std::nothrow_t&) noexcept { std::free(value); }
+[[gnu::noinline]] void operator delete(void* value, const std::nothrow_t&) noexcept { std::free(value); }
 
 #define WINAPI
 #define CALLBACK
@@ -512,6 +512,11 @@ bool VisitEnvironment(void (*visit)(const char*, void*), void* context) {
   visit("GESHER_OFD_TRANSFER_ENV=fixture", context);
   return true;
 }
+// Model the trusted launcher's empty package identity: no storage override.
+// Guest identity propagation is outside this OFD transport fixture's scope.
+std::wstring ExternalStorageChildEnvironment(const wchar_t*) { return {}; }
+// FIFO descriptions (fifo.cc) are outside this envelope: none is exported.
+HANDLE FifoRingSection(const DescriptorSnapshotPtr&) { errno = EOPNOTSUPP; return nullptr; }
 // gesher/fork.h (ADR 0092): this fixture is never a forked child, so the
 // builder creates its process itself, under the spawn lock a fork excludes.
 static int spawn_lock_depth = 0;

@@ -4,6 +4,8 @@
 #   http://127.0.0.1:<HttpPort>/auth   Basic authentication (user "gesher",
 #                                      password "secret", realm "gesher-test")
 #   http://127.0.0.1:<HttpPort>/post   echoes a POST body in the page title
+#   http://127.0.0.1:<HttpPort>/intent-source/<case>  a page-driven intent anchor
+#   http://127.0.0.1:<HttpPort>/intent-target/<case>  its explicit HTTP fallback
 #   https://127.0.0.1:<HttpsPort>/     a self-signed certificate; asks for a
 #                                      client certificate and says whether it
 #                                      got one in the page title
@@ -98,7 +100,7 @@ public static class GesherWebTestServer {
           var body = new byte[length];
           for (int read = 0; read < length;) { int n = s.Read(body, read, length - read); if (n <= 0) break; read += n; }
           Say((tls ? "https " : "http ") + method + " " + path + (auth != null ? " (authorization)" : "") + (length > 0 ? " body " + Encoding.UTF8.GetString(body) : ""));
-          int status = 200; string extra = ""; string title;
+          int status = 200; string extra = "", markup = ""; string title;
           if (tls) {
             title = "tls client certificate: " + clientCert;
           } else if (path.StartsWith("/auth")) {
@@ -107,13 +109,28 @@ public static class GesherWebTestServer {
             else { status = 401; title = "auth needed"; extra = "WWW-Authenticate: Basic realm=\"gesher-test\"\r\n"; }
           } else if (path.StartsWith("/post")) {
             title = method + " " + Encoding.UTF8.GetString(body);
+          } else if (path.StartsWith("/intent-source/")) {
+            string name = path.Substring("/intent-source/".Length);
+            if (name != "default" && name != "explicit" && name != "veto") {
+              status = 404; title = "unknown intent case";
+            } else {
+              title = "intent source " + name;
+              string fallback = "http://127.0.0.1:" + ((IPEndPoint)http.LocalEndpoint).Port
+                  + "/intent-target/" + name;
+              string intent = "intent://fixture/" + name + "#Intent;scheme=gesher-webview-test;"
+                  + "S.browser_fallback_url=" + Uri.EscapeDataString(fallback) + ";end";
+              markup = "<a id='intent' href='" + WebUtility.HtmlEncode(intent) + "'>open intent</a>"
+                  + "<script>function runIntent(){document.getElementById('intent').click();}</script>";
+            }
+          } else if (path.StartsWith("/intent-target/")) {
+            title = "intent target " + path.Substring("/intent-target/".Length);
           } else if (path.StartsWith("/favicon")) {
             status = 404; title = "none";
           } else {
             title = "hello";
           }
           byte[] page = Encoding.UTF8.GetBytes("<!doctype html><html><head><title>" + WebUtility.HtmlEncode(title)
-              + "</title></head><body style='background:#ffff00'>" + WebUtility.HtmlEncode(title) + "</body></html>");
+              + "</title></head><body style='background:#ffff00'>" + WebUtility.HtmlEncode(title) + markup + "</body></html>");
           string head = "HTTP/1.1 " + status + (status == 200 ? " OK" : status == 401 ? " Unauthorized" : " Not Found")
               + "\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: " + page.Length
               + "\r\nCache-Control: no-store\r\n" + extra + "\r\n";

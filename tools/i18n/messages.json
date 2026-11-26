@@ -15,12 +15,12 @@
     "chooser_cancel": {"en": "Cancel", "he": "ביטול"},
     "chooser_add": {"en": "Add account", "he": "הוספת חשבון"},
     "install_request": {
-      "en": "Install or update Android application \u2068{0}\u2069 (version \u2068{1}\u2069)?\nThis approval applies to this installation only.",
-      "he": "להתקין או לעדכן את יישום Android \u2068{0}\u2069 (גרסה \u2068{1}\u2069)?\nהאישור חל על התקנה זו בלבד."
+      "en": "Install or update Android application {0} (version {1})?\r\nThis approval applies to this installation only.",
+      "he": "להתקין או לעדכן את יישום \u202aAndroid {0}\u202c (גרסה \u202a{1}\u202c)?\r\nהאישור חל על התקנה זו בלבד."
     },
     "removal_request": {
-      "en": "Remove Android application \u2068{0}\u2069 (version \u2068{1}\u2069)?\nIts app data will be deleted. This approval applies to this removal only.",
-      "he": "להסיר את יישום Android \u2068{0}\u2069 (גרסה \u2068{1}\u2069)?\nגם נתוני היישום יימחקו. האישור חל על הסרה זו בלבד."
+      "en": "Remove Android application {0} (version {1})?\r\nIts app data will be deleted. This approval applies to this removal only.",
+      "he": "להסיר את יישום \u202aAndroid {0}\u202c (גרסה \u202a{1}\u202c)?\r\nגם נתוני היישום יימחקו. האישור חל על הסרה זו בלבד."
     },
     "starting": {
       "en": "Starting…",
@@ -74,6 +74,18 @@
     "account_title": {
       "en": "Gesher account access",
       "he": "גשר — גישה לחשבון"
+    },
+    "location_off_prompt": {
+      "en": "The application {0} needs Windows Location services (and desktop app location access), which are currently turned off.\r\n\r\nOpen Windows Location settings?",
+      "he": "היישום \u202a{0}\u202c זקוק לשירותי המיקום של Windows (ולגישת מיקום ליישומי שולחן עבודה), שכרגע כבויים.\r\n\r\nלפתוח את הגדרות המיקום של Windows?"
+    },
+    "location_off_open": {
+      "en": "Open settings",
+      "he": "פתח הגדרות"
+    },
+    "location_off_later": {
+      "en": "Not now",
+      "he": "לא כעת"
     },
     "account_prefix": {
       "en": "Allow this Android application to access an account token?\n\nApplication: ",
@@ -506,6 +518,22 @@
     "cp_drag_drop_hint": {
       "en": "Drag and drop APK files here to install",
       "he": "גרור ושחרר קובצי APK לכאן להתקנה מהירה"
+    },
+    "cp_apps_search_placeholder": {
+      "en": "Search apps",
+      "he": "חיפוש אפליקציות"
+    },
+    "cp_apps_search_clear": {
+      "en": "Clear search",
+      "he": "ניקוי החיפוש"
+    },
+    "cp_apps_search_no_matches": {
+      "en": "No installed app matches the search.",
+      "he": "אין אפליקציה מותקנת שמתאימה לחיפוש."
+    },
+    "cp_apps_splitter_tip": {
+      "en": "Drag to resize the applications area; double-click to restore",
+      "he": "גרור כדי להגדיל או להקטין את אזור האפליקציות; לחיצה כפולה מחזירה לגודל הרגיל"
     },
     "cp_btn_launch": {
       "en": "Launch",

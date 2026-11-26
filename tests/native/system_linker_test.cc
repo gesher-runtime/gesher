@@ -513,8 +513,159 @@ static void TestNoFile(const std::wstring& data) {
          static_cast<unsigned long>(status));
 }
 
+// chmod and utimes through a symbolic or a hard link to the file, and
+// readlink of a chain of links.
+static void TestLinks(const std::wstring& data) {
+  printf("links to the file\n");
+  const char* name = "/system/bin/linker64";
+  const std::string before = ReadPath(name);
+  struct stat st_before {};
+  CHECK(stat(name, &st_before) == 0);
+  // A hard link made with Win32 (link() through the name is EROFS).
+  const std::wstring hard = data + L"\\hard-linker64";
+  if (CreateHardLinkW(hard.c_str(), FindFile(data).c_str(), nullptr)) {
+    const std::string h = ex::Narrow(hard);
+    CHECK_EROFS(chmod(h.c_str(), 0777));
+    CHECK_EROFS(utimes(h.c_str(), nullptr));
+    CHECK_EROFS(utimensat(AT_FDCWD, h.c_str(), nullptr, 0));
+    CHECK_EROFS(utimensat(AT_FDCWD, h.c_str(), nullptr, AT_SYMLINK_NOFOLLOW));
+    CHECK_EROFS(open(h.c_str(), O_WRONLY));
+    printf("PASS  a hard link: chmod, utimes, utimensat, open for writing: EROFS\n");
+    DeleteFileW(hard.c_str());
+  } else {
+    printf("SKIP  no hard link (error %lu)\n", GetLastError());
+  }
+  const std::string b = ex::Narrow(data + L"\\link-b");
+  const std::string a = ex::Narrow(data + L"\\link-a");
+  if (symlink(name, b.c_str()) == 0 && symlink(b.c_str(), a.c_str()) == 0) {
+    CHECK_EROFS(chmod(b.c_str(), 0777));
+    CHECK_EROFS(chmod(a.c_str(), 0777));
+    CHECK_EROFS(utimes(a.c_str(), nullptr));
+    CHECK_EROFS(utimensat(AT_FDCWD, b.c_str(), nullptr, 0));
+    // The links themselves are not the file.
+    CHECK(utimensat(AT_FDCWD, a.c_str(), nullptr, AT_SYMLINK_NOFOLLOW) == 0);
+    char target[4096] = {};
+    ssize_t n = readlink(b.c_str(), target, sizeof(target) - 1);
+    CHECK(n > 0 && std::string(target, static_cast<size_t>(n)) == name);
+    // A's target is B, not the file B leads to.
+    n = readlink(a.c_str(), target, sizeof(target) - 1);
+    const std::string got = n > 0 ? std::string(target, static_cast<size_t>(n)) : std::string();
+    CHECK(got != name && got.size() >= 7 && got.compare(got.size() - 7, 7, "/link-b") == 0);
+    printf("PASS  symbolic links: chmod and utimes EROFS; readlink of A -> B -> file gives B\n");
+  } else {
+    printf("SKIP  symbolic links need developer mode or a privilege here (errno %d)\n", errno);
+  }
+  CHECK(ReadPath(name) == before);
+  struct stat st_after {};
+  CHECK(stat(name, &st_after) == 0 && st_after.st_mtime == st_before.st_mtime);
+  const DWORD attributes = GetFileAttributesW(FindFile(data).c_str());
+  CHECK(attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_READONLY) == 0);
+}
+
+static bool WaitForFile(const std::wstring& path) {
+  for (int i = 0; i < 1000; ++i) {
+    if (GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES) return true;
+    Sleep(10);
+  }
+  return false;
+}
+
+static void Touch(const std::wstring& path) {
+  HANDLE h = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, 0, nullptr);
+  if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
+}
+
+// --hold <data>: uses the name (making and holding the file), links to it,
+// then waits for "done".
+static int HoldChild(const char* data_arg) {
+  const std::wstring data = ex::Widen(data_arg);
+  SetEnvironmentVariableW(L"ANDROID_DATA", data.c_str());
+  struct stat st {};
+  if (stat("/system/bin/linker64", &st) != 0) return 1;
+  if (symlink("/system/bin/linker64", ex::Narrow(data + L"\\late-link").c_str()) != 0) return 77;
+  Touch(data + L"\\go");
+  return WaitForFile(data + L"\\done") ? 0 : 2;
+}
+
+// --late <data>: looks for the file before it exists (a write open), then,
+// once another process made and holds it, writes through a link to it.
+static int LateChild(const char* data_arg) {
+  const std::wstring data = ex::Widen(data_arg);
+  SetEnvironmentVariableW(L"ANDROID_DATA", data.c_str());
+  const std::string scratch = ex::Narrow(data + L"\\scratch");
+  const int fd = open(scratch.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+  if (fd < 0) return 1;
+  close(fd);
+  Touch(data + L"\\probed");
+  if (!WaitForFile(data + L"\\go")) return 2;
+  const ULONGLONG start = GetTickCount64();
+  errno = 0;
+  const int w = open(ex::Narrow(data + L"\\late-link").c_str(), O_WRONLY);
+  const ULONGLONG elapsed = GetTickCount64() - start;
+  if (w >= 0) {
+    close(w);
+    return 3;
+  }
+  if (errno != EROFS) return 4;
+  printf("late open refused in %llu ms\n", static_cast<unsigned long long>(elapsed));
+  return 0;
+}
+
+static HANDLE StartSelf(const wchar_t* mode, const std::wstring& data) {
+  wchar_t self[MAX_PATH];
+  GetModuleFileNameW(nullptr, self, MAX_PATH);
+  std::wstring command;
+  ex::AppendQuoted(&command, self);
+  command += L" ";
+  command += mode;
+  command += L" ";
+  ex::AppendQuoted(&command, data);
+  STARTUPINFOW si = {};
+  si.cb = sizeof(si);
+  PROCESS_INFORMATION pi = {};
+  if (!CreateProcessW(self, command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr,
+                      nullptr, &si, &pi)) {
+    return nullptr;
+  }
+  CloseHandle(pi.hThread);
+  return pi.hProcess;
+}
+
+static DWORD Finish(HANDLE process) {
+  DWORD status = 99;
+  if (process == nullptr) return status;
+  WaitForSingleObject(process, 30000);
+  GetExitCodeProcess(process, &status);
+  CloseHandle(process);
+  return status;
+}
+
+static void TestLateProbe(const std::wstring& base) {
+  printf("a process that looked before the file existed\n");
+  const std::wstring data = base + L"\\late";
+  CreateDirectoryW(data.c_str(), nullptr);
+  HANDLE late = StartSelf(L"--late", data);
+  CHECK(late != nullptr);
+  CHECK(WaitForFile(data + L"\\probed"));
+  HANDLE hold = StartSelf(L"--hold", data);
+  CHECK(hold != nullptr);
+  const DWORD late_status = Finish(late);
+  Touch(data + L"\\done");
+  const DWORD hold_status = Finish(hold);
+  if (hold_status == 77) {
+    printf("SKIP  symbolic links need developer mode or a privilege here\n");
+    return;
+  }
+  CHECK(hold_status == 0);
+  CHECK(late_status == 0);
+  printf("PASS  it looks again when a write is refused for sharing: EROFS (status %lu)\n",
+         static_cast<unsigned long>(late_status));
+}
+
 int main(int argc, char** argv) {
   if (argc == 3 && strcmp(argv[1], "--no-file") == 0) return NoFileChild(argv[2]);
+  if (argc == 3 && strcmp(argv[1], "--hold") == 0) return HoldChild(argv[2]);
+  if (argc == 3 && strcmp(argv[1], "--late") == 0) return LateChild(argv[2]);
   if (argc == 3 && strcmp(argv[1], "--use") == 0) {
     // A second process using the name (TestTemporaryPrune).
     SetEnvironmentVariableW(L"ANDROID_DATA", ex::Widen(argv[2]).c_str());
@@ -539,6 +690,8 @@ int main(int argc, char** argv) {
   TestTemporaryPrune(data);
   TestOtherNames(data);
   TestNoFile(data);
+  TestLinks(data);
+  TestLateProbe(data);
   if (g_failed != 0) {
     printf("system_linker_test: %d of %d checks failed\n", g_failed, g_checks);
     return 1;
