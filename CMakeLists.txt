@@ -242,6 +242,11 @@ add_executable(bionic_ftruncate_test tests/native/bionic_ftruncate_test.cc)
 target_compile_options(bionic_ftruncate_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(bionic_ftruncate_test PRIVATE gesher_bionic gesher_elf)
 
+# creat and creat64 through the actual Bionic exports (issue #320).
+add_executable(bionic_creat_test tests/native/bionic_creat_test.cc)
+target_compile_options(bionic_creat_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(bionic_creat_test PRIVATE gesher_bionic gesher_elf)
+
 # Real Bionic stream locks and wide I/O through the exported FILE APIs.
 add_executable(bionic_stdio_contract_test tests/native/bionic_stdio_contract_test.cc)
 target_compile_options(bionic_stdio_contract_test PRIVATE -Wall -Wextra -Werror)

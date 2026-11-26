@@ -181,6 +181,10 @@ Check 'bionic shim: ftruncate rights, cursor and same-size final-page invalidati
   & "$Dir/bionic_ftruncate_test.exe"
 } @('bionic_ftruncate_test all passed')
 
+Check 'bionic shim: creat and creat64 create or truncate a write-only file' {
+  & "$Dir/bionic_creat_test.exe"
+} @('bionic_creat_test all passed')
+
 Check 'bionic shim: shared CRT stream ownership and wide stdio' {
   & "$Dir/bionic_stdio_contract_test.exe"
 } @('bionic_stdio_contract_test all passed')
