@@ -46,7 +46,10 @@ public final class HttpEngineBrotliWireTest {
                             int colon=h.indexOf(':');
                             if(h.substring(0,colon).equalsIgnoreCase("Accept-Encoding"))coding=h.substring(colon+1).trim();
                         }
-                        boolean acceptsBrotli=Arrays.asList(coding.split("\\s*,\\s*")).contains("br");
+                        boolean acceptsBrotli=false;
+                        for(String token:coding.split(",")) {
+                            if(token.trim().equals("br")) {acceptsBrotli=true;break;}
+                        }
                         byte[] body=acceptsBrotli?brotli:gzip;
                         if(acceptsBrotli)brResponses.incrementAndGet();
                         OutputStream out=s.getOutputStream();
