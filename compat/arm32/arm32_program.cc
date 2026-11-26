@@ -66,6 +66,12 @@ bool Program::HostSymbolAddress(std::string_view name, uint32_t* guest_address) 
   return true;
 }
 
+bool Program::HasExport(std::string_view library, std::string_view symbol) const {
+  const Module* module = Find(library);
+  uint32_t address = 0;
+  return module != nullptr && module->image.Lookup(symbol, &address);
+}
+
 bool Program::Resolve(std::string_view name, uint32_t* result) const {
   if (!result) return false;
   // We only expose already-relocated dependency symbols and explicit typed
