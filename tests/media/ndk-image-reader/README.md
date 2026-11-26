@@ -94,3 +94,15 @@ D3D-backed hardware buffer import path. The consumer gets zero planes,
 and the hardware buffer denies CPU locks. Each acquired image owns its
 buffer until release. Raw GPU dequeue slots and video-encoder usage are
 outside this path.
+
+## Per-frame producer dataspace
+
+Pass `dataspace` to the public NDK PIE or JNI fixture on an API 34 or newer
+runtime. The fixture posts consecutive frames tagged Display P3 and linear
+sRGB, then reads both tags through `AImage_getDataSpace`. Windows preserves
+the tag captured at RGBA and PRIVATE producer publication. Typed frames
+whose sources supply no tag report `ADATASPACE_UNKNOWN`. The Android 16
+emulator build BE2A.250530.026.D1 returns `ADATASPACE_UNKNOWN` for these
+two frames despite reporting both tags on the producer window. The fixture
+expects the per-buffer dataspace specified by the API and read by the
+[Android 16 ImageReader implementation](https://android.googlesource.com/platform/frameworks/av/+/refs/tags/android-16.0.0_r4/media/ndk/NdkImageReader.cpp#440).

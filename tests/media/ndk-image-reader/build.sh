@@ -15,7 +15,7 @@ done
 for abi in x86_64 aarch64; do
   compiler="$llvm/bin/$abi-linux-android29-clang"
   if [ -f "$compiler.cmd" ]; then compiler=$compiler.cmd; fi
-  common=(-std=c17 -O2 -Wall -Wextra -Werror "$here/image_reader_test.c" -lmediandk -landroid -ldl -lEGL -lGLESv2)
+  common=(-std=c17 -O2 -Wall -Wextra -Werror "$here/image_reader_test.c" -lmediandk -landroid -lnativewindow -ldl -lEGL -lGLESv2)
   "$compiler" -DIMAGE_READER_STANDALONE -fPIE -pie "${common[@]}" -o "$out/image-reader-$abi"
   "$compiler" -fPIC -shared "${common[@]}" -o "$out/libimage-reader-$abi.so"
 done

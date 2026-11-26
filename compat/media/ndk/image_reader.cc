@@ -1,6 +1,7 @@
 // Copyright 2026 The Gesher Authors
 // SPDX-License-Identifier: Apache-2.0
 
+#include <android/data_space.h>
 #include <android/hardware_buffer.h>
 #include <pthread.h>
 #include <unistd.h>
@@ -57,6 +58,7 @@ struct ImageFrame {
   int32_t width = 0;
   int32_t height = 0;
   int32_t format = AIMAGE_FORMAT_RGBA_8888;
+  int32_t dataspace = ADATASPACE_UNKNOWN;
   int64_t timestamp_ns = 0;
 };
 
@@ -208,6 +210,7 @@ int Publish(const std::weak_ptr<ReaderState>& weak, const SurfaceFrame& frame,
             pixels, kPixelStride, static_cast<uint32_t>(frame.width * kPixelStride)};
       }
       image->format = format;
+      image->dataspace = frame.dataspace;
       image->width = frame.width;
       image->height = frame.height;
       image->timestamp_ns = frame.timestamp_ns;
@@ -578,6 +581,12 @@ media_status_t BIONIC_SYSV GetImageField(const AImage* image, T* out) {
   return AMEDIA_OK;
 }
 
+media_status_t BIONIC_SYSV GetDataSpace(const AImage* image, int32_t* out) {
+  const auto status = GetImageField<int32_t, &ImageFrame::dataspace>(image, out);
+  if (status == AMEDIA_ERROR_INVALID_OBJECT) *out = -1;
+  return status;
+}
+
 media_status_t BIONIC_SYSV GetCropRect(const AImage* image, AImageCropRect* out) {
   if (image == nullptr || out == nullptr) return AMEDIA_ERROR_INVALID_PARAMETER;
   std::lock_guard<std::mutex> lock(image->owner->mutex);
@@ -658,6 +667,7 @@ bool Register() {
   ENTRY(AImage_getFormat, GetImageField<int32_t, &ImageFrame::format>);
   ENTRY(AImage_getTimestamp, GetImageField<int64_t, &ImageFrame::timestamp_ns>);
   ENTRY(AImage_getCropRect, GetCropRect);
+  ENTRY(AImage_getDataSpace, GetDataSpace);
   ENTRY(AImage_getNumberOfPlanes, GetPlaneCount);
   ENTRY(AImage_getPlanePixelStride, GetPlaneStride<&AHardwareBuffer_Plane::pixelStride>);
   ENTRY(AImage_getPlaneRowStride, GetPlaneStride<&AHardwareBuffer_Plane::rowStride>);

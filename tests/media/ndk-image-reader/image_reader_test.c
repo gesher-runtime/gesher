@@ -1,6 +1,9 @@
 // Copyright 2026 The Gesher Authors
 // SPDX-License-Identifier: Apache-2.0
 
+#ifndef IMAGE_READER_COMPONENT
+#include <android/data_space.h>
+#endif
 #include <android/hardware_buffer.h>
 #include <android/native_window.h>
 #include <android/rect.h>
@@ -357,6 +360,56 @@ static int make_release_fence(void) {
 #endif
 
 #ifndef IMAGE_READER_COMPONENT
+static int run_dataspace_test(void) {
+    checks = 0;
+    void* library = dlopen("libmediandk.so", RTLD_NOW | RTLD_LOCAL);
+    CHECK(library != NULL);
+    // Keep the fixture linkable for NDK 29 while testing this API 34 export.
+    media_status_t (*get_dataspace)(const AImage*, int32_t*) =
+        dlsym(library, "AImage_getDataSpace");
+    CHECK(get_dataspace != NULL);
+
+    AImageReader* reader = NULL;
+    CHECK(AImageReader_new(kWidth, kHeight, AIMAGE_FORMAT_RGBA_8888, 2, &reader) == AMEDIA_OK);
+    ANativeWindow* window = NULL;
+    CHECK(AImageReader_getWindow(reader, &window) == AMEDIA_OK && window != NULL);
+
+    // A native CPU producer connects on its first lock. Finish that
+    // connection before setting producer tags for the measured frames.
+    post(window, 0xff000000);
+    AImage* initial = NULL;
+    CHECK(AImageReader_acquireNextImage(reader, &initial) == AMEDIA_OK);
+    AImage_delete(initial);
+
+    AImage* first = NULL;
+    AImage* second = NULL;
+    CHECK(ANativeWindow_setBuffersDataSpace(window, ADATASPACE_DISPLAY_P3) == 0);
+    post(window, 0xff0000aa);
+    CHECK(AImageReader_acquireNextImage(reader, &first) == AMEDIA_OK);
+    CHECK(ANativeWindow_setBuffersDataSpace(window, ADATASPACE_SRGB_LINEAR) == 0);
+    post(window, 0xffaa0000);
+    CHECK(AImageReader_acquireNextImage(reader, &second) == AMEDIA_OK);
+
+    int32_t actual = -1;
+    CHECK(get_dataspace(first, &actual) == AMEDIA_OK);
+    if (actual != ADATASPACE_DISPLAY_P3) fprintf(stderr, "First dataspace: %#x\n", actual);
+    CHECK(actual == ADATASPACE_DISPLAY_P3);
+    CHECK(get_dataspace(second, &actual) == AMEDIA_OK);
+    if (actual != ADATASPACE_SRGB_LINEAR) fprintf(stderr, "Second dataspace: %#x\n", actual);
+    CHECK(actual == ADATASPACE_SRGB_LINEAR);
+    CHECK(get_dataspace(NULL, &actual) == AMEDIA_ERROR_INVALID_PARAMETER);
+    CHECK(get_dataspace(second, NULL) == AMEDIA_ERROR_INVALID_PARAMETER);
+
+    AImageReader_delete(reader);
+    actual = ADATASPACE_SRGB_LINEAR;
+    CHECK(get_dataspace(second, &actual) == AMEDIA_ERROR_INVALID_OBJECT && actual == -1);
+    AImage_delete(second);
+    AImage_delete(first);
+    CHECK(dlclose(library) == 0);
+    printf("NDK image reader dataspace: %d checks and retained producer tags passed\n", checks);
+    return 0;
+}
+
 static GLuint compile_shader(GLenum type, const char* source) {
     GLuint shader = glCreateShader(type);
     glShaderSource(shader, 1, &source, NULL);
@@ -609,10 +662,18 @@ int main(void) {
 }
 #else
 int main(int argc, char** argv) {
-    return argc > 1 && strcmp(argv[1], "private") == 0 ? run_private_test() : run_test();
+    if (argc > 1 && strcmp(argv[1], "private") == 0) return run_private_test();
+    if (argc > 1 && strcmp(argv[1], "dataspace") == 0) return run_dataspace_test();
+    return run_test();
 }
 #endif
 #else
+JNIEXPORT jint JNICALL Java_gesher_NdkImageReaderTest_nativeRunDataSpace(JNIEnv* env, jclass cls) {
+    (void)env;
+    (void)cls;
+    return run_dataspace_test();
+}
+
 JNIEXPORT jint JNICALL Java_gesher_NdkImageReaderTest_nativeRunPrivate(JNIEnv* env, jclass cls) {
     (void)env;
     (void)cls;
