@@ -11272,7 +11272,7 @@
     "version": 1,
     "reviewed_feature": "3a309b747fc604f84fa20a42bbd875d706116d6d",
     "manifest_sha256": "0545609007da5cc9bdd847edb55a0a7b9f063b85548d0bda82acd8cdfda576cc",
-    "adapter_sha256": "39cc8922c8b4542a0e95b41a1f6d0528cb88d155c86b89c1ce5b3523c9956c2f",
+    "adapter_sha256": "0d600d7169046b13209b49c665cbf1debe4bbf093063f5d674a4410e5e8e6761",
     "native_runtime_approval": false
   }
 }

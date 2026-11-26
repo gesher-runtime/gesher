@@ -92,15 +92,18 @@ def normalize(report, current, baseline, archived, helper, expected_helper,
         for path in paths:
             (work / path).parent.mkdir(parents=True, exist_ok=True)
             (work / path).write_bytes(current[path])
-        subprocess.run(['git', 'apply', '--reverse', '--check', '-'], input=patch,
+        # This scratch tree has no repository attributes. Git must preserve
+        # the exact source bytes even when the user's default is CRLF.
+        apply_patch = ['git', '-c', 'core.autocrlf=false', 'apply']
+        subprocess.run([*apply_patch, '--reverse', '--check', '-'], input=patch,
                        cwd=work, check=True, capture_output=True)
-        subprocess.run(['git', 'apply', '--reverse', '-'], input=patch,
+        subprocess.run([*apply_patch, '--reverse', '-'], input=patch,
                        cwd=work, check=True, capture_output=True)
         for path in paths:
             require((work / path).read_bytes() == baseline[path], 'exact reverse endpoint ' + path)
-        subprocess.run(['git', 'apply', '--check', '-'], input=patch,
+        subprocess.run([*apply_patch, '--check', '-'], input=patch,
                        cwd=work, check=True, capture_output=True)
-        subprocess.run(['git', 'apply', '-'], input=patch,
+        subprocess.run([*apply_patch, '-'], input=patch,
                        cwd=work, check=True, capture_output=True)
         for path in paths:
             require((work / path).read_bytes() == current[path], 'exact forward endpoint ' + path)
