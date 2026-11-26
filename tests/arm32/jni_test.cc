@@ -337,6 +337,33 @@ void Run(const char* path) {
         "guest JNI_OnUnload cleared its actual native state");
   Check(program.Shutdown(&error), "close guest JNI module");
 
+  // Registration must fail closed without an actual ART host-trampoline
+  // installer: returning JNI_OK here would make guest native methods appear
+  // installed even though ART cannot call their ARM32 entrypoints.
+  {
+    Program without_handler([&](std::string_view name, std::vector<uint8_t>* output,
+                               std::string*) {
+      if (name != "gesher_arm32_jni_fixture.so") return false;
+      *output = bytes;
+      return true;
+    });
+    Jni32 native_without_art(without_handler, &env);
+    Check(native_without_art.Install(&error) &&
+          without_handler.LoadLibrary("gesher_arm32_jni_fixture.so", &error) &&
+          without_handler.Initialize(&error),
+          "load guest JNI without an ART registration handler");
+    Value no_registration;
+    Check(without_handler.CallExport("gesher_arm32_jni_fixture.so",
+          "jni32_register_natives",
+          {Value::GuestPointer(native_without_art.GuestEnvironment())},
+          ValueKind::I32, &no_registration, &error) &&
+          static_cast<int32_t>(no_registration.bits) == JNI_ERR &&
+          native_without_art.ReleaseLocals(&error),
+          "RegisterNatives reports JNI_ERR when real host registration is unavailable");
+    Check(without_handler.Shutdown(&error),
+          "close guest JNI after rejected native registration");
+  }
+
   {
     Program retired([](std::string_view, std::vector<uint8_t>*, std::string*) {
       return false;
