@@ -6,6 +6,7 @@
 #include <jni.h>
 
 #include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <iostream>
 #include <iterator>
@@ -120,6 +121,36 @@ jboolean JNICALL IsSameObject(JNIEnv* env, jobject a, jobject b) {
   RequireState(env);
   return a == b ? JNI_TRUE : JNI_FALSE;
 }
+jbyteArray JNICALL NewByteArray(JNIEnv* env, jsize length) {
+  RequireState(env);
+  if (length < 0) return nullptr;
+  ++state->locals;
+  return reinterpret_cast<jbyteArray>(
+      state->Add(std::string(static_cast<size_t>(length), '\0'), false));
+}
+jsize JNICALL GetArrayLength(JNIEnv* env, jarray array) {
+  RequireState(env);
+  return static_cast<jsize>(Object(array)->value.size());
+}
+void JNICALL GetByteArrayRegion(JNIEnv* env, jbyteArray array, jsize start,
+                                 jsize length, jbyte* buffer) {
+  RequireState(env);
+  const auto& source = Object(array)->value;
+  Check(start >= 0 && length >= 0 &&
+        uint64_t{static_cast<uint32_t>(start)} + static_cast<uint32_t>(length)
+          <= source.size(), "byte region host boundary checks");
+  if (length) std::memcpy(buffer, source.data() + start, static_cast<size_t>(length));
+}
+void JNICALL SetByteArrayRegion(JNIEnv* env, jbyteArray array, jsize start,
+                                 jsize length, const jbyte* buffer) {
+  RequireState(env);
+  auto& destination = Object(array)->value;
+  Check(start >= 0 && length >= 0 &&
+        uint64_t{static_cast<uint32_t>(start)} + static_cast<uint32_t>(length)
+          <= destination.size(), "byte region host boundary checks");
+  if (length) std::memcpy(destination.data() + start, buffer,
+                          static_cast<size_t>(length));
+}
 jclass JNICALL GetObjectClass(JNIEnv* env, jobject value) {
   RequireState(env);
   if (!value) return nullptr;
@@ -148,6 +179,10 @@ void Run(const char* path) {
   functions.DeleteGlobalRef = DeleteGlobalRef;
   functions.IsSameObject = IsSameObject;
   functions.GetObjectClass = GetObjectClass;
+  functions.NewByteArray = NewByteArray;
+  functions.GetArrayLength = GetArrayLength;
+  functions.GetByteArrayRegion = GetByteArrayRegion;
+  functions.SetByteArrayRegion = SetByteArrayRegion;
   JNIEnv env{};
   env.functions = &functions;
 
@@ -246,6 +281,18 @@ void Run(const char* path) {
   Check(result.bits == 42, "guest JNI references, UTF strings and ABI methods");
   Check(fake.globals == 0 && fake.utf_acquired == fake.utf_released &&
         fake.utf_acquired == 1, "global refs and UTF buffers released exactly once");
+  Value byte_array_result;
+  Check(program.CallExport("gesher_arm32_jni_fixture.so", "jni32_byte_array",
+          {Value::GuestPointer(bridge.GuestEnvironment())}, ValueKind::I32,
+          &byte_array_result, &error) &&
+        static_cast<int32_t>(byte_array_result.bits) == 28,
+        "ARM32 guest NewByteArray/SetByteArrayRegion/GetByteArrayRegion");
+  Check(!program.CallExport("gesher_arm32_jni_fixture.so", "jni32_byte_bad_pointer",
+          {Value::GuestPointer(bridge.GuestEnvironment())}, ValueKind::I32,
+          &byte_array_result, &error) && !error.empty(),
+        "ARM32 byte region rejects unmapped guest input before host JNI");
+  Check(fake.locals == 2,
+        "failed byte region owns one unreturned temporary local JNI reference");
   Check(bridge.ReleaseLocals(&error) && fake.locals == 0,
         "local references retired at explicit JNI frame boundary");
 
