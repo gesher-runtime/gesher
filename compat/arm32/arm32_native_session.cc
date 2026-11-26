@@ -96,8 +96,16 @@ bool NativeLibrarySession::Open(
     return Fail(error, "ARM32 native library root name is invalid");
   try {
     root_ = std::string(soname);
-    if (!bionic_.Install(error) || !jni_.Install(error) ||
-        !program_.LoadLibrary(root_, error) || !program_.Initialize(error))
+    if (!bionic_.Install(error) || !jni_.Install(error))
+      return false;
+    // JNI_OnLoad is allowed to call RegisterNatives immediately. The host
+    // callback must be installed before we execute any guest constructors
+    // or the first JNI_OnLoad instruction.
+    if (registration_handler &&
+        !jni_.SetNativeRegistrationHandler(
+            std::move(registration_handler), error))
+      return false;
+    if (!program_.LoadLibrary(root_, error) || !program_.Initialize(error))
       return false;
     if (require_jni_onload) {
       jint version = 0;
