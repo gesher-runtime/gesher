@@ -89,7 +89,7 @@ class Loader {
 
   bool Run(ElfImage* result) {
     if (!Headers() || !MapImage() || !Dynamic() || !Symbols() || !Relocations() ||
-        !Relocate() || !InitFini()) return false;
+        !Dependencies() || !Relocate() || !InitFini()) return false;
     *result = std::move(image_);
     if (error_ != nullptr) error_->clear();
     return true;
@@ -293,7 +293,7 @@ class Loader {
         case 7: case 8: case 9: return Fail("DT_RELA relocations are unsupported");
         case 22: return Fail("DT_TEXTREL is unsupported");
         case 32: case 33: return Fail("DT_PREINIT_ARRAY is unsupported for shared libraries");
-                case kDtAndroidRela: case kDtAndroidRelaSz:
+        case kDtAndroidRela: case kDtAndroidRelaSz:
           return Fail("ELF32 Android packed RELA relocations are unsupported");
         case 0x6ffffff0: case 0x6ffffffc: case 0x6ffffffd: case 0x6ffffffe: case 0x6fffffff:
           return Fail("versioned dynamic symbols are unsupported");
@@ -320,6 +320,19 @@ class Loader {
     for (uint32_t needed : needed_) {
       std::string name;
       if (!Name(needed, &name)) return false;
+      image_.dependencies.push_back(std::move(name));
+    }
+    if (Has(kDtSoname) && !Name(Tag(kDtSoname), &image_.soname)) return false;
+    for (uint32_t tag : {uint32_t{15}, uint32_t{29}}) {
+      if (Has(tag)) { std::string ignored; if (!Name(Tag(tag), &ignored)) return false; }
+    }
+    return true;
+  }
+
+  bool Dependencies() {
+    // Parse and validate ELF tables first, before the dependency resolver
+    // performs externally visible work (including recursive guest loads).
+    for (const auto& name : image_.dependencies) {
       if (!options_.resolve_dependency)
         return Fail("DT_NEEDED '" + name + "' requires the unimplemented dependency loader");
       bool accepted = false;
@@ -329,11 +342,6 @@ class Loader {
         return Fail("dependency resolver threw an exception");
       }
       if (!accepted) return Fail("unresolved dependency '" + name + "'");
-      image_.dependencies.push_back(std::move(name));
-    }
-    if (Has(kDtSoname) && !Name(Tag(kDtSoname), &image_.soname)) return false;
-    for (uint32_t tag : {uint32_t{15}, uint32_t{29}}) {
-      if (Has(tag)) { std::string ignored; if (!Name(Tag(tag), &ignored)) return false; }
     }
     return true;
   }
