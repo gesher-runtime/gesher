@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <functional>
 #include <limits>
 #include <map>
@@ -142,7 +143,7 @@ struct ICoreWebView2Environment2 : RecordedObject<ICoreWebView2Environment2> {
   }
 };
 struct ICoreWebView2_2 : RecordedObject<ICoreWebView2_2> {
-  int plain = 0, sent = 0;
+  int plain = 0, sent = 0, stops = 0;
   HRESULT result = S_OK;
   std::wstring url;
   Com<ICoreWebView2WebResourceRequest> request;
@@ -155,6 +156,7 @@ struct ICoreWebView2_2 : RecordedObject<ICoreWebView2_2> {
     if (on_navigate) on_navigate();
     return result;
   }
+  HRESULT Stop() { ++stops; return S_OK; }
 };
 using ICoreWebView2 = ICoreWebView2_2;
 struct CoString {
@@ -197,6 +199,9 @@ struct Impl {
     std::shared_ptr<RequestArgs> args = std::make_shared<RequestArgs>();
   };
   bool api_navigation = false, destroyed = false, closing = false, failed = false, ready = true;
+  bool document_script_in_flight = false;
+  uint64_t navigation_generation = 0;
+  std::deque<std::function<void(Impl*)>> document_script_waiters;
 @NAVIGATION_STATE@
   std::wstring main_document, auth_retry;
   std::set<UINT64> cancelled;
@@ -207,6 +212,9 @@ struct Impl {
   int reports = 0;
   HRESULT reported = S_OK;
   std::vector<std::function<void(Impl*)>> pending;
+  std::vector<std::function<void(ICoreWebView2*)>> service_waiting;
+  // Popup completion ownership has its own extracted production fixture.
+  void CancelPendingNewWindows() {}
   std::map<int64_t, Request> requests;
   Com<ICoreWebView2_2> webview{new ICoreWebView2_2, false};
   Com<ICoreWebView2Environment2> env{new ICoreWebView2Environment2, false};
@@ -241,6 +249,7 @@ void RunOneTask() {
   auto task = std::move(tasks.front()); tasks.erase(tasks.begin()); task();
 }
 @DO@
+@STOP_COMMAND@
 
 // SHCreateMemStream's documented copied-buffer boundary, adapted only for the
 // exact baseline dispatch; its Windows allocator/COM internals are not measured.
@@ -653,6 +662,41 @@ void NavigationIdentityContracts() {
 #endif
 }
 
+void NavigationLifecycleContracts() {
+#if NUMBERED_NAVIGATION
+  for (bool stopped : {false, true}) {
+    auto state = std::make_shared<Impl>();
+    StartListener listener; state->listener = &listener;
+    if (stopped) RunStopCommand(state.get());
+    ICoreWebView2NavigationStartingEventArgs args{L"https://example.test/later", 50};
+    NavigationStartHandler(state)(nullptr, &args);
+    Check(state->webview->stops == (stopped ? 1 : 0), "ordinary Stop reaches the renderer");
+    Check(!args.cancelled && listener.calls == 1 && state->events.size() == 1
+              && state->events[0].type == kPageStarted && state->cancelled.empty(),
+          "healthy host and ordinary Stop allow a later page navigation");
+  }
+  for (bool closing : {false, true}) for (int route = 0; route < 4; ++route) {
+    auto state = std::make_shared<Impl>();
+    StartListener listener; state->listener = &listener;
+    state->main_document = L"https://example.test/retained";
+    if (closing) state->closing = true;
+    else Fail(state.get(), E_FAIL, L"required document settings");
+    state->events.clear();
+    ICoreWebView2NavigationStartingEventArgs args{L"https://example.test/rejected", 51};
+    if (route == 1) state->auth_retry = args.url;
+    if (route == 2) state->api_navigation = true;
+    if (route == 3) args.redirect = TRUE;
+    NavigationStartHandler(state)(nullptr, &args);
+    Check(args.cancelled && state->cancelled.count(args.id) == 1,
+          "failed or closing host cancels page, auth-retry, API and redirect events");
+    Check(listener.calls == 0 && state->events.empty()
+              && state->main_document == L"https://example.test/retained"
+              && state->NavigationEnded(args.id) == 0,
+          "retired navigation has no app callback, start event or retained finish");
+  }
+#endif
+}
+
 void BeginMeasure() {
   allocation_count = 0; allocation_bytes = 0; payload_count = 0; payload_bytes = 0;
   tasks.reserve(32); tracking = true;
@@ -692,6 +736,7 @@ int main(int argc, char**) {
   bool measure_only = argc > 1;
   if (!measure_only) {
     StreamContracts(); ConcurrentCursors(); DispatchContracts(); NavigationIdentityContracts();
+    NavigationLifecycleContracts();
   }
   Measure(!measure_only);
   tasks.clear();

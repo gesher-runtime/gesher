@@ -5,6 +5,17 @@
 namespace gesher::accessibility {
 namespace {
 thread_local bool g_executing_query = false;
+
+void CancelRequest(const std::shared_ptr<Query>& request) {
+  // Serialize the cancellation predicate with result wait registration. The
+  // worker still owns its request and JNI lifetime until Execute returns;
+  // cancellation wakes only the native caller and never declares work done.
+  {
+    std::lock_guard<std::mutex> lock(request->result_mutex);
+    request->canceled.store(true, std::memory_order_release);
+  }
+  request->result_ready.notify_all();
+}
 }
 
 int Query::RemainingMillis() const {
@@ -39,7 +50,11 @@ bool QueryPool::Start() {
 
 void QueryPool::PruneLocked() {
   queue_.erase(std::remove_if(queue_.begin(), queue_.end(), [](const auto& item) {
-    return !item->Active();
+    if (item->Active()) return false;
+    // Window retirement publishes a dead epoch before entering the pool. Any
+    // intervening prune owns the queued caller's final cancellation wakeup.
+    CancelRequest(item);
+    return true;
   }), queue_.end());
 }
 
@@ -56,13 +71,18 @@ bool QueryPool::Run(const std::shared_ptr<Query>& request) {
   lock.unlock();
   changed_.notify_one();
   std::unique_lock<std::mutex> result_lock(request->result_mutex);
-  if (!request->result_ready.wait_until(result_lock, request->deadline, [&] { return request->done; })) {
+  if (!request->result_ready.wait_until(result_lock, request->deadline, [&] {
+        return request->done || request->canceled.load(std::memory_order_acquire);
+      })) {
     request->canceled.store(true, std::memory_order_release);
+    // Pruning may cancel this same request. Keep the only nested lock order
+    // pool -> result, including when a queued caller reaches its deadline.
+    result_lock.unlock();
     if (mutex_.try_lock()) { PruneLocked(); mutex_.unlock(); }
     changed_.notify_all();
     return false;
   }
-  return request->Active() && request->okay;
+  return request->done && request->Active() && request->okay;
 }
 
 DWORD WINAPI QueryPool::ThreadEntry(void* value) {
@@ -110,7 +130,7 @@ void QueryPool::Retire(const std::shared_ptr<WindowEpoch>& window) {
   window->alive.store(false, std::memory_order_release);
   std::lock_guard<std::timed_mutex> lock(mutex_);
   for (const auto& request : active_) if (request && request->window == window) {
-    request->canceled.store(true, std::memory_order_release);
+    CancelRequest(request);
   }
   PruneLocked();
   changed_.notify_all();
@@ -132,9 +152,9 @@ bool QueryPool::Stop() {
   if (!lock.try_lock_until(deadline)) return false;
   accepting_ = false;
   stopping_ = true;
-  for (const auto& request : queue_) request->canceled.store(true, std::memory_order_release);
+  for (const auto& request : queue_) CancelRequest(request);
   queue_.clear();
-  for (const auto& request : active_) if (request) request->canceled.store(true, std::memory_order_release);
+  for (const auto& request : active_) if (request) CancelRequest(request);
   changed_.notify_all();
   if (!changed_.wait_until(lock, deadline, [&] {
         return std::none_of(active_.begin(), active_.end(), [](const auto& item) { return item != nullptr; });

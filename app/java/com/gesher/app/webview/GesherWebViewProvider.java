@@ -340,6 +340,8 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
     private final ApiNavigations mApiNavigations = new ApiNavigations();
     /** The WebView thread's last NavigationStarting was one of the WebView's own loads. */
     private boolean mStartingApi;
+    /** A pending intent fallback cannot replace a newer navigation or stop request. */
+    private final AtomicLong mNavigationGeneration = new AtomicLong();
 
     // Bounds (the WebView's Looper).
     private boolean mAttached;
@@ -519,6 +521,7 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
 
     @Override
     public void destroy() {
+        mNavigationGeneration.incrementAndGet();
         WebView2Host host;
         synchronized (mPagePorts) {
             if (mDestroyed) return;
@@ -588,6 +591,7 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
 
     /** A load of the WebView's own; {@code data} answers its main document (or none). */
     private void navigate(String webView2Url, String headers, PendingData data) {
+        mNavigationGeneration.incrementAndGet();
         if (mHost == null) {
             GesherWebView.log("loading " + webView2Url + ": WebView2 is unavailable");
             return;
@@ -611,6 +615,7 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
             return;
         }
         // NavigateWithWebResourceRequest with the body, form-encoded as Android posts it.
+        mNavigationGeneration.incrementAndGet();
         mPendingData.set(null);
         mHost.navigate(url, "Content-Type: application/x-www-form-urlencoded\r\n", "POST",
                 postData != null ? postData : new byte[0], mApiNavigations.issued(url));
@@ -656,6 +661,7 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
             String html = new String(bytes, StandardCharsets.UTF_8)
                     .replace("file:///android_asset/", FileUrls.toWebView2("file:///android_asset/"))
                     .replace("file:///android_res/", FileUrls.toWebView2("file:///android_res/"));
+            mNavigationGeneration.incrementAndGet();
             mPendingData.set(null);
             mHost.navigateToString(html);
             return;
@@ -765,11 +771,13 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
 
     @Override
     public void stopLoading() {
+        mNavigationGeneration.incrementAndGet();
         if (mHost != null) mHost.run(WebView2Host.STOP);
     }
 
     @Override
     public void reload() {
+        mNavigationGeneration.incrementAndGet();
         if (mHost != null) mHost.run(WebView2Host.RELOAD);
     }
 
@@ -780,6 +788,7 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
 
     @Override
     public void goBack() {
+        mNavigationGeneration.incrementAndGet();
         if (mHost != null) mHost.run(WebView2Host.GO_BACK);
     }
 
@@ -790,6 +799,7 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
 
     @Override
     public void goForward() {
+        mNavigationGeneration.incrementAndGet();
         if (mHost != null) mHost.run(WebView2Host.GO_FORWARD);
     }
 
@@ -810,7 +820,10 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
         } else if (steps != 0) {
             // Page.navigateToHistoryEntry: several steps at once.
             int entry = mHistory.entryId(steps);
-            if (entry >= 0) devTools("Page.navigateToHistoryEntry", "{\"entryId\":" + entry + "}", null);
+            if (entry >= 0) {
+                mNavigationGeneration.incrementAndGet();
+                devTools("Page.navigateToHistoryEntry", "{\"entryId\":" + entry + "}", null);
+            }
         }
     }
 
@@ -2025,26 +2038,57 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
 
     @Override
     public boolean onNavigationStarting(String url, boolean userInitiated, boolean redirect, long handed) {
+        final long generation = mNavigationGeneration.incrementAndGet();
         // WebView2Host knows one outstanding load of the WebView's own at a time; a second
         // one issued before the first started reaches here too. Android does not ask the
         // app about either (a WebViewClient that takes its base URL would cancel the load).
         mStartingApi = !redirect && mApiNavigations.started(url, handed);
         if (mStartingApi) return false;
-        if (!mOverridesNavigation) return false;
         String appUrl = FileUrls.fromWebView2(url);
+        final String fallback = IntentFallback.httpUrl(appUrl);
+        final boolean overrides = mOverridesNavigation;
+        if (!overrides && fallback == null) return false;
         final WebViewClient client = mClient;
-        FutureTask<Boolean> ask = new FutureTask<>(() -> client.shouldOverrideUrlLoading(mView,
-                new Request(appUrl, true, redirect, userInitiated, "GET", null)));
-        mUi.post(ask);
+        FutureTask<Boolean> ask = new FutureTask<>(() -> {
+            if (fallback != null && !canUseIntentFallback(generation)) return true;
+            if (overrides && client.shouldOverrideUrlLoading(mView,
+                    new Request(appUrl, true, redirect, userInitiated, "GET", null))) {
+                GesherWebView.log("shouldOverrideUrlLoading took " + appUrl);
+                return true;
+            }
+            if (fallback == null) return false;
+            if (!canUseIntentFallback(generation)) return true;
+            // This replacement is initiated by the page/runtime, so the app must
+            // get its ordinary chance to handle the resolved HTTP(S) destination.
+            if (overrides && client.shouldOverrideUrlLoading(mView,
+                    new Request(fallback, true, true, userInitiated, "GET", null))) return true;
+            if (canUseIntentFallback(generation)) {
+                GesherWebView.log("intent: loading HTTP(S) fallback");
+                // Stay in the same UI task: a second post could overtake a newer
+                // app load or restart a navigation that the app already stopped.
+                loadUrl(fallback);
+            }
+            return true;
+        });
+        if (!mUi.post(ask)) {
+            ask.cancel(false);
+            return false;
+        }
         try {
-            boolean cancel = ask.get(WAIT_FOR_UI_MS, TimeUnit.MILLISECONDS);
-            if (cancel) GesherWebView.log("shouldOverrideUrlLoading took " + appUrl);
-            return cancel;
+            return ask.get(WAIT_FOR_UI_MS, TimeUnit.MILLISECONDS);
         } catch (Exception e) {
+            ask.cancel(false);
+            mNavigationGeneration.compareAndSet(generation, generation + 1);
+            if (e instanceof InterruptedException) Thread.currentThread().interrupt();
             GesherWebView.log("shouldOverrideUrlLoading(" + appUrl + "): no answer (" + e
                     + "); loading it");
             return false;
         }
+    }
+
+    /** Called on the WebView's Looper, including after application callbacks. */
+    private boolean canUseIntentFallback(long generation) {
+        return !mDestroyed && mHost != null && mNavigationGeneration.get() == generation;
     }
 
     @Override
@@ -2146,11 +2190,64 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
     private static byte[] readAll(InputStream in) {
         if (in == null) return new byte[0];
         try (InputStream s = in) {
-            ByteArrayOutputStream out = new ByteArrayOutputStream();
-            byte[] buf = new byte[16384];
-            int n;
-            while ((n = s.read(buf)) > 0) out.write(buf, 0, n);
-            return out.toByteArray();
+            int maxArray = Integer.MAX_VALUE - 8;
+            ArrayList<byte[]> chunks = null;
+            int total = 0;
+            byte[] chunk;
+            int chunkPos = 0;
+            int avail = 0;
+            try {
+                avail = s.available();
+            } catch (Exception ignored) {
+                // This is only an allocation hint. A readable app stream can
+                // decline to implement it; continue with bounded chunks.
+            }
+            if (avail > 0 && avail <= 16 * 1024 * 1024) {
+                byte[] first = new byte[avail];
+                int pos = 0;
+                while (pos < first.length) {
+                    int n = s.read(first, pos, first.length - pos);
+                    if (n <= 0) return pos == 0 ? new byte[0] : Arrays.copyOf(first, pos);
+                    pos += n;
+                }
+                byte[] probe = new byte[1];
+                int extra = s.read(probe, 0, 1);
+                if (extra <= 0) return first;
+                chunks = new ArrayList<>();
+                chunks.add(first);
+                chunk = new byte[16384];
+                chunk[0] = probe[0];
+                chunkPos = 1;
+                total = pos + 1;
+            } else {
+                chunk = new byte[16384];
+            }
+            while (true) {
+                if (chunkPos == chunk.length) {
+                    if (chunks == null) chunks = new ArrayList<>();
+                    chunks.add(chunk);
+                    chunk = new byte[65536];
+                    chunkPos = 0;
+                }
+                int n = s.read(chunk, chunkPos, chunk.length - chunkPos);
+                if (n <= 0) break;
+                if (total > maxArray - n) throw new OutOfMemoryError("Stream exceeds max array size");
+                chunkPos += n;
+                total += n;
+            }
+            if (chunks == null) {
+                return chunkPos == 0 ? new byte[0]
+                        : (chunkPos == chunk.length ? chunk : Arrays.copyOf(chunk, chunkPos));
+            }
+            byte[] out = new byte[total];
+            int outPos = 0;
+            for (int i = 0, size = chunks.size(); i < size; i++) {
+                byte[] c = chunks.get(i);
+                System.arraycopy(c, 0, out, outPos, c.length);
+                outPos += c.length;
+            }
+            if (chunkPos > 0) System.arraycopy(chunk, 0, out, outPos, chunkPos);
+            return out;
         } catch (Exception e) {
             return new byte[0];
         }

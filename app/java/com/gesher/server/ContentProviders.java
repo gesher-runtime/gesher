@@ -57,6 +57,7 @@ final class ContentProviders {
     private final SettingsProvider mSettings;
     private final DocumentsStorageProvider mDocumentsStorage;
     private final CallLogProvider mCallLog;
+    private final ContactsProvider mContacts;
     private final CallerIdentity mCallers;
     private final UriGrants mUriGrants;
 
@@ -113,7 +114,10 @@ final class ContentProviders {
         final ApkPackage owner;
         final ProviderInfo info;
         volatile boolean retired;
-        ProviderInstall(ApkPackage owner, ProviderInfo info) { this.owner = owner; this.info = info; }
+        ProviderInstall(ApkPackage owner, ProviderInfo info) {
+            this.owner = owner;
+            this.info = new ProviderInfo(info);
+        }
     }
 
     private static final class ProviderRequest {
@@ -192,15 +196,51 @@ final class ContentProviders {
         mCallers = new CallerIdentity(pm, atm);
         mUriGrants = new UriGrants(pm, atm, this);
         mSettings = new SettingsProvider(pm, atm);
+        // CaptioningManager's Secure keys follow Windows' caption style (CaptioningBridge).
+        WindowsCaptions captions = WindowsCaptions.create();
+        if (captions != null) {
+            new CaptioningBridge(captions, new CaptioningBridge.Secure() {
+                @Override public String get(String key) {
+                    return SettingsProvider.secureString(key);
+                }
+
+                @Override public void set(String key, String value) {
+                    SettingsProvider.putSecure(key, value);
+                }
+            }).start();
+        }
         mDocumentsStorage = new DocumentsStorageProvider(this, mUriGrants);
         mCallLog = new CallLogProvider(this, mUriGrants);
+        mContacts = new ContactsProvider(this, pm, atm, mUriGrants);
         pm.setHostedProviders(this);
     }
 
     PackageManagerService packageManager() { return mPm; }
     UriGrants uriGrants() { return mUriGrants; }
+
+    /** The system server's {@code downloads} provider, once it is registered. */
+    private volatile DownloadProvider mDownloads;
+
+    void setDownloads(DownloadProvider downloads) {
+        RegisteredProvider registration = registeredProvider(DownloadProvider.AUTHORITY);
+        if (downloads == null || registration != downloads.registration) {
+            throw new IllegalArgumentException("Downloads provider is not registered");
+        }
+        mDownloads = downloads;
+    }
     DocumentsStorageProvider documents() { return mDocumentsStorage; }
+
+    /** The system server's {@code media} provider (MediaStore), once it is registered. */
+    private volatile MediaStoreProvider mMedia;
+
+    void setMedia(MediaStoreProvider media) {
+        if (media == null || registeredProvider(MediaStoreProvider.AUTHORITY) != media.registration) {
+            throw new IllegalArgumentException("Media provider is not registered");
+        }
+        mMedia = media;
+    }
     CallLogProvider callLog() { return mCallLog; }
+    ContactsProvider contacts() { return mContacts; }
     CallerIdentity callers() { return mCallers; }
 
     SettingsProvider settingsProvider() { return mSettings; }
@@ -211,22 +251,26 @@ final class ContentProviders {
         return false;
     }
 
-    /** Ambiguous declarations never select an attacker simply because it installed first. */
+    /**
+     * Ambiguous declarations never select an attacker simply because it installed first.
+     * ApkPackage handles ordinary collisions within the same manifest: an authority
+     * belongs to the package's first provider declaring it, and one left with none has
+     * a null authority, which matches no lookup. Reject any remaining ambiguity here,
+     * including names declared by multiple packages.
+     */
     static ProviderInfo declaredProvider(PackageManagerService pm, String authority) {
         synchronized (pm) {
             ProviderInfo found = null;
             for (ApkPackage pkg : pm.providerPackages(authority)) {
                 if (pm.isRemovalPending(pkg.packageName)) continue;
-                for (ProviderInfo info : pkg.providers(PackageManager.GET_META_DATA
+                ProviderInfo info = pkg.providerForAuthority(authority, PackageManager.GET_META_DATA
                         | PackageManager.GET_URI_PERMISSION_PATTERNS
-                        | PackageManager.GET_SHARED_LIBRARY_FILES)) {
-                    if (!hasAuthority(info, authority)) continue;
-                    if (found != null && (!found.packageName.equals(info.packageName)
-                            || !found.name.equals(info.name))) {
-                        throw new SecurityException("Conflicting content provider authority");
-                    }
-                    found = info;
+                        | PackageManager.GET_SHARED_LIBRARY_FILES);
+                if (info == null) continue;
+                if (found != null) {
+                    throw new SecurityException("Conflicting content provider authority");
                 }
+                found = info;
             }
             return found;
         }
@@ -299,6 +343,10 @@ final class ContentProviders {
         String processName = mAtm.componentProcess(ai.packageName, ai.processName);
         for (ProviderInfo info : declaredProviders(p, PackageManager.GET_META_DATA
                 | PackageManager.GET_SHARED_LIBRARY_FILES)) {
+            // ComponentResolver.queryProviders (generateApplicationProvidersLocked's
+            // source) skips a provider whose every authority an earlier declaration
+            // of the package registered: it is neither instantiated nor published.
+            if (info.authority == null) continue;
             if (processName.equals(mAtm.componentProcess(info.packageName, info.processName))) {
                 result.add(info);
             }
@@ -353,6 +401,34 @@ final class ContentProviders {
             enforceAccess(actualPackage, registration.info);
             return mDocumentsStorage.holder();
         }
+        DownloadProvider downloads = mDownloads;
+        if (downloads != null && DownloadProvider.AUTHORITY.equals(name)) {
+            // As Android's DownloadProvider, the system's provider owns the authority;
+            // ContentProvider.Transport enforces its path permissions and URI grants.
+            if (registeredProvider(name) != downloads.registration || declaredProvider(mPm, name) != null) {
+                throw new SecurityException("Downloads authority is not uniquely registered");
+            }
+            return downloads.holder();
+        }
+        MediaStoreProvider media = mMedia;
+        if (media != null && MediaStoreProvider.AUTHORITY.equals(name)) {
+            // As Android's MediaProvider, the system's provider owns the authority; it
+            // applies scoped-storage ownership and permissions to every request itself.
+            RegisteredProvider registration = registeredProvider(name);
+            if (registration != media.registration || declaredProvider(mPm, name) != null) {
+                throw new SecurityException("Media authority is not uniquely registered");
+            }
+            enforceAccess(actualPackage, registration.info);
+            return media.holder();
+        }
+        if (ContactsProviderSupport.CONTACTS_AUTHORITY.equals(name)) {
+            RegisteredProvider registration = registeredProvider(name);
+            if (registration == null || declaredProvider(mPm, name) != null) {
+                throw new SecurityException("Contacts authority is not uniquely registered");
+            }
+            enforceAccess(actualPackage, registration.info);
+            return mContacts.holder();
+        }
         if (ContactsProviderSupport.CALL_LOG_AUTHORITY.equals(name)) {
             RegisteredProvider registration = registeredProvider(name);
             if (registration == null || declaredProvider(mPm, name) != null) {
@@ -388,32 +464,42 @@ final class ContentProviders {
                 if (caller != null && (caller.exiting || caller.dead)) {
                     throw new SecurityException("Content provider caller retired before acquisition");
                 }
+                String publishedAuthority = name;
                 ContentProviderHolder published = mPublished.get(name);
+                int separator = declared.authority.indexOf(';');
+                if (published == null && separator >= 0) {
+                    // A syncable alias can refer to an already published class record.
+                    publishedAuthority = declared.authority.substring(0, separator);
+                    published = mPublished.get(publishedAuthority);
+                }
                 if (published != null) {
-                    ActivityTaskManagerService.ProcessRecord owner = mPublishedBy.get(name);
-                    if (owner == null || owner.exiting || owner.dead || mPublishedCode.get(name) != declaredCode
+                    ActivityTaskManagerService.ProcessRecord owner = mPublishedBy.get(publishedAuthority);
+                    if (owner == null || owner.exiting || owner.dead || mPublishedCode.get(publishedAuthority) != declaredCode
                             || !declared.packageName.equals(owner.packageName)
                             || !declared.name.equals(published.info.name)
                             || !mAtm.componentProcess(declared.packageName, declared.processName)
                                     .equals(mAtm.componentProcess(owner.packageName, owner.processName))
                             || !live.contains(owner)) {
-                        mPublished.remove(name); mPublishedBy.remove(name); mPublishedCode.remove(name);
-                        mClients.remove(name);
+                        mPublished.remove(publishedAuthority);
+                        mPublishedBy.remove(publishedAuthority);
+                        mPublishedCode.remove(publishedAuthority);
+                        mClients.remove(publishedAuthority);
                         continue;
                     }
                     if (caller != null && owner != null && caller != owner) {
-                        if (mClients.computeIfAbsent(name, k -> new HashSet<>()).add(caller)) {
+                        if (mClients.computeIfAbsent(publishedAuthority, k -> new HashSet<>()).add(caller)) {
                             SystemServer.log("getContentProvider " + name + " from "
                                     + callingPackage + ": " + owner + " has a client, "
                                     + caller);
                         }
                     }
-                    ContentProviderHolder h = new ContentProviderHolder(new ProviderInfo(declared));
+                    ContentProviderHolder h = new ContentProviderHolder(new ProviderInfo(
+                            name.equals(publishedAuthority) ? declared : published.info));
                     h.provider = published.provider;
                     h.noReleaseNeeded = true;
                     if (counted && caller != null && owner != null && caller != owner) {
                         Connection c = connectionLocked(owner, caller,
-                                published.provider.asBinder(), name, declaredCode, declared.name);
+                                published.provider.asBinder(), publishedAuthority, declaredCode, declared.name);
                         boolean held = c.stable != 0 || c.unstable != 0;
                         if (stable) c.stable++; else c.unstable++;
                         if (!held) {
@@ -462,9 +548,10 @@ final class ContentProviders {
                     if (request.canceled || caller.exiting || caller.dead
                             || mPm.get(declared.packageName) != declaredCode
                             || !declaredCode.componentEnabled(declared.name, ApkPackage.ComponentKind.PROVIDER)) return null;
-                    mInstalling.computeIfAbsent(caller, ignored -> new HashMap<>())
-                            .computeIfAbsent(declared.name, ignored -> new ProviderInstall(declaredCode, declared));
-                    ContentProviderHolder local = new ContentProviderHolder(declared);
+                    ProviderInstall pending = mInstalling.getOrDefault(caller, Map.of()).get(declared.name);
+                    ProviderInfo localInfo = current(pending) && pending.owner == declaredCode
+                            ? pending.info : declared;
+                    ContentProviderHolder local = new ContentProviderHolder(new ProviderInfo(localInfo));
                     local.mLocal = true;
                     local.noReleaseNeeded = true;
                     return local;
@@ -548,12 +635,8 @@ final class ContentProviders {
             // The process no longer owns a pending provider record after cleanup.
             // A late publish cannot recreate it or turn an ordinary race into a crash.
             if (!current(admission) || admission.owner != pkg) continue;
-            ProviderInfo declared = null;
-            for (ProviderInfo candidate : declaredProviders(pkg, PackageManager.GET_META_DATA
-                    | PackageManager.GET_SHARED_LIBRARY_FILES | PackageManager.MATCH_DISABLED_COMPONENTS)) {
-                if (candidate.name.equals(info.name)) { declared = candidate; break; }
-            }
-            if (declared == null || !pkg.packageName.equals(info.packageName)
+            ProviderInfo declared = admission.info;
+            if (!pkg.packageName.equals(info.packageName)
                     || info.applicationInfo == null || info.applicationInfo.uid != pkg.uid()
                     || !pkg.packageName.equals(info.applicationInfo.packageName)
                     || !java.util.Objects.equals(declared.authority, info.authority)
@@ -564,6 +647,7 @@ final class ContentProviders {
             }
             for (String authority : declared.authority.split(";")) {
                 if (authority.isEmpty() || SettingsProvider.AUTHORITY.equals(authority)
+                        || (mDownloads != null && DownloadProvider.AUTHORITY.equals(authority))
                         || registeredProvider(authority) != null
                         || ContactsProviderSupport.isSystemAuthority(authority)
                         || !batch.add(authority)) throw new SecurityException("Invalid published authority");

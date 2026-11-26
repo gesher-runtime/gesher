@@ -88,3 +88,51 @@ extra setup.
 - Ship Google's proprietary apps or Play Services. microG may be integrated
   later for apps that depend on Play Services APIs.
 - Run apps that need kernel drivers or root.
+
+## Desktop script responsibilities
+
+All desktop scripts remain in `tools/package` and are installed by `gesher.iss`.
+
+| File | Responsibility |
+| --- | --- |
+| `gesher-control-panel.ps1` | View coordination, refresh, action admission/completion, update confirmation and close policy. |
+| `gesher-panel-view.ps1`, `gesher-panel-{dashboard,confirm,message}.xaml` | Window construction, literal localized resources, layout, styles and templates; no operations or event ownership. |
+| `gesher-panel-actions.ps1` | APK error propagation and background execution, including ConsoleHost/native handle ownership. |
+| `gesher-panel-native.ps1` | Native desktop and metadata monitoring helpers. |
+| `gesher-app.ps1` | Application/device command entry point and runtime/profile orchestration. |
+| `gesher-app-microg.ps1` | microG staging and enable/disable operations. |
+| `gesher-update.ps1` | Release discovery, verified download and installer process helpers. |
+| `gesher-runtime-files.ps1` | Runtime-owned file synchronization into the Android profile. |
+| `gesher-ui.ps1`, `ui-messages.json` | Language selection and message catalog. |
+| `gesher.iss` | Per-user installation, shell integration and optional components. |
+
+The panel dot-sources the action module at the former definition site, supplying
+`$here` (installed script directory) and the selected UI language.
+`New-PanelActionWorker(operation, request)` returns the existing
+`PowerShell`, `Handle`, `Disposed` record; its result contains `Errors`. The panel
+owns admission, polling, disposal and feedback. Workers receive data, never WPF
+controls, retaining helper ordering, exit codes and temporary-file cleanup.
+A committing install is not stopped on close.
+
+Update orchestration stays with confirmation/rendering in the panel; transport
+and installer helpers already live in `gesher-update.ps1`. Further splitting
+should follow responsibility rather than line counts.
+See [Build and package](build-and-package.md) for derived artifacts and validation.
+
+## Native presentation boundaries
+
+Credential dialog `*CreateControls` helpers build controls and fonts on the same
+modal thread after state installation. Callbacks retain population, foreground,
+focus, cancellation, owner-process checks, result mapping and disposal. The
+existing `host_dialog_theme.h` remains the shared C/C++ presentation layer;
+no second theme or runtime is introduced. `PaintSplash` owns GDI painting;
+launcher process discovery, timeouts and cancellation remain in the launcher.
+
+`window_frame.h` owns initial frame construction, DPI-aware client-to-frame
+geometry, Back bar bounds/drawing and non-client geometry/hit testing. It has no
+Android events or HWND/COM lifetime ownership. `gesher_window.cc` retains window
+creation on its STA, splash discovery/position application, popup/owner policy,
+readiness, input, Back state and Android key delivery, close events and rendering.
+Windows still provides the standard caption buttons. Shared frame geometry now
+serves both client resizing and minimum track size.
+See [presentation separation](ui-presentation-separation.md) for validation limits.
