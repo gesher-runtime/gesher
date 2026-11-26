@@ -6,7 +6,8 @@
 namespace gesher::media {
 int queried = 0, created = 0;
 int mf_video_created = 0, soft_video_created = 0;
-bool MfH264EncoderAvailable() { return true; }
+int mf_profile_queries = 0, mf_profiles = 0;
+int MfH264EncoderProfiles() { ++mf_profile_queries; return mf_profiles; }
 bool MfAacEncoderAvailable() { ++queried; return true; }
 std::unique_ptr<VideoEncoder> CreateMfH264Encoder(const VideoEncoderParams&, std::string* error) {
   ++mf_video_created;
@@ -41,13 +42,21 @@ int main(int argc, char** argv) {
   assert(ProfileLevels("audio/mp4a-latm", false, 0) == decoder);
 
   assert(argc == 2);
-  const bool soft = std::string(argv[1]) == "soft";
+  const std::string mode = argv[1];
+  const bool forced_soft = mode == "soft";
+  if (mode == "mf" || forced_soft) {
+    mf_profiles = kAvcProfileBaseline | kAvcProfileMain | kAvcProfileHigh;
+  } else if (mode == "limited-mf") {
+    mf_profiles = kAvcProfileMain;
+  }
+  const int active_mf_profiles = forced_soft ? 0 : mf_profiles;
+  const bool soft = active_mf_profiles == 0;
   const EncoderInfo& avc = AvailableEncoders().front();
+  assert(mf_profile_queries == (forced_soft ? 0 : 1));
   assert(avc.mime == "video/avc" && avc.backend == (soft ? "soft" : "mf"));
   std::vector<std::pair<int, int>> expected = {{kAvcProfileBaseline, kAvcLevel41}};
-  if (!soft) {
-    expected.emplace_back(kAvcProfileMain, kAvcLevel41);
-    expected.emplace_back(kAvcProfileHigh, kAvcLevel41);
+  for (int profile : {kAvcProfileMain, kAvcProfileHigh}) {
+    if ((active_mf_profiles & profile) != 0) expected.emplace_back(profile, kAvcLevel41);
   }
   assert(ProfileLevels(avc.mime, true, avc.avc_profiles) == expected);
   VideoEncoderParams video;
@@ -59,18 +68,20 @@ int main(int argc, char** argv) {
     assert(!VideoEncoder::Create(avc.mime, video, &error) && !error.empty());
     assert(mf_video_created == 0 && soft_video_created == 0);
   }
+  int expected_mf_attempts = 0;
   for (int profile : {kAvcProfileMain, kAvcProfileHigh}) {
+    if ((active_mf_profiles & profile) != 0) ++expected_mf_attempts;
     video.profile = profile;
     error.clear();
     assert(!VideoEncoder::Create(avc.mime, video, &error) && !error.empty());
     assert(soft_video_created == 0);
   }
-  assert(mf_video_created == (soft ? 0 : 2));
+  assert(mf_video_created == expected_mf_attempts);
   for (int profile : {0, kAvcProfileBaseline}) {
     video.profile = profile;
     VideoEncoder::Create(avc.mime, video, &error);
   }
-  assert(mf_video_created == (soft ? 0 : 4) && soft_video_created == 2);
+  assert(mf_video_created == expected_mf_attempts + (soft ? 0 : 2) && soft_video_created == 2);
   std::cout << "Encoder selection: AAC roles and " << avc.backend
             << " AVC declarations, admission and fallback passed\n";
 }

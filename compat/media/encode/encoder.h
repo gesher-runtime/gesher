@@ -96,7 +96,7 @@ class AudioEncoder {
 };
 
 // Media Foundation (mf_encoder.cc).
-bool MfH264EncoderAvailable();
+int MfH264EncoderProfiles();
 bool MfAacEncoderAvailable();
 std::unique_ptr<VideoEncoder> CreateMfH264Encoder(const VideoEncoderParams& p, std::string* error);
 std::unique_ptr<AudioEncoder> CreateMfAacEncoder(const AudioEncoderParams& p, std::string* error);

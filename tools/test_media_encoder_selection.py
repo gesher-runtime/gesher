@@ -25,7 +25,9 @@ with tempfile.TemporaryDirectory(prefix='gesher-encoder-selection-') as temporar
         '-DGESHER_MEDIA_STANDALONE', '-I', str(ROOT), '-I', str(ROOT / 'tests/media/recorder-host/include'),
         str(ROOT / 'tests/media/recorder-host/encoder_selection.cc'), str(ROOT / 'compat/media/encode/encoder.cc'),
         str(unit), '-o', str(work / 'selection')], check=True, timeout=60)
-    for mode in ('soft', 'mf'):
+    for mode in ('soft', 'mf', 'limited-mf', 'unusable-mf'):
         env = os.environ.copy()
-        env['GESHER_VIDEO_ENCODERS'] = mode
+        env.pop('GESHER_VIDEO_ENCODERS', None)
+        if mode == 'soft':
+            env['GESHER_VIDEO_ENCODERS'] = 'soft'
         subprocess.run([str(work / 'selection'), mode], env=env, check=True, timeout=15)

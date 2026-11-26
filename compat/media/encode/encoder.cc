@@ -26,9 +26,9 @@ bool SoftVideoOnly() {
 const std::vector<EncoderInfo>& AvailableEncoders() {
   static const std::vector<EncoderInfo> encoders = [] {
     std::vector<EncoderInfo> all;
-    if (!SoftVideoOnly() && MfH264EncoderAvailable()) {
-      all.push_back({"video/avc", "mf", true,
-                     kAvcProfileBaseline | kAvcProfileMain | kAvcProfileHigh});
+    const int mf_profiles = SoftVideoOnly() ? 0 : MfH264EncoderProfiles();
+    if (mf_profiles != 0) {
+      all.push_back({"video/avc", "mf", true, mf_profiles | kAvcProfileBaseline});
     } else if (kSoftAvcEncoder) {
       all.push_back({"video/avc", "soft", true, kAvcProfileBaseline});
     }
