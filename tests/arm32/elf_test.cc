@@ -512,6 +512,15 @@ void HostileImages() {
   invalid.Rel(9, 0x624, 0, 160);
   Rejected(invalid, "R_ARM_IRELATIVE", Options(&imports));
   CHECK(imports == 0);  // Full relocation validation precedes importer callbacks.
+  invalid.Tag(1, 34);
+  int dependencies_called = 0;
+  ElfLoadOptions malformed_options = Options(&imports);
+  malformed_options.resolve_dependency = [&](std::string_view) {
+    ++dependencies_called;
+    return true;
+  };
+  Rejected(invalid, "R_ARM_IRELATIVE", malformed_options);
+  CHECK(dependencies_called == 0);  // Never load dependencies for corrupt ELF.
 
   options = Options();
   options.resolve_import = [](std::string_view, uint32_t*) -> bool { throw std::runtime_error("test importer"); };
