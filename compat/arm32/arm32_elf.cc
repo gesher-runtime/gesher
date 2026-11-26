@@ -26,6 +26,9 @@ constexpr uint32_t kDtNeeded = 1, kDtPltRelSz = 2, kDtHash = 4, kDtStrtab = 5,
                    kDtInitArray = 25, kDtFiniArray = 26, kDtInitArraySz = 27,
                    kDtFiniArraySz = 28, kDtFlags = 30,
                    kDtGnuHash = 0x6ffffef5, kDtRelCount = 0x6ffffffa,
+                   kDtRelr = 36, kDtRelrSz = 35, kDtRelrEnt = 37,
+                   kDtAndroidRelr = 0x6fffe000, kDtAndroidRelrSz = 0x6fffe001,
+                   kDtAndroidRelrEnt = 0x6fffe003, kDtAndroidRelrCount = 0x6fffe005,
                    kDtFlags1 = 0x6ffffffb;
 constexpr uint8_t kStbGlobal = 1, kStbWeak = 2, kSttFunc = 2,
                   kSttTls = 6, kSttIfunc = 10;
@@ -281,13 +284,14 @@ class Loader {
         case 21: case kDtJmpRel: case 24: case kDtInitArray: case kDtFiniArray:
         case kDtInitArraySz: case kDtFiniArraySz: case 29: case kDtFlags:
         case kDtGnuHash: case kDtRelCount: case kDtFlags1:
+        case kDtRelr: case kDtRelrSz: case kDtRelrEnt:
+        case kDtAndroidRelr: case kDtAndroidRelrSz: case kDtAndroidRelrEnt:
+        case kDtAndroidRelrCount:
           break;
         case 7: case 8: case 9: return Fail("DT_RELA relocations are unsupported");
         case 22: return Fail("DT_TEXTREL is unsupported");
         case 32: case 33: return Fail("DT_PREINIT_ARRAY is unsupported for shared libraries");
-        case 35: case 36: case 37: case 0x6fffe000: case 0x6fffe001: case 0x6fffe003:
-          return Fail("DT_RELR relocations are unsupported");
-        case 0x6000000f: case 0x60000010: case 0x60000011: case 0x60000012:
+                case 0x6000000f: case 0x60000010: case 0x60000011: case 0x60000012:
           return Fail("Android packed relocations are unsupported");
         case 0x6ffffff0: case 0x6ffffffc: case 0x6ffffffd: case 0x6ffffffe: case 0x6fffffff:
           return Fail("versioned dynamic symbols are unsupported");
@@ -454,6 +458,47 @@ class Loader {
     return true;
   }
 
+  // ELF32 RELR: even entries identify a direct relative relocation; odd
+  // entries describe the following 31 four-byte words. Validate the entire
+  // expansion before publishing any writes, including overlaps with DT_REL.
+  bool RelrTable(uint32_t address, uint32_t bytes) {
+    if ((bytes & 3) != 0) return Fail("invalid RELR table size");
+    if (bytes == 0) return true;
+    const uint8_t* table = MetadataAt(address, bytes);
+    if (table == nullptr) return Fail("RELR table exceeds PT_LOAD");
+    uint64_t cursor = 0;
+    bool have_base = false;
+    auto add = [&](uint64_t offset) {
+      if (offset > UINT32_MAX || (offset & 3) != 0 ||
+          At(static_cast<uint32_t>(offset), 4) == nullptr)
+        return Fail("RELR target is unaligned or outside PT_LOAD");
+      const auto* segment = Covering(static_cast<uint32_t>(offset), 4);
+      if (segment == nullptr || (segment->flags & 2) == 0)
+        return Fail("RELR target is not in a writable PT_LOAD segment");
+      if (relocations_.size() >= options_.max_relocations)
+        return Fail("RELR expansion exceeds relocation limit");
+      relocations_.push_back({static_cast<uint32_t>(offset), 0, 23});
+      return true;
+    };
+    for (size_t index = 0; index < bytes / 4; ++index) {
+      const uint32_t entry = U32(table + index * 4);
+      if ((entry & 1) == 0) {
+        if (!add(entry)) return false;
+        cursor = uint64_t{entry} + 4;
+        have_base = true;
+      } else {
+        if (!have_base) return Fail("RELR bitmap has no preceding address");
+        for (uint32_t bit = 1; bit < 32; ++bit) {
+          if ((entry & (uint32_t{1} << bit)) != 0 &&
+              !add(cursor + uint64_t{bit - 1} * 4)) return false;
+        }
+        cursor += 31 * 4;
+        if (cursor > kAddressLimit) return Fail("RELR bitmap address overflow");
+      }
+    }
+    return true;
+  }
+
   bool Relocations() {
     if (Has(kDtRel) != Has(kDtRelSz)) return Fail("incomplete DT_REL description");
     if ((Has(kDtRel) || Has(kDtRelEnt)) && Tag(kDtRelEnt) != 8) return Fail("DT_RELENT must be 8");
@@ -463,6 +508,22 @@ class Loader {
       return Fail("incomplete or non-REL PLT relocations");
     }
     if (Has(kDtJmpRel) && !RelocationTable(Tag(kDtJmpRel), Tag(kDtPltRelSz), true)) return false;
+    // Both standardized and early Android tags use exactly the same 32-bit
+    // encoding. Fail closed on duplicates, partial descriptions and bad sizes.
+    const bool standard = Has(kDtRelr) || Has(kDtRelrSz) || Has(kDtRelrEnt);
+    const bool android = Has(kDtAndroidRelr) || Has(kDtAndroidRelrSz) ||
+                         Has(kDtAndroidRelrEnt);
+    if (standard && android) return Fail("mixed RELR tag families");
+    if (standard || android) {
+      const uint32_t a = standard ? kDtRelr : kDtAndroidRelr;
+      const uint32_t s = standard ? kDtRelrSz : kDtAndroidRelrSz;
+      const uint32_t e = standard ? kDtRelrEnt : kDtAndroidRelrEnt;
+      if (!Has(a) || !Has(s) || !Has(e)) return Fail("incomplete RELR description");
+      if (Tag(e) != 4) return Fail("RELR entry size must be 4");
+      if (!RelrTable(Tag(a), Tag(s))) return false;
+    }
+    if (Has(kDtAndroidRelrCount) && !android)
+      return Fail("Android RELR count without RELR table");
     if (Has(kDtRelCount)) {
       const uint32_t count = Tag(kDtRelCount);
       if (!Has(kDtRel) || count > Tag(kDtRelSz) / 8) return Fail("invalid DT_RELCOUNT");
