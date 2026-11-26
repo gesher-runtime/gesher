@@ -251,6 +251,8 @@ bool Program::CallExport(std::string_view library, std::string_view symbol,
   uint32_t entry = 0;
   if (!module || !module->image.Lookup(symbol, &entry))
     return Fail(error, "ARM32 library export was not found");
+  if (!module->initialized)
+    return Fail(error, "ARM32 library constructors have not run");
   CallFrame frame;
   if (!PackArguments(arguments, &frame, error)) return false;
   const auto executed = executor_.Call(entry, frame, kStackTop, budget);
