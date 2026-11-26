@@ -67,6 +67,8 @@ def main() -> int:
     # The receiver-only translated SA_SIGINFO claim; absent in history.
     guest = ([function(source, "bool IsGuestHandler(")]
              if "bool IsGuestHandler(" in source else [])
+    locked_delivery = ([function(source, "int TakeDeliverableLocked(")]
+                       if "int TakeDeliverableLocked(" in source else [])
     helpers = [function(source, "bool DefaultStops("),
                function(source, "bool ActionSupported("),
                function(source, "bool ClaimActionLocked("),
@@ -88,7 +90,7 @@ def main() -> int:
     structs.append(function(shim, "struct LinuxTimespec {") + ";")
     replacements = {
         "@DECLARATIONS@": "\n".join(declarations + structs + bodies[:1 + len(filters)]),
-        "@ACTION_HELPERS@": "\n".join(guest + helpers[:5]),
+        "@ACTION_HELPERS@": "\n".join(guest + helpers[:4] + locked_delivery + helpers[4:5]),
         "@DELIVER_ALL@": helpers[5],
         "@ENTRY_POINTS@": "\n".join(bodies[1 + len(filters):]),
         "@SUSPEND@": "\n".join(suspend),
@@ -100,7 +102,7 @@ def main() -> int:
         fixture = fixture.replace(marker, content)
     print("production source SHA256 " + hashlib.sha256(source.encode()).hexdigest(), flush=True)
     print("production entry bodies SHA256 " + hashlib.sha256("\n".join(bodies).encode()).hexdigest(), flush=True)
-    print("production delivery helpers SHA256 " + hashlib.sha256("\n".join(guest + helpers + suspend).encode()).hexdigest(), flush=True)
+    print("production delivery helpers SHA256 " + hashlib.sha256("\n".join(guest + helpers + locked_delivery + suspend).encode()).hexdigest(), flush=True)
     print("production pending container SHA256 " + hashlib.sha256(pending.encode()).hexdigest(), flush=True)
     with tempfile.TemporaryDirectory(prefix="gesher-bionic-masks-") as temporary:
         directory = Path(temporary)

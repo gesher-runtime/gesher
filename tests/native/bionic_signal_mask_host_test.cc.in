@@ -100,9 +100,8 @@ int DeliverAll(ThreadState* self) {
 
 @ENTRY_POINTS@
 
-// sigwait/sigsuspend/pause and the production wait they use. Every case queues
-// an already-deliverable record first or uses a zero timeout, so a correct wait
-// returns without blocking; a watchdog fails a wait that blocks instead.
+// sigwait/sigsuspend/pause and the production wait they use. A watchdog bounds
+// the blocking cases.
 @SUSPEND@
 
 static int checks, failures;
@@ -593,6 +592,85 @@ static void WaitSets() {
   CheckRetained(false, 10, 906);
 }
 
+static void WaitInterrupts() {
+  phase = "synchronous signal wait interruption";
+  const LinuxTimespec timeout{0, 100000000};
+  const LinuxTimespec zero{0, 0};
+  const uint64_t set = high_bit;
+  const uint64_t mask = timer_bit | high_bit;
+  for (bool process : {false, true}) {
+    variation = process;
+    Reset(mask);
+    Queue(process, 10, 1001);
+    BionicSiginfo info{};
+    info.value = sentinel;
+    errno = ERANGE;
+    const int rc = Sigtimedwait(&set, &info, &timeout);
+    check("caught signal interrupts the timed wait and runs on its receiver",
+          rc == -1 && errno == EINTR && dispatched.size() == 1 &&
+          IsRecord(dispatched.front().info, 10, 1001) && dispatched.front().mask == mask);
+    check("interrupted wait preserves the mask, set and result buffer",
+          state.mask == mask && set == high_bit && info.value == sentinel && state.waiting_for == 0);
+    check("the interrupt source is no longer pending",
+          state.pending.Mask() == 0 && !state.any_pending &&
+          S().process_pending.Mask() == 0 && !g_process_pending);
+  }
+
+  variation = 2;
+  Reset(mask);
+  Queue(false, 10, 1002);
+  Queue(true, 64, 1003);
+  BionicSiginfo info{};
+  check("a selected signal takes priority over pending interruption",
+        Sigtimedwait(&set, &info, &timeout) == 64 && IsRecord(info, 64, 1003) && dispatched.empty());
+  check("a zero-duration empty poll does not report interruption",
+        Sigtimedwait(&set, &info, &zero) == -1 && errno == kEAGAIN && dispatched.empty());
+  CheckRetained(false, 10, 1002);
+
+  variation = 3;
+  Reset(mask | low_bit);
+  Queue(false, 10, 1004);
+  check("a masked and unselected signal does not interrupt",
+        Sigtimedwait(&set, &info, &timeout) == -1 && errno == kEAGAIN && dispatched.empty());
+  CheckRetained(false, 10, 1004);
+
+  variation = 4;
+  Reset(mask);
+  Queue(false, 10, 1005);
+  S().actions[10].handler = kSigIgn;
+  check("discarding an ignored pending signal does not interrupt",
+        Sigtimedwait(&set, &info, &timeout) == -1 && errno == kEAGAIN && dispatched.empty());
+  check("the ignored signal was drained", state.pending.Mask() == 0 && !state.any_pending);
+
+  for (bool retry : {false, true}) {
+    variation = retry ? 6 : 5;
+    Reset(mask);
+    Queue(false, 10, 1006);
+    // If a wait did not handle the first record, the wanted signal still
+    // releases it so the same harness can report the exact negative.
+    std::thread producer([] {
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+      std::lock_guard<std::mutex> lock(S().mutex);
+      Queue(true, 64, 1007);
+      S().sent.notify_all();
+    });
+    int signal = -1;
+    const int rc = retry ? Sigwait(&set, &signal) : Sigwaitinfo(&set, &info);
+    const int observed_errno = errno;
+    producer.join();
+    check("the unrelated signal was handled once",
+          dispatched.size() == 1 && IsRecord(dispatched.front().info, 10, 1006));
+    if (retry) {
+      check("sigwait retries until its requested signal arrives",
+            rc == 0 && signal == 64 && S().process_pending.Mask() == 0);
+    } else {
+      check("sigwaitinfo returns EINTR and leaves the later selected signal for the next wait",
+            rc == -1 && observed_errno == EINTR &&
+            Sigtimedwait(&set, &info, &zero) == 64 && IsRecord(info, 64, 1007));
+    }
+  }
+}
+
 static std::mutex watchdog_mutex;
 static std::condition_variable watchdog_done;
 static bool finished;
@@ -663,6 +741,7 @@ int main() {
   TranslatedReceiver();
   SuspendMasks();
   WaitSets();
+  WaitInterrupts();
   Reset(timer_bit);
   check("all fixture-owned pending records are released", queued_records == 0);
   std::printf("Bionic mask entry points: %d checks, %d failures; actual pending/action/delivery helpers; "

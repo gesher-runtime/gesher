@@ -27,7 +27,9 @@
 //    interrupt x86-64 code or other blocking calls, which take it at their
 //    next delivery point. A handler of translated code leaves the
 //    interrupted code's FPCR/FPSR as they were, as sigreturn does.
-//  - sigwait/sigwaitinfo/sigtimedwait take pending signals.
+//  - sigwait/sigwaitinfo/sigtimedwait take pending signals. A handler for an
+//    unblocked signal outside the set interrupts sigwaitinfo/sigtimedwait;
+//    Android's sigwait retries.
 //  - Ordinary kill() of another process uses gesher-base's existing mailbox.
 //    Remote RT kill and queued-value sends return ENOSYS before that bitmap
 //    transport. Ordinary external signals and SIGCHLD are pending if every
@@ -553,10 +555,9 @@ int Run(ThreadState* self, int sig, const BionicSiginfo& info) {
 // A pending signal whose action this thread cannot run now stays pending (and
 // makes the result -ENOSYS once nothing else is deliverable); it does not hold
 // back the higher-numbered signals behind it.
-int TakeDeliverable(ThreadState* self, BionicSiginfo* info, BionicSigaction* act) {
-  std::lock_guard<std::mutex> lock(S().mutex);
+int TakeDeliverableLocked(ThreadState* self, uint64_t unblocked, BionicSiginfo* info,
+                          BionicSigaction* act) {
   bool unsupported = false;
-  const uint64_t unblocked = ~self->mask.load(std::memory_order_relaxed);
   uint64_t own = self->pending.Mask() & unblocked;
   uint64_t shared = S().process_pending.Mask() & unblocked;
   while (own != 0 || shared != 0) {
@@ -578,6 +579,11 @@ int TakeDeliverable(ThreadState* self, BionicSiginfo* info, BionicSigaction* act
   }
   self->any_pending.store(self->pending.Mask() != 0, std::memory_order_relaxed);
   return unsupported ? -kENOSYS : 0;
+}
+
+int TakeDeliverable(ThreadState* self, BionicSiginfo* info, BionicSigaction* act) {
+  std::lock_guard<std::mutex> lock(S().mutex);
+  return TakeDeliverableLocked(self, ~self->mask.load(std::memory_order_relaxed), info, act);
 }
 
 std::atomic<bool> g_process_pending{false};
@@ -935,13 +941,36 @@ int TakeWaiting(ThreadState* self, uint64_t want, BionicSiginfo* info,
         return sig;
       }
     }
-    self->waiting_for = want;
-    if (deadline == nullptr) {
-      S().sent.wait(lock);
-    } else if (S().sent.wait_until(lock, *deadline) == std::cv_status::timeout) {
+    if (deadline != nullptr && std::chrono::steady_clock::now() >= *deadline) {
       self->waiting_for = 0;
       return 0;
     }
+    // An ordinary signal which this thread did not block can interrupt a
+    // sigwait, while a selected record takes priority. Claim the action and
+    // record together, then release the lock before invoking the handler.
+    const uint64_t unblocked = act == nullptr ? ~self->mask.load(std::memory_order_relaxed) : 0;
+    if (((self->pending.Mask() | S().process_pending.Mask()) & unblocked) != 0) {
+      BionicSiginfo interruption;
+      BionicSigaction handler;
+      const int sig = TakeDeliverableLocked(self, unblocked, &interruption, &handler);
+      if (sig < 0) {
+        self->waiting_for = 0;
+        return sig;
+      }
+      if (sig > 0) {
+        g_process_pending.store(S().process_pending.Mask() != 0, std::memory_order_relaxed);
+        if (handler.handler == kSigIgn || (handler.handler == kSigDfl && DefaultIgnores(sig))) {
+          continue;
+        }
+        self->waiting_for = 0;
+        lock.unlock();
+        Dispatch(self, sig, interruption, handler);
+        return -kEINTR;
+      }
+    }
+    self->waiting_for = want | unblocked;
+    if (deadline == nullptr) S().sent.wait(lock);
+    else S().sent.wait_until(lock, *deadline);
   }
 }
 
@@ -957,7 +986,11 @@ int BIONIC_SYSV Sigwait(const uint64_t* set, int* sig) {
   if (set == nullptr) return kEFAULT;
   ThreadState* self = Self();
   if (self == nullptr) return kEAGAIN;
-  int s = TakeWaiting(self, WaitSet(*set), nullptr, nullptr);
+  int s;
+  do {
+    s = TakeWaiting(self, WaitSet(*set), nullptr, nullptr);
+  } while (s == -kEINTR);
+  if (s < 0) return -s;
   *sig = s;
   return 0;
 }
@@ -965,7 +998,8 @@ int BIONIC_SYSV Sigwaitinfo(const uint64_t* set, BionicSiginfo* info) {
   if (set == nullptr) return errno = kEFAULT, -1;
   ThreadState* self = Self();
   if (self == nullptr) return errno = kEAGAIN, -1;
-  return TakeWaiting(self, WaitSet(*set), info, nullptr);
+  int sig = TakeWaiting(self, WaitSet(*set), info, nullptr);
+  return sig < 0 ? (errno = -sig, -1) : sig;
 }
 int BIONIC_SYSV Sigtimedwait(const uint64_t* set, BionicSiginfo* info, const LinuxTimespec* ts) {
   if (set == nullptr) return errno = kEFAULT, -1;
@@ -976,7 +1010,8 @@ int BIONIC_SYSV Sigtimedwait(const uint64_t* set, BionicSiginfo* info, const Lin
   ThreadState* self = Self();
   if (self == nullptr) return errno = kEAGAIN, -1;
   int sig = TakeWaiting(self, WaitSet(*set), info, &deadline);
-  return sig != 0 ? sig : (errno = kEAGAIN, -1);
+  if (sig > 0) return sig;
+  return errno = sig < 0 ? -sig : kEAGAIN, -1;
 }
 
 // sigsuspend: with `mask` in place, waits for a signal it lets through, runs
