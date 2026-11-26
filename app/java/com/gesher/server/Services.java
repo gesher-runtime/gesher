@@ -262,7 +262,7 @@ public final class Services {
         services.put(Context.COUNTRY_DETECTOR, StandIn.of(android.location.ICountryDetector.class,
                 new CountryDetectorService(WindowsCountry.create())).asBinder());
         services.put(com.gesher.net.IWindowsWifi.NAME,
-                new WifiService(am, atm, pm, () -> location.isLocationEnabledForUser(0)));
+                new WifiService(am, atm, pm, location::isLocationEnabled));
         // Bluetooth (docs/bluetooth.md): Windows' radio, its broadcasts and discovery. The
         // android.bluetooth classes run scans, GATT and sockets in the app's process.
         services.put(BluetoothManagerService.NAME, new BluetoothManagerService(am, pm));
@@ -301,10 +301,12 @@ public final class Services {
                         user(userId); return Configuration.GRAMMATICAL_GENDER_NOT_SPECIFIED;
                     }
                 }).asBinder());
-        // Accounts: a dummy Google account (microG / GMS compat) and apps' own, through
-        // their authenticators.
+        // Accounts: those an installed authenticator added (apps' own, microG's Google
+        // accounts), through their authenticators. Sync settings left for the Google
+        // account Gesher once reported without an authenticator are retired (#335).
         AccountManagerService accounts = new AccountManagerService(am, pm, persistentAccounts);
         accounts.setSyncRetirement(sync::accountsRemoved);
+        accounts.retireSyntheticAccountResidue();
         services.put(Context.ACCOUNT_SERVICE, StandIn.of(android.accounts.IAccountManager.class,
                 accounts).asBinder());
         sync.start(accounts::syncableAccounts, accounts::canAccessAccount);
@@ -329,7 +331,7 @@ public final class Services {
         // Telephony over the host's cellular modem, if Windows reported one at boot
         // (docs/telephony.md); without one, AOSP's no-phone answers.
         TelephonyService.Endpoints telephony = TelephonyService.create(pm, am,
-                () -> location.isLocationEnabledForUser(0));
+                location::isLocationEnabled);
         services.put(Context.TELEPHONY_SERVICE, StandIn.of(
                 com.android.internal.telephony.ITelephony.class, telephony.phone).asBinder());
         services.put("iphonesubinfo", StandIn.of(
@@ -644,6 +646,14 @@ public final class Services {
             return path.canWrite() ? VolumeInfo.STATE_MOUNTED : VolumeInfo.STATE_MOUNTED_READ_ONLY;
         }
 
+        private static java.io.File canonicalFile(java.io.File path) {
+            try {
+                return path.getCanonicalFile();
+            } catch (java.io.IOException e) {
+                return path.getAbsoluteFile();
+            }
+        }
+
         @Override
         public DiskInfo[] getDisks() {
             // There are no Android-managed physical/adoptable disks. The framework
@@ -667,10 +677,13 @@ public final class Services {
         public VolumeInfo[] getVolumes(int flags) {
             // The two views refer to the same backing storage. Android also includes
             // a private internal volume even though it has no DiskInfo or fsUuid.
+            // StorageManager.getUuidForPath compares File.getCanonicalPath() against
+            // VolumeInfo.path, so canonicalize non-canonical ANDROID_DATA paths
+            // (such as Windows 8.3 short paths for non-ASCII profile directories).
             VolumeInfo internal = new VolumeInfo(VolumeInfo.ID_PRIVATE_INTERNAL,
                     VolumeInfo.TYPE_PRIVATE, null, null);
             internal.state = directoryState(mDataDirectory);
-            internal.path = mDataDirectory.getAbsolutePath();
+            internal.path = canonicalFile(mDataDirectory).getPath();
 
             VolumeInfo shared = new VolumeInfo(VolumeInfo.ID_EMULATED_INTERNAL + ";0",
                     VolumeInfo.TYPE_EMULATED, null, null);
@@ -680,7 +693,7 @@ public final class Services {
             shared.state = directoryState(sharedDirectory());
             // VolumeInfo appends the user ID in getPathForUser(); StorageVolume
             // below contains that final per-user path instead.
-            shared.path = mediaRoot().getAbsolutePath();
+            shared.path = canonicalFile(mediaRoot()).getPath();
             shared.internalPath = shared.path;
             return new VolumeInfo[] {internal, shared};
         }
@@ -779,7 +792,7 @@ public final class Services {
         @Override
         public StorageVolume[] getVolumeList(int userId, String callingPackage, int flags) {
             if (userId != 0) return new StorageVolume[0];
-            java.io.File path = sharedDirectory();
+            java.io.File path = canonicalFile(sharedDirectory());
             return new StorageVolume[] {new StorageVolume("emulated;" + userId, path, path,
                     "Internal shared storage", true /* primary */, false /* removable */,
                     true /* emulated */, false /* externallyManaged */,

@@ -1,0 +1,168 @@
+{
+  "base": "b2e1d97813e65e58d7e6dbd10ea21d1f821e405d",
+  "failed_head": "4bb899914d9efb20b3b13067ad82acc323312722",
+  "failed_run": 45198148590,
+  "failed_job": 137840987873,
+  "production_sha256": "99d5dc95ad3f08a952fa312e14db3b2b63eb6067c3caba57db48470a682d3b3f",
+  "assertions": {
+    "peer": 101,
+    "production": 2919,
+    "compiled_negative_controls": 5,
+    "artifact_main_tests": 34
+  },
+  "windows_binaries": {
+    "x86_64": "5ec73ccba2eeda05638560e42a16f3a461d9b9c21331af6254642b9ccebc56fe",
+    "aarch64": "b495680f86996b6d9a510ccf7e9ddb0324ca6982c7678939b82e78e84f92b505"
+  },
+  "members": {
+    "negative-controls/excess-attempts/dns_peer_ports.h": {
+      "bytes": 3608,
+      "sha256": "cc74f219b40445f466b2abf243394a84f08bd3fb1a549ddcecac60428dfbb360"
+    },
+    "negative-controls/excess-attempts/dns_peer_ports_test.h": {
+      "bytes": 4731,
+      "sha256": "ba02d74cd3e5ea186a01540c565ab3e16bf28fb4e36007b7c05a063299c32650"
+    },
+    "negative-controls/excess-attempts/probe.cc": {
+      "bytes": 81,
+      "sha256": "67437ea6bd6543f8bb30966899c5bfface15f3af7f1452d0bed18bb008099cae"
+    },
+    "negative-controls/excess-attempts/run.log": {
+      "bytes": 73,
+      "sha256": "ec0e565c6efb11e7eb7a4a5064f13594616f1bf9ad14e49dcd8d83f16875f73b"
+    },
+    "negative-controls/lost-udp-owner/dns_peer_ports.h": {
+      "bytes": 3554,
+      "sha256": "5912427119572780f80560b85d6feb40e1a14f520dfe102001cd6b269176ad04"
+    },
+    "negative-controls/lost-udp-owner/dns_peer_ports_test.h": {
+      "bytes": 4731,
+      "sha256": "ba02d74cd3e5ea186a01540c565ab3e16bf28fb4e36007b7c05a063299c32650"
+    },
+    "negative-controls/lost-udp-owner/probe.cc": {
+      "bytes": 81,
+      "sha256": "67437ea6bd6543f8bb30966899c5bfface15f3af7f1452d0bed18bb008099cae"
+    },
+    "negative-controls/lost-udp-owner/run.log": {
+      "bytes": 67,
+      "sha256": "027220766851132d6773e6c3860fa25f6943f91b194ef3a71341bd8a768b8f7a"
+    },
+    "negative-controls/no-collision-retry/dns_peer_ports.h": {
+      "bytes": 3586,
+      "sha256": "0e31237f6661ccdccf645c32c4fc5d50cba0a8aa033e9507aec7c580fe8d4a54"
+    },
+    "negative-controls/no-collision-retry/dns_peer_ports_test.h": {
+      "bytes": 4731,
+      "sha256": "ba02d74cd3e5ea186a01540c565ab3e16bf28fb4e36007b7c05a063299c32650"
+    },
+    "negative-controls/no-collision-retry/probe.cc": {
+      "bytes": 81,
+      "sha256": "67437ea6bd6543f8bb30966899c5bfface15f3af7f1452d0bed18bb008099cae"
+    },
+    "negative-controls/no-collision-retry/run.log": {
+      "bytes": 76,
+      "sha256": "35f2cc71a6bc33247cfdfc63299b5d42613f36954584c153a239ef83a7148f97"
+    },
+    "negative-controls/receipts.json": {
+      "bytes": 5333,
+      "sha256": "f34a1955d576f49f8703660e560e45752323025ac221c0b3a6cdd2ea84975181"
+    },
+    "negative-controls/retry-other-errors/dns_peer_ports.h": {
+      "bytes": 3580,
+      "sha256": "ef84c0115728f65b1fc25e5baff0407913f8557ad5f967d4b762e1c21b66df47"
+    },
+    "negative-controls/retry-other-errors/dns_peer_ports_test.h": {
+      "bytes": 4731,
+      "sha256": "ba02d74cd3e5ea186a01540c565ab3e16bf28fb4e36007b7c05a063299c32650"
+    },
+    "negative-controls/retry-other-errors/probe.cc": {
+      "bytes": 81,
+      "sha256": "67437ea6bd6543f8bb30966899c5bfface15f3af7f1452d0bed18bb008099cae"
+    },
+    "negative-controls/retry-other-errors/run.log": {
+      "bytes": 60,
+      "sha256": "0e582859b749e56b06002aa9918263736849938a9de0cb488658ea53fec35f03"
+    },
+    "negative-controls/unchanged-setup-real-collision/probe.cc": {
+      "bytes": 50459,
+      "sha256": "f75b05b6339049c9ce1c518677f8a1d0ec458889f1dfa84bfb6ceba06482192c"
+    },
+    "negative-controls/unchanged-setup-real-collision/run.log": {
+      "bytes": 72,
+      "sha256": "55b1b79938f484fe51c605843571db4ddb58519f441e601ed8b9432efc598930"
+    },
+    "receipts/java-dns-hex-main-b2-proof.json": {
+      "bytes": 3741,
+      "sha256": "4d19319b002711ed912cde924af1ab6e07712c7c771790d3c2b40416376caef0"
+    },
+    "receipts/native-manual-1737-361-windows2025.log": {
+      "bytes": 402472,
+      "sha256": "b88d7ea80cceaf50a8f31fe3f8110f73fb6001c27e83db501abb033cebc48cf7"
+    },
+    "receipts/native-review-dns-peer.log": {
+      "bytes": 988,
+      "sha256": "443e2a2d1e58a9691c3e387cc44703ec0991dc12cf75eae631b96e0847393427"
+    },
+    "receipts/pr361-dns-peer-artifact-main.log": {
+      "bytes": 133,
+      "sha256": "81332e7ac5c324deb13f73c9497e1baf385a57c6f7b24aa65bbed49546daef75"
+    },
+    "receipts/pr361-dns-peer-final-aarch64.log": {
+      "bytes": 423,
+      "sha256": "470911ee5a8146db8be4a577cd3534a2b7f841c314dd82136eef5c4a673963ab"
+    },
+    "receipts/pr361-dns-peer-final-x86_64.log": {
+      "bytes": 423,
+      "sha256": "470911ee5a8146db8be4a577cd3534a2b7f841c314dd82136eef5c4a673963ab"
+    },
+    "receipts/pr361-dns-peer-full.log": {
+      "bytes": 988,
+      "sha256": "3b5f0314bd5cc70c85885fecaa4fc9b5edd939bab87dc80b61b35ecbeba45862"
+    },
+    "receipts/pr361-dns-peer-proof-final.log": {
+      "bytes": 455,
+      "sha256": "8ad1c5cceb68ab0d33d9da6e3812c4b86547b9687035d5c545ddaf82d8c57915"
+    },
+    "receipts/pr361-dns-peer-proof.py": {
+      "bytes": 3771,
+      "sha256": "7a03e42ffc68482e231c199eab1d71d6e37297de239b24f5e791128058b07b54"
+    },
+    "receipts/pr361-dns-peer-selected-policy.log": {
+      "bytes": 2999,
+      "sha256": "34c22ac45564b380f28360fc26640ea1db5d8112ea66d94095fb194aad165a5e"
+    },
+    "receipts/pr361-dns-peer-selected-supplier.log": {
+      "bytes": 184,
+      "sha256": "651082038c49ccb553c0e469d5a34b32689e254480339bca0cdf12d03d6c2120"
+    },
+    "receipts/pr361-dns-peer-vector-policy.log": {
+      "bytes": 3749,
+      "sha256": "d24e6cfdbb25d6d19fd035787f9947619fd2dd3ec060da33469cd6d37db3a409"
+    },
+    "source/compat/posix/src/network_dns.cc": {
+      "bytes": 18830,
+      "sha256": "99d5dc95ad3f08a952fa312e14db3b2b63eb6067c3caba57db48470a682d3b3f"
+    },
+    "source/tests/native/dns_admission_host.cc.in": {
+      "bytes": 32285,
+      "sha256": "bd5e815867150a46b7abd570794ebaaa1cbed758838b0e439c504579894162fe"
+    },
+    "source/tests/native/dns_peer_ports.h": {
+      "bytes": 3608,
+      "sha256": "509fa1cf14709c6d5b13dd28c01640c274d0153aaf6c0e298920b29293fc301d"
+    },
+    "source/tests/native/dns_peer_ports_test.h": {
+      "bytes": 4731,
+      "sha256": "ba02d74cd3e5ea186a01540c565ab3e16bf28fb4e36007b7c05a063299c32650"
+    },
+    "source/tools/test_dns_admission.py": {
+      "bytes": 3578,
+      "sha256": "36085ee4823991b41a676d69326430bcb5abb9fa914bcbb34db81cd660224fb1"
+    }
+  },
+  "archive": {
+    "file": "dns-peer-port-reservation-2026-11-23.tar.gz",
+    "bytes": 78022,
+    "sha256": "b1be0a90fab58936ffe59528774ce7d5e2a919db2b9b078224b3239339235951"
+  }
+}

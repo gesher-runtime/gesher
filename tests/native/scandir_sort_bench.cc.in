@@ -1,0 +1,111 @@
+// Ordinary allocators and complete scan/copy/sort/verify/free operations.
+#include "shim_internal.h"
+#include <algorithm>
+#include <cerrno>
+#include <climits>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <dirent.h>
+#include <fcntl.h>
+#include <mutex>
+#include <string>
+#include <sys/stat.h>
+#include <time.h>
+#include <unistd.h>
+#include <utility>
+#include <vector>
+namespace gesher::bionic {
+namespace {
+constexpr int kAtFdcwd = -100, kODirectory = O_DIRECTORY;
+bool PathOfFd(int fd, std::string* out) {
+  char proc[64], path[4096]; std::snprintf(proc, sizeof(proc), "/proc/self/fd/%d", fd);
+  ssize_t n = ::readlink(proc, path, sizeof(path)); if (n < 0) return false;
+  out->assign(path, static_cast<size_t>(n)); return true;
+}
+@DIRECTORY_IMPLEMENTATION@
+}
+}
+namespace {
+using gesher::bionic::BionicDirent;
+using gesher::bionic::SysvDirCompare;
+using gesher::bionic::SysvFilter;
+using Scan = int(BIONIC_SYSV*)(const char*, BionicDirent***, SysvFilter, SysvDirCompare);
+Scan volatile scan_entry = gesher::bionic::Scandir;
+enum Order { Sorted, Reverse, Nearby, Random, Groups, Lexical, NoSort, FilterNone };
+struct Scenario { const char* name; size_t count; Order order; unsigned loops; };
+const Scenario scenarios[] = {
+  {"empty", 0, Lexical, 8192}, {"single", 1, Lexical, 8192}, {"tiny2", 2, Lexical, 8192},
+  {"small16", 16, Lexical, 2048}, {"floor127", 127, Reverse, 256}, {"floor128", 128, Reverse, 256},
+  {"sorted1024", 1024, Sorted, 128}, {"nearby1024", 1024, Nearby, 128},
+  {"random1024", 1024, Random, 16}, {"reverse1024", 1024, Reverse, 16},
+  {"lexical1024", 1024, Lexical, 16}, {"ties1024", 1024, Groups, 16},
+  {"reverse4096", 4096, Reverse, 2}, {"nosort4096", 4096, NoSort, 32},
+  {"filtered4096", 4096, FilterNone, 64},
+};
+const Scenario* active;
+uint64_t Key(const BionicDirent& e, Order order) {
+  uint64_t x = static_cast<uint64_t>(e.d_off);
+  if (order == Reverse) return UINT64_MAX - x;
+  if (order == Nearby) return x ^ 1;
+  if (order == Groups) return x % 7;
+  if (order == Random) { x ^= x >> 16; x *= 0x7feb352dU; x ^= x >> 15; x *= 0x846ca68bU; x ^= x >> 16; }
+  return x;
+}
+int Value(const BionicDirent& a, const BionicDirent& b, Order order) {
+  if (order == Lexical) return std::strcmp(a.d_name, b.d_name);
+  uint64_t x = Key(a, order), y = Key(b, order); return (x > y) - (x < y);
+}
+int BIONIC_SYSV Compare(const BionicDirent** a, const BionicDirent** b) { return Value(**a, **b, active->order); }
+int BIONIC_SYSV Filter(const BionicDirent* e) { return active->order != FilterNone && e->d_name[0] != '.'; }
+void Require(bool value) { if (!value) { std::fputs("SCANDIR_BENCH_IDENTITY_FAILURE\n", stderr); std::exit(1); } }
+uint64_t Clock(clockid_t id) { timespec t{}; Require(clock_gettime(id, &t) == 0); return uint64_t(t.tv_sec) * 1000000000ULL + t.tv_nsec; }
+std::vector<BionicDirent> Reference(const std::string& path) {
+  std::vector<BionicDirent> result; DIR* d = ::opendir(path.c_str()); Require(d != nullptr);
+  int64_t position = 0;
+  while (auto* e = ::readdir(d)) {
+    ++position; if (e->d_name[0] == '.' || active->order == FilterNone) continue;
+    BionicDirent v{}; v.d_ino = e->d_ino ? e->d_ino : static_cast<uint64_t>(e->d_off);
+    v.d_off = position; v.d_type = e->d_type; v.d_reclen = sizeof(v); std::strcpy(v.d_name, e->d_name); result.push_back(v);
+  }
+  Require(::closedir(d) == 0);
+  if (active->order != NoSort) std::stable_sort(result.begin(), result.end(), [](const auto& a, const auto& b) { return Value(a, b, active->order) < 0; });
+  return result;
+}
+void Complete(const std::string& path, const std::vector<BionicDirent>& expected) {
+  BionicDirent** result = nullptr; errno = EDOM;
+  const int n = scan_entry(path.c_str(), &result, Filter, active->order == NoSort ? nullptr : Compare);
+  Require(n == static_cast<int>(expected.size()) && errno == EDOM);
+  for (int i = 0; i < n; ++i) {
+    const auto& a = *result[i]; const auto& b = expected[static_cast<size_t>(i)];
+    Require(a.d_ino == b.d_ino && a.d_off == b.d_off && a.d_type == b.d_type &&
+      a.d_reclen == b.d_reclen && std::strcmp(a.d_name, b.d_name) == 0);
+    std::free(result[i]);
+  }
+  std::free(result);
+}
+}
+int main(int argc, char** argv) {
+  if (argc != 2) return 2;
+  for (const auto& s : scenarios) if (std::strcmp(s.name, argv[1]) == 0) active = &s;
+  if (!active) return 2;
+  char folder[] = "/tmp/gesher-scandir-bench-XXXXXX"; Require(mkdtemp(folder) != nullptr); std::string path = folder;
+  for (size_t i = 0; i < active->count; ++i) {
+    char leaf[48]; std::snprintf(leaf, sizeof(leaf), "/item-%05zu", i);
+    int fd = ::open((path + leaf).c_str(), O_CREAT | O_EXCL | O_WRONLY, 0600); Require(fd >= 0 && ::close(fd) == 0);
+  }
+  auto expected = Reference(path);
+  for (unsigned sample = 0; sample < 4; ++sample) {
+    const unsigned loops = sample == 0 ? 1 : active->loops;
+    const uint64_t wall = Clock(CLOCK_MONOTONIC), cpu = Clock(CLOCK_PROCESS_CPUTIME_ID);
+    for (unsigned i = 0; i < loops; ++i) Complete(path, expected);
+    const uint64_t cpu_ns = Clock(CLOCK_PROCESS_CPUTIME_ID) - cpu, wall_ns = Clock(CLOCK_MONOTONIC) - wall;
+    std::printf("{\"case\":\"%s\",\"sample\":%u,\"calls\":%u,\"count\":%zu,\"cpu_ns\":%llu,\"wall_ns\":%llu,\"complete_output\":true}\n",
+      active->name, sample, loops, active->count, static_cast<unsigned long long>(cpu_ns), static_cast<unsigned long long>(wall_ns));
+  }
+  for (size_t i = 0; i < active->count; ++i) {
+    char leaf[48]; std::snprintf(leaf, sizeof(leaf), "/item-%05zu", i); Require(::unlink((path + leaf).c_str()) == 0);
+  }
+  Require(::rmdir(path.c_str()) == 0);
+  std::puts("SCANDIR_BENCH_COMPLETE owned_directory_removed=true");
+}
