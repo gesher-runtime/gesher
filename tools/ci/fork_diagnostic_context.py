@@ -98,3 +98,21 @@ def assert_current(value):
     checkout = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
     require(value == envelope(os.environ, checkout), 'Fork diagnostic context changed during execution')
     return value
+
+
+def authenticate_dns_producer(path, raw, consumer, producer):
+    """Prove a retained producer while preserving the fork diagnostic identity."""
+    require(isinstance(producer, dict) and producer.keys() == consumer.keys() and
+            all(producer[key] == consumer[key] for key in consumer if key != 'attempt'),
+            'Fork DNS producer identity differs from the consumer')
+    attempt = producer['attempt']
+    require(isinstance(attempt, str) and re.fullmatch(r'[1-9][0-9]*', attempt) and
+            int(attempt) <= int(consumer['attempt']), 'Invalid fork DNS producer attempt')
+    if attempt != consumer['attempt']:
+        from producer_context import authenticate_archive
+        current = dict(repo=consumer['repository'], repo_id=consumer['repository_id'],
+                       run_id=consumer['run'], attempt=consumer['attempt'],
+                       checkout=consumer['source'], head=consumer['source'],
+                       head_repo=consumer['repository_id'], workflow=consumer['workflow'])
+        authenticate_archive(path, raw, current, dict(current, attempt=attempt), 'native2-dns')
+    return producer

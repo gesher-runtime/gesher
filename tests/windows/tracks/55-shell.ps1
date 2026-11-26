@@ -68,7 +68,7 @@ Set-Content -LiteralPath (Join-Path $PSScriptRoot 'probe.txt') -Encoding utf8 -V
 'gesher-launch probe: output passed on'
 exit 7
 '@
-  $psi = [Diagnostics.ProcessStartInfo]::new((Join-Path $launchDir 'gesher-launch.exe'), 'launch "com.example two words" tail')
+  $psi = [Diagnostics.ProcessStartInfo]::new((Join-Path $launchDir 'gesher-launch.exe'), 'protected-launch "C:\test packages\protected app.apk"')
   $psi.UseShellExecute = $false
   $psi.RedirectStandardOutput = $true
   $psi.RedirectStandardError = $true
@@ -82,7 +82,7 @@ exit 7
   if ($p.ExitCode -ne 7) { $problems += "exit $($p.ExitCode), not the script's 7" }
   if (-not $launchText.Contains('gesher-launch probe: output passed on')) { $problems += "the script's output was not passed on ($launchText)" }
   $probe = if (Test-Path $probeFile) { Get-Content -LiteralPath $probeFile } else { @() }
-  if ($probe -notcontains 'args=launch|com.example two words|tail') { $problems += "the script got: $($probe -join '; ')" }
+  if ($probe -notcontains 'args=protected-launch|C:\test packages\protected app.apk') { $problems += "the script got: $($probe -join '; ')" }
   if ($probe -notcontains 'console-window=0') { $problems += "powershell's console has a window ($($probe -join '; ')): not CREATE_NO_WINDOW" }
   $launchBytes = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes("$Dir/gesher-launch.exe"))
   if (-not $launchBytes.Contains('AllowSetForegroundWindow')) { $problems += 'gesher-launch.exe does not import AllowSetForegroundWindow (the app''s window would open behind Explorer)' }

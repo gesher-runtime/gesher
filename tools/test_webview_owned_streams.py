@@ -63,6 +63,11 @@ def main() -> int:
                      "  host.Navigate(url, headers, method, std::move(body));"
                     if legacy_number else
                     "host.Navigate(url, headers, method, std::move(body), number);")
+    # Keep the opt-in diagnostics in the extracted production functions. Older
+    # source controls have no tracing helpers and retain their original path.
+    trace = (function(source, "bool NavigationTracing(") +
+             function(source, "void TraceNavigation(")
+             if "bool NavigationTracing(" in source else "")
     dispatch = function(source, "void Fail(") + "\n" + function(source, "void Do(")
     for signature in ("void QueueAfterDocumentScript(", "void DoAfterDocumentScript(",
                       "void DoNavigation(", "void StopNavigation("):
@@ -80,8 +85,11 @@ def main() -> int:
         "@STOP_COMMAND@": "void RunStopCommand(Impl* impl) {\n" + stop + "}\n",
         "@NAVIGATE_DECLARATION@": declaration,
         "@NAVIGATE@": navigate,
+        "@NAVIGATION_TRACE@": trace,
         "@NUMBERED_NAVIGATION@": "1" if numbered else "0",
-        "@NAVIGATION_STATE@": state,
+        "@NAVIGATION_STATE@": (
+            "  unsigned long long trace_id = 1;\n" + state if "impl->trace_id" in source else state
+        ),
         "@NAV_START_CALLBACK@": callback,
         "@NUMBER_DECLARATION@": "void NumberNextNavigate(int64_t number);" if legacy_number else "",
         "@NUMBER_FUNCTION@": function(source, "void Host::NumberNextNavigate(") if legacy_number else "",

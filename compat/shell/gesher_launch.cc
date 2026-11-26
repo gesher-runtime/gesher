@@ -170,7 +170,7 @@ void EndHandover() {
 // one, so the arguments are not the bare-file form, and they show no app window
 // (except launch).
 const wchar_t* const kCommands[] = {
-    L"launch", L"install", L"uninstall", L"view", L"list", L"status", L"start", L"shutdown",
+    L"launch", L"protected-launch", L"install", L"uninstall", L"view", L"list", L"status", L"start", L"shutdown",
     L"toast-activated", L"apk-icon", L"apk-info", L"proxy", L"windows", L"special-access",
     L"settings-closed", L"settings-shown", L"sync-shortcuts", L"cameras", L"spell-checker",
     L"mobile-data", L"control-panel", L"settings", L"dashboard", L"gui", L"--app-crash"};
@@ -267,7 +267,7 @@ void ShowLaunchFailure(const std::wstring& reason, HWND owner = nullptr) {
   else text = formatted;
   GesherHostPrompt(GesherUiText(language, "brand"), text.c_str(),
                    GesherUiText(language, "cp_dialog_ok"), nullptr,
-                   GesherUiRtl(language), owner);
+                   GesherUiRtl(language), owner, MB_ICONERROR);
 }
 
 // A failing app starts this short-lived host process rather than waiting inside
@@ -294,7 +294,7 @@ int ShowAppCrash(int argc, LPWSTR* argv) {
   }
   GesherHostPrompt(GesherUiText(language, "brand"), message.c_str(),
                    GesherUiText(language, "cp_dialog_ok"), nullptr,
-                   GesherUiRtl(language), nullptr);
+                   GesherUiRtl(language), nullptr, MB_ICONERROR);
   return 0;
 }
 

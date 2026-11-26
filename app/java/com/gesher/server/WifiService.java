@@ -91,6 +91,7 @@ public final class WifiService extends IWindowsWifi.Stub {
     private final PackageManagerService mPm;
     private final BooleanSupplier mLocationEnabled;
     private final Backend mBackend;
+    private final Consumer<String> mOnLocationBlocked;
     private final Object mScanLock = new Object();
     private ScanGroup mScan;
 
@@ -98,19 +99,27 @@ public final class WifiService extends IWindowsWifi.Stub {
 
     WifiService(ActivityManagerService am, ActivityTaskManagerService atm,
             PackageManagerService pm, BooleanSupplier locationEnabled) {
-        this(am, atm, pm, locationEnabled, WINDOWS, WifiConnections.HOST_UI);
+        this(am, atm, pm, locationEnabled, WINDOWS, WifiConnections.HOST_UI,
+                pkg -> WindowsLocation.maybePromptEnable(pkg, pkg));
     }
 
     WifiService(ActivityManagerService am, ActivityTaskManagerService atm,
             PackageManagerService pm, BooleanSupplier locationEnabled, Backend backend) {
-        this(am, atm, pm, locationEnabled, backend, WifiConnections.NO_UI);
+        this(am, atm, pm, locationEnabled, backend, WifiConnections.NO_UI, pkg -> {});
     }
 
     WifiService(ActivityManagerService am, ActivityTaskManagerService atm,
             PackageManagerService pm, BooleanSupplier locationEnabled, Backend backend, WifiConnections.Ui ui) {
+        this(am, atm, pm, locationEnabled, backend, ui, pkg -> {});
+    }
+
+    WifiService(ActivityManagerService am, ActivityTaskManagerService atm,
+            PackageManagerService pm, BooleanSupplier locationEnabled, Backend backend,
+            WifiConnections.Ui ui, Consumer<String> onLocationBlocked) {
         mAm = Objects.requireNonNull(am); mAtm = Objects.requireNonNull(atm);
         mPm = Objects.requireNonNull(pm); mLocationEnabled = Objects.requireNonNull(locationEnabled);
         mBackend = Objects.requireNonNull(backend);
+        mOnLocationBlocked = Objects.requireNonNull(onLocationBlocked);
         mConnections = new WifiConnections(this, backend, ui);
         mBackend.listen(new WindowsWifi.Events() {
             @Override public void onWifiStateChanged(int previous, int current) {
@@ -198,16 +207,28 @@ public final class WifiService extends IWindowsWifi.Stub {
                 || granted(owner, "android.permission.RADIO_SCAN_WITHOUT_LOCATION");
     }
 
-    boolean mayScan(Owner owner) {
-        if (!current(owner)) return false;
-        if (privilegedScan(owner)) return true;
-        if (!mLocationEnabled.getAsBoolean()) return false;
+    boolean hasScanLocationPermission(Owner owner) {
+        if (!current(owner) || owner.system() || privilegedScan(owner)) return false;
         boolean location = granted(owner, FINE) && note(owner, AppOpsManager.OP_FINE_LOCATION);
         if (!location && owner.code().parsed.getTargetSdkVersion() < 29) {
             location = granted(owner, COARSE) && note(owner, AppOpsManager.OP_COARSE_LOCATION);
         }
         return (location || granted(owner, "android.permission.PEERS_MAC_ADDRESS"))
                 && note(owner, AppOpsManager.OP_WIFI_SCAN) && current(owner);
+    }
+
+    private void notifyLocationBlocked(Owner owner) {
+        if (!owner.system() && !privilegedScan(owner) && current(owner)
+                && !mLocationEnabled.getAsBoolean() && hasScanLocationPermission(owner)) {
+            mOnLocationBlocked.accept(owner.name());
+        }
+    }
+
+    boolean mayScan(Owner owner) {
+        if (!current(owner)) return false;
+        if (privilegedScan(owner)) return true;
+        if (!mLocationEnabled.getAsBoolean()) return false;
+        return hasScanLocationPermission(owner);
     }
 
     private boolean mayStartScan(Owner owner) {
@@ -281,10 +302,10 @@ public final class WifiService extends IWindowsWifi.Stub {
 
     @Override public List<ScanResult> getScanResults(String name, String tag) {
         Owner owner = caller(name, tag); enforce(owner, ACCESS);
-        if (!mayScan(owner)) return new ArrayList<>();
+        if (!mayScan(owner)) { notifyLocationBlocked(owner); return new ArrayList<>(); }
         List<ScanResult> scans = mBackend.scanResults();
         enforce(owner, ACCESS);
-        if (!mayScan(owner)) return new ArrayList<>();
+        if (!mayScan(owner)) { notifyLocationBlocked(owner); return new ArrayList<>(); }
         List<ScanResult> result = new ArrayList<>(scans.size());
         for (ScanResult scan : scans) result.add(new ScanResult(scan));
         return result;
@@ -347,7 +368,13 @@ public final class WifiService extends IWindowsWifi.Stub {
 
     @Override public boolean startScan(String name, String tag) {
         Owner owner = caller(name, tag); enforce(owner, CHANGE);
-        if (!mayStartScan(owner)) return false;
+        if (!mayStartScan(owner)) {
+            if (granted(owner, CHANGE) && (granted(owner, "android.permission.NETWORK_SETTINGS")
+                    || note(owner, AppOpsManager.OP_CHANGE_WIFI_STATE))) {
+                notifyLocationBlocked(owner);
+            }
+            return false;
+        }
         ScanGroup scan;
         synchronized (mScanLock) {
             if (mScan != null) {

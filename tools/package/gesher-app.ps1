@@ -110,17 +110,22 @@ $root = Set-GesherProfileEnvironment $here
 # The optional addon installer records an explicit per-profile choice. An explicit
 # environment value (including 0) takes precedence for a single invocation.
 $enableMicrogForProfile = -not $env:GESHER_MICROG_SPOOF -and (Test-Path (Join-Path $root 'microg.enabled'))
-$commands = 'install', 'uninstall', 'view', 'list', 'status', 'start', 'shutdown', 'launch', 'toast-activated', 'apk-icon', 'apk-info', 'proxy', 'windows', 'special-access', 'settings-closed', 'settings-shown', 'sync-shortcuts', 'cameras', 'spell-checker', 'mobile-data'
+$commands = 'install', 'uninstall', 'view', 'list', 'status', 'start', 'shutdown', 'launch', 'protected-launch', 'toast-activated', 'apk-icon', 'apk-info', 'proxy', 'windows', 'special-access', 'settings-closed', 'settings-shown', 'sync-shortcuts', 'cameras', 'spell-checker', 'mobile-data'
 if ($Arguments.Count -eq 0) {
   Write-Host ((Get-GesherText 'usage') + 'gesher-app APK [--window | --hidden-window | --headless [--keep-task]] [--activity CLASS] [--ez KEY true|false]... [--proxy host:port|direct|windows] [--detach | --wait | --single-process | --system-server]')
   Write-Host '       gesher-app launch PACKAGE|APK [options] | install APK [--desktop-shortcut] | uninstall PACKAGE | view PACKAGE URL | list | status | start | shutdown | proxy [[PACKAGE] host:port|direct|windows] | windows PACKAGE separate|shared'
   Write-Host '       gesher-app spell-checker list|use COMPONENT|automatic|enable|disable|language ID'
   Write-Host '       gesher-app cameras [rear CAMERA_ID | reset]'
+  Write-Host '       gesher-app protected-launch APK'
   Write-Host '       gesher-app mobile-data [on|off] | mobile-data roaming [on|off]'
   exit 2
 }
 $command = $Arguments[0]
 $rest = @($Arguments | Select-Object -Skip 1)
+if ($command -eq 'protected-launch' -and $rest.Count -ne 1) {
+  Write-Host ((Get-GesherText 'usage') + 'gesher-app protected-launch APK')
+  exit 2
+}
 
 if ($command -in 'control-panel', 'settings', 'dashboard', 'gui') {
   & (Join-Path $here 'gesher-control-panel.ps1') @rest
@@ -182,7 +187,7 @@ $apkFull = $null
 if ($commands -notcontains $command) {
   $apkFull = (Resolve-Path $command).Path
 } elseif ($rest.Count -gt 0 -and ($command -eq 'install' -or $command -eq 'apk-icon' -or
-    $command -eq 'apk-info' -or
+    $command -eq 'apk-info' -or $command -eq 'protected-launch' -or
     ($command -eq 'launch' -and (Test-Path -LiteralPath $rest[0] -PathType Leaf)))) {
   $apkFull = (Resolve-Path -LiteralPath $rest[0]).Path
   $rest = @($rest | Select-Object -Skip 1)

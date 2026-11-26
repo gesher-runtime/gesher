@@ -41,7 +41,7 @@ index 831997deefe..3508bcc49bf 100644
 +    }
 +  }
 diff --git a/compat/binder/binderd.cc b/compat/binder/binderd.cc
-index ee26bfc04f4..5d7188480c7 100644
+index 889533e89..9516fa91c 100644
 --- a/compat/binder/binderd.cc
 +++ b/compat/binder/binderd.cc
 @@ -40,0 +41 @@
@@ -128,12 +128,12 @@ index ee26bfc04f4..5d7188480c7 100644
 @@ -968 +1023 @@ void CloseStagingFds(Buffer* buffer) {
 -    CloseRemoteHandle(buffer->proc->pid, staging);
 +    CloseRemoteHandle(buffer->proc, staging);
-@@ -1365,0 +1421,4 @@ retry:
+@@ -1368,0 +1424,4 @@ retry:
 +      if (proc->protected_peer && (thread->is_dead || !ProcLive(proc))) {
 +        ret = -EBADF;
 +        break;
 +      }
-@@ -1375 +1434,6 @@ retry:
+@@ -1378 +1437,6 @@ retry:
 -      thread->cv.wait(lock);
 +      if (proc->protected_peer) {
 +        // Protected registration can be revoked without a Binder message.
@@ -141,63 +141,63 @@ index ee26bfc04f4..5d7188480c7 100644
 +      } else {
 +        thread->cv.wait(lock);
 +      }
-@@ -1557 +1621 @@ constexpr uint32_t kMaxMessage = 64u << 20;
+@@ -1560 +1624 @@ constexpr uint32_t kMaxMessage = 64u << 20;
 -bool ReadMessage(HANDLE pipe, std::vector<uint8_t>* msg) {
 +bool ReadMessage(HANDLE pipe, std::vector<uint8_t>* msg, uint32_t limit = kMaxMessage) {
-@@ -1559 +1623 @@ bool ReadMessage(HANDLE pipe, std::vector<uint8_t>* msg) {
+@@ -1562 +1626 @@ bool ReadMessage(HANDLE pipe, std::vector<uint8_t>* msg) {
 -  if (!ReadExact(pipe, &len, sizeof(len)) || len > kMaxMessage) return false;
 +  if (!ReadExact(pipe, &len, sizeof(len)) || len > limit) return false;
-@@ -1610 +1674 @@ bool ClientIsRestricted(HANDLE pipe) {
+@@ -1613 +1677 @@ bool ClientIsRestricted(HANDLE pipe) {
 -void ServeProc(HANDLE pipe, In in) {
 +void ServeProc(HANDLE pipe, In in, const ProtectedIdentity& protected_peer) {
-@@ -1613 +1677,5 @@ void ServeProc(HANDLE pipe, In in) {
+@@ -1616 +1680,5 @@ void ServeProc(HANDLE pipe, In in) {
 -  if (g_sandbox && ClientIsRestricted(pipe)) {
 +#ifdef GESHER_PROTECTED_BINDER
 +  if (protected_peer && (!protected_peer->live() || pid != protected_peer->pid() ||
 +      uid != protected_peer->uid() || in.p != in.end)) return;
 +#endif
 +  if (!protected_peer && g_sandbox && ClientIsRestricted(pipe)) {
-@@ -1636,0 +1705 @@ void ServeProc(HANDLE pipe, In in) {
+@@ -1639,0 +1708 @@ void ServeProc(HANDLE pipe, In in) {
 +    proc->protected_peer = protected_peer;
-@@ -1648 +1717 @@ void ServeProc(HANDLE pipe, In in) {
+@@ -1651 +1720 @@ void ServeProc(HANDLE pipe, In in) {
 -    while (ReadMessage(pipe, &msg)) {
 +    while (ReadMessage(pipe, &msg, protected_peer ? 0 : kMaxMessage)) {
-@@ -1897,0 +1967,4 @@ int DoIoctl(Proc* proc, Thread* thread, uint32_t request, In in, Out* out) {
+@@ -1900,0 +1970,4 @@ int DoIoctl(Proc* proc, Thread* thread, uint32_t request, In in, Out* out) {
 +#ifdef GESHER_PROTECTED_BINDER
 +      if (proc->protected_peer &&
 +          proc->protected_peer->role() != gesher::binder::PeerRole::kContextManager) return -EPERM;
 +#endif
-@@ -1933 +2006 @@ int DoIoctl(Proc* proc, Thread* thread, uint32_t request, In in, Out* out) {
+@@ -1936 +2009 @@ int DoIoctl(Proc* proc, Thread* thread, uint32_t request, In in, Out* out) {
 -void ServeThread(HANDLE pipe, In in) {
 +void ServeThread(HANDLE pipe, In in, const ProtectedIdentity& protected_peer = {}) {
-@@ -1937 +2010 @@ void ServeThread(HANDLE pipe, In in) {
+@@ -1940 +2013 @@ void ServeThread(HANDLE pipe, In in) {
 -      !in.Get(&tid)) {
 +      !in.Get(&tid) || (protected_peer && in.p != in.end)) {
-@@ -1947 +2020,2 @@ void ServeThread(HANDLE pipe, In in) {
+@@ -1950 +2023,2 @@ void ServeThread(HANDLE pipe, In in) {
 -    if (it != g_procs.end() && it->second->key == key && !it->second->is_dead) {
 +    if (it != g_procs.end() && it->second->key == key &&
 +        it->second->protected_peer == protected_peer && ProcLive(it->second.get())) {
-@@ -1974 +2048 @@ void ServeThread(HANDLE pipe, In in) {
+@@ -1977 +2051 @@ void ServeThread(HANDLE pipe, In in) {
 -    if (thread->is_dead || proc->is_dead) {
 +    if (thread->is_dead || !ProcLive(proc)) {
-@@ -2029 +2103 @@ void ServeThread(HANDLE pipe, In in) {
+@@ -2033 +2107 @@ void ServeThread(HANDLE pipe, In in) {
 -void Serve(HANDLE pipe) {
 +void ServeConnection(HANDLE pipe, ProtectedIdentity protected_peer = {}) {
-@@ -2031 +2105,4 @@ void Serve(HANDLE pipe) {
+@@ -2035 +2109,4 @@ void Serve(HANDLE pipe) {
 -  if (ReadMessage(pipe, &msg)) {
 +  // The largest protected hello is op, magic, version, proc id, key and tid.
 +  constexpr uint32_t kProtectedHelloLimit = 7 * sizeof(uint32_t);
 +  if (ReadMessage(pipe, &msg, protected_peer ? kProtectedHelloLimit : kMaxMessage) &&
 +      !msg.empty()) {
-@@ -2036 +2113 @@ void Serve(HANDLE pipe) {
+@@ -2040 +2117 @@ void Serve(HANDLE pipe) {
 -        ServeProc(pipe, in);
 +        ServeProc(pipe, in, protected_peer);
-@@ -2038,2 +2115,2 @@ void Serve(HANDLE pipe) {
+@@ -2042,2 +2119,2 @@ void Serve(HANDLE pipe) {
 -        ServeThread(pipe, in);
 -      } else if (op == wire::kHelloRights) {
 +        ServeThread(pipe, in, protected_peer);
 +      } else if (op == wire::kHelloRights && !protected_peer) {
-@@ -2040,0 +2118,13 @@ void Serve(HANDLE pipe) {
+@@ -2044,0 +2122,13 @@ void Serve(HANDLE pipe) {
 +#ifdef GESHER_PROTECTED_BINDER
 +      } else if (op == wire::kPublishApplicationSharedMemory && protected_peer) {
 +        uint32_t version = 0;
@@ -211,7 +211,7 @@ index ee26bfc04f4..5d7188480c7 100644
 +        reply.Put<uint32_t>(status);
 +        if (WriteMessage(pipe, reply)) FlushFileBuffers(pipe);
 +#endif
-@@ -2047,0 +2138,60 @@ void Serve(HANDLE pipe) {
+@@ -2051,0 +2142,60 @@ void Serve(HANDLE pipe) {
 +void Serve(HANDLE pipe) { ServeConnection(pipe); }
 +
 +#ifdef GESHER_PROTECTED_BINDER
@@ -272,7 +272,7 @@ index ee26bfc04f4..5d7188480c7 100644
 +}
 +#endif
 +
-@@ -2052,0 +2203,7 @@ int main(int argc, char** argv) {
+@@ -2056,0 +2207,7 @@ int main(int argc, char** argv) {
 +  if (argc > 1 && std::string_view(argv[1]) == "--gesher-protected-binder") {
 +#ifdef GESHER_PROTECTED_BINDER
 +    return RunProtected(argc, argv);

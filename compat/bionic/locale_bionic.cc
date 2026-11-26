@@ -454,6 +454,13 @@ size_t BIONIC_SYSV Wcsnrtombs(char* dst, const wchar32** src, size_t nwc, size_t
       }
       return count;
     }
+    // The loop already guarantees one output byte. Keep ASCII on the
+    // direct path instead of copying it through the multibyte buffer.
+    if (*w < 0x80) {
+      if (dst != nullptr) dst[count] = static_cast<char>(*w);
+      ++count;
+      continue;
+    }
     size_t r = Encode(*w, buf);
     if (r == kInvalid) {
       if (dst != nullptr) *src = w;

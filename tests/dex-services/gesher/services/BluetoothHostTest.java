@@ -484,8 +484,12 @@ public final class BluetoothHostTest {
                 "hands-free: connected");
         check(adapter.getProfileConnectionState(BluetoothProfile.A2DP) == BluetoothProfile.STATE_CONNECTED,
                 "adapter's A2DP state");
+        check(!adapter.getProfileProxy(app, listener, BluetoothProfile.LE_AUDIO),
+                "unavailable LE Audio profile");
+        check(proxies.poll(100, TimeUnit.MILLISECONDS) == null,
+                "no service-connected callback for unavailable LE Audio");
         check(!adapter.getProfileProxy(app, listener, BluetoothProfile.HID_DEVICE), "no HID device profile");
-        step("profiles: A2DP and headset proxies list the connected headset");
+        step("profiles: A2DP and headset proxies, LE Audio unavailable");
     }
 
     private static void scan(BluetoothAdapter adapter) throws Exception {

@@ -231,7 +231,9 @@ jobs:
       - name: Java DNS admission and completion ownership on Windows
         if: ${{ !cancelled() }}
         shell: bash
-        run: python tools/test_dns_resolver_admission.py --java-home "$JAVA_HOME"
+        run: |
+          python tools/test_dns_resolver_admission.py --java-home "$JAVA_HOME"
+          python tools/test_dns_deadline_retirement_controls.py --java-home "$JAVA_HOME"
       - name: Durable settings journal, replacement and crash recovery contracts
         if: ${{ !cancelled() }}
         shell: bash
@@ -677,6 +679,8 @@ jobs:
           python3 tools/test_egl_readback_layout.py --sanitize
           python3 tools/test_bionic_allocations.py --sanitize
           python3 tools/test_memmem_performance.py --sanitize
+          python3 tools/test_memrchr_contracts.py --sanitize --negative-controls
+          python3 tools/test_memrchr_report.py
           python3 tools/test_bionic_system_contracts.py --sanitize
           python3 tools/test_environment_contracts.py --sanitize
           python3 tools/test_environment_lookup_contracts.py
@@ -685,6 +689,10 @@ jobs:
           python3 tools/test_socket_control_contract.py --sanitize
           python3 tools/test_socket_timeout_contracts.py --sanitize --linux-reference
           python3 tools/test_bionic_directory_contracts.py --sanitize
+          python3 tools/test_search_delete_contracts.py --sanitize --negative-controls
+          python3 tools/test_search_delete_report.py
+          python3 tools/test_scandir_sort.py --sanitize --negative-controls --output-dir scandir-sort-contracts
+          python3 tools/test_scandir_report.py
           python3 tools/test_bionic_semaphore_contracts.py --sanitize
           python3 tools/test_file_allocation_contracts.py --sanitize
           python3 tools/test_positioned_io_contracts.py --sanitize
@@ -702,13 +710,14 @@ jobs:
           python3 tools/test_deferred_rewrite_failures.py --sanitize
           python3 tools/test_msync_contracts.py --sanitize
           python3 tools/test_retriever_frame_contracts.py --sanitize
+          python3 tools/test_i420_crop.py --sanitize --negative-controls
           python3 tools/test_utc_time_contracts.py --sanitize
           python3 tools/test_sleep_contracts.py --sanitize
           python3 tools/test_storage_tools.py
 
       - name: Native TLS, wait, DNS, clock, affinity, finalizer and media lifecycle contracts
         run: |
-          python3 tools/test_bionic_key_contracts.py --sanitize
+          python3 tools/test_bionic_key_contracts.py --sanitize --negative-controls
           python3 tools/test_pthread_clock_contracts.py --sanitize
           python3 tools/test_pthread_clock_contracts.py --linux-reference
           python3 tools/test_pthread_attribute_contracts.py --sanitize
@@ -729,6 +738,7 @@ jobs:
           python3 tools/test_elf_tls_rollback.py --sanitize
           python3 tools/test_arm64_pending_rollback.py --sanitize
           python3 tools/test_arm64_native_rollback.py --sanitize
+          python3 tools/test_arm64_tls_lifecycle.py --host-boundary --sanitize --negative-controls
           python3 tools/test_media_api_contracts.py --sanitize
           python3 tools/test_aaudio_builder_contracts.py
           python3 tools/test_aaudio_lifecycle_contracts.py --sanitize
@@ -768,7 +778,13 @@ jobs:
       - name: Descriptor-backed stdio and stream lifetime contracts
         run: |
           python3 tools/test_stdio_contracts.py --sanitize
+          python3 tools/test_stdio_scanning.py --sanitize --negative-controls
           python3 tools/test_socket_registry_lifetime.py --sanitize
+
+      - name: Guest snprintf bounded accumulation contracts
+        run: |
+          python3 tools/test_snprintf_bounds.py --sanitize --negative-controls
+          python3 tools/test_snprintf_bounds.py --observe-allocations --allocation-contracts
 
       - name: MediaPlayer PCM priming and playback lifecycle contracts
         run: python3 tools/test_media_player_priming.py --sanitize
@@ -782,6 +798,7 @@ jobs:
           python3 tools/test_fnmatch_performance.py --sanitize
           python3 tools/test_virtual_path_classification.py --sanitize
           python3 tools/test_binder_reply_allocations.py --sanitize
+          python3 tools/test_binder_output_ownership.py --sanitize --negative-controls
           python3 tools/test_binder_receive_views.py --sanitize
           python3 tools/test_camera_capture_allocations.py --sanitize
           python3 tools/test_layered_bitmap_cache.py --sanitize
@@ -794,7 +811,9 @@ jobs:
           python3 tools/test_art_jni_dispatch.py --sanitize
           python3 tools/test_audio_mixer_allocations.py --sanitize
           python3 tools/test_audio_unity_rate.py --sanitize
+          python3 tools/test_audio_resampler_weights.py --sanitize --negative-controls
           python3 tools/test_audio_capture_allocations.py --sanitize
+          python3 tools/test_audio_capture_unity.py --sanitize --negative-controls
           python3 tools/test_capture_stream_selection.py --sanitize
           python3 tools/test_audio_file_source.py --sanitize
           python3 tools/test_audio_rate_history.py --sanitize
@@ -809,6 +828,7 @@ jobs:
             tests/native/event_loop_reference.c -o "$RUNNER_TEMP/event-loop-reference"
           "$RUNNER_TEMP/event-loop-reference"
           python3 tools/test_audio_state_contracts.py --sanitize
+          python3 tools/test_audio_blocked_write.py --sanitize --negative-controls
           python3 tools/test_surface_geometry_contracts.py --sanitize
           python3 tools/test_video_scaling_contracts.py --sanitize
           python3 tools/test_native_window_dispatch.py --sanitize
@@ -840,6 +860,12 @@ jobs:
           "$RUNNER_TEMP/gesher-noreplace-holes"
           python3 tools/test_madvise_reference.py
 
+      - name: Actual wide conversion, pinned Android and guard-page contracts
+        run: python3 tools/test_wide_ascii_contracts.py --sanitize
+
+      - name: Validate wide conversion measurement evidence
+        run: python3 tools/test_wide_ascii_performance_evidence.py
+
       - name: Filesystem metadata and media source ownership contracts
         run: |
           python3 tools/test_file_timestamp_contracts.py --sanitize
@@ -855,6 +881,9 @@ jobs:
           python3 tools/test_media_surface_contracts.py --sanitize
           python3 tools/test_codec_output_storage.py --sanitize
           python3 tools/test_codec_reader_delivery.py --sanitize
+          python3 tools/test_nv12_rgba.py --sanitize --negative-controls
+          python3 tools/test_reader_plane_scaling.py --sanitize --negative-controls
+          python3 tools/test_image_reader_rgba.py --sanitize --negative-controls
           cc -std=gnu11 -O1 -Wall -Wextra -Werror -DGESHER_FILESYSTEM_REFERENCE_MAIN \
             tests/native/filesystem_contract_guest.c -o "$RUNNER_TEMP/filesystem-metadata-reference"
           "$RUNNER_TEMP/filesystem-metadata-reference"
@@ -885,7 +914,9 @@ jobs:
         run: python3 tools/test_download_manager_contracts.py --java-home "$JAVA_HOME"
 
       - name: Java DNS admission, cancellation, callback ownership and actual deadlines
-        run: python3 tools/test_dns_resolver_admission.py --java-home "$JAVA_HOME"
+        run: |
+          python3 tools/test_dns_resolver_admission.py --java-home "$JAVA_HOME"
+          python3 tools/test_dns_deadline_retirement_controls.py --java-home "$JAVA_HOME"
 
       - name: MediaStore provider ownership, pending items, queries and scanning over real SQLite
         run: python3 tools/test_media_provider_contracts.py --java-home "$JAVA_HOME"
@@ -962,6 +993,7 @@ jobs:
           python3 tools/test_capture_permission_flow.py --java-home "$JAVA_HOME"
           python3 tools/test_camera_callback_admission.py --java-home "$JAVA_HOME"
           python3 tools/test_camera2_capture_dispatch.py --java-home "$JAVA_HOME"
+          python3 tools/test_recorder_camera_ready.py --java-home "$JAVA_HOME" --negative-controls
           python3 tools/test_dexopt_work.py --java-home "$JAVA_HOME"
 
       - name: Validate user interface translations
@@ -1006,6 +1038,36 @@ jobs:
           python3 tools/test_media_recorder_rollover.py --sanitize
           python3 tools/test_mp4_rollover_work.py
           python3 tools/test_media_mux_limits.py --libwebm third_party/aosp/external/libwebm
+          python3 tools/test_annexb_scan.py --sanitize --negative-controls
+          python3 tools/test_annexb_report.py
+
+      - name: Real software AVC output ownership and independent decoded pixels
+        run: >-
+          python3 tools/test_soft_avc_output.py
+          --libavc-root third_party/aosp/external/libavc --sanitize
+          --output-dir out/media-avc-output-fixtures
+      - name: Real software AVC ownership and reusable storage
+        run: python3 tools/test_soft_avc_reuse.py --libavc-root third_party/aosp/external/libavc --sanitize
+
+      - name: Real software audio decoder scratch and output ownership
+        run: |
+          python3 tools/test_audio_decoder_scratch.py \
+            --frameworks-av-root third_party/aosp/frameworks/av-media \
+            --tremolo-root third_party/aosp/external/tremolo \
+            --opus-root third_party/aosp/external/libopus \
+            --sanitize --output-dir out/media-audio-scratch-fixtures
+
+      - name: Real software HEVC output ownership and independent decoded pixels
+        run: >-
+          python3 tools/test_soft_hevc_output.py
+          --libhevc-root third_party/aosp/external/libhevc
+          --vpx-root third_party/aosp/external/libvpx
+          --dav1d-root third_party/aosp/external/libdav1d --sanitize --negative-controls
+          --output-dir out/media-hevc-output-fixtures
+
+      - name: Actual RGBA input conversion and real AVC output
+        run: |
+          python3 tools/test_rgba_i420.py --libavc-root third_party/aosp/external/libavc --sanitize --negative-controls
 
       - name: libcore System.nanoTime shares Android awake-time domain
         run: python3 tools/test_system_nanotime.py --source third_party/aosp/libcore/ojluni/src/main/native/System.c
@@ -1018,6 +1080,12 @@ jobs:
       - name: Build test apps
         run: tests/build-test-apps.sh out/test-apps
 
+      - name: Incremental Brotli native and real HTTP provider contracts
+        run: >-
+          python3 tools/test_http_brotli.py --java-home "$JAVA_HOME"
+          --brotli-source third_party/aosp/external/brotli
+          --okhttp-source third_party/aosp/external/okhttp
+
       - name: Build boot class path (core-oj, core-libart)
         run: tools/build-boot-jars.sh out/boot-jars
 
@@ -1027,7 +1095,13 @@ jobs:
       - name: Collect framework assets
         run: |
           mkdir -p framework-assets
+          mkdir -p framework-assets/media-audio-scratch-fixtures
+          cp out/media-audio-scratch-fixtures/*.audt out/media-audio-scratch-fixtures/fixtures.json framework-assets/media-audio-scratch-fixtures/
           cp out/test-apps/* out/boot-jars/*.jar framework-assets/
+          mkdir -p framework-assets/media-avc-output-fixtures
+          cp out/media-avc-output-fixtures/*.avct out/media-avc-output-fixtures/fixtures.json framework-assets/media-avc-output-fixtures/
+          mkdir -p framework-assets/media-hevc-output-fixtures
+          cp out/media-hevc-output-fixtures/*.hevct out/media-hevc-output-fixtures/fixtures.json framework-assets/media-hevc-output-fixtures/
           # ICU's data, which the runtime maps from $ANDROID_I18N_ROOT/etc/icu.
           cp third_party/aosp/external/icu/icu4c/source/stubdata/icudt*l.dat framework-assets/
           # The system fonts and fonts.xml, for $ANDROID_ROOT (docs/fonts.md).
@@ -1112,6 +1186,9 @@ jobs:
           python3 tools/test_binder_reply_allocations.py --compile-only \
             --cxx "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang++" \
             --output out/binder_reply_allocations_test.exe
+          python3 tools/test_binder_output_ownership.py --compile-only --aosp-dir third_party/aosp \
+            --cxx "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang++" \
+            --output-dir out/binder-output --output out/binder_output_ownership_test.exe
           python3 tools/test_binder_lifetime.py --compile-only --aosp-dir third_party/aosp \
             --cxx "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang++" \
             --output out/binder_lifetime_test.exe
@@ -1127,6 +1204,14 @@ jobs:
           python3 tools/test_arm64_tls_lifecycle.py --compile-only \
             --cxx "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang++" \
             --output out/arm64_tls_lifecycle_test.exe
+          # Immutable pre-change owner and matching reviewed measurement fixture.
+          # The current fixture additionally checks later signal/fork lifecycle work.
+          git fetch --no-tags --depth=1 https://github.com/gesher-runtime/gesher.git d38b5549dc3963f8d491e9205f9b2743bb6d3745 c65f4b119f79c586aaec043f166efa3afb567e06
+          python3 tools/test_arm64_tls_lifecycle.py --compile-only \
+            --source-ref d38b5549dc3963f8d491e9205f9b2743bb6d3745 \
+            --fixture-ref c65f4b119f79c586aaec043f166efa3afb567e06 \
+            --cxx "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang++" \
+            --output out/arm64_tls_lifecycle_baseline.exe
 
       - name: Build
         run: |
@@ -2715,8 +2800,21 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $setup = (Get-ChildItem installer\gesher-setup-*.exe).FullName
           $env:GESHER_TRACE_MISSING_BOOT_CLASSES = '1'
+          $env:GESHER_TRACE_WEBVIEW_NAVIGATION = '1'
           pwsh -NoProfile -File tests/e2e/run-e2e.ps1 -Setup $setup -Out e2e-results -InvocationId $invocation -RequireApkIdentity -BuildTools $env:GESHER_TEST_BUILD_TOOLS
           exit $LASTEXITCODE
+
+      - name: Show captured WebView navigation event diagnostics
+        if: always()
+        shell: pwsh
+        run: |
+          Get-ChildItem e2e-results -Filter '*.app.log' -ErrorAction SilentlyContinue | ForEach-Object {
+            $trace = @(Select-String -Path $_.FullName -SimpleMatch 'gesher-webview: navigation-trace ')
+            if ($trace.Count) {
+              Write-Host "Navigation trace from $($_.Name)"
+              $trace | ForEach-Object { Write-Host $_.Line }
+            }
+          }
 
       - name: Validate and publish real-app coverage
         if: always()
@@ -2824,6 +2922,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & ./dist/binder_reply_allocations_test.exe gate
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $binderOutput = & ./dist/binder_output_ownership_test.exe gate 2>&1 | Out-String
+          $binderOutput | Write-Host
+          if ($LASTEXITCODE -ne 0 -or $binderOutput -notmatch '(?m)^BINDER_OUTPUT_PASS checks=[1-9][0-9]*\r?$') {
+            throw 'Binder direct output ownership contracts failed'
+          }
           & ./dist/layered_bitmap_cache_test.exe gate
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & ./dist/structured_logging_test.exe
@@ -2867,11 +2970,13 @@ jobs:
           python tools/surface/assemble-artifacts.py --source ci-suppliers/core/artifacts/arm64 --destination dist --ledger ci-owners.json --owner arm64
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: ARM64 parked TLS, reuse and actual translator callbacks
+      - name: ARM64 active and parked TLS, baseline commitment and actual translator callbacks
         if: matrix.shard == 'native'
         timeout-minutes: 3
         shell: pwsh
         run: |
+          & ./dist/arm64_tls_lifecycle_baseline.exe measure
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & ./dist/arm64_tls_lifecycle_test.exe gate ./dist/gesher_arm64.dll
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -3022,6 +3127,8 @@ jobs:
           path: |
             results.txt
             ci-owners.json
+            ${{ runner.temp }}/gesher-surface-evidence/*.json
+            ${{ runner.temp }}/gesher-surface-evidence/*.log
             dist/realtime-signals-evidence/**/*.json
             ${{ runner.temp }}/gesher-root/devsvc-toast-*-projection.jsonl
             ${{ runner.temp }}/gesher-root/logs/system_server.log

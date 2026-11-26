@@ -78,7 +78,10 @@ public final class DnsResolverHost {
     }
 
     static void until(BooleanSupplier condition, String message) throws Exception {
-        long end = System.nanoTime() + TimeUnit.SECONDS.toNanos(8);
+        until(condition, message, System.nanoTime() + TimeUnit.SECONDS.toNanos(8));
+    }
+
+    static void until(BooleanSupplier condition, String message, long end) throws Exception {
         while (!condition.getAsBoolean() && System.nanoTime() < end) Thread.sleep(2);
         Throwable failure = ASYNC_FAILURE.get();
         if (failure != null) throw new AssertionError("asynchronous fixture failure", failure);
@@ -555,11 +558,12 @@ public final class DnsResolverHost {
             for (int i = 0; i < 33; i++) query("deadline.test", DIRECT, null, callback);
             until(() -> WindowsNetworks.calls.get() == 32, "deadline case saturates native lane");
             check(callbacks.await(40, TimeUnit.SECONDS), "actual 30-second queued and active deadlines fire");
+            check(errors.get() == 33 && answers.get() == 0, "one timeout per admitted query");
+            // The callback's latch is signalled before its finally and the inline
+            // Executor return. Those real owners must retire before observing 32.
+            awaitQueuedTimeoutRetirement(started + TimeUnit.SECONDS.toNanos(40));
             long elapsed = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
             check(elapsed >= 29_000 && elapsed < 40_000, "production monotonic deadline duration");
-            check(errors.get() == 33 && answers.get() == 0, "one timeout per admitted query");
-            check(snapshot().requests == 32 && snapshot().lookupQueue == 0,
-                    "queued timeout unlinks; timed-out uncancelable lookups keep their slots");
             check(WindowsNetworks.active.get() == 32 && WindowsNetworks.calls.get() == 32,
                     "timeouts do not start extra native workers or cancel them by assertion");
             System.out.println("Actual query deadline: " + elapsed + " ms; 32 native owners retained");
@@ -570,6 +574,72 @@ public final class DnsResolverHost {
         Result<List<InetAddress>> recovered = new Result<>();
         query("capacity-returned.test", DIRECT, null, recovered);
         recovered.await(); drain();
+    }
+
+    static void awaitQueuedTimeoutRetirement(long end) throws Exception {
+        until(() -> {
+            Snapshot state = snapshot();
+            return state.requests == 32 && state.lookupQueue == 0;
+        }, "queued timeout unlinks; timed-out uncancelable lookups keep their slots", end);
+    }
+
+    static void deadlineRetirement() throws Exception {
+        CountDownLatch nativeReturn = new CountDownLatch(1), executorReturn = new CountDownLatch(1);
+        CountDownLatch queuedCallbackReturned = new CountDownLatch(1), observationDone = new CountDownLatch(1);
+        AtomicReference<Throwable> observationFailure = new AtomicReference<>();
+        Counts<List<InetAddress>> callbacks = new Counts<>();
+        backend((network, name) -> { awaitUninterruptibly(nativeReturn); return SMALL; });
+        Thread observer = new Thread(() -> {
+            try { awaitQueuedTimeoutRetirement(System.nanoTime() + TimeUnit.SECONDS.toNanos(8)); }
+            catch (Throwable failure) { observationFailure.set(failure); }
+            finally { observationDone.countDown(); }
+        }, "DnsDeadline-retirement-observer");
+        try {
+            for (int i = 0; i < 32; ++i) query("retirement-active.test", DIRECT, null, callbacks);
+            until(() -> WindowsNetworks.active.get() == 32, "retirement control owns 32 native calls");
+            query("retirement-queued.test", task -> {
+                task.run();
+                queuedCallbackReturned.countDown();
+                awaitUninterruptibly(executorReturn);
+            }, null, callbacks);
+            List<?> requests;
+            synchronized (LOCK) { requests = new ArrayList<>((Set<?>) field("sRequests")); }
+            check(requests.size() == 33, "retirement control has one actual queued request");
+            // Invoke the real timer transition under a controlled schedule. The
+            // separate deadline case still waits for the unmodified 30-second timer.
+            for (Object request : requests) {
+                var timeout = request.getClass().getDeclaredMethod("timeout");
+                timeout.setAccessible(true);
+                timeout.invoke(request);
+            }
+            check(queuedCallbackReturned.await(8, TimeUnit.SECONDS), "queued callback actually returned");
+            until(() -> callbacks.errors.get() == 33, "all controlled real timeout callbacks delivered");
+            Snapshot held = snapshot();
+            check(held.lookupQueue == 0 && held.completionQueue == 0,
+                    "controlled queued timeout actually unlinks its lookup and completion tasks");
+            check(held.requests == 33,
+                    "returned callback still charges its blocked Executor and 32 native owners");
+            check(WindowsNetworks.active.get() == 32 && WindowsNetworks.calls.get() == 32,
+                    "controlled timeouts cannot retire or replace actual native calls");
+            observer.start();
+            until(() -> observationDone.getCount() == 0 || observer.getState() == Thread.State.TIMED_WAITING,
+                    "retirement observation reaches its bounded wait");
+            if (observationFailure.get() != null)
+                throw new AssertionError("callback notification is not Executor retirement", observationFailure.get());
+            check(observationDone.getCount() == 1, "retirement observer cannot pass while Executor is held");
+            executorReturn.countDown();
+            check(observationDone.await(8, TimeUnit.SECONDS), "retirement observer resumes after real Executor return");
+            check(observationFailure.get() == null, "real Executor return satisfies the original ownership predicate");
+            check(snapshot().requests == 32 && WindowsNetworks.active.get() == 32,
+                    "only completed queued ownership retires before native calls return");
+        } finally {
+            executorReturn.countDown(); nativeReturn.countDown();
+            observer.join(9000);
+        }
+        check(!observer.isAlive(), "retirement control observer actually terminates");
+        drain();
+        check(callbacks.errors.get() == 33 && callbacks.answers.get() == 0,
+                "late native completion cannot duplicate the controlled terminal callbacks");
     }
 
     static void idleRetirement() throws Exception {
@@ -712,6 +782,7 @@ public final class DnsResolverHost {
         if (mode.equals("burst")) burstControl();
         else if (mode.equals("copy")) copyControl();
         else if (mode.equals("deadline")) deadlines();
+        else if (mode.equals("deadline-retirement")) deadlineRetirement();
         else if (mode.equals("delayed-deadline")) delayedDeadline();
         else if (mode.equals("recovery")) startupFailures();
         else {

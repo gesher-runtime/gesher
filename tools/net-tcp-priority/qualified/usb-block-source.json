@@ -1,7 +1,7 @@
 {
   "after_sha256": {
     "compat/art/dalvikvm_main.cc": "acc7cda395361af1029e83077ce552448263c107c5b82644d8c76ce8f7d5133d",
-    "compat/binder/binderd.cc": "bf9309e8a8784224e78fffe766139aa1bdec7f6d97c48939e2c0fc010240036a",
+    "compat/binder/binderd.cc": "00424115aed56de032939839ce574fa08b3f58df43b3dda8da214da1540d65ff",
     "compat/bionic/process_bionic.cc": "554e261770ecb93299390bdf7feb90908a016e4d23a37f76ad789231a663a45e",
     "compat/elf/exec/exec_spawn.cc": "926231d7ce0055d3ed51221dcd1faa3225b5760d762e8df9df0f02bc0bfab7f2",
     "compat/elf/exec/exec_spawn.h": "3282aa6a8b10cb19d9bb16ca0a174fe3f16881161483228aed8a3859fdf559c6",
@@ -47,7 +47,7 @@
     "compat/binder/protected_shared_memory.h": "c499079d00374ce5aaea8b153cf323ea130874772443e3910bc58df10352125b",
     "compat/bionic/extra_sys_bionic.cc": "5b302ffa6123df4ccc1dd961d928ce83a23c21ef3f7273e234ef10e598c7eee3",
     "compat/bionic/program_break.h": "9c9de9842dac59c13e45cdd7b465744c01d79d866b8312557abb69d25ad989d4",
-    "compat/credentials/account_crypto.c": "814b04686cc9038c44a90a4f33a0820d5ab51b9b6cba1208327b990e2cb81b85",
+    "compat/credentials/account_crypto.c": "5e71ce02faabd27bee5378d6be3d73c4eac08a2128deda476ea4e770c9f70dc4",
     "compat/devsvc/usb_natives.cc": "b097de2069270f5107f50acec4956cd9696ced7ee17ba008a917c791b4d836f7",
     "compat/devsvc/usb_storage_observation.cc": "58b7a482d77f06496faf6ddac563e807780df1aa44c32bb067b8fa94d862bb89",
     "compat/devsvc/usb_storage_observation.h": "136b7070b5a73a9c1f355ff3e38fda5744ae9bf57f0be9b4f8b2edb1562952a7",
@@ -110,9 +110,10 @@
     "compat/usb_storage/protected_usb_observation.h": "068ae1a67e1343352a1f61d4507269aa1983af72e59172329477bb9751445adf",
     "compat/usb_storage/usb_authority_service.cc": "ac3e0e536f9fdc6ee5a6b9bccd7631f0d9cd894a66117c1ec65a440a93a155fc"
   },
-  "patch_sha256": "6edb2186ac925c13058c3c6f68e8b3e002b3275a38080661818b67012e5b82b6",
+  "patch_sha256": "2643d33a557476e7134ae4c5a0836b79dd27330f169191bb0565e26f64a436cb",
   "path_bases": {
     "compat/art/dalvikvm_main.cc": "43edc832893d4cd21843c7c6d56424556b625016",
+    "compat/binder/binderd.cc": "a025ba60e321a0238c0da90808e2ec9cc69f64ca",
     "compat/bionic/process_bionic.cc": "a62bd9a0a9bd5bcd5f428929dc52842fb938ac5a",
     "compat/elf/exec/exec_spawn.cc": "43edc832893d4cd21843c7c6d56424556b625016",
     "compat/elf/exec/exec_spawn.h": "a62bd9a0a9bd5bcd5f428929dc52842fb938ac5a",
