@@ -378,6 +378,57 @@ public final class ServiceRebindContractTest {
         h.unbind(after); h.stop();
     }
 
+    private static void cancelDuringPublication() throws Exception {
+        for (boolean publishNull : new boolean[]{false, true}) {
+            Harness h = new Harness();
+            h.start();
+            Connection first = new Connection(Runnable::run), canceled = new Connection(Runnable::run);
+            Connection replacement = new Connection(Runnable::run);
+            Operation replace = () -> {
+                h.unbind(canceled);
+                h.bind(replacement, "publish-cancel", Context.BIND_AUTO_CREATE);
+            };
+            first.onConnected = replace;
+            first.onNull = replace;
+            h.bind(first, "publish-cancel", Context.BIND_AUTO_CREATE);
+            h.bind(canceled, "publish-cancel", Context.BIND_AUTO_CREATE);
+            IBinder value = publishNull ? null : new Binder();
+            h.publish(0, value);
+            check(canceled.connected == 0 && canceled.nulls == 0,
+                    "Published a cached result to a client removed during delivery");
+            if (publishNull) replacement.nullOnce();
+            else check(replacement.connected == 1 && replacement.value == value,
+                    "Replacement did not receive the live Binder");
+            check(h.thread.binds.size() == 1, "Reentrant bind should use the live publication");
+            h.unbind(first);
+            h.unbind(replacement);
+            h.stop();
+        }
+    }
+
+    private static void replaceProcessDuringPublication() throws Exception {
+        Harness h = new Harness();
+        AppThread client = new AppThread();
+        int clientPid = PID + 100;
+        h.clientProcess(clientPid, client);
+        Connection first = new Connection(Runnable::run), second = new Connection(Runnable::run);
+        Connection trigger = new Connection(Runnable::run);
+        IBinder old = new Binder(), replacement = new Binder();
+        first.onConnected = () -> {
+            first.onConnected = null;
+            h.restartProcess();
+            h.bind(trigger, "publish-generation", Context.BIND_AUTO_CREATE);
+            h.publish(0, replacement);
+        };
+        h.bindFrom(clientPid, client, first, "publish-generation");
+        h.bindFrom(clientPid, client, second, "publish-generation");
+        h.publish(0, old);
+        check(second.connected == 1 && second.value == replacement && second.nulls == 0,
+                "Retired process publication overwrote the replacement Binder");
+        check(trigger.connected == 1 && trigger.value == replacement,
+                "Replacement process did not publish to its new binding");
+    }
+
     private static void orderedCalls() throws Exception {
         Harness h = new Harness(); h.start();
         Connection client = new Connection(Runnable::run);
@@ -666,6 +717,8 @@ public final class ServiceRebindContractTest {
             independentIntents(true);
         }
         if (scenario.equals("all") || scenario.equals("reentrant")) reentrant();
+        if (scenario.equals("all") || scenario.equals("publication-cancel")) cancelDuringPublication();
+        if (scenario.equals("all") || scenario.equals("publication-generation")) replaceProcessDuringPublication();
         if (scenario.equals("all") || scenario.equals("ordered")) orderedCalls();
         if (scenario.equals("all") || scenario.equals("ordered-destroyed")) orderedDestruction();
         if (scenario.equals("all") || scenario.equals("replacement")) replacingOwner();

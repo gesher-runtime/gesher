@@ -453,6 +453,7 @@ final class ActiveServices {
         IntentBindRecord b;
         IBinder published = null;
         boolean received;
+        long generation;
         ConnectionRecord connectionRecord;
         synchronized (this) {
             if (!sender.acceptance.getAsBoolean() || target == null
@@ -469,6 +470,7 @@ final class ActiveServices {
             b.connections.add(c);
             mConnections.computeIfAbsent(connection.asBinder(), k -> new ArrayList<>()).add(c);
             received = b.received;
+            generation = r.bindingGeneration;
             if (received) published = b.binder;
             // A new client: the idle reaper must not take this as an unused process.
             if (r.app != null) r.app.markActive(SystemClock.uptimeMillis());
@@ -482,7 +484,7 @@ final class ActiveServices {
             // onBind may have completed with null. That is a published null binding,
             // not a pending bind: every later client must receive onNullBinding too.
             if (received) {
-                connected(connectionRecord, published);
+                deliverPublishedBinding(connectionRecord, published, generation);
                 // The Binder (including a published null) survives ordinary unbinding.
                 // A callback may have unbound again before this point.
                 synchronized (this) { requestBindingLocked(r, b, true); }
@@ -496,6 +498,7 @@ final class ActiveServices {
 
     void publishService(IBinder token, IBinder bindToken, IBinder service) {
         ServiceRecord r;
+        long generation;
         List<ConnectionRecord> clients = new ArrayList<>();
         synchronized (this) {
             r = byToken(token);
@@ -507,12 +510,25 @@ final class ActiveServices {
             if (b.service != r || b.received) return;
             b.binder = service;
             b.received = true;
-            for (ConnectionRecord c : b.connections) clients.add(c);
+            generation = r.bindingGeneration;
+            clients.addAll(b.connections);
         }
         SystemServer.log("publishService " + r + ": "
                 + (service != null ? service.getClass().getSimpleName() : "null") + " to "
                 + clients.size() + " connection(s)");
-        for (ConnectionRecord client : clients) connected(client, service);
+        for (ConnectionRecord client : clients) deliverPublishedBinding(client, service, generation);
+    }
+
+    private void deliverPublishedBinding(ConnectionRecord connection, IBinder binder, long generation) {
+        IntentBindRecord binding = connection.binding;
+        ServiceRecord service = binding.service;
+        synchronized (this) {
+            // A prior callback can unbind another client or replace the service process.
+            // Revalidate each ordinary publication, including a published null.
+            if (service.bindingGeneration != generation || mServices.get(service.name) != service
+                    || !serviceCurrent(service) || !binding.connections.contains(connection)) return;
+        }
+        connected(connection, binder);
     }
 
     private void connected(ConnectionRecord connection, IBinder service) {
