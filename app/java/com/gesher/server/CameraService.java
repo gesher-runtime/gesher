@@ -70,6 +70,7 @@ public final class CameraService extends ICameraService.Default {
     static final int HAL_BLOB = 0x21;
     static final int HAL_PRIVATE = 0x22;
     static final int HAL_YCBCR_420_888 = 0x23;
+    private static final int[] OUTPUT_FORMATS = {HAL_YCBCR_420_888, HAL_PRIVATE, HAL_BLOB};
     static final long FRAME_DURATION_NS = 33_333_333L;
 
     private static volatile CameraService sInstance;
@@ -234,14 +235,20 @@ public final class CameraService extends ICameraService.Default {
     public CameraMetadataNative getSessionCharacteristics(String cameraId, int targetSdkVersion,
             CameraCompatibilityInfo compatInfo, SessionConfiguration sessionConfiguration,
             AttributionSourceState clientAttribution, int devicePolicy) {
-        return characteristics(device(cameraId));
+        device(cameraId);
+        throw new ServiceSpecificException(ERROR_INVALID_OPERATION,
+                "session-specific camera characteristics are not supported");
     }
 
     @Override
     public boolean isSessionConfigurationWithParametersSupported(String cameraId,
             int targetSdkVersion, SessionConfiguration sessionConfiguration,
             AttributionSourceState clientAttribution, int devicePolicy) {
-        return true;
+        // This backend implements the connected device's stream query. It does not
+        // advertise INFO_SESSION_CONFIGURATION_QUERY_VERSION or validate session parameters.
+        device(cameraId);
+        throw new ServiceSpecificException(ERROR_INVALID_OPERATION,
+                "camera session configuration queries with parameters are not supported");
     }
 
     @Override
@@ -250,13 +257,20 @@ public final class CameraService extends ICameraService.Default {
         return defaultRequest(device(cameraId), templateId);
     }
 
+    static boolean supportsOutputFormat(int format) {
+        for (int supported : OUTPUT_FORMATS) {
+            if (supported == format) return true;
+        }
+        return false;
+    }
+
     static CameraMetadataNative characteristics(WindowsCamera.Device d) {
         CameraMetadataNative m = new CameraMetadataNative();
         Size largest = d.sizes.get(0);
         List<StreamConfiguration> configs = new ArrayList<>();
         List<StreamConfigurationDuration> durations = new ArrayList<>();
         List<StreamConfigurationDuration> stalls = new ArrayList<>();
-        for (int format : new int[] {HAL_YCBCR_420_888, HAL_PRIVATE, HAL_BLOB}) {
+        for (int format : OUTPUT_FORMATS) {
             for (Size s : d.sizes) {
                 configs.add(new StreamConfiguration(format, s.getWidth(), s.getHeight(), false));
                 durations.add(new StreamConfigurationDuration(format, s.getWidth(),
