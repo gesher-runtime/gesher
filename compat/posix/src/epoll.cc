@@ -202,8 +202,8 @@ struct Entry {
   std::shared_ptr<OwnerWatch> owner_watch = nullptr;
   bool ordinary_eventfd = false;
   uint32_t readable_events = EPOLLIN;
-  // Eventfd, timerfd and inotify publish producer notifications. Ordinary
-  // eventfd exclusive registrations use this path in level mode too.
+  // Eventfd, timerfd and inotify publish producer notifications. Exclusive
+  // registrations use this path in level mode too.
   std::shared_ptr<EventFd> edge_source = nullptr;
   std::shared_ptr<EventFdEdgeWatch> edge_watch = nullptr;
   std::shared_ptr<EventFd> watch_source = nullptr;
@@ -325,7 +325,7 @@ void ConfigureEventFdEntry(Entry& entry, const std::shared_ptr<EventFd>& source,
   // Eventfd, timerfd and inotify all publish producer notifications, so every
   // edge entry uses its source's generations; level entries wake on readiness.
   watch->level = !edge;
-  watch->exclusive = entry.ordinary_eventfd && (entry.events & EPOLLEXCLUSIVE) != 0;
+  watch->exclusive = (entry.events & EPOLLEXCLUSIVE) != 0;
   watch->wake = wake;
   std::lock_guard<std::mutex> lock(source->mutex);
   if (watch->exclusive) {
@@ -859,8 +859,8 @@ int epoll_create1(int flags) {
 
 int epoll_create(int size) { return size <= 0 ? (errno = EINVAL, -1) : epoll_create1(0); }
 
-// Eventfds publish edge and exclusive notifications. Timerfds and inotify
-// publish edge notifications; the remaining backends still use level readiness.
+// Eventfd, timerfd and inotify publish edge and exclusive notifications.
+// The remaining backends still use level readiness.
 int epoll_ctl(int epfd, int op, int fd, struct epoll_event* event) {
   gesher::record_locks::DescriptorGuard descriptors;
   if (gesher::HandleFromFd(epfd) == INVALID_HANDLE_VALUE ||
