@@ -167,3 +167,31 @@ int jni32_get_created_vm(JNIEnv32* env) {
   if (VMAPI(vm, 6, VmGetEnv)(vm, &again, 0x10006) != 0) return -2;
   return again == env ? 99 : -3;
 }
+
+typedef struct {
+  const char* name;
+  const char* signature;
+  void* function;
+} JniNative32;
+typedef int (*RegisterNatives32)(JNIEnv32*, jclass32, const JniNative32*, int);
+
+// The host test handler deliberately refuses to install callable ART
+// trampolines: JNI_ERR must reach guest code, never a false success.
+int jni32_register_natives(JNIEnv32* env) {
+  jclass32 klass = API(env, 6, FindClass)(env, "java/lang/String");
+  if (!klass) return -4;
+  const JniNative32 entry = {
+      "nativeAdd", "(II)I", (void*)&Java_gesher_Test_add
+  };
+  return API(env, 215, RegisterNatives32)(env, klass, &entry, 1);
+}
+
+// All entries must be validated before invoking the host registration sink.
+int jni32_invalid_registration(JNIEnv32* env) {
+  jclass32 klass = API(env, 6, FindClass)(env, "java/lang/String");
+  if (!klass) return -4;
+  const JniNative32 entry = {
+      "invalid", "(I)I", (void*)0x12345000
+  };
+  return API(env, 215, RegisterNatives32)(env, klass, &entry, 1);
+}
