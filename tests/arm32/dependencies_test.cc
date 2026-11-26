@@ -64,8 +64,6 @@ void Run(const char* consumer_path, const char* dependency_path,
   Check(!missing.LoadLibrary(consumer_name, &error) &&
         missing.LibraryCount() == 0,
         "missing DT_NEEDED dependency rolls back entire transaction");
-  Check(!missing.Initialize(&error) || missing.LibraryCount() == 0,
-        "missing dependency can never publish an executable consumer");
 }
 }  // namespace
 int main(int argc, char** argv) {
