@@ -134,6 +134,10 @@ int jni32_vm_bad_version(JavaVM32* vm) {
   JNIEnv32* env = 0;
   return VMAPI(vm, 6, VmGetEnv)(vm, &env, 0x10008);
 }
+int jni32_vm_unknown_version(JavaVM32* vm) {
+  JNIEnv32* env = 0;
+  return VMAPI(vm, 6, VmGetEnv)(vm, &env, 0x10005);
+}
 int jni32_vm_attach(JavaVM32* vm) {
   JNIEnv32* env = 0;
   if (VMAPI(vm, 4, VmAttach)(vm, &env, 0) != 0 || !env)
