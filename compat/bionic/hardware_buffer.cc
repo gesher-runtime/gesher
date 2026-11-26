@@ -25,6 +25,7 @@
 #include "gpu_interop.h"  // first: the EGL/GL prototype macros
 #include "gpu_fence.h"
 #include "hardware_buffer.h"
+#include "hardware_buffer_transfer.h"
 
 #include "abi_types.h"
 
@@ -483,17 +484,19 @@ bool EnsureTexture(Buffer* b) {
 }
 
 // Reads rect `r` of the texture back into memory.
-void ReadbackRect(Buffer* b, const ARect& r) {
-  if (b->gpu.texture == nullptr || Empty(r)) return;
+bool ReadbackRect(Buffer* b, const ARect& r) {
+  if (Empty(r)) return true;
+  if (b->gpu.texture == nullptr) return false;
   const int w = r.right - r.left, h = r.bottom - r.top;
   const size_t row_bytes = static_cast<size_t>(w) * b->format->texture_bytes;
   std::vector<uint8_t> px(row_bytes * h);
   if (!gpu::ReadTexture(b->gpu.texture, r.left, r.top, w, h, px.data(), row_bytes)) {
     static std::atomic<bool> said{false};
     LogOnce(&said, "a buffer's texture could not be read back: CPU reads see the last CPU contents");
-    return;
+    return false;
   }
   FromTexture(b, r, px.data());
+  return true;
 }
 
 void FreeGpu(Buffer* b) {
@@ -927,16 +930,6 @@ int BIONIC_SYSV GetId(const AHardwareBuffer* buffer, uint64_t* out_id) {
   return 0;
 }
 
-// What travels with the memfd.
-struct Wire {
-  uint32_t magic;
-  uint32_t version;
-  uint32_t width, height, layers, format;
-  uint64_t usage;
-  uint32_t stride, reserved;
-  uint64_t id;
-  uint64_t size;
-};
 constexpr uint32_t kWireMagic = 0x57424841;  // "AHBW"
 
 bool IsStreamSocket(int fd) {
@@ -946,17 +939,9 @@ bool IsStreamSocket(int fd) {
 }
 
 int BIONIC_SYSV SendHandle(const AHardwareBuffer* buffer, int socket_fd) {
-  Buffer* b = FromApp(buffer);
-  if (b == nullptr) return kBadValue;
-  bool readback;
-  {
-    std::lock_guard<std::mutex> lock(b->mutex);
-    readback = b->has_texture && b->gpu_written;
-  }
-  // The receiver maps the memory: it gets what the GPU drew so far.
-  if (readback) gpu::Thread::Get()->Run([&] { ReadbackRect(b, Clip(b, nullptr)); });
-  Wire wire{kWireMagic, 1, b->desc.width, b->desc.height, b->desc.layers, b->desc.format,
-            b->desc.usage, b->desc.stride, 0, b->id, b->size};
+  BufferTransfer wire{};
+  int fd = -1;
+  if (int status = PrepareBufferTransfer(buffer, &wire, &fd); status != 0) return status;
   iovec iov{&wire, sizeof wire};
   alignas(cmsghdr) char control[CMSG_SPACE(sizeof(int))] = {};
   msghdr msg{};
@@ -968,7 +953,7 @@ int BIONIC_SYSV SendHandle(const AHardwareBuffer* buffer, int socket_fd) {
   c->cmsg_level = SOL_SOCKET;
   c->cmsg_type = SCM_RIGHTS;
   c->cmsg_len = CMSG_LEN(sizeof(int));
-  std::memcpy(CMSG_DATA(c), &b->fd, sizeof(int));
+  std::memcpy(CMSG_DATA(c), &fd, sizeof(fd));
   ssize_t n;
   do {
     n = sendmsg(socket_fd, &msg, MSG_NOSIGNAL);
@@ -997,7 +982,7 @@ int BIONIC_SYSV SendHandle(const AHardwareBuffer* buffer, int socket_fd) {
 int BIONIC_SYSV RecvHandle(int socket_fd, AHardwareBuffer** out) {
   if (out == nullptr) return kBadValue;
   *out = nullptr;
-  Wire wire{};
+  BufferTransfer wire{};
   iovec iov{&wire, sizeof wire};
   alignas(cmsghdr) char control[CMSG_SPACE(sizeof(int) * 4) + CMSG_SPACE(sizeof(ucred))] = {};
   msghdr msg{};
@@ -1042,8 +1027,38 @@ int BIONIC_SYSV RecvHandle(int socket_fd, AHardwareBuffer** out) {
     if (more <= 0) break;
     got += static_cast<size_t>(more);
   }
-  if (got != sizeof wire || wire.magic != kWireMagic || wire.version != 1 || wire.reserved != 0 ||
-      wire.id == 0) {
+  if (got != sizeof wire) {
+    close(fd);
+    return kInvalidOperation;
+  }
+  return ImportBufferTransfer(wire, fd, out);
+}
+
+}  // namespace
+
+int PrepareBufferTransfer(const AHardwareBuffer* buffer, BufferTransfer* transfer, int* fd) {
+  Buffer* b = FromApp(buffer);
+  if (b == nullptr) return kBadValue;
+  bool readback;
+  {
+    std::lock_guard<std::mutex> lock(b->mutex);
+    readback = b->has_texture && b->gpu_written && !b->memory_newer;
+  }
+  if (readback) {
+    bool copied = false;
+    gpu::Thread::Get()->Run([&] { copied = ReadbackRect(b, Clip(b, nullptr)); });
+    if (!copied) return -EIO;
+  }
+  *transfer = {kWireMagic, 1, b->desc.width, b->desc.height, b->desc.layers, b->desc.format,
+               b->desc.usage, b->desc.stride, 0, b->id, b->size};
+  *fd = b->fd;
+  return 0;
+}
+
+int ImportBufferTransfer(const BufferTransfer& wire, int fd, AHardwareBuffer** out) {
+  *out = nullptr;
+  if (fd < 0) return kBadValue;
+  if (wire.magic != kWireMagic || wire.version != 1 || wire.reserved != 0 || wire.id == 0) {
     close(fd);
     return kInvalidOperation;
   }
@@ -1074,6 +1089,8 @@ int BIONIC_SYSV RecvHandle(int socket_fd, AHardwareBuffer** out) {
   *out = ToApp(b);
   return 0;
 }
+
+namespace {
 
 void Register() {
   struct Entry {

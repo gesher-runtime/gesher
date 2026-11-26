@@ -113,6 +113,8 @@ GraphicsDex 'SurfaceTexture in OpenGL ES: producer dataspace follows the latched
   SurfaceTextureGlTest @((NoDrive (Resolve-Path "$Dir/reader_buffer_test.so").Path))
 GraphicsDex 'ImageReader native surface: EGL pixels, Canvas notification, queue overflow and close lifetime' `
   ImageReaderEglTest @()
+GraphicsDex 'HardwareBuffer Parcel: backing descriptor, independent lifetime and published pixels' `
+  HardwareBufferParcelTest @()
 # A PRIVATE, GPU-sampled reader, as Flutter's platform views create it: drawn into
 # through lockHardwareCanvas, lockCanvas and EGL, its images' HardwareBuffers imported
 # by an NDK library (AHardwareBuffer_fromHardwareBuffer, reader_buffer_test.so from

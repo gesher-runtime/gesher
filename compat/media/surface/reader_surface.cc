@@ -1,6 +1,8 @@
 #include "reader_surface.h"
 #include "queue_surface.h"
+#include "../../bionic/hardware_buffer_transfer.h"
 #include <android_runtime/android_view_Surface.h>
+#include <android/hardware_buffer.h>
 #include <gesher/rgba_buffers.h>
 #include <GraphicsJNI.h>
 #include <hwui/Bitmap.h>
@@ -8,6 +10,7 @@
 #include <atomic>
 #include <cstring>
 #include <memory>
+#include <new>
 
 namespace gesher::bionic {
 int RegisterSyncFenceNatives(JNIEnv* env);  // hardware_buffer_java.cc
@@ -15,14 +18,18 @@ int RegisterSyncFenceNatives(JNIEnv* env);  // hardware_buffer_java.cc
 
 namespace gesher::media {
 namespace {
+namespace ahb = gesher::bionic::ahb;
+
 // A Java HardwareBuffer of a reader image holds a reference to the image's RGBA
 // AHardwareBuffer (<gesher/rgba_buffers.h>), which the reader's pool will not
 // write into while it is held. Its immutable Bitmap conversion works on both
 // Gesher's CPU and SkiaGL display pipelines.
 struct Buffer {
   void* ahb;  // a reference
-  int width, height;
-  Buffer(void* b, int w, int h) : ahb(b), width(w), height(h) { gesher::bionic::ahb::RetainRgbaBuffer(b); }
+  int width, height, stride;
+  Buffer(void* b, int w, int h, int row) : ahb(b), width(w), height(h), stride(row) {
+    gesher::bionic::ahb::RetainRgbaBuffer(b);
+  }
   ~Buffer() {
     gesher::bionic::ahb::NoteRgbaAppReleased(ahb);  // the app's draws so far: the buffer's release fence
     gesher::bionic::ahb::ReleaseRgbaBuffer(ahb);
@@ -53,12 +60,23 @@ jlong JNICALL FromGraphicBuffer(JNIEnv* env, jclass, jobject) {
   jniThrowException(env, "java/lang/UnsupportedOperationException", "GraphicBuffer import is not supported on Gesher");
   return 0;
 }
-void JNICALL WriteParcel(JNIEnv* env, jclass, jlong, jobject) {
-  jniThrowException(env, "java/lang/UnsupportedOperationException", "HardwareBuffer parcel transport is not supported on Gesher");
+void JNICALL WriteParcel(JNIEnv* env, jclass, jlong ptr, jobject parcel) {
+  ahb::WriteHardwareBufferParcel(env, parcel, static_cast<const AHardwareBuffer*>(Of(ptr)->ahb));
 }
-jlong JNICALL ReadParcel(JNIEnv* env, jclass, jobject) {
-  jniThrowException(env, "java/lang/UnsupportedOperationException", "HardwareBuffer parcel transport is not supported on Gesher");
-  return 0;
+jlong JNICALL ReadParcel(JNIEnv* env, jclass, jobject parcel) {
+  ahb::BufferTransfer transfer{};
+  AHardwareBuffer* buffer = ahb::ReadHardwareBufferParcel(env, parcel, &transfer);
+  if (buffer == nullptr) return 0;
+  // This Java wrapper represents the RGBA buffers used by ImageReader.
+  Buffer* result = nullptr;
+  if (transfer.format == AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM) {
+    result = new (std::nothrow) Buffer(buffer, transfer.width, transfer.height, transfer.stride);
+    if (result == nullptr) {
+      jniThrowException(env, "java/lang/OutOfMemoryError", "Could not retain HardwareBuffer");
+    }
+  }
+  ahb::ReleaseRgbaBuffer(buffer);
+  return reinterpret_cast<jlong>(result);
 }
 jobject JNICALL Wrap(JNIEnv* env, jclass, jobject buffer, jlong color_space) {
   jlong ptr = env->GetLongField(buffer, buffer_pointer);
@@ -75,7 +93,7 @@ jobject JNICALL Wrap(JNIEnv* env, jclass, jobject buffer, jlong color_space) {
     return nullptr;
   }
   for (int y = 0; y < data->height; y++)
-    memcpy(pixels.getAddr(0, y), gesher::bionic::ahb::RgbaBufferPixels(data->ahb) + static_cast<size_t>(y) * data->width * 4,
+    memcpy(pixels.getAddr(0, y), gesher::bionic::ahb::RgbaBufferPixels(data->ahb) + static_cast<size_t>(y) * data->stride * 4,
            static_cast<size_t>(data->width) * 4);
   pixels.setImmutable();
   auto bitmap = android::Bitmap::createFrom(info, *pixels.pixelRef());
@@ -126,7 +144,7 @@ void* ReaderHardwareBufferNative(JNIEnv* env, jobject buffer) {
   return ptr != 0 ? Of(ptr)->ahb : nullptr;
 }
 jobject ReaderHardwareBuffer(JNIEnv* env, void* rgba, int width, int height) {
-  auto buffer = std::make_unique<Buffer>(rgba, width, height);
+  auto buffer = std::make_unique<Buffer>(rgba, width, height, width);
   jobject result = env->NewObject(buffer_class, buffer_constructor, reinterpret_cast<jlong>(buffer.get()));
   if (result != nullptr && !env->ExceptionCheck()) buffer.release();
   return result;

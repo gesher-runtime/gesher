@@ -15,6 +15,7 @@
 // (gesher/native_fence.h): Image.getFence() and an app's SyncFence of a fence
 // descriptor (eglDupNativeFenceFDANDROID's).
 #include "abi_types.h"
+#include "hardware_buffer_transfer.h"
 #include "jni_bridge.h"
 
 #include "../media/surface/reader_surface.h"
@@ -22,6 +23,8 @@
 #include <gesher/bionic_shim.h>
 #include <gesher/native_fence.h>
 
+#include "android_os_Parcel.h"
+#include <binder/Parcel.h>
 #include <nativehelper/JNIHelp.h>
 #include <unistd.h>
 
@@ -30,6 +33,42 @@
 #include <memory>
 
 namespace gesher::bionic {
+
+void ahb::WriteHardwareBufferParcel(JNIEnv* env, jobject parcel_object,
+                                    const AHardwareBuffer* buffer) {
+  android::Parcel* parcel = android::parcelForJavaObject(env, parcel_object);
+  if (parcel == nullptr) {
+    jniThrowNullPointerException(env, "HardwareBuffer destination parcel");
+    return;
+  }
+  if (!parcel->allowFds()) {
+    jniThrowException(env, "android/os/BadParcelableException",
+                      "HardwareBuffer requires a file descriptor in its parcel");
+    return;
+  }
+  BufferTransfer transfer{};
+  int fd = -1;
+  int status = PrepareBufferTransfer(buffer, &transfer, &fd);
+  if (status == android::OK) status = parcel->write(&transfer, sizeof(transfer));
+  if (status == android::OK) status = parcel->writeDupFileDescriptor(fd);
+  if (status != android::OK) {
+    jniThrowExceptionFmt(env, "android/os/BadParcelableException",
+                         "Could not write HardwareBuffer to parcel (%d)", status);
+  }
+}
+
+AHardwareBuffer* ahb::ReadHardwareBufferParcel(JNIEnv* env, jobject parcel_object,
+                                               BufferTransfer* transfer) {
+  const android::Parcel* parcel = android::parcelForJavaObject(env, parcel_object);
+  if (parcel == nullptr) return nullptr;
+  android::binder::unique_fd fd;
+  if (parcel->read(transfer, sizeof(*transfer)) != android::OK ||
+      parcel->readUniqueFileDescriptor(&fd) != android::OK) return nullptr;
+  AHardwareBuffer* buffer = nullptr;
+  if (ImportBufferTransfer(*transfer, fd.release(), &buffer) != android::OK) return nullptr;
+  return buffer;
+}
+
 namespace {
 
 // The JNIEnv is the loaded library's System V proxy; the Java object is read
