@@ -215,9 +215,10 @@ Nothing is installed without the user's consent (issue 519,
 [ADR 0028's amendment](decisions/0028-shell-start-menu-apps.md)):
 
 1. A small progress window (the splash's painting: the file's name, "Reading…")
-   while `gesher-app.ps1 apk-info "<file>" "<temp file>"` reads the APK or bundle
+   while Gesher copies the selected file to a private temporary directory and
+   `gesher-app.ps1 apk-info "<snapshot>" "<temp file>"` reads that copy
    without installing it or starting the device: its package, versionCode,
-   versionName, label and icon (recorded for Explorer as `apk-icon` records it),
+   versionName, label and icon,
    the installed versionCode and versionName when the package is installed, and
    whether its recorded desktop shortcut is there. A file that cannot be read
    (not an app, an encrypted `.apkm`) ends here with the error dialog.
@@ -231,16 +232,20 @@ Nothing is installed without the user's consent (issue 519,
    alone does not install. Cancel, Esc and the X install nothing; gesher-launch
    exits with 1223 (`ERROR_CANCELLED`).
 4. Install: a progress window ("Installing <label>…") while `gesher-app.ps1
-   install "<file>"` runs, with `--desktop-shortcut` when the box was checked.
+   install "<snapshot>"` runs, with `--desktop-shortcut` when the box was checked.
+   The snapshot is kept open for reading, without permitting writes or removal,
+   from the metadata read through installation. For a split app, open its bundle
+   so the snapshot contains all of the app's files.
    The APK is installed (or updated) on the user's Gesher device as `gesher-app
    install` installs it; its Start menu shortcut is made as usual.
-5. Only when the install succeeded, a second dialog, "<label> was installed."
+5. After verifying the installation result's package and version against the
+   confirmation, Gesher shows a second dialog, "<label> was installed."
    (or updated): **Open** runs `launch <package>` with the splash; **Done** (the
    default), Esc and the X end it. The app is never started without Open. When
    the box was checked but the record names no desktop shortcut that exists
    (install printed why), the dialog adds "The desktop shortcut was not created."
 
-A failing step (an unreadable file, a failed install) shows Gesher's error
+Gesher removes the snapshot when the flow ends. A failing step (an unreadable file, a failed install) shows Gesher's error
 dialog with its message and ends with that step's non-zero exit code; nothing
 claims success. The check box is not shown in portable Gesher, with
 `GESHER_SHORTCUTS=0`, and when the package's recorded desktop shortcut is still

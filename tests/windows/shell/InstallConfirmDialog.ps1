@@ -215,6 +215,7 @@ function Set-GesherDesktopShortcutBox([IntPtr] $Hwnd, [bool] $On) {
 #                            not checked
 #   -Done Open|Done|None     the installed dialog's button (None: do not wait
 #                            for it, e.g. when the install is expected to fail)
+#   -BeforeAnswer           run a test assertion while the confirmation is open
 # Returns @{ Problems = @(...); ConfirmTitle; DoneTitle; DesktopBox }. Problems
 # is empty when every step happened as asked.
 function Invoke-GesherInstallConfirm {
@@ -228,7 +229,8 @@ function Invoke-GesherInstallConfirm {
     [int] $ConfirmTimeoutSeconds = 300,
     [int] $InstallTimeoutSeconds = 600,
     [string] $CatalogPath = '',
-    [switch] $NoChildren
+    [switch] $NoChildren,
+    [scriptblock] $BeforeAnswer
   )
   $result = [pscustomobject]@{ Problems = @(); ConfirmTitle = $null; DoneTitle = $null; DesktopBox = $null }
   $confirm = Wait-GesherInstallDialog $ProcessId 'Confirm' $ConfirmTimeoutSeconds $Process -NoChildren:$NoChildren
@@ -254,6 +256,10 @@ function Invoke-GesherInstallConfirm {
   if ($DesktopShortcut) {
     if (-not $box) { $result.Problems += 'asked to check the desktop shortcut box, but the dialog does not show it' }
     elseif (-not (Set-GesherDesktopShortcutBox $confirm $true)) { $result.Problems += 'the desktop shortcut check box (1001) could not be checked' }
+  }
+  if ($BeforeAnswer -and -not $result.Problems.Count) {
+    try { & $BeforeAnswer | Out-Null }
+    catch { $result.Problems += "while awaiting confirmation: $_" }
   }
   if ($result.Problems.Count) {
     # Leave nothing installed by a dialog that is not what was expected.

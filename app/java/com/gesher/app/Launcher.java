@@ -256,9 +256,16 @@ public final class Launcher {
             case "launch": return launch(rest);
             case "install": {
                 boolean desktopShortcut = rest.remove("--desktop-shortcut");
-                if (rest.size() != 1) return usage();
+                String confirmedPackage = null;
+                String confirmedVersion = null;
+                if (rest.size() == 4 && "--confirmed".equals(rest.get(1))) {
+                    confirmedPackage = rest.get(2);
+                    confirmedVersion = rest.get(3);
+                } else if (rest.size() != 1) {
+                    return usage();
+                }
                 ensureDevice(true);
-                String pkg = install(gesher(), rest.get(0), true);
+                String pkg = install(gesher(), rest.get(0), true, confirmedPackage, confirmedVersion);
                 // Asked for by the user (gesher-launch's install confirmation): a failure is
                 // printed, but the package is installed all the same.
                 if (desktopShortcut) AppShell.createDesktopLinkQuietly(pkg);
@@ -661,9 +668,20 @@ public final class Launcher {
 
     private static String install(GesherService.Client gesher, String apk, boolean explicitInstall)
             throws Exception {
+        return install(gesher, apk, explicitInstall, null, null);
+    }
+
+    private static String install(GesherService.Client gesher, String apk, boolean explicitInstall,
+            String confirmedPackage, String confirmedVersion)
+            throws Exception {
         File f = new File(apk);
         if (!f.isFile()) throw new IllegalArgumentException(text("no_file", apk));
         String[] r = gesher.install(f.getAbsolutePath(), explicitInstall);
+        if (confirmedPackage != null && (r == null || r.length < 4
+                || !confirmedPackage.equals(r[0]) || !confirmedVersion.equals(r[3]))) {
+            throw new IllegalStateException("Installation result does not match the confirmed package "
+                    + confirmedPackage + " (version " + confirmedVersion + ")");
+        }
         switch (r[1]) {
             case "unchanged":
                 log(text("unchanged", r[0], r[2]));
@@ -675,7 +693,7 @@ public final class Launcher {
         AppShell.registerQuietly(r[0], r[2], !"unchanged".equals(r[1]));
         AppShell.registerUrlProtocolsQuietly(r[0], r[2], !"unchanged".equals(r[1]));
         // The APK file shows the app's icon in Explorer (gesher_shellext.dll).
-        AppShell.rememberApkQuietly(r[0], f);
+        if (confirmedPackage == null) AppShell.rememberApkQuietly(r[0], f);
         return r[0];
     }
 

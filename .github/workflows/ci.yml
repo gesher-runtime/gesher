@@ -1823,8 +1823,27 @@ jobs:
           'PASS  installer: an APK opened from Explorer asks first (install_confirm_title; Install/Cancel, an unchecked desktop shortcut box); Cancel installs nothing (exit 1223)' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           # Install with the desktop shortcut box checked, then Done: installed, not launched;
           # <Desktop>\<label>.lnk made like the Start menu's and recorded as desktop_link.
+          $stageParent = "$env:LOCALAPPDATA\Gesher\data\system"
+          $previousStages = @(Get-ChildItem -LiteralPath $stageParent -Directory -Filter 'gesher-install-*' | ForEach-Object FullName)
+          $expectedApkHash = (Get-FileHash -LiteralPath "$app\lifecycle.apk").Hash
+          $checkSnapshot = {
+            $stages = @(Get-ChildItem -LiteralPath $stageParent -Directory -Filter 'gesher-install-*' |
+              Where-Object FullName -NotIn $previousStages)
+            if ($stages.Count -ne 1) { throw "expected one installation snapshot, saw $($stages.Count)" }
+            $snapshot = Join-Path $stages[0].FullName 'payload\lifecycle.apk'
+            if ((Get-FileHash -LiteralPath $snapshot).Hash -ne $expectedApkHash) {
+              throw 'the confirmation snapshot differs from the selected APK'
+            }
+            try {
+              $stream = [IO.File]::Open($snapshot, 'Open', 'Write', 'ReadWrite')
+              $stream.Dispose()
+              throw 'the confirmation snapshot allowed write access'
+            } catch [IO.IOException] {
+              if (($_.Exception.HResult -band 0xffff) -ne 32) { throw }
+            }
+          }
           $run = Start-ApkOpen "$app\lifecycle.apk"
-          $answer = Invoke-GesherInstallConfirm -ProcessId $run.Process.Id -Process $run.Process -Answer Install -DesktopShortcut -ExpectDesktopBox $true -Done Done
+          $answer = Invoke-GesherInstallConfirm -ProcessId $run.Process.Id -Process $run.Process -Answer Install -DesktopShortcut -ExpectDesktopBox $true -Done Done -BeforeAnswer $checkSnapshot
           $out = Complete-ApkOpen $run 'gesher-launch lifecycle.apk, Install with a desktop shortcut, Done'
           Write-Host "installed dialog: '$($answer.DoneTitle)'"
           $problems = @($answer.Problems)
@@ -1832,6 +1851,20 @@ jobs:
           if ($out -notmatch 'installed com\.gesher\.lifecycle') { $problems += 'no "installed com.gesher.lifecycle" line' }
           if ($out -match 'gesher-app: done' -or $out -match 'LifecycleActivity' -or $out -match 'launching the installed package') { $problems += 'the app was launched without Open' }
           if (-not (Test-LifecycleListed)) { $problems += 'gesher-app list does not show com.gesher.lifecycle' }
+          $installed = @(Get-Content -LiteralPath (Join-Path $stageParent 'packages.list') |
+            Where-Object { $_.StartsWith("com.gesher.lifecycle`t") })
+          if ($installed.Count -ne 1) {
+            $problems += 'packages.list lacks a unique installed lifecycle package'
+          } else {
+            $codeDir = (($installed[0] -split "`t")[1] -split '[/\\]')[-1]
+            $installedApk = "$env:LOCALAPPDATA\Gesher\data\app\$codeDir\base.apk"
+            if ((Get-FileHash -LiteralPath $installedApk).Hash -ne $expectedApkHash) {
+              $problems += 'installed APK differs from the one shown for confirmation'
+            }
+          }
+          $remainingStages = @(Get-ChildItem -LiteralPath $stageParent -Directory -Filter 'gesher-install-*' |
+            Where-Object FullName -NotIn $previousStages)
+          if ($remainingStages.Count) { $problems += 'the launcher left an installation snapshot behind' }
           if (-not (Test-Path $lnk)) { $problems += "no Start menu shortcut $lnk" }
           if (-not (Test-Path $desktopLnk)) { $problems += "no desktop shortcut $desktopLnk" } else {
             $desk = $wsh.CreateShortcut($desktopLnk)
