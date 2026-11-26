@@ -558,6 +558,19 @@ int main(void) {
       Check(enabled[1] == 1 && enabled[2] == 0,
           "enforced grant and denial survive programmatic checkbox changes");
     }
+    if (locale != 0) {
+      const WCHAR* groups[REVIEW_VISIBLE_ROWS + 1];
+      unsigned char enabled[REVIEW_VISIBLE_ROWS + 1];
+      unsigned char changeable[REVIEW_VISIBLE_ROWS + 1];
+      for (int i = 0; i <= REVIEW_VISIBLE_ROWS; ++i) {
+        groups[i] = L"Permission group label";
+        enabled[i] = 1;
+        changeable[i] = i == 0 ? 1 : 0;
+      }
+      review_action = RV_MANAGED_CANCEL;
+      Check(ShowReview(L"com.example.review.rtl", groups, enabled, changeable,
+          REVIEW_VISIBLE_ROWS + 1) == REVIEW_DISMISSED, "RTL managed review scrolls and cancels");
+    }
     if (locale == 0) {
       unsigned char single[1] = {1};
       review_action = RV_CONFIRM_ALL;
