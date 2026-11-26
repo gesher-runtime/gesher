@@ -62,8 +62,8 @@ PR would be routed to a group that will not run the job. Moving the framework
 producers back to the local runner needs a separate reviewed design (for
 example a dedicated caller that pins a reviewed `framework.yml` commit) and an
 explicit allowlist update. The current caller sets `local-runner: false`, so
-the pinned route action selects the hosted runner without making
-local-authorization API requests, regardless of `GESHER_SELF_HOSTED_PRS`.
+the build jobs select the hosted runner directly. The route job runs only for
+an explicit local-runner request, regardless of `GESHER_SELF_HOSTED_PRS`.
 Both required Linux producer jobs and all Windows execution jobs remain required.
 
 The pinned action also handles confirmed GitHub quota responses if local routing
@@ -127,8 +127,8 @@ hosted dependency installation, JDK setup and Actions caches. No commit,
 workflow edit, runner unregistration or local-cache transfer is required. A
 hosted cache may be cold on the first run, but no build depends on local files.
 
-Routing is decided once by each run's `runner-route` job. Changing the flag does
-not relocate a job that has already been routed to the local runner. For an
+For an opted-in run, its `runner-route` job decides routing once. Changing the
+flag does not relocate a job that has already been routed to the local runner. For an
 affected run, copy its numeric ID from the Actions URL and run:
 
 ```powershell

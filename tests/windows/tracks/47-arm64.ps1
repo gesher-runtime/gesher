@@ -17,15 +17,21 @@ $a64 = (Resolve-Path $Dir).Path
 # guest fork's children outlive a parent that is killed, as orphans do on
 # Linux; the test job must not keep them).
 function A64StopDescendants([int] $ProcessId, [datetime] $Started) {
-  $processes = @(Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,CreationDate `
-    -OperationTimeoutSec 10 -ErrorAction Stop)
+  # Most probes create no children. Enumerate the full tree only when needed.
+  $children = @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$ProcessId" `
+    -Property ProcessId,ParentProcessId,CreationDate -OperationTimeoutSec 5 -ErrorAction Stop)
+  if (-not $children.Count) { return }
+  $byParent = Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,CreationDate `
+    -OperationTimeoutSec 5 -ErrorAction Stop |
+    Group-Object -Property ParentProcessId -AsHashTable -AsString
+  $byParent[[string]$ProcessId] = $children + @($byParent[[string]$ProcessId] | Where-Object { $null -ne $_ })
   $tree = @([pscustomobject]@{ ProcessId = $ProcessId; CreationDate = $Started })
   $seen = [System.Collections.Generic.HashSet[int]]::new()
   $null = $seen.Add($ProcessId)
   for ($i = 0; $i -lt $tree.Count; $i++) {
     $parent = $tree[$i]
-    $tree += @($processes | Where-Object {
-      $_.ParentProcessId -eq $parent.ProcessId -and $_.CreationDate -ge $parent.CreationDate -and
+    $tree += @($byParent[[string]$parent.ProcessId] | Where-Object {
+      $_.CreationDate -ge $parent.CreationDate -and
         $seen.Add($_.ProcessId)
     })
   }
@@ -59,7 +65,7 @@ function A64Run([string] $Exe, [string[]] $Arguments, [int] $Seconds = 300) {
     $null = $p.Handle
     if (-not $p.WaitForExit($Seconds * 1000)) {
       Write-Output "TIMEOUT after $Seconds s: $Exe $($Arguments -join ' ')"
-      if (-not $p.HasExited) { $p.Kill() }
+      try { $p.Kill() } catch { if (-not $p.HasExited) { throw } }
       if (-not $p.WaitForExit(5000)) { throw 'ARM64 process did not exit after termination' }
       $exitCode = 124
     } else {

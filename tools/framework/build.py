@@ -939,6 +939,7 @@ class Builder:
         return r.returncode
 
     R8 = 'https://dl.google.com/android/maven2/com/android/tools/r8/9.5.26/r8-9.5.26.jar'
+    R8_SHA256 = '3502f087388ce95bbf5254555927f09385dc2636873964d0bd53f3eaf4fb49ad'
 
     def package(self):
         """<out>/<module>.jar: the module's classes dexed with D8 plus its
@@ -946,9 +947,15 @@ class Builder:
         makes the core jars. The runtime's boot class path takes it after
         the core jars (core-oj, core-libart, core-icu4j, then framework);
         that wiring lives with the boot image build, not here."""
-        r8 = os.path.join(self.out, os.path.basename(self.R8))
-        if not os.path.isfile(r8):
-            run(['curl', '-fsSL', '-o', r8, self.R8])
+        r8 = os.environ.get('R8_JAR')
+        if r8:
+            with open(r8, 'rb') as jar:
+                if hashlib.file_digest(jar, 'sha256').hexdigest() != self.R8_SHA256:
+                    raise RuntimeError(f'R8_JAR SHA-256 mismatch: {r8}')
+        else:
+            r8 = os.path.join(self.out, os.path.basename(self.R8))
+            if not os.path.isfile(r8):
+                run(['curl', '-fsSL', '-o', r8, self.R8])
         split = os.path.join(self.out, 'split', self.args.module)
         dex = os.path.join(self.out, 'dex', self.args.module)
         shutil.rmtree(dex, ignore_errors=True)

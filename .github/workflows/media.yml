@@ -160,6 +160,9 @@ jobs:
       - name: Interrupted build-tool download controls
         run: python3 -m unittest discover -s tests/apps/lifecycle -p test_download.py -v
 
+      - name: Acquire the shared verified R8 compiler
+        run: bash tools/ci/setup-r8.sh
+
       - name: Build mediaapp.apk
         run: |
           chmod +x work/build-tools-36.1/aapt2 work/build-tools-36.1/zipalign

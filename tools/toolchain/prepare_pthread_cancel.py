@@ -19,6 +19,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent / 'pthread-cancel'
@@ -130,6 +131,27 @@ def compiler_identity(driver, env=os.environ):
                 libraries=record['after']['files'], static_object_sha256=record['static_object_sha256'])
 
 
+def extract_publisher_archive(archive, destination):
+    # Checking members while extracting avoids decompressing the XZ stream
+    # twice. Publish the isolated root only after every member has passed.
+    with tempfile.TemporaryDirectory(dir=destination) as staging:
+        root = Path(staging).resolve() / NAME
+
+        def publisher_member(member, staging):
+            parts = Path(member.name).parts
+            require(parts[:1] == (NAME,) and '..' not in parts, 'Unexpected archive member path')
+            if member.issym() or member.islnk():
+                base = (Path(staging) / member.name).parent if member.issym() else Path(staging)
+                target = Path(os.path.realpath(base / member.linkname))
+                require(target.is_relative_to(root), 'Archive link leaves the publisher root')
+            return tarfile.data_filter(member, staging)
+
+        with tarfile.open(archive, 'r|xz') as tar:
+            tar.extractall(staging, filter=publisher_member)
+        require(root.is_dir() and not root.is_symlink(), 'Unexpected archive root')
+        root.rename(destination / NAME)
+
+
 def build(args):
     work = args.work.resolve()
     require(not work.exists(), 'Overlay work directory must be fresh: ' + str(work))
@@ -157,9 +179,7 @@ def build(args):
         run(['curl', '--fail', '--location', '--retry', '3', '--connect-timeout', '20', '--max-time', '240',
              URL, '-o', archive], ROOT, 'download.log', 300)
     require(sha(archive) == PIN['compiler_archive_sha256'], 'Publisher archive hash mismatch')
-    with tarfile.open(archive, 'r:xz') as tar:
-        require({Path(item.name).parts[0] for item in tar.getmembers()} == {NAME}, 'Unexpected archive root')
-        tar.extractall(work, filter='data')
+    extract_publisher_archive(archive, work)
     llvm = work / NAME
     target = llvm / 'x86_64-w64-mingw32'
     environment['PATH'] = str(llvm / 'bin') + os.pathsep + environment['PATH']

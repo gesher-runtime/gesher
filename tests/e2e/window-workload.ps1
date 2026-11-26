@@ -167,14 +167,14 @@ function PngBase64($px) {
   } finally { Remove-Item -LiteralPath $file -ErrorAction SilentlyContinue }
 }
 
-function SavePng($px, [string] $path) {
+function SavePng([int[]] $px, [string] $path) {
   if ($null -eq $px) { return }
   $w = $px[0]; $h = $px[1]
   $bmp = [System.Drawing.Bitmap]::new($w, $h, [System.Drawing.Imaging.PixelFormat]::Format32bppRgb)
   $data = $bmp.LockBits([System.Drawing.Rectangle]::new(0, 0, $w, $h), [System.Drawing.Imaging.ImageLockMode]::WriteOnly,
                         [System.Drawing.Imaging.PixelFormat]::Format32bppRgb)
   for ($y = 0; $y -lt $h; $y++) {
-    [Runtime.InteropServices.Marshal]::Copy([int[]]$px, 2 + $y * $w, [IntPtr]($data.Scan0.ToInt64() + $y * $data.Stride), $w)
+    [Runtime.InteropServices.Marshal]::Copy($px, 2 + $y * $w, [IntPtr]($data.Scan0.ToInt64() + $y * $data.Stride), $w)
   }
   $bmp.UnlockBits($data)
   $bmp.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
@@ -254,7 +254,7 @@ function FrontWindow([string] $log, [IntPtr] $hwnd) {
 }
 
 # Captures until two reads a second apart agree on non-blank content (the app settled)
-# or $seconds pass.
+# or $seconds pass. Return one typed buffer so the pipeline does not box each pixel.
 function CaptureSettled([IntPtr] $hwnd, [int] $seconds = 15, $render = $null, $since = $null, $renderReady = $null) {
   $deadline = (Get-Date).AddSeconds($seconds)
   if ($null -ne $renderReady) { $renderReady.Value = $false }
@@ -268,12 +268,12 @@ function CaptureSettled([IntPtr] $hwnd, [int] $seconds = 15, $render = $null, $s
       $an = Analyze $px
       if ($an.Other -ge ($an.Width * $an.Height * 0.005) -and (RenderReadiness $render $px $since).Ready) {
         if ($null -ne $renderReady) { $renderReady.Value = $true }
-        return $px
+        return ,$px
       }
     }
     $last = $px
   } while ((Get-Date) -lt $deadline)
-  return $last
+  return ,$last
 }
 
 # Diagnose an already failed blank-frame assertion without changing its result or

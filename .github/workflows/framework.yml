@@ -51,6 +51,7 @@ concurrency:
 
 jobs:
   runner-route:
+    if: inputs.local-runner
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
@@ -66,7 +67,9 @@ jobs:
   # Linux build host from the pinned AOSP sources.
   host-tools:
     needs: runner-route
-    runs-on: ${{ fromJSON(needs.runner-route.outputs.runner) }}
+    # The default hosted path doesn't need another runner to authorize it.
+    if: ${{ !cancelled() && (!inputs.local-runner || needs.runner-route.result == 'success') }}
+    runs-on: ${{ fromJSON(!inputs.local-runner && '"ubuntu-24.04"' || needs.runner-route.outputs.runner) }}
     timeout-minutes: 75
     outputs:
       key: ${{ steps.key.outputs.key }}
@@ -134,8 +137,14 @@ jobs:
       - name: Install build tools
         if: steps.reuse.outputs.build == 'true' && runner.environment != 'self-hosted'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ninja-build bison flex ccache libc++-18-dev libc++abi-18-dev
+          packages=(ninja-build bison flex ccache libc++-18-dev libc++abi-18-dev)
+          for package in "${packages[@]}"; do
+            if [[ $(dpkg-query -W -f='${db:Status-Status}' "$package" 2>/dev/null) != installed ]]; then
+              sudo apt-get update
+              sudo apt-get install -y --no-install-recommends "${packages[@]}"
+              break
+            fi
+          done
 
       # Restored and saved separately, so a failed build keeps its objects.
       - name: Restore compiler output
@@ -195,7 +204,8 @@ jobs:
 
   framework:
     needs: [host-tools, runner-route]
-    runs-on: ${{ fromJSON(needs.runner-route.outputs.runner) }}
+    if: ${{ !cancelled() && needs.host-tools.result == 'success' && (!inputs.local-runner || needs.runner-route.result == 'success') }}
+    runs-on: ${{ fromJSON(!inputs.local-runner && '"ubuntu-24.04"' || needs.runner-route.outputs.runner) }}
     timeout-minutes: 150
     steps:
       - uses: actions/checkout@v4
@@ -229,7 +239,8 @@ jobs:
       # The tools are linked against libc++, as Soong links them.
       - name: Install the host tools' runtime
         run: |
-          if [[ "$RUNNER_ENVIRONMENT" != self-hosted ]]; then
+          if [[ "$RUNNER_ENVIRONMENT" != self-hosted ]] &&
+             [[ $(dpkg-query -W -f='${db:Status-Status}\n' libc++1-18 libc++abi1-18 2>/dev/null) != $'installed\ninstalled' ]]; then
             sudo apt-get install -y --no-install-recommends libc++1-18 libc++abi1-18
           fi
           missing=$(for t in $(find dist-host -type f); do ldd "$t" | sed -n "s|^|$t: |; /not found/p"; done)
@@ -267,6 +278,9 @@ jobs:
         with:
           distribution: temurin
           java-version: 21
+
+      - name: Acquire the shared verified R8 compiler
+        run: bash tools/ci/setup-r8.sh
 
       # Restored and saved apart (actions/cache saves only when the whole
       # job passes, and the javac step may still fail): each is saved right
@@ -423,15 +437,9 @@ jobs:
       # classes, so they are built here, next to them.
       - name: Build gesher-app and lifecycle.apk
         env:
-          # Reuse one verified compiler across all app and fixture builders.
-          R8_JAR: ${{ runner.temp }}/gesher-r8.jar
           # Retain this exact build dependency for the framework host contracts.
           APKSIG_JAR: ${{ runner.temp }}/gesher-apksig.jar
         run: |
-          curl -fsSL --retry 5 --retry-all-errors --retry-delay 10 -o "$R8_JAR.download" \
-            https://dl.google.com/android/maven2/com/android/tools/r8/9.5.26/r8-9.5.26.jar
-          printf '%s  %s\n' 3502f087388ce95bbf5254555927f09385dc2636873964d0bd53f3eaf4fb49ad "$R8_JAR.download" | sha256sum --check --strict
-          mv "$R8_JAR.download" "$R8_JAR"
           app/build.sh out/app --framework-classes out/framework/classes --core-classes out/coremod
           python3 tests/host-net-proxy/run.py --java-home "$JAVA_HOME" \
             --proxy-source third_party/aosp/frameworks/base/core/java/android/net/Proxy.java

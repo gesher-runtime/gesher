@@ -60,9 +60,11 @@ label and keeps the QA gate pending. Approve and run both required PR workflows;
 their completion events recheck the existing exact-head approval automatically.
 
 `ci-required` covers every root production CI job, including Windows shards,
-packaging and e2e; failed, cancelled or skipped root jobs fail it. `arm64-required`
-covers source identity and the ARM64 build. The deployed configuration is
-`.github/automerge-ruleset.json`: PR review and resolved discussions are required,
+packaging and e2e. Failed, cancelled or skipped root jobs fail it, apart from the
+expected skip of tag validation on branch runs. `arm64-required`
+verifies the exact checkout and builds the ARM64 targets in one hosted job. The
+deployed configuration is `.github/automerge-ruleset.json`: PR review and
+resolved discussions are required,
 all three contexts are bound to GitHub Actions, force pushes/deletion are blocked,
 and there are no permanent bypass actors. Branch updates may need fresh CI;
 there is no automatic second full CI run simply for merging.

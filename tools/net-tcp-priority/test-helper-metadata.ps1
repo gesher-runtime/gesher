@@ -14,7 +14,7 @@ $reviewed=@{
  'tools/native3-locks/artifact/download-verified-artifact.py'='cd5cc415e53102c664edac22b1604df639c8804b'
  'tools/ci/receipt-diagnostics.ps1'='b89f2f3f8a54a8b23937bae48ad900c85d4d49e9'
  'tools/ci/source_identity.py'='8bbf1174020adab86b02403070f88c5aa42d9755'
- 'tools/ci/github_read.py'='a0b0496b84194d824f7ff2d91a41a286397f1586'
+ 'tools/ci/github_read.py'='90a34582e87928b6c6b4b2b8d5ac5286d56056f5'
  'tools/ci/github_jobs.py'='ae6864eaf1f612317c917a10a2f45e5c8b15ac0c'
 }
 function ExactMap($Value){
@@ -31,7 +31,8 @@ foreach($entry in $actual.GetEnumerator()){
 }
 foreach($stale in @(@{P='tools/windows4/TsfJobSupervisor.cs';H='d1cf9319268df1bccf03177e7f8dde52a7f55510'},@{P='tools/windows4/TsfJobWorker.cs';H='08f29f78f56195825d96de2f2f6632bf91133e1e'},@{P='tools/windows4/test-tsf-job-supervisor.ps1';H='91e6946c4ab05a42ffbf6917166193c3dad07872'},
  @{P='tools/ci/github_read.py';H='997d37c8f6677bb8e1bbfb38d5c87f504b3eb0e4'},
- @{P='tools/ci/github_read.py';H='185256b2664ae3e6225f38f6add8d493731d30aa'})){
+ @{P='tools/ci/github_read.py';H='185256b2664ae3e6225f38f6add8d493731d30aa'},
+ @{P='tools/ci/github_read.py';H='a0b0496b84194d824f7ff2d91a41a286397f1586'})){
  $bad=$actual.Clone();$bad[$stale.P]=$stale.H;if(ExactMap $bad){throw 'Historical stale helper hash accepted'}
 }
 $bad=$actual.Clone();$bad['tools/unreviewed.cs']='0'*40;if(ExactMap $bad){throw 'Additional helper accepted'}

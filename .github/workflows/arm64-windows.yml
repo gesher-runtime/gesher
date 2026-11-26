@@ -23,14 +23,22 @@ env:
   LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
 
 jobs:
-  source-identity:
-    uses: ./.github/workflows/source-identity.yml
-  build:
-    needs: [source-identity]
+  # Source verification and the required build share a runner. A success
+  # requires both steps and avoids two separate hosted runner queues.
+  arm64-required:
+    name: arm64-required
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Verify exact source
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          echo "SOURCE_IDENTITY source=$GITHUB_SHA"
 
       - name: Cache toolchain
         id: toolchain
@@ -93,21 +101,3 @@ jobs:
             out-arm64/*.exe
             out-arm64/*.a
           if-no-files-found: warn
-
-  arm64-required:
-    name: arm64-required
-    if: always()
-    needs: [source-identity, build]
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Require every production CI job
-        env:
-          JOB_RESULTS: ${{ toJSON(needs) }}
-        run: |
-          python3 - <<'PY'
-          import json, os
-          results = json.loads(os.environ['JOB_RESULTS'])
-          failed = {name: job['result'] for name, job in results.items() if job['result'] != 'success'}
-          if not results or failed:
-              raise SystemExit(f"Required jobs did not succeed: {failed}")
-          PY

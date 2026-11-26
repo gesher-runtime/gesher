@@ -51,7 +51,7 @@ class GitHubReadTest(unittest.TestCase):
         self.sleep.assert_not_called()
 
     def test_each_observed_http_status_recovers_without_changing_identity(self):
-        for status in (502, 503, 504):
+        for status in (500, 502, 503, 504):
             with self.subTest(status=status):
                 self.run.reset_mock()
                 self.sleep.reset_mock()
@@ -130,7 +130,7 @@ class GitHubReadTest(unittest.TestCase):
         self.assertNotIsInstance(caught.exception, GitHubTransientError)
 
     def test_permanent_and_unobserved_errors_fail_without_retry(self):
-        permanent = (400, 401, 403, 404, 408, 429, 500, 501)
+        permanent = (400, 401, 403, 404, 408, 429, 501)
         errors = [f'gh: rejected (HTTP {status})' for status in permanent]
         errors += [f'gh: HTTP {status}\r\n' for status in permanent]
         errors += ['connection reset by peer', 'context deadline exceeded',
@@ -183,7 +183,7 @@ class GitHubReadTest(unittest.TestCase):
         self.sleep.assert_not_called()
 
     def test_terminal_json_eof_reports_status_without_response_body(self):
-        for status in (401, 403, 404, 429, 500, 502, 503, 504):
+        for status in (401, 403, 404, 429, 502, 503, 504):
             with self.subTest(status=status):
                 self.run.reset_mock()
                 self.sleep.reset_mock()
@@ -281,6 +281,7 @@ class GitHubReadTest(unittest.TestCase):
 
 class ReceiptIntegrationTest(unittest.TestCase):
     def setUp(self):
+        self.enterContext(patch('github_jobs._PAGED_ENDPOINTS', set()))
         self.repo = 'gesher-runtime/gesher'
         self.head = 'b' * 40
         self.checkout = 'a' * 40
@@ -396,7 +397,7 @@ class ReceiptIntegrationTest(unittest.TestCase):
 
     def test_receipt_recovers_gh_json_eof_and_still_rejects_wrong_identity_or_digest(self):
         for defect in (None, 'source', 'digest'):
-            with self.subTest(defect=defect):
+            with self.subTest(defect=defect), patch('github_jobs._PAGED_ENDPOINTS', set()):
                 self.commands.clear()
                 self.downloads.clear()
                 jobs = copy.deepcopy(self.jobs)
@@ -578,6 +579,7 @@ def inventory(count, start=1, size=None):
 
 class JobsTest(unittest.TestCase):
     def setUp(self):
+        self.enterContext(patch('github_jobs._PAGED_ENDPOINTS', set()))
         self.diagnostics = io.StringIO()
         self.enterContext(contextlib.redirect_stderr(self.diagnostics))
 
@@ -591,6 +593,61 @@ class JobsTest(unittest.TestCase):
             [JOBS_ENDPOINT + '?per_page=100&page=1', JOBS_ENDPOINT + '?per_page=50&page=1',
              JOBS_ENDPOINT + '?per_page=50&page=2'])
         sleep.assert_not_called()
+
+    def test_large_inventory_http_500_uses_small_pages_immediately(self):
+        first, second = inventory(73), inventory(73, 51, 23)
+        truncated = response(code=1, stderr=GH_JSON_EOF + '\r\n')
+        truncated.stdout = b'HTTP/2.0 500\r\n\r\n{"message":'
+        with patch('github_read.subprocess.run', side_effect=[
+            truncated, response(first), response(second),
+        ]) as run, patch('github_read.time.sleep') as sleep:
+            result = get_jobs(JOBS_ENDPOINT)
+        self.assertEqual(result, {'total_count': 73, 'jobs': first['jobs'] + second['jobs']})
+        self.assertEqual([entry.args[0][-1] for entry in run.call_args_list], [
+            JOBS_ENDPOINT + '?per_page=100&page=1', JOBS_ENDPOINT + '?per_page=50&page=1',
+            JOBS_ENDPOINT + '?per_page=50&page=2',
+        ])
+        sleep.assert_not_called()
+
+    def test_successful_fallback_prefers_small_pages_on_a_fresh_exact_endpoint_read(self):
+        first, second = inventory(73), inventory(73, 51, 23)
+        updated_first, updated_second = inventory(74), inventory(74, 51, 24)
+        updated_first['jobs'][0]['conclusion'] = 'failure'
+        other = JOBS_ENDPOINT.replace('/attempts/2/', '/attempts/1/')
+        other_jobs = inventory(73, size=73)
+        with patch('github_jobs.get_json', side_effect=[
+            TRANSIENT, first, second, updated_first, updated_second, other_jobs,
+        ]) as read:
+            self.assertEqual(get_jobs(JOBS_ENDPOINT)['jobs'], first['jobs'] + second['jobs'])
+            self.assertEqual(get_jobs(JOBS_ENDPOINT)['jobs'], updated_first['jobs'] + updated_second['jobs'])
+            self.assertEqual(get_jobs(other), other_jobs)
+        self.assertEqual(read.call_args_list, [
+            call(JOBS_ENDPOINT + '?per_page=100&page=1', retry_transient=False),
+            call(JOBS_ENDPOINT + '?per_page=50&page=1'),
+            call(JOBS_ENDPOINT + '?per_page=50&page=2'),
+            call(JOBS_ENDPOINT + '?per_page=50&page=1'),
+            call(JOBS_ENDPOINT + '?per_page=50&page=2'),
+            call(other + '?per_page=100&page=1', retry_transient=False),
+        ])
+
+    def test_failed_small_pages_do_not_leave_a_preference(self):
+        first, second, full = inventory(73), inventory(73, 51, 23), inventory(73, size=73)
+        for preferred in (False, True):
+            with self.subTest(preferred=preferred), patch('github_jobs._PAGED_ENDPOINTS', set()):
+                before_failure = [TRANSIENT, first, second] if preferred else [TRANSIENT]
+                with patch('github_jobs.get_json', side_effect=[
+                    *before_failure, first, GitHubReadError('502'), full,
+                ]) as read:
+                    if preferred:
+                        get_jobs(JOBS_ENDPOINT)
+                    with self.assertRaisesRegex(GitHubReadError, '502'):
+                        get_jobs(JOBS_ENDPOINT)
+                    self.assertEqual(get_jobs(JOBS_ENDPOINT), full)
+                self.assertEqual(read.call_args_list[-3:], [
+                    call(JOBS_ENDPOINT + '?per_page=50&page=1'),
+                    call(JOBS_ENDPOINT + '?per_page=50&page=2'),
+                    call(JOBS_ENDPOINT + '?per_page=100&page=1', retry_transient=False),
+                ])
 
     def test_one_hundred_row_page_is_a_complete_inventory_in_one_request(self):
         for count in (0, 1, 50, 51, 73, 100):
@@ -665,7 +722,7 @@ class JobsTest(unittest.TestCase):
 
     def test_boundaries(self):
         for count in (0, 1, 50, 51, 100):
-            with self.subTest(count=count):
+            with self.subTest(count=count), patch('github_jobs._PAGED_ENDPOINTS', set()):
                 pages = [inventory(count)]
                 if count > 50: pages.append(inventory(count, 51, count - 50))
                 with patch('github_jobs.get_json', side_effect=[TRANSIENT, *pages]) as read:
@@ -696,7 +753,7 @@ class JobsTest(unittest.TestCase):
             old, fresh = inventory(count), inventory(count)
             old['jobs'][0]['name'] = 'discarded-first-page'
             short, complete = inventory(count, 51, count - 51), inventory(count, 51, count - 50)
-            with self.subTest(count=count), \
+            with self.subTest(count=count), patch('github_jobs._PAGED_ENDPOINTS', set()), \
                     patch('github_jobs.get_json', side_effect=[TRANSIENT, old, short, fresh, complete]) as read, \
                     patch('github_jobs.time.sleep') as sleep:
                 result = get_jobs(JOBS_ENDPOINT)
