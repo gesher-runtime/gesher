@@ -8,6 +8,8 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstring>
+#include <exception>
+#include <limits>
 #include <map>
 #include <mutex>
 #include <string>
@@ -46,6 +48,38 @@ bool ReadGuestString(GuestMemory& memory, uint32_t address,
 }
 
 constexpr size_t Slot(size_t offset) { return offset / sizeof(void*); }
+
+// Parsing the Java type codes is independent of guest ABI word allocation.
+// ParseJniMethodDescriptor checks full JVM grammar and limits first.
+bool RawParameterTypes(std::string_view descriptor, std::vector<char>* types) {
+  if (descriptor.empty() || descriptor.front() != '(') return false;
+  for (size_t at = 1; at < descriptor.size() && descriptor[at] != ')';) {
+    char type = descriptor[at++];
+    if (type == '[') {
+      while (at < descriptor.size() && descriptor[at] == '[') ++at;
+      if (at == descriptor.size()) return false;
+      if (descriptor[at] == 'L') {
+        at = descriptor.find(';', at);
+        if (at == std::string_view::npos) return false;
+        ++at;
+      } else {
+        ++at;  // primitive array's element
+      }
+    } else if (type == 'L') {
+      at = descriptor.find(';', at);
+      if (at == std::string_view::npos) return false;
+      ++at;
+    }
+    types->push_back(type);
+  }
+  return true;
+}
+
+char ReturnTypeCode(std::string_view descriptor) {
+  const size_t close = descriptor.find(')');
+  return close == std::string_view::npos || close + 1 == descriptor.size()
+             ? '\0' : descriptor[close + 1];
+}
 
 }  // namespace
 
@@ -433,9 +467,142 @@ uint32_t Jni32::GuestEnvironment() const {
 }
 bool Jni32::ReleaseLocals(std::string* error) {
   if (!state_ || !state_->CheckThread(error)) return false;
-  if (!state_->utf_copies.empty())
-    return Fail(error, "JNI32 unreleased GetStringUTFChars leases at frame exit");
+  const bool leaked = !state_->utf_copies.empty();
+  // Even a misbehaving native is forbidden from leaving guest UTF mappings
+  // alive across ART calls. Report the contract error while reclaiming them.
+  for (const auto& [address, copy] : state_->utf_copies)
+    (void)state_->program.Memory().Unmap(address, copy.mapped_size);
+  state_->utf_copies.clear();
   state_->ClearReferences(false);
+  if (leaked) return Fail(error, "JNI32 unreleased GetStringUTFChars leases at frame exit");
+  if (error) error->clear();
+  return true;
+}
+
+bool Jni32::CallNative(std::string_view library, std::string_view export_name,
+                       std::string_view descriptor, JniCallMode mode,
+                       jobject receiver, const jvalue* arguments,
+                       size_t argument_count, jvalue* result,
+                       std::string* error, uint64_t instruction_budget) {
+  if (!state_ || !state_->CheckThread(error) || !result ||
+      (argument_count && !arguments))
+    return Fail(error, "JNI32 native invocation has invalid inputs or Java thread");
+
+  JniMethodSignature signature;
+  if (!ParseJniMethodDescriptor(descriptor, &signature, error)) return false;
+  if (argument_count != signature.parameters.size())
+    return Fail(error, "JNI32 native argument count differs from descriptor");
+  std::vector<char> raw_types;
+  if (!RawParameterTypes(descriptor, &raw_types) ||
+      raw_types.size() != argument_count)
+    return Fail(error, "JNI32 raw argument types differ from descriptor");
+
+  bool called = false;
+  Value returned;
+  std::string failure;
+  try {
+    std::vector<Value> guest_arguments;
+    guest_arguments.reserve(argument_count);
+    for (size_t i = 0; i < argument_count; ++i) {
+      const jvalue& input = arguments[i];
+      switch (raw_types[i]) {
+        case 'Z': guest_arguments.push_back(Value::Unsigned32(input.z != 0)); break;
+        case 'B': guest_arguments.push_back(Value::Signed32(input.b)); break;
+        case 'C': guest_arguments.push_back(Value::Unsigned32(input.c)); break;
+        case 'S': guest_arguments.push_back(Value::Signed32(input.s)); break;
+        case 'I': guest_arguments.push_back(Value::Signed32(input.i)); break;
+        case 'J': guest_arguments.push_back(Value::Signed64(input.j)); break;
+        case 'F': guest_arguments.push_back(Value::Float32(input.f)); break;
+        case 'D': guest_arguments.push_back(Value::Float64(input.d)); break;
+        case 'L': case '[': {
+          if (mode == JniCallMode::CriticalNative) {
+            failure = "CriticalNative cannot contain Java object parameters";
+            break;
+          }
+          uint32_t token = 0;
+          if (!state_->Adopt(state_->real->NewLocalRef(input.l),
+                             false, &token, &failure)) break;
+          guest_arguments.push_back(Value::GuestPointer(token));
+          break;
+        }
+        default: failure = "unknown JNI32 argument type"; break;
+      }
+      if (!failure.empty()) break;
+    }
+    uint32_t receiver_token = 0;
+    if (failure.empty() && mode != JniCallMode::CriticalNative &&
+        !state_->Adopt(state_->real->NewLocalRef(receiver), false,
+                       &receiver_token, &failure)) {
+      // Adopt releases the new ref when token allocation fails.
+    }
+    CallFrame frame;
+    if (failure.empty() &&
+        !PackJniCall(signature, mode,
+                     mode == JniCallMode::CriticalNative ? 0 : GuestEnvironment(),
+                     receiver_token, guest_arguments, &frame, &failure)) {
+      // Reject invalid guest argument types before calling any native code.
+    }
+    if (failure.empty()) {
+      std::vector<Value> full;
+      full.reserve(guest_arguments.size() +
+                   (mode == JniCallMode::CriticalNative ? 0 : 2));
+      if (mode != JniCallMode::CriticalNative) {
+        full.push_back(Value::GuestPointer(GuestEnvironment()));
+        full.push_back(Value::GuestPointer(receiver_token));
+      }
+      full.insert(full.end(), guest_arguments.begin(), guest_arguments.end());
+      called = state_->program.CallExport(library, export_name, full,
+                                           signature.result, &returned,
+                                           &failure, instruction_budget);
+    }
+
+    if (called && failure.empty()) {
+      jvalue host_result{};
+      const uint32_t word = static_cast<uint32_t>(returned.bits);
+      switch (ReturnTypeCode(descriptor)) {
+        case 'V': break;
+        case 'Z': host_result.z = static_cast<jboolean>(word); break;
+        case 'B': host_result.b = static_cast<jbyte>(word); break;
+        case 'C': host_result.c = static_cast<jchar>(word); break;
+        case 'S': host_result.s = static_cast<jshort>(word); break;
+        case 'I': host_result.i = static_cast<jint>(word); break;
+        case 'J': host_result.j = static_cast<jlong>(returned.bits); break;
+        case 'F': {
+          const uint32_t bits = word;
+          std::memcpy(&host_result.f, &bits, sizeof(bits));
+          break;
+        }
+        case 'D': std::memcpy(&host_result.d, &returned.bits, sizeof(double)); break;
+        case 'L': case '[': {
+          jobject object = nullptr;
+          if (!state_->Lookup(word, &object, &failure)) { called = false; break; }
+          host_result.l = state_->real->NewLocalRef(object);
+          if (object != nullptr && host_result.l == nullptr &&
+              !state_->real->ExceptionCheck()) {
+            called = false;
+            failure = "JNI32 could not duplicate guest return reference";
+          }
+          break;
+        }
+        default: called = false; failure = "invalid JNI32 return descriptor"; break;
+      }
+      if (called) *result = host_result;
+    }
+  } catch (const std::exception& ex) {
+    failure = std::string("JNI32 native argument marshal exception: ") + ex.what();
+    called = false;
+  } catch (...) {
+    failure = "JNI32 native argument marshal exception";
+    called = false;
+  }
+
+  std::string cleanup_error;
+  const bool cleaned = ReleaseLocals(&cleanup_error);
+  if (!cleaned && failure.empty()) failure = cleanup_error;
+  if (!called || !cleaned) {
+    if (error) *error = failure.empty() ? "JNI32 guest native call failed" : failure;
+    return false;
+  }
   if (error) error->clear();
   return true;
 }
