@@ -1,0 +1,8 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.gesher.keystorepersist">
+  <uses-sdk android:minSdkVersion="36" android:targetSdkVersion="36" />
+  <application android:label="Gesher Keystore persistence contract">
+    <activity android:name=".PersistenceActivity" android:exported="true">
+      <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
+    </activity>
+  </application>
+</manifest>
