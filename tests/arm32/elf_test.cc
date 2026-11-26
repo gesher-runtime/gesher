@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <functional>
+#include <iterator>
 #include <new>
 #include <stdexcept>
 #include <string>
@@ -338,6 +339,22 @@ void ValidImages() {
   CHECK(LoadElf32(ignored_rel_addend_grouping.file.data(),
                   ignored_rel_addend_grouping.file.size(), Options(), &image, &error));
 
+  // Dependency resolution happens before import resolution and retains the
+  // exact DT_NEEDED name; an absent/throwing callback fails the transaction.
+  Fixture dependencies;
+  dependencies.Tag(1, 34);
+  ElfLoadOptions dependency_options = Options();
+  std::vector<std::string> dependency_calls;
+  dependency_options.resolve_dependency = [&](std::string_view name) {
+    dependency_calls.emplace_back(name);
+    return name == "fixture.so";
+  };
+  CHECK(LoadElf32(dependencies.file.data(), dependencies.file.size(),
+                  dependency_options, &image, &error));
+  CHECK((dependency_calls == std::vector<std::string>{"fixture.so"}));
+  CHECK((image.dependencies == std::vector<std::string>{"fixture.so"}));
+  CHECK(R32(image.bytes, 0x60c) == 0x70001);
+
   Fixture linux;
   linux.file[7] = 3;
   CHECK(LoadElf32(linux.file.data(), linux.file.size(), Options(), &image, &error));
@@ -397,6 +414,19 @@ void HostileImages() {
   bad([](auto& f) { f.Tag(27, 3); }, "init/fini array");
   bad([](auto& f) { W32(f.file, 0x620, 0x600); }, "constructor/finalizer");
   bad([](auto& f) { f.Tag(1, 34); }, "DT_NEEDED 'fixture.so'");
+  {
+    Fixture f;
+    f.Tag(1, 34);
+    ElfLoadOptions options = Options();
+    options.resolve_dependency = [](std::string_view) { return false; };
+    Rejected(f, "unresolved dependency 'fixture.so'", options);
+    options.resolve_dependency = [](std::string_view) -> bool {
+      throw std::runtime_error("dependency failed");
+    };
+    Rejected(f, "dependency resolver threw", options);
+    options.resolve_dependency = [](std::string_view) -> bool { throw 42; };
+    Rejected(f, "dependency resolver threw", options);
+  }
   bad([](auto& f) { f.Tag(7, 0x400); }, "DT_RELA");
   bad([](auto& f) { f.Tag(36, 0x400); }, "incomplete RELR");
   bad([](auto& f) {
