@@ -210,9 +210,11 @@ template<class Frame> int Mode(const Frame& f) {
   else return 1;
 }
 template<class Queue> bool Post(Queue* q, int w, int h, int stride, const uint32_t* p, int64_t ts, int mode) {
-  if constexpr (requires { q->PostFrame(w, h, stride, p, ts, mode); })
-    return q->PostFrame(w, h, stride, p, ts, mode);
-  else return q->PostFrame(w, h, stride, p, ts);
+  if constexpr (requires { q->PostFrame(w, h, stride, p, ts, mode); }) {
+    auto status = q->PostFrame(w, h, stride, p, ts, mode);
+    if constexpr (std::is_same_v<decltype(status), bool>) return status;
+    else return status == 0;
+  } else return q->PostFrame(w, h, stride, p, ts);
 }
 template<class Frame> int Render(ANativeWindow* w, const Frame& f, int64_t ts, int mode) {
   if constexpr (requires { gesher::media::RenderFrame(w, f, ts, mode); })

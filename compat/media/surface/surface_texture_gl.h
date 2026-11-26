@@ -55,8 +55,9 @@ class GlTextureConsumer {
   // to GL_TEXTURE_EXTERNAL_OES either way, as AOSP does.
   int UpdateTexImage(const std::shared_ptr<const SurfaceFrame>& latest);
   // releaseTexImage: drops the latched frame; an attached texture shows a
-  // 1x1 black image instead (AOSP binds a small debug image).
-  int ReleaseTexImage();
+  // 1x1 black image instead (AOSP binds a small debug image). Reports the
+  // frame number returned to the producer, even if binding the debug image fails.
+  int ReleaseTexImage(uint64_t* released_frame);
   int AttachToContext(uint32_t tex_name);
   int DetachFromContext();
   // SurfaceTexture.release: every later call gives NO_INIT.

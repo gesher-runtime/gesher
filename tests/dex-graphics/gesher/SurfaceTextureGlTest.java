@@ -106,6 +106,7 @@ public final class SurfaceTextureGlTest {
     check(a.makeCurrent() && b.makeCurrent(), "two ES 2 contexts on pbuffers");
     attachedAtConstruction(a, b, handler);
     detachedAtOnce(a, handler);
+    singleBuffer(a, b, handler);
     a.destroy();
     b.destroy();
     EGL14.eglTerminate(display);
@@ -189,6 +190,47 @@ public final class SurfaceTextureGlTest {
     check(st.isReleased() && throwsRuntime(st::updateTexImage),
         "after release() updateTexImage throws");
     GLES20.glDeleteTextures(1, new int[] {texB}, 0);
+  }
+
+  private static void singleBuffer(Gl a, Gl b, Handler handler) throws Exception {
+    a.makeCurrent();
+    int name = newTexture();
+    SurfaceTexture texture = new SurfaceTexture(name, true);
+    Surface producer = new Surface(texture);
+    float[] matrix = new float[16];
+    try {
+      texture.setDefaultBufferSize(W, H);
+      Semaphore frames = new Semaphore(0);
+      texture.setOnFrameAvailableListener(ignored -> frames.release(), handler);
+      draw(producer, Color.RED, Color.RED);
+      check(frames.tryAcquire(5, TimeUnit.SECONDS), "single buffer queues one producer frame");
+      texture.updateTexImage();
+      texture.getTransformMatrix(matrix);
+      check(sample(name, matrix)[at(W / 2, H / 2)] == Color.RED,
+          "single buffer latches the actual Canvas pixels");
+
+      b.makeCurrent();
+      check(throwsIllegalState(texture::releaseTexImage),
+          "wrong EGL context cannot return the single buffer");
+      a.makeCurrent();
+      check(throwsRuntime(() -> draw(producer, Color.BLUE, Color.BLUE)),
+          "single-buffer Canvas producer is blocked before releaseTexImage");
+      texture.updateTexImage();
+      check(sample(name, matrix)[at(W / 2, H / 2)] == Color.RED,
+          "failed producer lock leaves the latched image intact");
+
+      texture.releaseTexImage();
+      draw(producer, Color.GREEN, Color.GREEN);
+      check(frames.tryAcquire(5, TimeUnit.SECONDS), "single buffer returns to the producer");
+      texture.updateTexImage();
+      texture.getTransformMatrix(matrix);
+      check(sample(name, matrix)[at(W / 2, H / 2)] == Color.GREEN,
+          "returned single buffer carries the next actual Canvas frame");
+    } finally {
+      producer.release();
+      texture.release();
+      GLES20.glDeleteTextures(1, new int[] {name}, 0);
+    }
   }
 
   // GeckoSurfaceTexture: new SurfaceTexture(0, singleBufferMode) and detachFromGLContext()

@@ -93,8 +93,9 @@ class QueueSurface::Buffer
   std::vector<uint32_t> pixels;
 };
 
-QueueSurface::QueueSurface(int default_width, int default_height)
-    : android::Surface(nullptr), frame_pool_(std::make_shared<FramePool>()) {
+QueueSurface::QueueSurface(int default_width, int default_height, bool single_buffer_mode)
+    : android::Surface(nullptr), single_buffer_mode_(single_buffer_mode),
+      frame_pool_(std::make_shared<FramePool>()) {
   default_width_ = default_width > 0 ? default_width : 1;
   default_height_ = default_height > 0 ? default_height : 1;
   UpdateFrameGeometry();
@@ -133,9 +134,24 @@ void QueueSurface::SetListener(std::function<void()> listener) {
   if (!abandoned_) listener_ = std::move(listener);
 }
 
+void QueueSurface::SetForwardingListener(std::function<int(const SurfaceFrame&)> listener) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (!abandoned_) forwarding_listener_ = std::move(listener);
+}
+
 std::shared_ptr<const SurfaceFrame> QueueSurface::Latest() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return latest_;
+}
+
+void QueueSurface::ReleaseFrame(uint64_t frame_number) {
+  if (!single_buffer_mode_) return;
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (latest_ != nullptr && latest_->number == frame_number) latest_.reset();
+}
+
+bool QueueSurface::SingleBufferOccupied() const {
+  return single_buffer_mode_ && (locked_ || !dequeued_.empty() || latest_ != nullptr);
 }
 
 uint64_t QueueSurface::frames() const {
@@ -147,6 +163,7 @@ void QueueSurface::Abandon() {
   std::lock_guard<std::mutex> lock(mutex_);
   abandoned_ = true;
   listener_ = nullptr;
+  forwarding_listener_ = nullptr;
   frame_pool_->Close();
   latest_.reset();
   // Dequeued producers own their buffers through dequeued_. A CPU lock has
@@ -154,10 +171,15 @@ void QueueSurface::Abandon() {
   if (!locked_) buffer_ = nullptr;
 }
 
-bool QueueSurface::PostFrame(int width, int height, int stride, const uint32_t* pixels,
-                             int64_t timestamp_ns, int video_scaling_mode) {
+int QueueSurface::PostFrame(int width, int height, int stride, const uint32_t* pixels,
+                            int64_t timestamp_ns, int video_scaling_mode) {
   if (width <= 0 || height <= 0 || stride < width || pixels == nullptr ||
-      (video_scaling_mode != 1 && video_scaling_mode != 2)) return false;
+      (video_scaling_mode != 1 && video_scaling_mode != 2)) return -EINVAL;
+  if (single_buffer_mode_) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (abandoned_) return -ENODEV;
+    if (SingleBufferOccupied()) return -EAGAIN;
+  }
   // The copy is made unlocked: a large frame does not hold up this surface's
   // own producer or its readers.
   auto f = std::make_shared<RecycledFrame>(frame_pool_, width, height);
@@ -175,16 +197,16 @@ bool QueueSurface::PostFrame(int width, int height, int stride, const uint32_t* 
   }
   f->timestamp_ns = timestamp_ns == NATIVE_WINDOW_TIMESTAMP_AUTO
                         ? systemTime(SYSTEM_TIME_MONOTONIC) : timestamp_ns;
-  std::function<void()> listener;
+  Publication publication;
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (abandoned_) return false;
+    if (abandoned_) return -ENODEV;
+    if (SingleBufferOccupied()) return -EAGAIN;
     f->number = ++frames_;
     latest_ = std::move(f);
-    listener = listener_;
+    publication = {listener_, forwarding_listener_, forwarding_listener_ ? latest_ : nullptr};
   }
-  if (listener) listener();
-  return true;
+  return publication.Notify();
 }
 
 void QueueSurface::Size(int* width, int* height) const {
@@ -221,6 +243,7 @@ int QueueSurface::lock(ANativeWindow_Buffer* out, ARect* dirty) {
   // Surface::lock rejects a second CPU lock before consulting the consumer.
   if (locked_) return -ENOSYS;  // Android INVALID_OPERATION.
   if (abandoned_) return -ENODEV;
+  if (SingleBufferOccupied()) return -EAGAIN;
   EnsureBuffer();
   locked_ = true;
   out->width = buffer_->width;
@@ -255,7 +278,7 @@ int QueueSurface::UnlockAndPostWithTimestamp(int64_t timestamp_ns, int video_sca
 }
 
 int QueueSurface::UnlockAndPost(std::optional<int64_t> timestamp_ns, int video_scaling_mode) {
-  std::function<void()> listener;
+  Publication publication;
   {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!locked_) return -EINVAL;
@@ -264,14 +287,13 @@ int QueueSurface::UnlockAndPost(std::optional<int64_t> timestamp_ns, int video_s
       buffer_ = nullptr;
       return -ENODEV;
     }
-    listener = PublishLocked(timestamp_ns, video_scaling_mode);
+    publication = PublishLocked(timestamp_ns, video_scaling_mode);
   }
-  if (listener) listener();
-  return 0;
+  return publication.Notify();
 }
 
-std::function<void()> QueueSurface::PublishLocked(std::optional<int64_t> timestamp_ns,
-                                                int video_scaling_mode) {
+QueueSurface::Publication QueueSurface::PublishLocked(std::optional<int64_t> timestamp_ns,
+                                                      int video_scaling_mode) {
   static gesher::perf::Site copy_site("queue surface: publish a queued frame (copy)");
   const int64_t start = gesher::perf::Now();
   if (buffer_ == nullptr) return {};
@@ -308,12 +330,13 @@ std::function<void()> QueueSurface::PublishLocked(std::optional<int64_t> timesta
   f->number = ++frames_;
   latest_ = std::move(f);
   copy_site.Add(gesher::perf::Now() - start);
-  return listener_;
+  return {listener_, forwarding_listener_, forwarding_listener_ ? latest_ : nullptr};
 }
 
 int QueueSurface::dequeueBuffer(ANativeWindowBuffer** buffer, int* fence_fd) {
   std::lock_guard<std::mutex> lock(mutex_);
   if (abandoned_) return -ENODEV;
+  if (SingleBufferOccupied()) return -EAGAIN;
   EnsureBuffer();
   *buffer = buffer_.get();
   dequeued_.push_back(buffer_);
@@ -326,28 +349,30 @@ int QueueSurface::cancelBuffer(ANativeWindowBuffer* buffer, int) {
   for (auto it = dequeued_.begin(); it != dequeued_.end(); ++it) {
     if (static_cast<ANativeWindowBuffer*>(it->get()) == buffer) {
       dequeued_.erase(it);
-      break;
+      return single_buffer_mode_ && abandoned_ ? -ENODEV : 0;
     }
   }
-  return 0;
+  return single_buffer_mode_ ? (abandoned_ ? -ENODEV : -EINVAL) : 0;
 }
 
 int QueueSurface::queueBuffer(ANativeWindowBuffer* buffer, int) {
-  std::function<void()> listener;
+  Publication publication;
   {
     std::lock_guard<std::mutex> lock(mutex_);
+    bool owns_slot = false;
     for (auto it = dequeued_.begin(); it != dequeued_.end(); ++it) {
       if (static_cast<ANativeWindowBuffer*>(it->get()) == buffer) {
         if (!abandoned_) buffer_ = *it;
         dequeued_.erase(it);
+        owns_slot = true;
         break;
       }
     }
     if (abandoned_) return -ENODEV;
-    listener = PublishLocked(std::nullopt);
+    if (single_buffer_mode_ && !owns_slot) return -EINVAL;
+    publication = PublishLocked(std::nullopt);
   }
-  if (listener) listener();
-  return 0;
+  return publication.Notify();
 }
 
 int QueueSurface::setSwapInterval(int) {

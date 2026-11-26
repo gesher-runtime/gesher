@@ -116,8 +116,8 @@ class SurfaceSink : public BBinder {
   // kFrame: int32 width, int32 height, int64 time stamp, uint64 the memfd's id
   // (its producer's: a new memfd has a new one), the memfd with the pixels
   // (RGBA_8888, width pixels a row), optionally int32 scaling-version and mode.
-  // Answered with int32 status (OK; NO_INIT:
-  // the consumer is gone; BAD_VALUE: not a frame) and the consumer's current
+  // Answered with int32 status (OK; NO_INIT: the consumer is gone; WOULD_BLOCK:
+  // the single buffer is occupied; BAD_VALUE: not a frame) and its current
   // size.
   status_t onTransact(uint32_t code, const Parcel& data, Parcel* reply, uint32_t flags) override {
     if (code != kFrame) return BBinder::onTransact(code, data, reply, flags);
@@ -209,11 +209,10 @@ class SurfaceSink : public BBinder {
     status_t status = OK;
     std::shared_ptr<Mapping> m = MappingFor(id, fd, bytes, &status);
     if (m == nullptr) return status;
-    const bool queued = gesher_surface_post(surface, width, height, width, timestamp,
-                                            static_cast<const uint32_t*>(m->pixels),
-                                            video_scaling_mode);
+    status = gesher_surface_post(surface, width, height, width, timestamp,
+                                 static_cast<const uint32_t*>(m->pixels), video_scaling_mode);
     site.Add(gesher::perf::Now() - start);
-    return queued ? OK : NO_INIT;
+    return status;
   }
 
   const jlong surface_;
@@ -332,18 +331,19 @@ bool Reserve(Forwarder* f, size_t bytes) {
 }
 
 // A frame queued to a forwarding Surface, on its producer's thread.
-void Forward(void* context, jlong surface, int width, int height, int64_t timestamp,
-             const uint32_t* pixels, int video_scaling_mode) {
+int Forward(void* context, jlong surface, int width, int height, int64_t timestamp,
+            const uint32_t* pixels, int video_scaling_mode) {
   Forwarder* f = static_cast<std::shared_ptr<Forwarder>*>(context)->get();
   status_t status = NO_INIT;
   int32_t consumer_width = 0, consumer_height = 0;
   {
     std::lock_guard<std::mutex> lock(f->mutex);
     const size_t bytes = static_cast<size_t>(width) * static_cast<size_t>(height) * 4;
-    if (width <= 0 || height <= 0 || width > kMaxSide || height > kMaxSide || !Reserve(f, bytes)) {
+    if (width <= 0 || height <= 0 || width > kMaxSide || height > kMaxSide) return BAD_VALUE;
+    if (!Reserve(f, bytes)) {
       if (!f->warned) ALOGW("gesher-surface: no memory for a %dx%d frame", width, height);
       f->warned = true;
-      return;
+      return NO_MEMORY;
     }
     static gesher::perf::Site copy_site("surface forward: copy a frame into the memfd");
     static gesher::perf::Site transact_site("surface forward: frame transaction round trip");
@@ -374,7 +374,7 @@ void Forward(void* context, jlong surface, int width, int height, int64_t timest
     } else if (transport != DEAD_OBJECT) {  // DEAD_OBJECT: the consumer's process is gone
       status = transport;
     }
-    if (status != OK && status != NO_INIT && !f->warned) {
+    if (status != OK && status != NO_INIT && status != WOULD_BLOCK && !f->warned) {
       ALOGW("gesher-surface: a %dx%d frame was not queued (%d)", width, height, status);
       f->warned = true;
     }
@@ -385,6 +385,7 @@ void Forward(void* context, jlong surface, int width, int height, int64_t timest
              consumer_width <= kMaxSide && consumer_height <= kMaxSide) {
     gesher_surface_set_default_size(surface, consumer_width, consumer_height);
   }
+  return status;
 }
 
 void ReleaseForwarder(void* context) { delete static_cast<std::shared_ptr<Forwarder>*>(context); }

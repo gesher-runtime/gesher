@@ -223,7 +223,7 @@ int GlTextureConsumer::UpdateTexImage(const std::shared_ptr<const SurfaceFrame>&
   return kOk;
 }
 
-int GlTextureConsumer::ReleaseTexImage() {
+int GlTextureConsumer::ReleaseTexImage(uint64_t* released_frame) {
   std::lock_guard<std::mutex> lock(mutex_);
   if (abandoned_) {
     ALOGE("SurfaceTexture: releaseTexImage: SurfaceTexture is abandoned!");
@@ -233,6 +233,7 @@ int GlTextureConsumer::ReleaseTexImage() {
     if (int err = CheckEglState(true); err != kOk) return err;
   }
   if (current_ == nullptr) return kOk;
+  *released_frame = current_->number;
   current_.reset();
   timestamp_ns_ = 0;
   if (mode_ == Mode::kAttached) {

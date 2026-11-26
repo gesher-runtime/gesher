@@ -9,7 +9,9 @@ namespace accounting {
 // Every large allocation in these workloads is a production pixel vector.
 // Fixture snapshots retain owners instead of copying image payloads.
 constexpr size_t kPayloadMinimum = 4096;
-struct alignas(std::max_align_t) Header { size_t bytes; };
+// The replacement operator new must preserve the alignment the compiler
+// assumes for ordinary allocations, which can exceed alignof(max_align_t).
+struct alignas(__STDCPP_DEFAULT_NEW_ALIGNMENT__) Header { size_t bytes; };
 std::atomic<size_t> live{0}, peak{0};
 thread_local bool measuring = false;
 thread_local size_t allocations = 0, bytes = 0, payload_allocations = 0, payload_bytes = 0;
