@@ -39,6 +39,15 @@ add_custom_command(OUTPUT ${_gl_gen}/gl_thunks.inc
   COMMENT "Generating the EGL/GLES System V thunks"
   VERBATIM)
 
+set(_vk_include ${AOSP_DIR}/external/vulkan-headers/include)
+add_custom_command(OUTPUT ${_gl_gen}/vk_core_thunks.inc
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${_gl_gen}
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_LIST_DIR}/gen_vk_core_thunks.py
+    ${_gl_gen}/vk_core_thunks.inc ${_vk_include}/vulkan/vulkan_core.h
+  DEPENDS ${CMAKE_CURRENT_LIST_DIR}/gen_vk_core_thunks.py ${_vk_include}/vulkan/vulkan_core.h
+  COMMENT "Generating Vulkan 1.0 core ABI thunks"
+  VERBATIM)
+
 add_library(gesher_ndk_graphics OBJECT
   ${CMAKE_CURRENT_LIST_DIR}/libandroid_window.cc
   ${CMAKE_CURRENT_LIST_DIR}/egl_gles.cc
@@ -52,9 +61,10 @@ add_library(gesher_ndk_graphics OBJECT
   ${CMAKE_CURRENT_LIST_DIR}/egl_native_buffer.cc
   # The GPU kept from sleeping between frames read back (child surfaces, composition).
   ${CMAKE_CURRENT_LIST_DIR}/gpu_keepalive.cc
-  ${_gl_gen}/gl_thunks.inc)
+  ${CMAKE_CURRENT_LIST_DIR}/vulkan_core.cc
+  ${_gl_gen}/gl_thunks.inc ${_gl_gen}/vk_core_thunks.inc)
 target_include_directories(gesher_ndk_graphics PRIVATE ${CMAKE_CURRENT_LIST_DIR} ${_gl_gen}
-  ${_gl_include} ${CMAKE_SOURCE_DIR}/compat/hwui/window)
+  ${_gl_include} ${_vk_include} ${CMAKE_SOURCE_DIR}/compat/hwui/window)
 # graphics_native_headers (cmake/aosp/hwui.cmake): <android/native_window.h>.
 # d3d11: the GPU thread's own device (gpu_interop.cc) and the keep-alive's (gpu_keepalive.cc).
 target_link_libraries(gesher_ndk_graphics PRIVATE gesher_bionic gesher_elf graphics_native_headers
