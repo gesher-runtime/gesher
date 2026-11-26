@@ -49,6 +49,19 @@ bool ReadGuestString(GuestMemory& memory, uint32_t address,
   return Fail(error, "JNI32 guest string exceeds limit");
 }
 
+bool SupportedJniVersion(jint requested, jint host_version) {
+  if (requested > host_version) return false;
+  switch (requested) {
+    case JNI_VERSION_1_1:
+    case JNI_VERSION_1_2:
+    case JNI_VERSION_1_4:
+    case JNI_VERSION_1_6:
+    case 0x00010008:  // JNI 1.8, present on newer Android/Java runtimes.
+      return true;
+    default:
+      return false;  // Numeric gaps are not valid JNI versions.
+  }
+}
 constexpr size_t Slot(size_t offset) { return offset / sizeof(void*); }
 
 // Parsing the Java type codes is independent of guest ABI word allocation.
@@ -495,8 +508,8 @@ struct Jni32::State : std::enable_shared_from_this<Jni32::State> {
                    {P, P, I}, I, [this](const auto& a, Value* out, std::string* e) {
           if (!VmArgs(a, 3, e)) return false;
           const int32_t requested = static_cast<int32_t>(a[2].bits);
-          const int rc = requested >= JNI_VERSION_1_1 &&
-                         requested <= real->GetVersion() ? JNI_OK : JNI_EVERSION;
+          const int rc = SupportedJniVersion(requested, real->GetVersion())
+                             ? JNI_OK : JNI_EVERSION;
           if (rc == JNI_OK &&
               (a[1].bits == 0 || !program.Memory().Write32(
                   static_cast<uint32_t>(a[1].bits), kGuestEnv, e)))
@@ -638,7 +651,7 @@ bool Jni32::CallOnLoad(std::string_view library, jint* version,
     return false;
   }
   const jint requested = static_cast<jint>(returned.bits);
-  if (requested < JNI_VERSION_1_1 || requested > state_->real->GetVersion())
+  if (!SupportedJniVersion(requested, state_->real->GetVersion()))
     return Fail(error, "JNI32 guest JNI_OnLoad returned unsupported JNI version");
   *version = requested;
   if (error) error->clear();
