@@ -7,6 +7,7 @@
 #include <cmath>
 #include <future>
 #include <thread>
+#include <type_traits>
 
 #define HAS_SCALING @HAS_SCALING@
 #define HAS_ANDROID_REFERENCE @HAS_ANDROID_REFERENCE@

@@ -88,7 +88,16 @@ def generate(component: str, ref: str | None) -> str:
                                    "class QueueSurface::Buffer")
             pool_classes += ("\nQueueSurface::QueueSurface() : frame_pool_(std::make_shared<FramePool>()) {\n"
                              "  frame_pool_->Configure(buffer_->width, buffer_->height);\n}\n")
+        declaration = re.search(r"  [^;\n]+ PublishLocked\([^;]+;", header)
+        if declaration is None:
+            raise ValueError("queue publication declaration changed")
+        declaration = " ".join(declaration[0].split())
+        publication = ""
+        if "struct Publication {" in header:
+            publication = method(header, "  struct Publication {") + ";\n"
+            publication += "  std::function<int(const SurfaceFrame&)> forwarding_listener_;"
         replacements = {
+            "@PUBLISH_MEMBERS@": publication + "\n  " + declaration,
             "@FRAME_POOL_MEMBERS@": pool_members,
             "@FRAME_POOL_CLASSES@": pool_classes,
             "@TIMESTAMP_MEMBER@": members[0].strip(),

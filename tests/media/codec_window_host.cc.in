@@ -265,6 +265,7 @@ void ReleaseErrorContracts() {
   for (bool reader : {false, true}) {
     for (bool has_timestamp : {false, true}) {
       ANativeWindow window;
+      ANativeWindow replacement;
       JavaSurface surface{reader ? nullptr : &window, reader};
       Codec codec;
       codec.SetSurface(nullptr, &surface);
@@ -321,7 +322,6 @@ void ReleaseErrorContracts() {
       codec.RetireSurfaceFailure(generation, "duplicate completion");
       Check(codec.error_events == 1, "duplicate fatal completion cannot send another error");
 
-      ANativeWindow replacement;
       JavaSurface next{reader ? nullptr : &replacement, reader};
       env = {};
       MC_setSurface(&env, nullptr, &next);
