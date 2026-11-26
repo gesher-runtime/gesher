@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -159,6 +160,16 @@ void SetCursor(NetlinkShared& shared, Cursor cursor) {
 
 uint32_t RingAdvance(uint32_t offset, size_t count) {
   return static_cast<uint32_t>((offset + count) % kMaxNetlinkReceiveBytes);
+}
+
+bool CommitRingRange(NetlinkShared& shared, uint32_t offset, size_t count) {
+  const size_t first = std::min(count, static_cast<size_t>(kMaxNetlinkReceiveBytes - offset));
+  if (!VirtualAlloc(shared.data + offset, first, MEM_COMMIT, PAGE_READWRITE) ||
+      (first < count && !VirtualAlloc(shared.data, count - first, MEM_COMMIT, PAGE_READWRITE))) {
+    errno = WinError();
+    return false;
+  }
+  return true;
 }
 
 void RingWrite(NetlinkShared& shared, uint32_t* offset, const void* data, size_t count) {
@@ -397,11 +408,13 @@ std::shared_ptr<NetlinkState> CreateNetlinkState(int sock_type, bool nonblocking
     g_ports = shared;
   }
 
-  HANDLE section = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0,
+  HANDLE section = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE | SEC_RESERVE, 0,
                                       sizeof(NetlinkShared), nullptr);
   if (!section) return errno = WinError(), nullptr;
   auto* shared = static_cast<NetlinkShared*>(MapViewOfFile(section, FILE_MAP_WRITE, 0, 0, 0));
-  HANDLE lock = shared ? CreateMutexW(nullptr, FALSE, nullptr) : nullptr;
+  const bool header = shared &&
+      VirtualAlloc(shared, offsetof(NetlinkShared, data), MEM_COMMIT, PAGE_READWRITE);
+  HANDLE lock = header ? CreateMutexW(nullptr, FALSE, nullptr) : nullptr;
   HANDLE ready = lock ? CreateEventW(nullptr, TRUE, FALSE, nullptr) : nullptr;
   if (!ready) {
     const int error = WinError();
@@ -547,49 +560,61 @@ ssize_t NetlinkSend(NetlinkState& state, const ws::Buffer* buffers, size_t count
   // SELinux denies RTM_GETLINK to ordinary Android apps at send time.
   if (hdr.nlmsg_type == RTM_GETLINK) return errno = EACCES, -1;
 
+  const Operation operation(state);
+  if (!operation) return errno = EBADF, -1;
+  auto& shared = *state.shared;
+  const bool immediate = (flags & MSG_DONTWAIT) ||
+                         InterlockedCompareExchange(&shared.nonblocking, 0, 0);
+  const DWORD lock_wait = immediate ? 0 : 1000;
+  const bool address_request = hdr.nlmsg_type == RTM_GETADDR &&
+      (hdr.nlmsg_flags & (NLM_F_REQUEST | NLM_F_DUMP)) == (NLM_F_REQUEST | NLM_F_DUMP) &&
+      hdr.nlmsg_len > NLMSG_HDRLEN;
+  const uint8_t family = address_request ? req[NLMSG_HDRLEN] : AF_UNSPEC;
+  const bool dump = address_request && (family == AF_UNSPEC || family == AF_INET || family == AF_INET6);
+  uint32_t reply_pid;
   {
-    const Operation operation(state);
-    if (!operation) return errno = EBADF, -1;
-    const QueueLock lock(state);
+    const QueueLock lock(state, lock_wait);
     if (lock.error()) return errno = lock.error(), -1;
-    auto& shared = *state.shared;
     if (req.size() > static_cast<size_t>(shared.sndbuf)) return errno = EMSGSIZE, -1;
+    if (dump && GetCursor(shared).used != 0) return errno = EBUSY, -1;
     if (!AutoBindPort(shared)) return -1;
-    auto cursor = GetCursor(shared);
+    reply_pid = shared.bound_pid;
+  }
 
-    PacketBatcher batch;
-    if (hdr.nlmsg_type == RTM_GETADDR &&
-        (hdr.nlmsg_flags & (NLM_F_REQUEST | NLM_F_DUMP)) == (NLM_F_REQUEST | NLM_F_DUMP) &&
-        hdr.nlmsg_len > NLMSG_HDRLEN) {
-      const uint8_t family = req[NLMSG_HDRLEN];
-      if (family != AF_UNSPEC && family != AF_INET && family != AF_INET6) {
-        AppendErrorPacket(-EAFNOSUPPORT, hdr, shared.bound_pid, &batch);
-      } else {
-        if (cursor.used != 0) return errno = EBUSY, -1;
-        if (!AppendAddrDump(family, hdr.nlmsg_seq, shared.bound_pid, &batch)) return -1;
-      }
-    } else if (hdr.nlmsg_type == NLMSG_NOOP) {
-      if ((hdr.nlmsg_flags & NLM_F_ACK) != 0) {
-        AppendErrorPacket(0, hdr, shared.bound_pid, &batch);
-      }
-    } else {
-      AppendErrorPacket(-EOPNOTSUPP, hdr, shared.bound_pid, &batch);
+  // Adapter enumeration may call Windows network providers. No reader,
+  // descriptor alias, or process sharing this socket waits for it under the
+  // receive queue's mutex.
+  PacketBatcher batch;
+  if (dump) {
+    if (!AppendAddrDump(family, hdr.nlmsg_seq, reply_pid, &batch)) return -1;
+  } else if (address_request) {
+    AppendErrorPacket(-EAFNOSUPPORT, hdr, reply_pid, &batch);
+  } else if (hdr.nlmsg_type == NLMSG_NOOP) {
+    if (hdr.nlmsg_flags & NLM_F_ACK) AppendErrorPacket(0, hdr, reply_pid, &batch);
+  } else {
+    AppendErrorPacket(-EOPNOTSUPP, hdr, reply_pid, &batch);
+  }
+
+  const size_t bytes = batch.bytes + batch.packets.size() * sizeof(uint32_t);
+  if (bytes == 0) return static_cast<ssize_t>(req.size());
+  {
+    const QueueLock lock(state, lock_wait);
+    if (lock.error()) return errno = lock.error(), -1;
+    auto cursor = GetCursor(shared);
+    if (dump && cursor.used != 0) return errno = EBUSY, -1;
+    if (bytes + cursor.used > static_cast<size_t>(shared.rcvbuf)) return errno = ENOBUFS, -1;
+    uint32_t tail = RingAdvance(cursor.head, cursor.used);
+    // Keep empty sockets cheap. If a commitment fails, the old cursor and
+    // every already-published record remain intact.
+    if (!CommitRingRange(shared, tail, bytes)) return -1;
+    for (const auto& packet : batch.packets) {
+      const auto size = static_cast<uint32_t>(packet.size());
+      RingWrite(shared, &tail, &size, sizeof(size));
+      RingWrite(shared, &tail, packet.data(), size);
     }
-    size_t bytes = batch.bytes + batch.packets.size() * sizeof(uint32_t);
-    if (bytes) {
-      if (bytes + cursor.used > static_cast<size_t>(shared.rcvbuf)) return errno = ENOBUFS, -1;
-      uint32_t tail = RingAdvance(cursor.head, cursor.used);
-      for (const auto& packet : batch.packets) {
-        const auto size = static_cast<uint32_t>(packet.size());
-        RingWrite(shared, &tail, &size, sizeof(size));
-        RingWrite(shared, &tail, packet.data(), size);
-      }
-      // Publish all records together. A process that dies under the mutex
-      // either published the full batch or left the old cursor intact.
-      cursor.used += static_cast<uint32_t>(bytes);
-      SetCursor(shared, cursor);
-      SetEvent(state.ready);
-    }
+    // One store publishes all datagrams, even if a process dies under the mutex.
+    SetCursor(shared, {cursor.head, cursor.used + static_cast<uint32_t>(bytes)});
+    SetEvent(state.ready);
   }
   if (HasPollWaiters()) WakePollers();
   return static_cast<ssize_t>(req.size());

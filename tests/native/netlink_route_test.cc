@@ -475,6 +475,48 @@ bool ReadAck(int fd, uint32_t seq) {
   return hdr.nlmsg_type == NLMSG_ERROR && hdr.nlmsg_seq == seq;
 }
 
+std::set<uintptr_t> ReservedMappedRings() {
+  std::set<uintptr_t> bases;
+  SYSTEM_INFO system;
+  GetSystemInfo(&system);
+  auto address = reinterpret_cast<uintptr_t>(system.lpMinimumApplicationAddress);
+  while (address < reinterpret_cast<uintptr_t>(system.lpMaximumApplicationAddress)) {
+    MEMORY_BASIC_INFORMATION info{};
+    if (!VirtualQuery(reinterpret_cast<void*>(address), &info, sizeof(info))) break;
+    if (info.State == MEM_RESERVE && info.Type == MEM_MAPPED &&
+        info.RegionSize >= 256 * 1024) {
+      bases.insert(reinterpret_cast<uintptr_t>(info.AllocationBase));
+    }
+    const auto next = reinterpret_cast<uintptr_t>(info.BaseAddress) + info.RegionSize;
+    if (next <= address) break;
+    address = next;
+  }
+  return bases;
+}
+
+void TestEmptySocketReservation() {
+  const auto before = ReservedMappedRings();
+  const int fd = socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
+  Check(fd >= 0, "open route socket for empty ring resource test");
+  if (fd < 0) return;
+  const auto after = ReservedMappedRings();
+  bool found_reserved_ring = false;
+  SYSTEM_INFO system;
+  GetSystemInfo(&system);
+  for (const uintptr_t base : after) {
+    if (before.contains(base)) continue;
+    MEMORY_BASIC_INFORMATION region{};
+    if (VirtualQuery(reinterpret_cast<void*>(base), &region, sizeof(region)) &&
+        region.Type == MEM_MAPPED && region.State == MEM_COMMIT &&
+        region.RegionSize == system.dwPageSize) {
+      found_reserved_ring = true;
+      break;
+    }
+  }
+  Check(found_reserved_ring, "empty receive ring commits one header page and reserves the rest");
+  close(fd);
+}
+
 void TestQueueWrap() {
   const int fd = socket(AF_NETLINK, SOCK_RAW | SOCK_NONBLOCK, NETLINK_ROUTE);
   Check(fd >= 0, "open route socket to exercise receive ring wrap");
@@ -511,9 +553,10 @@ void TestForkedSocket() {
   if (cloned == 0) {
     // The child consumes the parent's record, updates shared open status,
     // queues a new response and lets its local last close retire.
-    const bool passed = ReadAck(fd, 31) &&
-                        fcntl(fd, F_SETFL, O_NONBLOCK) == 0 &&
-                        QueueAck(fd, 32) && close(fd) == 0;
+    bool passed = ReadAck(fd, 31) && fcntl(fd, F_SETFL, O_NONBLOCK) == 0;
+    // Commit at least one page the parent never touched before cloning.
+    for (uint32_t seq = 32; passed && seq <= 155; ++seq) passed = QueueAck(fd, seq);
+    passed = passed && close(fd) == 0;
     TerminateProcess(GetCurrentProcess(), passed ? 0 : 1);
     return;
   }
@@ -530,7 +573,9 @@ void TestForkedSocket() {
     gesher::ForgetForkedChild(pid);
     Check(poll(&pfd, 1, 1000) == 1 && (pfd.revents & POLLIN),
           "child reply is readable after the child's last local close");
-    Check(ReadAck(fd, 32), "parent sees the child's reply without duplicate data");
+    bool matched = true;
+    for (uint32_t seq = 32; matched && seq <= 155; ++seq) matched = ReadAck(fd, seq);
+    Check(matched, "parent reads the child's replies including newly committed pages");
     Check(fcntl(fd, F_GETFL) == (O_RDWR | O_NONBLOCK),
           "parent sees the child's open status flags");
     Check(poll(&pfd, 1, 0) == 0, "parent and child consumed each reply exactly once");
@@ -546,6 +591,7 @@ int main() {
   TestFlagsPollTimeoutAndDup();
   TestReceiveBufferLimit();
   TestReceiveRetirement();
+  TestEmptySocketReservation();
   TestQueueWrap();
   TestForkedSocket();
 
