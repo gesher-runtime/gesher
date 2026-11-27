@@ -1,5 +1,17 @@
 # Stable sorting work in complete directory scans
 
+## Historical evidence validation
+
+The report verifier checks the pinned measurement archive, the archived source
+map, every member, raw observations and recomputed statistics. Later changes to
+the working tree do not change those historical measurements. The production
+Scandir contracts run separately on the current source with sanitizers and
+compiled negative controls in CI. Performance claims for changed implementations
+require new measurements.
+
+The consolidation and supplier-integration records below describe earlier
+source compositions. Their transition files remain historical records.
+
 ## Draft consolidation on 2026-11-26
 
 The measurements below retain their original archived sources and execution
