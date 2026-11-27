@@ -138,6 +138,13 @@ class PlanTests(unittest.TestCase):
 
 
 
+    def test_unplanned_matrix_dimensions_are_rejected(self):
+        for name in ("test-native (windows-11-arm)", "test-new-shard (windows-2025)",
+                     "artifact-preflight (new-group)"):
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, "unselected"):
+                planner.verify_matrix_jobs(
+                    [{"name": name, "status": "completed", "conclusion": "success"}], [], [])
+
     def test_retained_successful_cells_keep_same_run_and_source_on_failed_rerun(self):
         context = {"run_id": 45, "attempt": 2, "head_sha": "a" * 40}
         jobs = [

@@ -46,7 +46,7 @@ def key(root, system):
 
 def system_identity():
     tools = {}
-    for name in ("clang", "clang++", "cmake", "ninja", "bison", "flex"):
+    for name in ("clang", "clang++", "cmake", "ninja", "bison", "flex", "python3"):
         executable = shutil.which(name)
         if executable is None:
             raise ValueError("Missing host compiler dependency: " + name)
@@ -92,7 +92,8 @@ def restore(root, cache_key, repository):
     if receipt_path.is_symlink():
         raise ValueError("Symlink in host tool receipt")
     receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
-    if (set(receipt) != {"key", "repository", "ref", "source", "run", "files"}
+    if (not isinstance(receipt, dict)
+            or set(receipt) != {"key", "repository", "ref", "source", "run", "files"}
             or receipt["key"] != cache_key or receipt["repository"] != repository
             or receipt["ref"] != "refs/heads/main"
             or not isinstance(receipt["source"], str)

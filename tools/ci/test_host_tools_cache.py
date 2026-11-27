@@ -98,13 +98,15 @@ class HostToolsCacheTests(unittest.TestCase):
                                 cache.key(self.root, {"compiler": "two"}))
 
     def test_cli_corrupt_cache_falls_back_to_build(self):
-        self.receipt().write_text("{")
-        with patch.object(cache, "ROOT", self.root), \
-                patch.object(cache, "output") as output, \
-                patch.object(cache.os, "environ", self.environment), \
-                patch("sys.argv", ["cache", "restore", "--key", self.key]):
-            cache.main()
-        output.assert_called_once_with("hit", "false")
+        for malformed in ('{', '1', 'null', '"scalar"', '[1, 2]', 'true'):
+            with self.subTest(receipt=malformed):
+                self.receipt().write_text(malformed)
+                with patch.object(cache, "ROOT", self.root), \
+                        patch.object(cache, "output") as output, \
+                        patch.object(cache.os, "environ", self.environment), \
+                        patch("sys.argv", ["cache", "restore", "--key", self.key]):
+                    cache.main()
+                output.assert_called_once_with("hit", "false")
 
     def test_workflow_republishes_current_artifact_after_verification(self):
         workflow = (cache.ROOT / ".github/workflows/framework.yml").read_text()

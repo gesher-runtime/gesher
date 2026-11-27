@@ -244,13 +244,13 @@ def verify(workflow, selected, results):
 
 
 def verify_matrix_jobs(jobs, shards, groups, context=None):
-    """Require every selected matrix cell in the current attempt to have succeeded."""
+    """Require every selected matrix cell, including retained rerun successes."""
     expected = {f"test-{shard} ({os_name})" for shard in shards for os_name in WINDOWS}
     expected.update(f"artifact-preflight ({group})" for group in groups)
     observed = set()
     for job in jobs:
         name = job["name"]
-        matrix_cell = re.fullmatch(r"test-\w+ \(windows-20(?:22|25)\)|artifact-preflight \([a-z]+\)", name)
+        matrix_cell = re.fullmatch(r"(?:test-[^()\r\n]+|artifact-preflight) \([^()\r\n]+\)", name)
         if not matrix_cell:
             continue
         if context is not None and (job.get("run_id") != context["run_id"]

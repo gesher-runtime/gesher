@@ -62,12 +62,26 @@ class QueueWorkflows(unittest.TestCase):
 
             verify = next(step for step in jobs[gate]['steps']
                           if 'select_pr_jobs.py verify' in step.get('run', ''))
-            self.assertEqual(verify['if'], "github.event_name == 'pull_request'")
+            self.assertNotIn('if', verify)
+            self.assertEqual(verify['env']['SHARDS'], '${{ needs.plan.outputs.shards }}')
+            self.assertEqual(verify['env']['PREFLIGHT_GROUPS'], '${{ needs.plan.outputs.preflight_groups }}')
+            self.assertEqual(verify['env']['GH_TOKEN'], '${{ github.token }}')
+            checkout = next(step for step in jobs[gate]['steps']
+                            if step.get('uses') == 'actions/checkout@v4')
+            self.assertEqual(checkout['with']['fetch-depth'], 0)
+            self.assertNotIn('if', checkout)
+            self.assertIn('tests/windows/test-shards.json', checkout['with']['sparse-checkout'])
             self.assertEqual(verify['env']['SELECTED'], '${{ needs.plan.outputs.selected }}')
             self.assertEqual(verify['env']['JOB_RESULTS'], '${{ toJSON(needs) }}')
             verification_lines = [line for line in verify['run'].splitlines() if 'select_pr_jobs.py' in line]
             self.assertEqual(verification_lines, [f'python3 tools/ci/select_pr_jobs.py verify --workflow {workflow}'])
-            command = [sys.executable, *verification_lines[0].split()[1:]]
+            # Aggregate predicates remain independent of GitHub transport. The planner
+            # suite exercises recomputation and exact matrix inventory rejection.
+            command = [sys.executable, '-c',
+                       "import json, os, sys; sys.path.insert(0, 'tools/ci'); "
+                       "import select_pr_jobs as p; "
+                       f"p.verify(p.load_workflow('{workflow}'), "
+                       "json.loads(os.environ['SELECTED']), json.loads(os.environ['JOB_RESULTS']))"]
 
             full = {job: {'result': 'success'} for job in tracked}
             docs_only = {job: {'result': 'success' if job in required else 'skipped'} for job in tracked}
