@@ -142,6 +142,65 @@ jobs:
         run: |
           & .\cost-events-test.exe
           if ($LASTEXITCODE -ne 0) { throw 'Required Windows client cost subscription failed' }
+  # A successfully unloaded service profile can remain locked by Windows.
+  # Both launch modes require a fresh machine: never delete or reuse a prior
+  # profile to make the observer-free safety precondition pass.
+  windows-protected-launch-unobserved:
+    needs: [plan, source-identity]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'windows-protected-launch-unobserved') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Actual protected runtime launch without a diagnostic observer
+        if: ${{ !cancelled() }}
+        timeout-minutes: 3
+        shell: cmd
+        run: |
+          cl /nologo /std:c++20 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /DNOMINMAX tests\native\usb_protected_launch_test.cc tests\native\usb_scm_profile_control.cc tests\native\usb_lowbox_iat_trace.cc compat\usb_storage\protected_identity.cc compat\usb_storage\authority_launch.cc compat\framework\app_container.cc /Fe:usb_protected_launch_test.exe advapi32.lib userenv.lib wtsapi32.lib user32.lib ole32.lib shell32.lib uuid.lib > usb-protected-launch.log 2>&1
+          set "GESHER_PROTECTED_LAUNCH_COMPILE_EXIT=%errorlevel%"
+          >> usb-protected-launch.log echo Protected launch compiler exit: %GESHER_PROTECTED_LAUNCH_COMPILE_EXIT%
+          if not "%GESHER_PROTECTED_LAUNCH_COMPILE_EXIT%"=="0" (
+            type usb-protected-launch.log
+            exit /b %GESHER_PROTECTED_LAUNCH_COMPILE_EXIT%
+          )
+          cl /nologo /std:c11 /GS- /W4 /WX /D_WIN32_WINNT=0x0A00 tests\native\usb_guest_loader_probe.c /Fe:guest-kernel32.exe /link /NODEFAULTLIB /ENTRY:GuestLoaderProbeEntry /SUBSYSTEM:CONSOLE kernel32.lib >> usb-protected-launch.log 2>&1
+          if errorlevel 1 (
+            type usb-protected-launch.log
+            exit /b 1
+          )
+          cl /nologo /std:c11 /GS- /W4 /WX /D_WIN32_WINNT=0x0A00 /DGESHER_PROBE_USER32 tests\native\usb_guest_loader_probe.c /Fe:guest-user32.exe /link /NODEFAULTLIB /ENTRY:GuestLoaderProbeEntry /SUBSYSTEM:CONSOLE kernel32.lib user32.lib >> usb-protected-launch.log 2>&1
+          if errorlevel 1 (
+            type usb-protected-launch.log
+            exit /b 1
+          )
+          cl /nologo /std:c11 /GS- /W4 /WX /D_WIN32_WINNT=0x0A00 /DGESHER_PROBE_USER32_LATE tests\native\usb_guest_loader_probe.c /Fe:guest-user32-late.exe /link /NODEFAULTLIB /ENTRY:GuestLoaderProbeEntry /SUBSYSTEM:CONSOLE kernel32.lib >> usb-protected-launch.log 2>&1
+          if errorlevel 1 (
+            type usb-protected-launch.log
+            exit /b 1
+          )
+          python -c "from datetime import datetime, timezone; print('Protected launch: fixture-start-utc=' + datetime.now(timezone.utc).isoformat(timespec='microseconds'))" >> usb-protected-launch.log 2>&1
+          usb_protected_launch_test.exe --scm-profile-control >> usb-protected-launch.log 2>&1
+          set "GESHER_PROTECTED_LAUNCH_NATIVE_EXIT=%errorlevel%"
+          >> usb-protected-launch.log echo Protected launch native exit: %GESHER_PROTECTED_LAUNCH_NATIVE_EXIT%
+          type usb-protected-launch.log
+          exit /b %GESHER_PROTECTED_LAUNCH_NATIVE_EXIT%
+      - name: Preserve observer-free protected launch evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: protected-launch-unobserved-native-${{ matrix.os }}
+          path: usb-protected-launch.log
+          if-no-files-found: error
+
   # Short Windows host contracts share one runner per OS: separate jobs each
   # paid for a runner, checkout and queue slot to run a minute of checks.
   # Every check step runs even after an earlier one fails, so one failure
@@ -214,16 +273,6 @@ jobs:
           if not "%GESHER_PROTECTED_LAUNCH_NATIVE_EXIT%"=="0" pwsh -NoLogo -NoProfile -NonInteractive -File tools\ci\protected_profile_diagnostics.ps1 -LogPath usb-protected-launch.log >> usb-protected-launch.log 2>&1
           type usb-protected-launch.log
           exit /b %GESHER_PROTECTED_LAUNCH_NATIVE_EXIT%
-      - name: Protected runtime launch without the native diagnostic observer
-        if: ${{ !cancelled() && steps.protected_launch_observed.outcome == 'success' }}
-        timeout-minutes: 3
-        shell: cmd
-        run: |
-          usb_protected_launch_test.exe --scm-profile-control > usb-protected-launch-unobserved.log 2>&1
-          set "GESHER_PROTECTED_LAUNCH_UNOBSERVED_EXIT=%errorlevel%"
-          >> usb-protected-launch-unobserved.log echo Unobserved protected launch native exit: %GESHER_PROTECTED_LAUNCH_UNOBSERVED_EXIT%
-          type usb-protected-launch-unobserved.log
-          exit /b %GESHER_PROTECTED_LAUNCH_UNOBSERVED_EXIT%
       - name: Preserve early protected launch diagnostics
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
@@ -3756,7 +3805,7 @@ jobs:
   ci-required:
     name: ci-required
     if: always()
-    needs: [plan, source-identity, automerge-script, network-cost-client, windows-host-contracts, api37-report-tests, union-tsf, union-services, union-native-blocking, artifact-preflight, build-framework-assets, build, native3-locks-reference, native3-locks-regression, framework, native-libs, bluetooth, exec, libs, arm64, native2, posix, graphics, angle, webview, boot-image, media, surfaces, asm-port, package, e2e, core-suppliers, test-shards, test, web3-query-regression, binder2-sg-fixtures, binder2-sg-regression, compile, linux-reference, supplier-correlation, windows]
+    needs: [plan, source-identity, automerge-script, network-cost-client, windows-host-contracts, windows-protected-launch-unobserved, api37-report-tests, union-tsf, union-services, union-native-blocking, artifact-preflight, build-framework-assets, build, native3-locks-reference, native3-locks-regression, framework, native-libs, bluetooth, exec, libs, arm64, native2, posix, graphics, angle, webview, boot-image, media, surfaces, asm-port, package, e2e, core-suppliers, test-shards, test, web3-query-regression, binder2-sg-fixtures, binder2-sg-regression, compile, linux-reference, supplier-correlation, windows]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
