@@ -76,10 +76,21 @@ final class UsbPermissionDecisions {
     }
 
     private static String entryKey(String device, ApkPackage installation) {
+        String owner = installation.enabledStateOwner();
+        if (owner == null || owner.equals("00000000-0000-0000-0000-000000000000")) return null;
+        try {
+            if (!java.util.UUID.fromString(owner).toString().equals(owner)) return null;
+        } catch (IllegalArgumentException invalid) {
+            return null;
+        }
         Signature[] signatures = installation.verifiedSignatures();
         if (signatures == null || signatures.length == 0) return null;
         String[] identity = Arrays.stream(signatures).map(Signature::toCharsString).sorted().toArray(String[]::new);
-        return hash(device, installation.packageName, Integer.toString(installation.uid()), hash(identity));
+        // A valid update retains its owner; uninstall/reinstall does not, even
+        // when package, UID and signer are reused. The domain also makes old
+        // owner-less rows inert. Retain those bounded records without granting.
+        return hash("installation-v2", device, installation.packageName,
+                Integer.toString(installation.uid()), owner, hash(identity));
     }
 
     synchronized Boolean get(String device, ApkPackage installation) {
@@ -93,7 +104,7 @@ final class UsbPermissionDecisions {
         changed.putAll(decisions);
         for (ApkPackage installation : installations) {
             String key = entryKey(device, installation);
-            if (key == null) throw new SecurityException("Cannot persist USB permission for an unverified APK");
+            if (key == null) throw new SecurityException("Cannot persist USB permission without verified installation identity");
             changed.setProperty(key, Boolean.toString(granted));
         }
         if (changed.equals(decisions)) return;

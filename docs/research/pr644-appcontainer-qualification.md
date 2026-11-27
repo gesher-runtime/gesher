@@ -419,3 +419,21 @@ approval/cancellation/lifecycle still block default enablement and overall
 approval. The user does not know whether a Windows driver-signing
 infrastructure exists; none is assumed and no driver or machine network policy
 was installed by this work. Physical USB remains unqualified without hardware.
+
+## Combined-review USB consent finding
+
+Whole-PR review found that persistent Android USB decisions used package, UID
+and signer but omitted the installation owner. The real allocator retains UID
+tombstones, so a same-name/signer reinstall could inherit the old consent.
+The decision key now includes the canonical nonzero enabled-state owner and a
+new framed hash domain. Same-installation updates and restarts retain consent;
+uninstall/reinstall requires a new decision. Old owner-less rows remain bounded
+and stored but authorize no installation. Transient attachment grants already
+require the exact current package object and are unchanged.
+
+The production decision store passes 45 real-filesystem host checks, including
+grant and denial separation for reused name/UID/signer, invalid owner rejection,
+same-owner update/restart, actual legacy-key denial and new-owner consent. The
+exact previous production source fails the new reinstall assertion. Independent
+review reproduced both outcomes. This qualifies the persistence and identity
+boundary, not physical USB transfers or the elevated raw-storage route.

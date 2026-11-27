@@ -38,8 +38,15 @@ public final class UsbDevice {
 import android.content.pm.Signature;
 final class ApkPackage {
     final String packageName; private final int uid; private final Signature[] signers;
-    ApkPackage(String name, int uid, Signature[] signers) { packageName=name; this.uid=uid; this.signers=signers; }
+    private final String owner;
+    ApkPackage(String name, int uid, Signature[] signers) {
+        this(name, uid, signers, "2cf7b610-cbeb-4027-a259-40e1111c1a2c");
+    }
+    ApkPackage(String name, int uid, Signature[] signers, String owner) {
+        packageName=name; this.uid=uid; this.signers=signers; this.owner=owner;
+    }
     int uid() { return uid; } Signature[] verifiedSignatures() { return signers == null ? null : signers.clone(); }
+    String enabledStateOwner() { return owner; }
 }''',
     'com/gesher/server/SystemServer.java': '''package com.gesher.server;
 final class SystemServer { static void log(String text) { System.out.println(text); } }''',
