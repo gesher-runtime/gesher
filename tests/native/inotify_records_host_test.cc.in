@@ -51,9 +51,19 @@ struct Watch {
   bool extended = true, removed = false, ignored_sent = false,
        awaiting_rename = false, still_linked = false, stale_name = false;
   std::set<std::wstring> writing;
+  // Query-generation acquisition is an explicit host boundary in this record
+  // fixture. The whole-source routing corpus exercises actual handle lifetime.
+  std::map<std::wstring, unsigned long long> generations;
   std::map<std::wstring, std::pair<long long, long long>> contents;
 };
 std::map<std::wstring, unsigned long long> current_entries;
+void RememberWriter(Watch &w, const std::wstring &name) {
+  if (w.removed) return;
+  w.writing.insert(name);
+  const auto found = current_entries.find(name);
+  if (w.file.empty() && found != current_entries.end())
+    w.generations.emplace(name, found->second);
+}
 bool MatchesNamedEntry(const Watch &w, const std::wstring &name) {
   auto it = current_entries.find(name);
   return it != current_entries.end() && it->second == w.index;

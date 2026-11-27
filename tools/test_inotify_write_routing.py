@@ -64,10 +64,14 @@ def main() -> int:
         raise ValueError("directory reopen boundary changed")
     source = source.replace(reopen_include, "")
     host = (ROOT / "tests/native/inotify_write_routing_host.cc.in").read_text()
+    parent_routing = 'int directory_wd = 0;' in source and 'SameIdentity(held_parent, parent_id)' in source
+    if not args.source_ref and not parent_routing:
+        raise ValueError("current source omitted held-parent identity routing")
     pieces = {
         "INOTIFY_SOURCE": source,
         "TRANSFER_FILE_HANDLE": section(fd, "int TransferFileHandle(", "// Capture the object and shared description"),
         "HAS_ROUTING_INDEX": str(int("std::map<FileIdentity, int> identities;" in source)),
+        "HAS_PARENT_ID_ROUTING": str(int(parent_routing)),
     }
     for name, data in pieces.items():
         marker = "@" + name + "@"

@@ -99,6 +99,22 @@ ReadDirectoryChangesExWFn ExtendedReader() {
   return fn;
 }
 
+bool ExactIdentity(HANDLE h, FILE_ID_INFO* id) {
+  if (!GetFileInformationByHandleEx(h, FileIdInfo, id, sizeof(*id))) return false;
+  const unsigned char zero[16]{};
+  return memcmp(id->FileId.Identifier, zero, sizeof(zero)) != 0;
+}
+bool SameIdentity(const FILE_ID_INFO& a, const FILE_ID_INFO& b) {
+  return a.VolumeSerialNumber == b.VolumeSerialNumber &&
+      memcmp(a.FileId.Identifier, b.FileId.Identifier, sizeof(a.FileId.Identifier)) == 0;
+}
+struct WriteGeneration {
+  HANDLE handle = INVALID_HANDLE_VALUE; // fresh attributes-only file object, never a writer duplicate
+  FILE_ID_INFO id{};
+  bool identified = false;
+  ~WriteGeneration() { if (handle != INVALID_HANDLE_VALUE) CloseHandle(handle); }
+};
+
 struct Watch {
   int wd = 0;
   uint32_t mask = 0;
@@ -122,6 +138,7 @@ struct Watch {
   // rename's record did not arrive in time. Writes then skip the rename wait
   // and IN_CLOSE_WRITE probes the inode itself.
   bool stale_name = false;
+  std::map<std::wstring, std::shared_ptr<WriteGeneration>> generations;
   std::set<std::wstring> writing;  // names to report IN_CLOSE_WRITE for
   // Each name's last modification time and size (extended records): a change
   // that moves neither is to metadata only (IN_ATTRIB).
@@ -170,6 +187,7 @@ std::atomic<int> g_live_count{0};
 // IDs). Lets InotifyNoteWrite query them before taking any lock.
 std::atomic<size_t> g_file_watches{0};
 std::atomic<size_t> g_path_watches{0};
+std::atomic<size_t> g_directory_watches{0};
 
 struct Inotify {
   std::mutex mutex;
@@ -183,6 +201,7 @@ struct Inotify {
   std::multimap<std::wstring, int, OrdinalLess> directories;
   std::multimap<std::wstring, int, OrdinalLess> unidentified_files;
   size_t file_watches = 0;
+  size_t unidentified_directories = 0;
   int next_wd = 1;
   uint32_t next_cookie = 1;
   HANDLE port = nullptr;
@@ -216,6 +235,8 @@ struct Inotify {
     identities.emplace(FileIdentity{w.volume, w.index}, w.wd);
     if (w.file.empty()) {
       directories.emplace(w.dir, w.wd);
+      g_directory_watches.fetch_add(1, std::memory_order_relaxed);
+      if (w.index == 0) ++unidentified_directories;
       g_path_watches.fetch_add(1, std::memory_order_relaxed);
     } else {
       ++file_watches;
@@ -239,6 +260,8 @@ struct Inotify {
     };
     if (w.file.empty()) {
       erase(directories);
+      g_directory_watches.fetch_sub(1, std::memory_order_relaxed);
+      if (w.index == 0) --unidentified_directories;
       g_path_watches.fetch_sub(1, std::memory_order_relaxed);
     } else {
       --file_watches;
@@ -286,6 +309,8 @@ struct Inotify {
     if (!w.removed) {
       w.removed = true;
       Unindex(w);
+      w.writing.clear();
+      w.generations.clear();
       if (w.pending) CancelIoEx(w.handle, &w.ov);
     }
   }
@@ -323,6 +348,22 @@ bool IsDirectory(const std::wstring& path) {
 
 std::wstring Join(const std::wstring& dir, const std::wstring& name) {
   return dir.empty() || dir.back() == L'\\' ? dir + name : dir + L'\\' + name;
+}
+
+// Pin a separate query-only file object so neither replacement nor ID reuse
+// can stand in for this generation. Never retain the writer's file object.
+void RememberWriter(Watch& w, const std::wstring& name, HANDLE writer = INVALID_HANDLE_VALUE) {
+  if (w.removed) return;
+  w.writing.insert(name);
+  if (!w.file.empty()) return;
+  if (writer == INVALID_HANDLE_VALUE && w.generations.count(name)) return;
+  auto generation = std::make_shared<WriteGeneration>();
+  if (directory_reopen::OpenChild(w.identity, name, &generation->handle) != ERROR_SUCCESS) return;
+  generation->identified = ExactIdentity(generation->handle, &generation->id);
+  FILE_ID_INFO actual{};
+  if (writer != INVALID_HANDLE_VALUE && (!generation->identified || !ExactIdentity(writer, &actual) ||
+      !SameIdentity(actual, generation->id))) return;
+  w.generations[name] = std::move(generation);
 }
 
 unsigned long long FileIndex(const BY_HANDLE_FILE_INFORMATION& info) {
@@ -461,22 +502,24 @@ void Inotify::Changes(Watch& w, DWORD bytes) {
       switch (action) {
         case FILE_ACTION_ADDED:
           EmitFor(w, IN_CREATE | isdir, 0, name);
-          if (!isdir) w.writing.insert(name);
+          if (!isdir) RememberWriter(w, name);
           break;
         case FILE_ACTION_REMOVED:
           w.writing.erase(name);
+          w.generations.erase(name);
           EmitFor(w, IN_DELETE | isdir, 0, name);
           break;
         case FILE_ACTION_MODIFIED:
           // A directory's own changes are not its parent's events on Linux.
           if (!isdir) {
             EmitFor(w, attrib_only ? IN_ATTRIB : IN_MODIFY, 0, name);
-            if (!attrib_only) w.writing.insert(name);
+            if (!attrib_only) RememberWriter(w, name);
           }
           break;
         case FILE_ACTION_RENAMED_OLD_NAME:
           cookie = next_cookie++;
           w.writing.erase(name);
+          w.generations.erase(name);
           EmitFor(w, IN_MOVED_FROM | isdir, cookie, name);
           break;
         case FILE_ACTION_RENAMED_NEW_NAME:
@@ -584,6 +627,7 @@ void Inotify::ProbeWriters() {
       if (w->removed || w->awaiting_rename) continue;
       if ((w->mask & IN_CLOSE_WRITE) == 0) {
         w->writing.clear();
+        w->generations.clear();
         continue;
       }
       for (const std::wstring& name : w->writing) probes.emplace_back(wd, name);
@@ -608,6 +652,35 @@ void Inotify::ProbeWriters() {
         if (error == ERROR_SHARING_VIOLATION || error == ERROR_LOCK_VIOLATION) continue;
         // Any other failure cannot become answerable by polling again.
         if (w.writing.erase(name) != 0 && error == 0) EmitFor(w, IN_CLOSE_WRITE, 0, name);
+        continue;
+      }
+      if (!file_watch) {
+        auto generation = w.generations.find(name);
+        if (generation == w.generations.end()) { w.writing.erase(name); continue; }
+        if (!generation->second->identified) {
+          // Native records still have the pinned generation on filesystems
+          // without 128-bit IDs. Reopen that exact object, never a name that
+          // a replacement could occupy; no ID inference is necessary.
+          HANDLE exact = ReOpenFile(generation->second->handle, GENERIC_READ,
+              FILE_SHARE_READ | FILE_SHARE_DELETE, 0);
+          DWORD error = exact == INVALID_HANDLE_VALUE ? GetLastError() : 0;
+          if (exact != INVALID_HANDLE_VALUE) CloseHandle(exact);
+          if (error == ERROR_SHARING_VIOLATION || error == ERROR_LOCK_VIOLATION) continue;
+          w.writing.erase(name);
+          w.generations.erase(generation);
+          if (error == 0) EmitFor(w, IN_CLOSE_WRITE, 0, name);
+          continue;
+        }
+        HANDLE child = INVALID_HANDLE_VALUE;
+        DWORD error = directory_reopen::OpenChild(w.identity, name, &child, true);
+        if (error == ERROR_SHARING_VIOLATION || error == ERROR_LOCK_VIOLATION) continue;
+        FILE_ID_INFO actual{};
+        const bool closed = error == ERROR_SUCCESS && ExactIdentity(child, &actual) &&
+            SameIdentity(actual, generation->second->id);
+        if (child != INVALID_HANDLE_VALUE) CloseHandle(child);
+        w.writing.erase(name);
+        w.generations.erase(generation);
+        if (closed) EmitFor(w, IN_CLOSE_WRITE, 0, name);
         continue;
       }
       path = Join(w.dir, file_watch ? w.file : name);
@@ -725,6 +798,61 @@ void InotifyNoteWrite(HANDLE h) {
     name = full.substr(slash + 1);
     return got_path = true;
   };
+  // DOS drive-name translation can be denied even while the process holds
+  // the writable file and its watched parent. Match the current parent inode,
+  // never an admission-time pathname that can name a replacement after rename.
+  BY_HANDLE_FILE_INFORMATION parent_info{};
+  FILE_ID_INFO parent_id{}, writer_id{};
+  bool writer_identified = false;
+  std::wstring native_name;
+  bool queried_parent = false, got_parent = false;
+  auto parent = [&] {
+    if (queried_parent) return got_parent;
+    queried_parent = true;
+    writer_identified = ExactIdentity(h, &writer_id);
+    std::wstring full(32768, L' ');
+    DWORD n = GetFinalPathNameByHandleW(h, full.data(), 32768,
+                                      FILE_NAME_NORMALIZED | VOLUME_NAME_NT);
+    if (!n || n >= 32768)
+      n = GetFinalPathNameByHandleW(h, full.data(), 32768, FILE_NAME_OPENED | VOLUME_NAME_NT);
+    std::wstring directory;
+    if (n && n < 32768) {
+      full.resize(n);
+      const size_t slash = full.find_last_of(L'\\');
+      if (slash == std::wstring::npos || slash == 0 || slash + 1 == full.size()) return false;
+      native_name = full.substr(slash + 1);
+      directory = L"\\\\?\\GLOBALROOT" + full.substr(0, slash);
+    } else {
+      // Volumes without an NT name retain the original DOS query path. The
+      // object opened here is still checked by identity, not just its name.
+      if (!path()) return false;
+      directory = dir;
+      native_name = name;
+    }
+    HANDLE opened = CreateFileW(directory.c_str(), FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+        FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    if (opened == INVALID_HANDLE_VALUE && path()) {
+      // Keep the former route on systems that cannot open GLOBALROOT. This
+      // query is from the writing handle, never the watch's stale label.
+      opened = CreateFileW(dir.c_str(), FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+          FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+          FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+      native_name = name;
+    }
+    if (opened == INVALID_HANDLE_VALUE) return false;
+    const bool identified = GetFileInformationByHandle(opened, &parent_info) &&
+        (parent_info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) &&
+        !(parent_info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT);
+    HANDLE child = INVALID_HANDLE_VALUE;
+    FILE_ID_INFO child_id{};
+    const bool matched = identified && writer_identified && ExactIdentity(opened, &parent_id) &&
+        directory_reopen::OpenChild(opened, native_name, &child) == ERROR_SUCCESS &&
+        ExactIdentity(child, &child_id) && SameIdentity(writer_id, child_id);
+    if (child != INVALID_HANDLE_VALUE) CloseHandle(child);
+    CloseHandle(opened);
+    return got_parent = matched;
+  };
   auto same = [](const std::wstring& a, const std::wstring& b) {
     return CompareStringOrdinal(a.c_str(), -1, b.c_str(), -1, TRUE) == CSTR_EQUAL;
   };
@@ -737,7 +865,7 @@ void InotifyNoteWrite(HANDLE h) {
     got_info = GetFileInformationByHandle(h, &info);
     queried_info = true;
   }
-  if (g_path_watches.load(std::memory_order_relaxed) != 0) path();
+  if (g_directory_watches.load(std::memory_order_relaxed) != 0) parent();
   std::lock_guard<std::mutex> live(g_live_mutex);
   for (Inotify* in : g_live) {
     bool noted = false;
@@ -754,9 +882,17 @@ void InotifyNoteWrite(HANDLE h) {
           if (found != in->identities.end()) file_wd = found->second;
         }
       }
+      int directory_wd = 0;
+      if (!in->directories.empty() && parent() && FileIndex(parent_info) != 0) {
+        const auto found = in->identities.find({parent_info.dwVolumeSerialNumber, FileIndex(parent_info)});
+        if (found != in->identities.end() && in->watches.at(found->second)->file.empty())
+          directory_wd = found->second;
+      }
       auto directory = in->directories.end(), directory_end = directory;
       auto unidentified = in->unidentified_files.end(), unidentified_end = unidentified;
-      if ((!in->directories.empty() || !in->unidentified_files.empty()) && path()) {
+      if (((!in->directories.empty() && (!got_parent || FileIndex(parent_info) == 0 ||
+                                        in->unidentified_directories != 0)) ||
+           !in->unidentified_files.empty()) && path()) {
         std::tie(directory, directory_end) = in->directories.equal_range(dir);
         std::tie(unidentified, unidentified_end) = in->unidentified_files.equal_range(dir);
       }
@@ -765,10 +901,12 @@ void InotifyNoteWrite(HANDLE h) {
       // old descriptor-order publication without allocating per-write scratch.
       for (;;) {
         int wd = file_wd;
+        if (directory_wd && (wd == 0 || directory_wd < wd)) wd = directory_wd;
         if (directory != directory_end && (wd == 0 || directory->second < wd)) wd = directory->second;
         if (unidentified != unidentified_end && (wd == 0 || unidentified->second < wd)) wd = unidentified->second;
         if (wd == 0) break;
         if (wd == file_wd) file_wd = 0;
+        if (wd == directory_wd) directory_wd = 0;
         if (directory != directory_end && directory->second == wd) ++directory;
         if (unidentified != unidentified_end && unidentified->second == wd) ++unidentified;
         auto current = in->watches.find(wd);
@@ -776,8 +914,16 @@ void InotifyNoteWrite(HANDLE h) {
         Watch& w = *current->second;
         if (w.removed) continue;
         if (w.file.empty()) {
-          in->EmitFor(w, IN_MODIFY, 0, name);
-          if (!w.removed) w.writing.insert(name);
+          FILE_ID_INFO held_parent{};
+          if (!got_parent || !ExactIdentity(w.identity, &held_parent) ||
+              !SameIdentity(held_parent, parent_id)) continue;
+          const std::wstring* written_name = &native_name;
+          if (w.index != 0 && got_parent && FileIndex(parent_info) != 0) {
+            if (w.volume != parent_info.dwVolumeSerialNumber || w.index != FileIndex(parent_info)) continue;
+            written_name = &native_name;
+          }
+          in->EmitFor(w, IN_MODIFY, 0, *written_name);
+          if (!w.removed) RememberWriter(w, *written_name, h);
         } else {
           if ((w.mask & (IN_MODIFY | IN_CLOSE_WRITE)) == 0) continue;
           if (w.index != 0 ? !got_info || !MatchesFile(w, info) : !same(w.file, name)) continue;

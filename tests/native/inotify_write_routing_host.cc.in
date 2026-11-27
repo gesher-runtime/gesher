@@ -14,6 +14,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <cwctype>
+#include <cwchar>
 #include <fcntl.h>
 #include <functional>
 #include <limits>
@@ -34,7 +35,7 @@ static void route_check(const char* label, bool ok) {
 }
 struct WorkCounters {
   uint64_t allocations = 0, bytes = 0, paths = 0, identities = 0;
-  uint64_t comparisons = 0, issues = 0, wakes = 0;
+  uint64_t comparisons = 0, issues = 0, wakes = 0, full_identities = 0;
 };
 static WorkCounters work;
 static bool count_allocations;
@@ -67,12 +68,12 @@ constexpr DWORD FILE_NOTIFY_CHANGE_FILE_NAME = 1, FILE_NOTIFY_CHANGE_DIR_NAME = 
 constexpr DWORD FILE_ACTION_ADDED = 1, FILE_ACTION_REMOVED = 2,
                 FILE_ACTION_MODIFIED = 3, FILE_ACTION_RENAMED_OLD_NAME = 4,
                 FILE_ACTION_RENAMED_NEW_NAME = 5;
-constexpr DWORD FILE_ATTRIBUTE_DIRECTORY = 16, FILE_ATTRIBUTE_NORMAL = 128,
+constexpr DWORD FILE_ATTRIBUTE_REPARSE_POINT = 1024, FILE_ATTRIBUTE_DIRECTORY = 16, FILE_ATTRIBUTE_NORMAL = 128,
                 INVALID_FILE_ATTRIBUTES = ~DWORD{0}, FILE_FLAG_BACKUP_SEMANTICS = 0x1000000,
                 FILE_FLAG_OPEN_REPARSE_POINT = 0x200000, FILE_FLAG_OVERLAPPED = 0x40000000;
 constexpr DWORD FILE_READ_ATTRIBUTES = 128, FILE_LIST_DIRECTORY = 1, GENERIC_READ = 0x80000000,
                 FILE_SHARE_READ = 1, FILE_SHARE_WRITE = 2, FILE_SHARE_DELETE = 4, OPEN_EXISTING = 3;
-constexpr DWORD FILE_NAME_NORMALIZED = 0, FILE_NAME_OPENED = 8, VOLUME_NAME_DOS = 0, FILE_TYPE_DISK = 1,
+constexpr DWORD FILE_NAME_NORMALIZED = 0, FILE_NAME_OPENED = 8, VOLUME_NAME_DOS = 0, VOLUME_NAME_NT = 2, FILE_TYPE_DISK = 1,
                 SYNCHRONIZE = 0x00100000;
 constexpr DWORD WAIT_OBJECT_0 = 0, WAIT_TIMEOUT = 258, INFINITE = ~DWORD{0}, MAXDWORD = ~DWORD{0};
 constexpr DWORD ERROR_SUCCESS = 0, ERROR_FILE_NOT_FOUND = ENOENT, ERROR_PATH_NOT_FOUND = ENOTDIR,
@@ -88,7 +89,9 @@ struct BY_HANDLE_FILE_INFORMATION {
   DWORD dwFileAttributes, dwVolumeSerialNumber, nFileIndexHigh, nFileIndexLow;
 };
 struct FILE_STANDARD_INFO { unsigned long NumberOfLinks; bool DeletePending; };
-constexpr int FileStandardInfo = 1;
+struct FILE_ID_128 { unsigned char Identifier[16]; };
+struct FILE_ID_INFO { uint64_t VolumeSerialNumber; FILE_ID_128 FileId; };
+constexpr int FileStandardInfo = 1, FileIdInfo = 18;
 struct FILE_NOTIFY_INFORMATION {
   DWORD NextEntryOffset, Action, FileNameLength;
   WCHAR FileName[1];
@@ -112,18 +115,27 @@ struct NativeWait {};
 using PTP_WAIT = NativeWait*;
 using WaitCallback = void(*)(PTP_CALLBACK_INSTANCE, void*, PTP_WAIT, TP_WAIT_RESULT);
 static thread_local DWORD last_error;
-static bool zero_identity, fail_identity, fail_path, fail_issue;
+static std::function<void()> before_parent_open;
+static bool fail_full_identity;
+static uint64_t coarse_directory_override;
+static bool zero_identity, zero_directory_identity, fail_identity, fail_path, fail_dos_path, fail_issue;
 static size_t live_handles, live_waits;
 static std::map<int, HANDLE> native_files;
 static DWORD GetLastError() { return last_error; }
 static void SetLastError(DWORD error) { last_error = error; }
 
 static std::string NativePath(const wchar_t* path) {
+  // Model only the Windows namespace spelling. The reopened directory and
+  // identity below still come from the real held Linux inode.
+  constexpr wchar_t root[] = L"\\\\?\\GLOBALROOT";
+  if (std::wcsncmp(path, root, sizeof(root) / sizeof(wchar_t) - 1) == 0)
+    path += sizeof(root) / sizeof(wchar_t) - 1;
   std::string result;
   for (; *path; ++path) result.push_back(*path == L'\\' ? '/' : static_cast<char>(*path));
   return result;
 }
 static HANDLE CreateFileW(const wchar_t* path, DWORD, DWORD, void*, DWORD, DWORD flags, HANDLE) {
+  if (before_parent_open) { auto hook = std::move(before_parent_open); before_parent_open = nullptr; hook(); }
   int options = O_RDONLY | O_CLOEXEC;
   if ((flags & FILE_FLAG_OPEN_REPARSE_POINT) != 0) options = O_PATH | O_NOFOLLOW | O_CLOEXEC;
   int fd = ::open(NativePath(path).c_str(), options);
@@ -152,23 +164,33 @@ static BOOL GetFileInformationByHandle(HANDLE handle, BY_HANDLE_FILE_INFORMATION
   struct stat st{};
   if (fail_identity || !handle || handle == INVALID_HANDLE_VALUE || handle->kind != NativeHandle::file ||
       fstat(handle->fd, &st) != 0) { last_error = EIO; return FALSE; }
-  uint64_t id = zero_identity && !S_ISDIR(st.st_mode) ? 0 : static_cast<uint64_t>(st.st_ino);
+  uint64_t id = ((zero_identity && !S_ISDIR(st.st_mode)) ||
+                 (zero_directory_identity && S_ISDIR(st.st_mode))) ? 0 : static_cast<uint64_t>(st.st_ino);
+  if (S_ISDIR(st.st_mode) && coarse_directory_override) id = coarse_directory_override;
   *out = {S_ISDIR(st.st_mode) ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_NORMAL,
           static_cast<DWORD>(st.st_dev), static_cast<DWORD>(id >> 32), static_cast<DWORD>(id)};
   return TRUE;
 }
-static BOOL GetFileInformationByHandleEx(HANDLE handle, int, void* raw, DWORD) {
+static BOOL GetFileInformationByHandleEx(HANDLE handle, int kind, void* raw, DWORD) {
   struct stat st{};
   if (fstat(handle->fd, &st) != 0) return FALSE;
+  if (kind == FileIdInfo) {
+    ++work.full_identities;
+    if (fail_full_identity) return FALSE;
+    FILE_ID_INFO id{}; id.VolumeSerialNumber = st.st_dev;
+    uint64_t inode = st.st_ino;
+    std::memcpy(id.FileId.Identifier, &inode, sizeof(inode));
+    *static_cast<FILE_ID_INFO*>(raw) = id; return TRUE;
+  }
   *static_cast<FILE_STANDARD_INFO*>(raw) = {st.st_nlink, st.st_nlink == 0};
   return TRUE;
 }
 static DWORD GetFileType(HANDLE handle) {
   return handle && handle != INVALID_HANDLE_VALUE && handle->kind == NativeHandle::file ? FILE_TYPE_DISK : 0;
 }
-static DWORD GetFinalPathNameByHandleW(HANDLE handle, wchar_t* out, DWORD capacity, DWORD) {
+static DWORD GetFinalPathNameByHandleW(HANDLE handle, wchar_t* out, DWORD capacity, DWORD flags) {
   ++work.paths;
-  if (fail_path) { last_error = EIO; return 0; }
+  if (fail_path || (fail_dos_path && (flags & VOLUME_NAME_NT) == 0)) { last_error = EIO; return 0; }
   char name[64], path[32768];
   std::snprintf(name, sizeof(name), "/proc/self/fd/%d", handle->fd);
   ssize_t bytes = ::readlink(name, path, sizeof(path));
@@ -265,6 +287,17 @@ enum class AccessKind { kStat, kRead, kWrite };
 static bool CheckExternalStorageAccess(const std::wstring&, AccessKind) { return true; }
 static bool CheckExternalStorageHandle(HANDLE, AccessKind) { return true; }
 namespace directory_reopen {
+static DWORD OpenChild(HANDLE directory, const std::wstring& leaf, HANDLE* result, bool deny_write = false) {
+  *result = INVALID_HANDLE_VALUE;
+  if (deny_write && reopen_busy) return ERROR_SHARING_VIOLATION;
+  int fd = ::openat(directory->fd, NativePath(leaf.c_str()).c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+  if (fd < 0) return errno;
+  ++live_handles; *result = new NativeHandle(NativeHandle::file, fd);
+  BY_HANDLE_FILE_INFORMATION info{};
+  if (!GetFileInformationByHandle(*result, &info)) { CloseHandle(*result); *result = INVALID_HANDLE_VALUE; return EIO; }
+  return ERROR_SUCCESS;
+}
+
 // Linux models the Windows held-directory reopen with the real opened inode,
 // never a fresh lookup of the pathname that selected it. Windows access and NT
 // file-object semantics are outside this host routing fixture.
@@ -379,6 +412,7 @@ static int route_poll(pollfd* descriptors, nfds_t count, int) {
 #undef inotify_init1
 
 #define HAS_ROUTING_INDEX @HAS_ROUTING_INDEX@
+#define HAS_PARENT_ID_ROUTING @HAS_PARENT_ID_ROUTING@
 
 static void CheckRoutingIndex(gesher::Inotify& source) {
 #if HAS_ROUTING_INDEX
@@ -426,7 +460,7 @@ static void QueueRecords(gesher::Watch& watch, std::initializer_list<RouteRecord
   watch.handle->completion_bytes = static_cast<DWORD>(used);
   watch.handle->completion_ok = true;
   watch.handle->repeat_completion = repeat;
-  SetEvent(watch.event);
+  if (watch.event) SetEvent(watch.event);
 }
 
 static std::vector<RoutingEvent> InternalRead(int fd) {
@@ -692,10 +726,11 @@ static void RoutingInternalContracts(const std::string& root) {
 static void PrintWork(const char* operation, size_t watches, size_t calls, int64_t elapsed,
                       const WorkCounters& count) {
   std::printf("MEASURE routing %s: watches=%zu calls=%zu allocations=%llu bytes=%llu paths=%llu "
-              "identities=%llu comparisons=%llu issues=%llu wakes=%llu elapsed_ns=%lld\n",
+              "identities=%llu full_identities=%llu comparisons=%llu issues=%llu wakes=%llu elapsed_ns=%lld\n",
               operation, watches, calls, static_cast<unsigned long long>(count.allocations),
               static_cast<unsigned long long>(count.bytes), static_cast<unsigned long long>(count.paths),
-              static_cast<unsigned long long>(count.identities), static_cast<unsigned long long>(count.comparisons),
+              static_cast<unsigned long long>(count.identities), static_cast<unsigned long long>(count.full_identities),
+              static_cast<unsigned long long>(count.comparisons),
               static_cast<unsigned long long>(count.issues), static_cast<unsigned long long>(count.wakes),
               static_cast<long long>(elapsed));
 }
@@ -787,7 +822,9 @@ static void RoutingWork(const std::string& root, bool measure) {
               std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count(), work);
     route_check("routing directory work observes only the right parent", InternalRead(fd).size() == size_t(hit));
     if (!measure && HAS_ROUTING_INDEX) {
-      route_check("routing directory work uses one actual pathname", work.paths == calls && work.identities == 0);
+      route_check("routing directory work counts full identity validation per write",
+                  work.paths == calls && work.identities == (HAS_PARENT_ID_ROUTING ? (hit ? 3 : 2) * calls : 0) &&
+                  work.full_identities == (HAS_PARENT_ID_ROUTING ? (hit ? 6 : 3) * calls : 0));
       route_check("routing directory lookup avoids full scan", work.comparisons < calls * directories / 2);
     }
   }
@@ -795,6 +832,127 @@ static void RoutingWork(const std::string& root, bool measure) {
   if (::unlink(matched_path.c_str()) != 0 || ::unlink(unmatched_path.c_str()) != 0) std::abort();
   for (const auto& parent : parents) if (::rmdir(parent.c_str()) != 0) std::abort();
   route_check("routing work directory retires", ::rmdir(directory.c_str()) == 0);
+}
+
+static void RoutingNativeGenerationWithoutFullId(const std::string& root) {
+  const auto path = root + "/native-no-full-id";
+  int writer = route_open(path.c_str(), O_CREAT | O_RDWR, 0600);
+  int fd = route_init1(IN_NONBLOCK);
+  int wd = inotify_add_watch(fd, root.c_str(), IN_MODIFY | IN_CLOSE_WRITE);
+  auto source = gesher::LookupInotify(fd);
+  auto& watch = *source->watches.at(wd);
+  fail_full_identity = true;
+  QueueRecords(watch, {{FILE_ACTION_MODIFIED, L"native-no-full-id", 0}});
+  source->Changes(watch, watch.handle->completion_bytes);
+  route_check("native unsupported full ID still delivers modify", RoutingHas(InternalRead(fd), wd, IN_MODIFY, "native-no-full-id"));
+  reopen_busy = true;
+  source->ProbeWriters();
+  route_check("native unsupported full ID cannot close open writer", InternalRead(fd).empty());
+  route_close(writer); reopen_busy = false;
+  source->ProbeWriters();
+  route_check("native unsupported full ID closes exact pinned generation", RoutingHas(InternalRead(fd), wd, IN_CLOSE_WRITE, "native-no-full-id"));
+  fail_full_identity = false;
+  source.reset(); route_close(fd);
+  route_check("native unsupported full ID file retires", ::unlink(path.c_str()) == 0);
+}
+
+static void RoutingDirectoryRace(const std::string& root) {
+  const auto a = root + "/race-a", b = root + "/race-b", moved = root + "/race-moved";
+  route_check("race directories", ::mkdir(a.c_str(), 0700) == 0 && ::mkdir(b.c_str(), 0700) == 0);
+  int writer = route_open((a + "/leaf").c_str(), O_CREAT | O_RDWR, 0600);
+  int other = route_open((b + "/leaf").c_str(), O_CREAT | O_RDWR, 0600);
+  int fd = route_init1(IN_NONBLOCK);
+  int old_wd = inotify_add_watch(fd, a.c_str(), IN_MODIFY | IN_CLOSE_WRITE);
+  int new_wd = inotify_add_watch(fd, b.c_str(), IN_MODIFY | IN_CLOSE_WRITE);
+  route_check("race both objects watched", old_wd > 0 && new_wd > 0);
+  fail_dos_path = true;
+  before_parent_open = [&] {
+    route_check("race move queried parent", ::rename(a.c_str(), moved.c_str()) == 0);
+    route_check("race replace queried parent", ::rename(b.c_str(), a.c_str()) == 0);
+  };
+  route_check("race actual old writer write", route_write(writer, "x", 1) == 1);
+  const auto events = InternalRead(fd);
+  route_check("race replacement watch cannot receive original write", !RoutingHas(events, new_wd, IN_MODIFY, "leaf"));
+  before_parent_open = nullptr;
+  route_check("race moved original resolves correctly", route_write(writer, "y", 1) == 1 &&
+              RoutingHas(InternalRead(fd), old_wd, IN_MODIFY, "leaf"));
+  coarse_directory_override = gesher::LookupInotify(fd)->watches.at(new_wd)->index;
+  route_check("coarse directory identity collision actual write", route_write(writer, "c", 1) == 1);
+  route_check("full identity rejects colliding directory candidate", InternalRead(fd).empty());
+  coarse_directory_override = 0;
+  fail_full_identity = true;
+  route_check("unsupported identity real write", route_write(writer, "z", 1) == 1);
+  route_check("unsupported identity cannot synthesize event", InternalRead(fd).empty());
+  fail_full_identity = false;
+  fail_dos_path = false;
+  reopen_busy = true;
+  gesher::LookupInotify(fd)->ProbeWriters();
+  route_check("generation writer open cannot close", InternalRead(fd).empty());
+  reopen_busy = false;
+  route_close(writer);
+  gesher::LookupInotify(fd)->ProbeWriters();
+  route_check("generation close follows renamed held directory", RoutingHas(InternalRead(fd), old_wd, IN_CLOSE_WRITE, "leaf"));
+  // A different same-named file must never satisfy the original generation's close.
+  route_check("generation replacement write", route_write(other, "w", 1) == 1);
+  InternalRead(fd);
+  route_check("generation unlink writer name", ::rename((a + "/leaf").c_str(), (a + "/old").c_str()) == 0);
+  int replacement = route_open((a + "/leaf").c_str(), O_CREAT | O_RDWR, 0600);
+  route_close(replacement);
+  gesher::LookupInotify(fd)->ProbeWriters();
+  route_check("generation replacement cannot close original open writer", InternalRead(fd).empty());
+  route_close(other); route_close(fd);
+  route_check("race files retire", ::unlink((moved + "/leaf").c_str()) == 0 &&
+              ::unlink((a + "/leaf").c_str()) == 0 && ::unlink((a + "/old").c_str()) == 0);
+  route_check("race roots retire", ::rmdir(a.c_str()) == 0 && ::rmdir(moved.c_str()) == 0);
+}
+
+static void RoutingDirectoryIdentity(const std::string& root) {
+  const std::string first = root + "/dir-identity", moved = root + "/dir-identity-moved";
+  const std::string leaf = first + "/leaf", moved_leaf = moved + "/leaf";
+  route_check("directory identity own root", ::mkdir(first.c_str(), 0700) == 0);
+  int writer = route_open(leaf.c_str(), O_CREAT | O_EXCL | O_RDWR, 0600);
+  int fd = route_init1(IN_NONBLOCK);
+  int wd = inotify_add_watch(fd, first.c_str(), IN_MODIFY);
+  route_check("directory identity real writer and watch", writer >= 0 && wd > 0);
+  // No native completion is queued here. Each event must come from the exact
+  // production local-write callback; the original DOS-only source misses it.
+  fail_dos_path = true;
+  route_check("directory identity actual write while DOS lookup denied", route_write(writer, "a", 1) == 1);
+  route_check("directory identity NT route preserves immediate named modify",
+              RoutingHas(InternalRead(fd), wd, IN_MODIFY, "leaf"));
+  route_check("directory identity rename held parent", ::rename(first.c_str(), moved.c_str()) == 0);
+  route_check("directory identity write follows held renamed inode", route_write(writer, "b", 1) == 1 &&
+              RoutingHas(InternalRead(fd), wd, IN_MODIFY, "leaf"));
+  route_check("directory identity replace old spelling", ::mkdir(first.c_str(), 0700) == 0);
+  int replacement = route_open(leaf.c_str(), O_CREAT | O_EXCL | O_RDWR, 0600);
+  route_check("directory identity replacement writer", replacement >= 0);
+  route_check("directory identity replacement write completes", route_write(replacement, "c", 1) == 1);
+  route_check("directory identity replacement never takes old watch", InternalRead(fd).empty());
+  route_check("directory identity original still notifies after replacement", route_write(writer, "d", 1) == 1 &&
+              RoutingHas(InternalRead(fd), wd, IN_MODIFY, "leaf"));
+  fail_dos_path = false;
+  route_close(replacement); route_close(writer); route_close(fd);
+  route_check("directory identity exact files retire", ::unlink(leaf.c_str()) == 0 && ::unlink(moved_leaf.c_str()) == 0);
+  route_check("directory identity exact roots retire", ::rmdir(first.c_str()) == 0 && ::rmdir(moved.c_str()) == 0);
+  // Some volumes cannot supply a usable directory ID. Their explicit name
+  // fallback must still consult the held object before publishing a new name.
+  zero_directory_identity = true;
+  route_check("zero-directory identity own root", ::mkdir(first.c_str(), 0700) == 0);
+  writer = route_open(leaf.c_str(), O_CREAT | O_EXCL | O_RDWR, 0600);
+  fd = route_init1(IN_NONBLOCK);
+  wd = inotify_add_watch(fd, first.c_str(), IN_MODIFY);
+  route_check("zero-directory identity watch admission", wd > 0);
+  route_check("zero-directory identity original write", route_write(writer, "z", 1) == 1 &&
+              RoutingHas(InternalRead(fd), wd, IN_MODIFY, "leaf"));
+  route_check("zero-directory identity held rename", ::rename(first.c_str(), moved.c_str()) == 0);
+  route_check("zero-directory identity old spelling replacement", ::mkdir(first.c_str(), 0700) == 0);
+  replacement = route_open(leaf.c_str(), O_CREAT | O_EXCL | O_RDWR, 0600);
+  route_check("zero-directory identity replacement write", replacement >= 0 && route_write(replacement, "q", 1) == 1);
+  route_check("zero-directory identity stale label cannot publish replacement", InternalRead(fd).empty());
+  route_close(replacement); route_close(writer); route_close(fd);
+  zero_directory_identity = false;
+  route_check("zero-directory identity exact files retire", ::unlink(leaf.c_str()) == 0 && ::unlink(moved_leaf.c_str()) == 0);
+  route_check("zero-directory identity exact roots retire", ::rmdir(first.c_str()) == 0 && ::rmdir(moved.c_str()) == 0);
 }
 
 int main(int argc, char** argv) {
@@ -806,6 +964,11 @@ int main(int argc, char** argv) {
   if (!measure) {
     InotifyWriteRouting(directory);
     RoutingInternalContracts(directory);
+    RoutingDirectoryIdentity(directory);
+#if HAS_PARENT_ID_ROUTING
+    RoutingDirectoryRace(directory);
+    RoutingNativeGenerationWithoutFullId(directory);
+#endif
   }
   RoutingWork(directory, measure);
   route_check("routing no live observer registry", gesher::observer_registry.empty() && gesher::g_live.empty() && gesher::g_live_count == 0);

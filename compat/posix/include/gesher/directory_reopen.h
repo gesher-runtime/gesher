@@ -4,6 +4,7 @@
 #include <windows.h>
 #include <winternl.h>
 #include <cstring>
+#include <string>
 
 namespace gesher::directory_reopen {
 
@@ -20,6 +21,41 @@ inline bool Identity(HANDLE file, FILE_ID_INFO* id) {
       info.nFileIndexLow;
   std::memcpy(id->FileId.Identifier, &index, sizeof(index));
   return true;
+}
+
+// A single existing child, resolved by the current token under a held directory.
+// No traversal, reparse following, creation, or token substitution is permitted.
+inline DWORD OpenChild(HANDLE directory, const std::wstring& leaf, HANDLE* result,
+                       bool deny_write = false) {
+  *result = INVALID_HANDLE_VALUE;
+  if (leaf.empty() || leaf == L"." || leaf == L".." ||
+      leaf.find_first_of(L"\\/:\0", 0, 4) != std::wstring::npos || leaf.size() > 32767)
+    return ERROR_INVALID_NAME;
+  using Create = NTSTATUS(NTAPI*)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, PIO_STATUS_BLOCK,
+                                 PLARGE_INTEGER, ULONG, ULONG, ULONG, ULONG, PVOID, ULONG);
+  using Translate = ULONG(WINAPI*)(NTSTATUS);
+  const HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+  const auto create = reinterpret_cast<Create>(reinterpret_cast<void*>(GetProcAddress(ntdll, "NtCreateFile")));
+  const auto translate = reinterpret_cast<Translate>(
+      reinterpret_cast<void*>(GetProcAddress(ntdll, "RtlNtStatusToDosError")));
+  if (!create || !translate) return ERROR_NOT_SUPPORTED;
+  UNICODE_STRING name{static_cast<USHORT>(leaf.size() * sizeof(wchar_t)),
+                      static_cast<USHORT>(leaf.size() * sizeof(wchar_t)), const_cast<wchar_t*>(leaf.data())};
+  OBJECT_ATTRIBUTES attributes{};
+  InitializeObjectAttributes(&attributes, &name, OBJ_CASE_INSENSITIVE, directory, nullptr);
+  IO_STATUS_BLOCK io{};
+  // Read-data access makes the deny-write share check effective; attributes
+  // alone do not participate in Windows read/write sharing accounting.
+  const DWORD access = FILE_READ_ATTRIBUTES | SYNCHRONIZE | (deny_write ? FILE_READ_DATA : 0);
+  const NTSTATUS status = create(result, access, &attributes, &io,
+      nullptr, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ | FILE_SHARE_DELETE | (deny_write ? 0 : FILE_SHARE_WRITE),
+      FILE_OPEN, FILE_NON_DIRECTORY_FILE | FILE_OPEN_REPARSE_POINT | FILE_SYNCHRONOUS_IO_NONALERT, nullptr, 0);
+  if (status < 0) { *result = INVALID_HANDLE_VALUE; return translate(status); }
+  BY_HANDLE_FILE_INFORMATION info{};
+  if (!GetFileInformationByHandle(*result, &info) || (info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
+    CloseHandle(*result); *result = INVALID_HANDLE_VALUE; return ERROR_ACCESS_DENIED;
+  }
+  return ERROR_SUCCESS;
 }
 
 inline DWORD Open(HANDLE source, HANDLE* result, bool overlapped = false) {
