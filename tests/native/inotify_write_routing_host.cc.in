@@ -91,7 +91,8 @@ struct BY_HANDLE_FILE_INFORMATION {
 struct FILE_STANDARD_INFO { unsigned long NumberOfLinks; bool DeletePending; };
 struct FILE_ID_128 { unsigned char Identifier[16]; };
 struct FILE_ID_INFO { uint64_t VolumeSerialNumber; FILE_ID_128 FileId; };
-constexpr int FileStandardInfo = 1, FileIdInfo = 18;
+struct FILE_ATTRIBUTE_TAG_INFO { DWORD FileAttributes, ReparseTag; };
+constexpr int FileStandardInfo = 1, FileAttributeTagInfo = 9, FileIdInfo = 18;
 struct FILE_NOTIFY_INFORMATION {
   DWORD NextEntryOffset, Action, FileNameLength;
   WCHAR FileName[1];
@@ -117,6 +118,8 @@ using WaitCallback = void(*)(PTP_CALLBACK_INSTANCE, void*, PTP_WAIT, TP_WAIT_RES
 static thread_local DWORD last_error;
 static std::function<void()> before_parent_open;
 static bool fail_full_identity;
+static bool fail_attributes;
+static bool fail_child_attributes;
 static uint64_t coarse_directory_override;
 static bool zero_identity, zero_directory_identity, fail_identity, fail_path, fail_dos_path, fail_issue;
 static size_t live_handles, live_waits;
@@ -174,6 +177,12 @@ static BOOL GetFileInformationByHandle(HANDLE handle, BY_HANDLE_FILE_INFORMATION
 static BOOL GetFileInformationByHandleEx(HANDLE handle, int kind, void* raw, DWORD) {
   struct stat st{};
   if (fstat(handle->fd, &st) != 0) return FALSE;
+  if (kind == FileAttributeTagInfo) {
+    if (fail_attributes || (fail_child_attributes && !S_ISDIR(st.st_mode))) return FALSE;
+    *static_cast<FILE_ATTRIBUTE_TAG_INFO*>(raw) = {
+        S_ISDIR(st.st_mode) ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_NORMAL, 0};
+    return TRUE;
+  }
   if (kind == FileIdInfo) {
     ++work.full_identities;
     if (fail_full_identity) return FALSE;
@@ -294,7 +303,15 @@ static DWORD OpenChild(HANDLE directory, const std::wstring& leaf, HANDLE* resul
   if (fd < 0) return errno;
   ++live_handles; *result = new NativeHandle(NativeHandle::file, fd);
   BY_HANDLE_FILE_INFORMATION info{};
-  if (!GetFileInformationByHandle(*result, &info)) { CloseHandle(*result); *result = INVALID_HANDLE_VALUE; return EIO; }
+  bool described = GetFileInformationByHandle(*result, &info) != FALSE;
+  if (!described) {
+    FILE_ATTRIBUTE_TAG_INFO child_attributes{};
+    described = GetFileInformationByHandleEx(*result, FileAttributeTagInfo, &child_attributes, sizeof(child_attributes)) != FALSE;
+    if (described) info.dwFileAttributes = child_attributes.FileAttributes;
+  }
+  if (!described || (info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
+    CloseHandle(*result); *result = INVALID_HANDLE_VALUE; return EIO;
+  }
   return ERROR_SUCCESS;
 }
 
@@ -636,6 +653,16 @@ static void RoutingInternalContracts(const std::string& root) {
   fail_identity = true;
   route_check("routing directory names do not require file identity", route_write(writer, "o", 1) == 1 &&
               RoutingHas(InternalRead(fd), directory_watch, IN_MODIFY, "internal"));
+#if HAS_PARENT_ID_ROUTING
+  fail_attributes = true;
+  route_check("routing failed parent attributes still permits actual disk write", route_write(writer, "p", 1) == 1);
+  route_check("routing failed parent attributes cannot synthesize a directory event", InternalRead(fd).empty());
+  fail_attributes = false;
+  fail_child_attributes = true;
+  route_check("routing failed child attributes still permits actual disk write", route_write(writer, "q", 1) == 1);
+  route_check("routing failed child attributes cannot synthesize a directory event", InternalRead(fd).empty());
+  fail_child_attributes = false;
+#endif
   fail_identity = false;
   CheckRoutingIndex(*source);
   source.reset(); route_close(fd);

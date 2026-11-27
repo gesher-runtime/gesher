@@ -207,3 +207,23 @@ in `out/qa314/window-promotion-qa/guid-inputs.json`. This tests same-user
 AppContainer graphics, not the separate private SYSTEM runtime. The shared
 runtime capability is not an assertion of foreign-app isolation on that fixture
 desktop; the next hosted matrix remains required.
+
+## Inotify legacy-query fallback
+
+The first complete Linux host-model run in `45995014400` passed its original
+ten record checks and 62 Linux reference checks, but failed one of 306
+production-model checks: denial of the legacy coarse identity query also
+prevented directory metadata validation. The repair treats that query as an
+index optimization. A separate attributes query may establish directory and
+no-reparse metadata while the full writer, child and held-parent identities
+remain mandatory. Failure of both metadata queries remains fail-closed.
+
+The original routing assertion is unchanged. New current-source controls
+separately deny parent and child attributes; they do not impose new semantics
+on historical source controls. A strict MSVC Windows probe reproduces the old
+child-open failure and passes with the repaired header, verifying the same
+actual full file identity, denied metadata, traversal/directory/stream selectors
+and exact cleanup. Sources, original header, binaries and logs are in
+`out/qa314/inotify-attributes/final-inputs.json`. The full Linux model and
+sanitizer rerun remain pending. Simultaneous DOS-name and coarse-identity
+failure, physical ReFS and a real reparse-file probe are outside this evidence.
