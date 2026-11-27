@@ -28,6 +28,8 @@ jobs:
     timeout-minutes: 10
     outputs:
       selected: ${{ steps.selection.outputs.selected }}
+      shards: ${{ steps.selection.outputs.shards }}
+      preflight_groups: ${{ steps.selection.outputs.preflight_groups }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -36,6 +38,7 @@ jobs:
           sparse-checkout: |
             .github/workflows
             tools/ci
+            tests/windows/test-shards.json
       - name: Select checks for this change
         id: selection
         run: |
@@ -121,16 +124,19 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-        if: github.event_name == 'pull_request'
         with:
           persist-credentials: false
+          fetch-depth: 0
           sparse-checkout: |
             .github/workflows
             tools/ci
+            tests/windows/test-shards.json
       - name: Require successful selected jobs and intentional skips
-        if: github.event_name == 'pull_request'
         env:
           SELECTED: ${{ needs.plan.outputs.selected }}
+          SHARDS: ${{ needs.plan.outputs.shards }}
+          PREFLIGHT_GROUPS: ${{ needs.plan.outputs.preflight_groups }}
+          GH_TOKEN: ${{ github.token }}
           JOB_RESULTS: ${{ toJSON(needs) }}
         run: |
           python3 -m pip install PyYAML==6.0.3
