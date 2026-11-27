@@ -1,17 +1,44 @@
 diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
-index f9e65608b..aaa8eeca4 100644
+index f9e65608b..f9831e6d4 100644
 --- a/.github/workflows/ci.yml
 +++ b/.github/workflows/ci.yml
-@@ -80,6 +80,43 @@ jobs:
+@@ -29,6 +29,24 @@ env:
+   LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
+
+ jobs:
++  plan:
++    runs-on: ubuntu-24.04
++    timeout-minutes: 10
++    outputs:
++      selected: ${{ steps.selection.outputs.selected }}
++    steps:
++      - uses: actions/checkout@v4
++        with:
++          persist-credentials: false
++          fetch-depth: ${{ github.event_name == 'pull_request' && '0' || '1' }}
++          sparse-checkout: |
++            .github/workflows
++            tools/ci
++      - name: Select checks for this change
++        id: selection
++        run: |
++          python3 -m pip install PyYAML==6.0.3
++          python3 tools/ci/select_pr_jobs.py plan --workflow ci
+   source-identity:
+     runs-on: ubuntu-24.04
+     outputs:
+@@ -80,12 +98,52 @@ jobs:
            python3 tools/ci/test_release_workflows.py
            python3 -m unittest discover -s tools/ci -p test_cache_policy.py
            python3 -m unittest discover -s tools/ci -p test_prune_caches.py
++          python3 -m unittest discover -s tools/ci -p test_select_pr_jobs.py
 +  # The hosted Server images can expose NLM without its cost backend. Their
 +  # contracts below prove that absence independently and check failed-start
 +  # cleanup. This client job unconditionally requires the real subscription.
 +  network-cost-client:
 +    name: Windows client network cost
-+    needs: [source-identity]
++    needs: [plan, source-identity]
++    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'network-cost-client') }}
 +    runs-on: windows-11-arm
 +    timeout-minutes: 10
 +    steps:
@@ -46,7 +73,15 @@ index f9e65608b..aaa8eeca4 100644
    # Short Windows host contracts share one runner per OS: separate jobs each
    # paid for a runner, checkout and queue slot to run a minute of checks.
    # Every check step runs even after an earlier one fails, so one failure
-@@ -102,18 +139,115 @@ jobs:
+   # does not hide another.
+   windows-host-contracts:
+-    needs: [source-identity]
++    needs: [plan, source-identity]
++    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'windows-host-contracts') }}
+     strategy:
+       fail-fast: false
+       matrix:
+@@ -102,18 +160,115 @@ jobs:
          with:
            distribution: temurin
            java-version: '21.0.13'
@@ -164,7 +199,7 @@ index f9e65608b..aaa8eeca4 100644
          shell: pwsh
          run: |
            & .\app-identity-restart.exe
-@@ -125,7 +259,7 @@ jobs:
+@@ -125,7 +280,7 @@ jobs:
        - name: Build actual dexopt child waiting and resource budgets
          if: ${{ !cancelled() }}
          shell: cmd
@@ -173,7 +208,7 @@ index f9e65608b..aaa8eeca4 100644
        - name: Verify real compiler cancellation, reaping, CPU and memory budgets
          if: ${{ !cancelled() }}
          shell: pwsh
-@@ -140,6 +274,65 @@ jobs:
+@@ -140,6 +295,65 @@ jobs:
          if: ${{ !cancelled() }}
          shell: pwsh
          run: tests/windows/clipboard/Publication.ps1
@@ -239,7 +274,7 @@ index f9e65608b..aaa8eeca4 100644
        - name: Exact native reader ownership and handle reuse controls
          if: ${{ !cancelled() }}
          shell: pwsh
-@@ -148,6 +341,91 @@ jobs:
+@@ -148,6 +362,91 @@ jobs:
          if: ${{ !cancelled() }}
          shell: pwsh
          run: python tools/test_windows_host_events.py --java-home "$env:JAVA_HOME"
@@ -331,7 +366,7 @@ index f9e65608b..aaa8eeca4 100644
        - name: Build native clipboard foreground actor before timed startup
          if: ${{ !cancelled() }}
          shell: cmd
-@@ -168,6 +446,72 @@ jobs:
+@@ -168,6 +467,72 @@ jobs:
          if: ${{ !cancelled() }}
          shell: bash
          run: python tools/test_storage_stats_scans.py --java-home "$JAVA_HOME"
@@ -404,7 +439,7 @@ index f9e65608b..aaa8eeca4 100644
        - name: Release updater and control panel contracts on Windows PowerShell 5.1
          if: ${{ !cancelled() }}
          shell: powershell
-@@ -178,23 +522,44 @@ jobs:
+@@ -178,23 +543,44 @@ jobs:
            tests/windows/shell/ControlPanelRefreshChecks.ps1
            tests/windows/shell/ControlPanelRecoveryChecks.ps1
            tests/windows/shell/ControlPanelIdleChecks.ps1
@@ -449,7 +484,44 @@ index f9e65608b..aaa8eeca4 100644
        - name: API 37 report gate failure and selection contracts
          if: ${{ !cancelled() }}
          shell: bash
-@@ -255,8 +620,13 @@ jobs:
+@@ -211,7 +597,8 @@ jobs:
+           PYTHONIOENCODING: utf-8
+         run: python tools/ci/run_api37_report_tests.py --profile windows
+   api37-report-tests:
+-    needs: [source-identity]
++    needs: [plan, source-identity]
++    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'api37-report-tests') }}
+     runs-on: ubuntu-24.04
+     timeout-minutes: 10
+     env:
+@@ -236,18 +623,22 @@ jobs:
+         shell: bash
+         run: python tools/ci/run_api37_report_tests.py --profile linux
+   union-tsf:
+-    needs: [source-identity]
++    needs: [plan, source-identity]
++    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'union-tsf') }}
+     uses: ./.github/workflows/tsf-format-component.yml
+   union-services:
+-    needs: [source-identity]
++    needs: [plan, source-identity]
++    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'union-services') }}
+     uses: ./.github/workflows/services-geocoder-worker-component.yml
+   union-native-blocking:
+-    needs: [source-identity]
++    needs: [plan, source-identity]
++    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'union-native-blocking') }}
+     uses: ./.github/workflows/native3-locks-blocking.yml
+   # Host-only contract tests. Builds no longer wait for them: they run
+   # alongside the build jobs and ci-required still requires them to pass.
+   artifact-preflight:
+-    needs: [source-identity]
++    needs: [plan, source-identity]
++    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'artifact-preflight') }}
+     runs-on: ubuntu-24.04
+     steps:
+       - uses: actions/checkout@v4
+@@ -255,8 +646,13 @@ jobs:
            fetch-depth: 0
        - name: Install media contract encoder and decoder tools
          run: |
@@ -465,7 +537,7 @@ index f9e65608b..aaa8eeca4 100644
 
        - name: Windows test shard coverage, dependencies and failure controls
          shell: pwsh
-@@ -305,6 +675,9 @@ jobs:
+@@ -305,6 +701,9 @@ jobs:
        - name: Notification image staging, cache, cancellation and encoder ownership
          run: python3 tools/test_notification_images.py
 
@@ -475,7 +547,7 @@ index f9e65608b..aaa8eeca4 100644
        - name: Native allocation, directory, semaphore, file-lock and socket-control contracts
          run: |
            python3 tools/test_hwui_renderer_policy.py --sanitize
-@@ -316,31 +689,40 @@ jobs:
+@@ -316,31 +715,40 @@ jobs:
            python3 tools/test_bionic_system_contracts.py --sanitize
            python3 tools/test_environment_contracts.py --sanitize
            python3 tools/test_environment_lookup_contracts.py
@@ -517,7 +589,7 @@ index f9e65608b..aaa8eeca4 100644
            python3 tools/test_pthread_clock_contracts.py --sanitize
            python3 tools/test_pthread_clock_contracts.py --linux-reference
            python3 tools/test_pthread_attribute_contracts.py --sanitize
-@@ -361,6 +743,7 @@ jobs:
+@@ -361,6 +769,7 @@ jobs:
            python3 tools/test_elf_tls_rollback.py --sanitize
            python3 tools/test_arm64_pending_rollback.py --sanitize
            python3 tools/test_arm64_native_rollback.py --sanitize
@@ -525,7 +597,7 @@ index f9e65608b..aaa8eeca4 100644
            python3 tools/test_media_api_contracts.py --sanitize
            python3 tools/test_aaudio_builder_contracts.py
            python3 tools/test_aaudio_lifecycle_contracts.py --sanitize
-@@ -371,8 +754,13 @@ jobs:
+@@ -371,8 +780,13 @@ jobs:
            python3 tools/test_boottime_resume.py --sanitize
            python3 tools/test_timerfd_contracts.py --sanitize
            python3 tools/test_input_surface_callbacks.py --sanitize
@@ -539,7 +611,7 @@ index f9e65608b..aaa8eeca4 100644
            python3 tools/test_dns_admission.py --sanitize
 
        - name: Stream device identity across close and reopen
-@@ -395,8 +783,14 @@ jobs:
+@@ -395,8 +809,14 @@ jobs:
        - name: Descriptor-backed stdio and stream lifetime contracts
          run: |
            python3 tools/test_stdio_contracts.py --sanitize
@@ -554,7 +626,7 @@ index f9e65608b..aaa8eeca4 100644
        - name: MediaPlayer PCM priming and playback lifecycle contracts
          run: python3 tools/test_media_player_priming.py --sanitize
 
-@@ -409,6 +803,7 @@ jobs:
+@@ -409,6 +829,7 @@ jobs:
            python3 tools/test_fnmatch_performance.py --sanitize
            python3 tools/test_virtual_path_classification.py --sanitize
            python3 tools/test_binder_reply_allocations.py --sanitize
@@ -562,7 +634,7 @@ index f9e65608b..aaa8eeca4 100644
            python3 tools/test_binder_receive_views.py --sanitize
            python3 tools/test_camera_capture_allocations.py --sanitize
            python3 tools/test_layered_bitmap_cache.py --sanitize
-@@ -421,7 +816,9 @@ jobs:
+@@ -421,7 +842,9 @@ jobs:
            python3 tools/test_art_jni_dispatch.py --sanitize
            python3 tools/test_audio_mixer_allocations.py --sanitize
            python3 tools/test_audio_unity_rate.py --sanitize
@@ -572,7 +644,7 @@ index f9e65608b..aaa8eeca4 100644
            python3 tools/test_capture_stream_selection.py --sanitize
            python3 tools/test_audio_file_source.py --sanitize
            python3 tools/test_audio_rate_history.py --sanitize
-@@ -436,6 +833,7 @@ jobs:
+@@ -436,6 +859,7 @@ jobs:
              tests/native/event_loop_reference.c -o "$RUNNER_TEMP/event-loop-reference"
            "$RUNNER_TEMP/event-loop-reference"
            python3 tools/test_audio_state_contracts.py --sanitize
@@ -580,7 +652,7 @@ index f9e65608b..aaa8eeca4 100644
            python3 tools/test_surface_geometry_contracts.py --sanitize
            python3 tools/test_video_scaling_contracts.py --sanitize
            python3 tools/test_native_window_dispatch.py --sanitize
-@@ -467,6 +865,12 @@ jobs:
+@@ -467,6 +891,12 @@ jobs:
            "$RUNNER_TEMP/gesher-noreplace-holes"
            python3 tools/test_madvise_reference.py
 
@@ -593,7 +665,7 @@ index f9e65608b..aaa8eeca4 100644
        - name: Filesystem metadata and media source ownership contracts
          run: |
            python3 tools/test_file_timestamp_contracts.py --sanitize
-@@ -478,9 +882,13 @@ jobs:
+@@ -478,9 +908,13 @@ jobs:
            python3 tools/test_media_callback_state.py --sanitize
            python3 tools/test_media_http_contracts.py --sanitize
            python3 tools/test_mf_encoder_input.py --sanitize
@@ -607,7 +679,7 @@ index f9e65608b..aaa8eeca4 100644
            cc -std=gnu11 -O1 -Wall -Wextra -Werror -DGESHER_FILESYSTEM_REFERENCE_MAIN \
              tests/native/filesystem_contract_guest.c -o "$RUNNER_TEMP/filesystem-metadata-reference"
            "$RUNNER_TEMP/filesystem-metadata-reference"
-@@ -501,13 +909,22 @@ jobs:
+@@ -501,13 +935,22 @@ jobs:
            python3 tools/test_media_callback_contracts.py --java-home "$JAVA_HOME"
            python3 tools/test_media_receiver_lifetimes.py
            python3 tools/test_media_recorder_state.py --java-home "$JAVA_HOME"
@@ -631,7 +703,7 @@ index f9e65608b..aaa8eeca4 100644
 
        - name: WebStorage origin, owned WebView responses and running-task contracts
          run: |
-@@ -515,6 +932,8 @@ jobs:
+@@ -515,6 +958,8 @@ jobs:
            python3 tools/test_webview_owned_responses.py --java-home "$JAVA_HOME"
            python3 tools/test_webview_boundary_dispatch.py --java-home "$JAVA_HOME"
            python3 tools/test_webview_geometry.py --java-home "$JAVA_HOME" --sanitize
@@ -640,7 +712,7 @@ index f9e65608b..aaa8eeca4 100644
            python3 tools/test_uia_snapshot_contracts.py --sanitize
            python3 tools/test_running_tasks_contracts.py
 
-@@ -523,8 +942,19 @@ jobs:
+@@ -523,8 +968,19 @@ jobs:
            python3 tools/test_bluetooth_native_contracts.py --sanitize
            python3 tools/test_bluetooth_gatt_contracts.py --java-home "$JAVA_HOME"
            python3 tools/test_bluetooth_socket_contracts.py --java-home "$JAVA_HOME"
@@ -660,7 +732,7 @@ index f9e65608b..aaa8eeca4 100644
 
        - name: MediaDataSource adapter contracts with checked JNI and UBSan
          run: python3 tools/test_media_callback_adapter.py
-@@ -538,6 +968,20 @@ jobs:
+@@ -538,6 +994,20 @@ jobs:
        - name: APK native library filename contracts
          run: python3 tools/test_native_library_paths.py --java-home "$JAVA_HOME"
 
@@ -681,7 +753,7 @@ index f9e65608b..aaa8eeca4 100644
        - name: Java service dispatch, durable settings, APK scans and bounded launcher logs
          run: |
            python3 tools/test_java_performance_contracts.py --java-home "$JAVA_HOME"
-@@ -545,13 +989,16 @@ jobs:
+@@ -545,13 +1015,16 @@ jobs:
            python3 tools/test_launcher_log_contracts.py --java-home "$JAVA_HOME"
            python3 tools/test_launcher_tail_io.py --java-home "$JAVA_HOME"
            python3 tools/test_launcher_log_bounds.py --java-home "$JAVA_HOME"
@@ -698,7 +770,17 @@ index f9e65608b..aaa8eeca4 100644
            python3 tools/test_dexopt_work.py --java-home "$JAVA_HOME"
 
        - name: Validate user interface translations
-@@ -590,12 +1037,47 @@ jobs:
+@@ -563,7 +1036,8 @@ jobs:
+         run: python3 tools/test_app_crash_diagnostics.py
+
+   build-framework-assets:
+-    needs: [source-identity]
++    needs: [plan, source-identity]
++    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'build-framework-assets') }}
+     runs-on: ubuntu-24.04
+     steps:
+       - uses: actions/checkout@v4
+@@ -590,12 +1064,47 @@ jobs:
 
        - name: Recorder lifecycle and complete-container size budgets
          run: |
@@ -748,7 +830,7 @@ index f9e65608b..aaa8eeca4 100644
 
        - name: libcore System.nanoTime shares Android awake-time domain
          run: python3 tools/test_system_nanotime.py --source third_party/aosp/libcore/ojluni/src/main/native/System.c
-@@ -608,6 +1090,12 @@ jobs:
+@@ -608,6 +1117,12 @@ jobs:
        - name: Build test apps
          run: tests/build-test-apps.sh out/test-apps
 
@@ -761,7 +843,7 @@ index f9e65608b..aaa8eeca4 100644
        - name: Build boot class path (core-oj, core-libart)
          run: tools/build-boot-jars.sh out/boot-jars
 
-@@ -617,7 +1105,13 @@ jobs:
+@@ -617,7 +1132,13 @@ jobs:
        - name: Collect framework assets
          run: |
            mkdir -p framework-assets
@@ -775,7 +857,17 @@ index f9e65608b..aaa8eeca4 100644
            # ICU's data, which the runtime maps from $ANDROID_I18N_ROOT/etc/icu.
            cp third_party/aosp/external/icu/icu4c/source/stubdata/icudt*l.dat framework-assets/
            # The system fonts and fonts.xml, for $ANDROID_ROOT (docs/fonts.md).
-@@ -702,6 +1196,9 @@ jobs:
+@@ -636,7 +1157,8 @@ jobs:
+   # Everything is cross-compiled on Linux with llvm-mingw, then executed on
+   # real Windows runners.
+   build:
+-    needs: [source-identity]
++    needs: [plan, source-identity]
++    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'build') }}
+     runs-on: ubuntu-24.04
+     env:
+       GESHER_HOST_PTHREAD_SELECTION: ${{ (github.ref == 'refs/heads/wip/pthread-production-factory' || github.ref == 'refs/heads/wip/coherent-selected-tcp') && 'selected-minimum' || 'publisher-cancel' }}
+@@ -702,6 +1224,9 @@ jobs:
            python3 tools/test_binder_reply_allocations.py --compile-only \
              --cxx "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang++" \
              --output out/binder_reply_allocations_test.exe
@@ -785,7 +877,7 @@ index f9e65608b..aaa8eeca4 100644
            python3 tools/test_binder_lifetime.py --compile-only --aosp-dir third_party/aosp \
              --cxx "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang++" \
              --output out/binder_lifetime_test.exe
-@@ -717,6 +1214,14 @@ jobs:
+@@ -717,6 +1242,14 @@ jobs:
            python3 tools/test_arm64_tls_lifecycle.py --compile-only \
              --cxx "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang++" \
              --output out/arm64_tls_lifecycle_test.exe
@@ -800,7 +892,7 @@ index f9e65608b..aaa8eeca4 100644
 
        - name: Build
          run: |
-@@ -745,9 +1250,10 @@ jobs:
+@@ -745,9 +1278,10 @@ jobs:
            ninja -C out CMakeFiles/gesher_bionic_unicode.dir/compat/bionic/unicode_width.cc.obj
            ninja -C out native3_unicode_test
            ninja -C out native3_cpu_clock_test clock_domains_windows_test boottime_resume_windows_test
@@ -812,7 +904,7 @@ index f9e65608b..aaa8eeca4 100644
            ninja -C out arm64_numeric_return_host arm64_numeric_fenv_test
            ninja -C out font_environment_test
 
-@@ -802,6 +1308,8 @@ jobs:
+@@ -802,6 +1336,8 @@ jobs:
            cp tools/package/licenses/BIONIC-GDTOA-NOTICES.txt dist/
            cp out/gesher_shellext.dll dist/
            cp out/futex_test_module.dll dist/
@@ -821,16 +913,164 @@ index f9e65608b..aaa8eeca4 100644
            cp out/libgesher_account_crypto.so dist/
            cp out/libgesher_install_pipe.so dist/
            cp out/libgesher_webview_bridge.so dist/
-@@ -1097,7 +1605,7 @@ jobs:
+@@ -903,7 +1439,8 @@ jobs:
+           if-no-files-found: error
+
+   native3-locks-reference:
+-    needs: [source-identity]
++    needs: [plan, source-identity]
++    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'native3-locks-reference') }}
+     runs-on: ubuntu-24.04
+     timeout-minutes: 8
+     steps:
+@@ -917,7 +1454,8 @@ jobs:
+           if-no-files-found: error
+
+   native3-locks-regression:
+-    needs: [build, native3-locks-reference]
++    needs: [plan, build, native3-locks-reference]
++    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'native3-locks-regression') }}
+     strategy:
+       fail-fast: false
+       matrix:
+@@ -969,7 +1507,8 @@ jobs:
+   # tools/framework/build.py): .github/workflows/framework.yml, which also
+   # runs on its own (gh workflow run framework --ref <branch>).
+   framework:
+-    needs: [source-identity]
++    needs: [plan, source-identity]
++    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'framework') }}
+     # A local call runs the framework.yml of the commit under test, so a
+     # framework.yml change takes effect in the same PR. Hosted build runners;
+     # see docs/self-hosted-ci.md before routing it to the restricted group.
+@@ -980,63 +1519,73 @@ jobs:
+   # Phase 6 (native libraries): the Android NDK test .so files, built on the
+   # Linux runner. .github/workflows/native-libs.yml, which also runs on its own.
+   native-libs:
+-    needs: [source-identity]
++    needs: [plan, source-identity]
++    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'native-libs') }}
+     uses: ./.github/workflows/native-libs.yml
+
+   # The Bluetooth backend's probe (docs/bluetooth.md): built on the Linux
+   # runner, run against Windows' real APIs (no radio) and the test radio.
+   bluetooth:
+-    needs: [source-identity]
++    needs: [plan, source-identity]
++    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'bluetooth') }}
+     uses: ./.github/workflows/bluetooth.yml
+
+   # Android ELF executables run as processes (docs/exec.md): the NDK test
+   # executable and gesher.ExecTest's dex: .github/workflows/exec.yml.
+   exec:
+-    needs: [source-identity]
++    needs: [plan, source-identity]
++    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'exec') }}
+     uses: ./.github/workflows/exec.yml
+
+   # The core libraries' own unit tests (AOSP's cc_test modules), built for
+   # the test job: .github/workflows/libs.yml.
+   libs:
+-    needs: [source-identity]
++    needs: [plan, source-identity]
++    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'libs') }}
+     uses: ./.github/workflows/libs.yml
+
+   # Phase 7 (arm64 translation): gesher_arm64.dll, the arm64 translator
+   # (dynarmic) dalvikvm LoadLibrary()s for arm64-v8a apps (docs/arm64.md,
+   # ADR 0047). .github/workflows/arm64.yml, which also runs on its own.
+   arm64:
+-    needs: [source-identity]
++    needs: [plan, source-identity]
++    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'arm64') }}
+     uses: ./.github/workflows/arm64.yml
+
+   # The native2 track's NDK test programs (shim extras, platform dlopen,
+   # popular NDK libraries' self-tests): .github/workflows/native2.yml.
+   native2:
+-    needs: [source-identity]
++    needs: [plan, source-identity]
++    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'native2') }}
+     uses: ./.github/workflows/native2.yml
+
+   # ART's own gtests for libartbase and libdexfile (docs/posix.md):
+   # .github/workflows/posix.yml, which also runs on its own.
+   posix:
+-    needs: [source-identity]
++    needs: [plan, source-identity]
++    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'posix') }}
+     uses: ./.github/workflows/posix.yml
+
+   # Skia, hwui and the graphics probes (docs/graphics.md):
+   # .github/workflows/graphics.yml, which also runs on its own.
+   graphics:
+-    needs: [source-identity]
++    needs: [plan, source-identity]
++    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'graphics') }}
+     uses: ./.github/workflows/graphics.yml
+
+   # ANGLE's libEGL.dll and libGLESv2.dll (GLES over Direct3D 11) and their
+   # probe (docs/angle.md): .github/workflows/angle.yml, which also runs on its own.
+   angle:
+-    needs: [source-identity]
++    needs: [plan, source-identity]
++    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'angle') }}
+     uses: ./.github/workflows/angle.yml
+
+   # android.webkit.WebView on WebView2 (docs/webview.md): the WebView2 probes
+   # and webapp.apk (built from the framework job's artifacts):
+   # .github/workflows/webview.yml, which also runs on its own.
+   webview:
+-    needs: [framework]
++    needs: [plan, framework]
++    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'webview') }}
+     uses: ./.github/workflows/webview.yml
+     with:
+       apk: true
+@@ -1044,24 +1593,28 @@ jobs:
+   # Gesher's boot image (docs/boot-image.md): dex2oat.exe from the build job
+   # compiles the boot class path on Windows: .github/workflows/boot-image.yml.
+   boot-image:
+-    needs: [build, framework]
++    needs: [plan, build, framework]
++    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'boot-image') }}
+     uses: ./.github/workflows/boot-image.yml
+
+   # Media (docs/media.md): the media track's test apps, built against this
+   # run's framework classes: .github/workflows/media.yml.
+   media:
+-    needs: [framework]
++    needs: [plan, framework]
++    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'media') }}
+     uses: ./.github/workflows/media.yml
+
+   # The surfaces track's NDK test app (surfacegl.apk: EGL into a SurfaceView):
+   # .github/workflows/surfaces.yml.
+   surfaces:
+-    needs: [source-identity]
++    needs: [plan, source-identity]
++    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'surfaces') }}
+     uses: ./.github/workflows/surfaces.yml
+
+   # What is left of porting ART's x86-64 assembly to Windows; informational.
+   asm-port:
+-    needs: [source-identity]
++    needs: [plan, source-identity]
++    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'asm-port') }}
+     runs-on: ubuntu-24.04
+     steps:
+       - uses: actions/checkout@v4
+@@ -1097,7 +1650,8 @@ jobs:
    # The Windows installer (tools/package/gesher.iss), installed and tried on a
    # clean runner: Hello through the installed `gesher` command, then uninstall.
    package:
 -    needs: [build, framework, graphics, angle, boot-image, media, arm64]
-+    needs: [build, framework, graphics, angle, boot-image, media, arm64, exec]
++    needs: [plan, build, framework, graphics, angle, boot-image, media, arm64, exec]
++    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'package') }}
      runs-on: windows-2022
      env:
        GH_TOKEN: ${{ github.token }}
-@@ -1120,6 +1628,15 @@ jobs:
+@@ -1120,6 +1674,15 @@ jobs:
              .github/workflows
              tools/fonts
              tools/binder
@@ -846,7 +1086,7 @@ index f9e65608b..aaa8eeca4 100644
 
        - name: Verify PowerShell UI translations
          shell: powershell
-@@ -1130,7 +1647,11 @@ jobs:
+@@ -1130,7 +1693,11 @@ jobs:
            tests/windows/shell/ControlPanelRefreshChecks.ps1
            tests/windows/shell/ControlPanelRecoveryChecks.ps1
            tests/windows/shell/ControlPanelIdleChecks.ps1
@@ -858,7 +1098,7 @@ index f9e65608b..aaa8eeca4 100644
            tests/windows/shell/UpdateChecks.ps1
            tests/windows/shell/UpdateTransportChecks.ps1
            tests/windows/shell/ControlPanelUpdateChecks.ps1
-@@ -1165,6 +1686,7 @@ jobs:
+@@ -1165,6 +1732,7 @@ jobs:
            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
        - name: Build installer
@@ -866,7 +1106,7 @@ index f9e65608b..aaa8eeca4 100644
          shell: pwsh
          run: |
            $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
-@@ -1181,6 +1703,11 @@ jobs:
+@@ -1181,6 +1749,11 @@ jobs:
            "$checksum  $($installer.Name)" | Set-Content -LiteralPath 'installer\SHA256SUMS.txt' -Encoding ascii
            Get-ChildItem installer
 
@@ -878,7 +1118,7 @@ index f9e65608b..aaa8eeca4 100644
        # Uploaded before the checks below: the e2e job tests this installer even when one
        # of them fails.
        - name: Upload tested installer artifact
-@@ -1189,9 +1716,105 @@ jobs:
+@@ -1189,9 +1762,105 @@ jobs:
            name: gesher-setup
            path: |
              installer/*.exe
@@ -984,7 +1224,7 @@ index f9e65608b..aaa8eeca4 100644
          shell: pwsh
          run: |
            $setup = (Get-ChildItem installer\gesher-setup-*.exe).FullName
-@@ -1205,9 +1828,11 @@ jobs:
+@@ -1205,9 +1874,11 @@ jobs:
            if ($LASTEXITCODE -ne 0) { throw 'Crash dialog host/Windows checks failed' }
            python tools/test_app_crash_runtime.py --runtime "$app" --fixture dist/crashnotice.apk --output out/crash-notice-art
            if ($LASTEXITCODE -ne 0) { throw 'Crash notice Windows/ART checks failed' }
@@ -997,7 +1237,7 @@ index f9e65608b..aaa8eeca4 100644
            . (Join-Path $app 'gesher-update.ps1')
            $installedVersion = Get-GesherInstalledVersion -InstallDirectory $app
            if ($installedVersion -cne $env:GESHER_PACKAGE_VERSION) {
-@@ -1220,6 +1845,9 @@ jobs:
+@@ -1220,6 +1891,9 @@ jobs:
              throw "Installer ProductVersion mismatch: expected '$env:GESHER_PACKAGE_VERSION', normalized '$installerVersion', raw '$rawProductVersion'"
            }
            'PASS  installer: updater, runtime synchronizer and exact release version are installed' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
@@ -1007,7 +1247,7 @@ index f9e65608b..aaa8eeca4 100644
            $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
            if (-not ($userPath -split ';' -contains $app)) { throw "PATH lacks $app" }
            $out = & "$app\gesher.cmd" "$app\hello.dex" gesher.Hello 2>&1 | Out-String
-@@ -1231,8 +1859,8 @@ jobs:
+@@ -1231,8 +1905,8 @@ jobs:
            if ($out -notmatch 'gesher: boot image loaded: 3 spaces') { throw 'The installed gesher did not load the installed boot image' }
            # gesher-app and the framework it runs on are installed, and the
            # installed copy takes the bundled app to onResume.
@@ -1018,7 +1258,7 @@ index f9e65608b..aaa8eeca4 100644
              if (-not (Test-Path "$app\$f")) { throw "The installer left out $f" }
            }
            $oatdumpOutput = & "$app\oatdump.exe" "--oat-file=$app/framework/x86_64/boot-framework.oat" --header-only --no-disassemble 2>&1 | Out-String
-@@ -1275,13 +1903,15 @@ jobs:
+@@ -1275,13 +1949,15 @@ jobs:
            $env:GESHER_APP_WINDOW = 'headless'
            # The device's processes log how they execute (checked below, ADR 0081).
            $env:GESHER_LOG_EXECUTION = '1'
@@ -1036,7 +1276,7 @@ index f9e65608b..aaa8eeca4 100644
              Get-Content "$env:LOCALAPPDATA\Gesher\logs\*.log" -ErrorAction SilentlyContinue | Select-Object -Last 60 | Out-Host
              throw "The installed gesher-app did not run lifecycle.apk on the Gesher device (exit $code)"
            }
-@@ -1473,8 +2103,11 @@ jobs:
+@@ -1473,8 +2149,11 @@ jobs:
              throw "The installed gesher-app --system-server did not take lifecycle.apk to onResume (exit $code)"
            }
            'PASS  installer: gesher-app --system-server runs the app with the services in a system server process' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
@@ -1050,7 +1290,7 @@ index f9e65608b..aaa8eeca4 100644
            $cls = 'HKCU:\Software\Classes'
            $progId = (Get-ItemProperty "$cls\.apk" -ErrorAction SilentlyContinue).'(default)'
            if ($progId -ne 'Gesher.Apk') { throw ".apk's default ProgID is '$progId', not Gesher.Apk" }
-@@ -1482,20 +2115,251 @@ jobs:
+@@ -1482,20 +2161,251 @@ jobs:
            $open = (Get-ItemProperty "$cls\Gesher.Apk\shell\open\command").'(default)'
            Write-Host "Gesher.Apk open command: $open"
            if ($open -notmatch '^"([^"]+)"\s*(.*)$' -or $Matches[1] -ne "$app\gesher-launch.exe") { throw "Gesher.Apk's open command does not start gesher-launch.exe: $open" }
@@ -1076,8 +1316,7 @@ index f9e65608b..aaa8eeca4 100644
 +            $psi.RedirectStandardError = $true
 +            $p = [Diagnostics.Process]::Start($psi)
 +            return [pscustomobject]@{ Process = $p; Out = $p.StandardOutput.ReadToEndAsync(); Err = $p.StandardError.ReadToEndAsync() }
-           }
--          'PASS  installer: .apk opens with gesher-app through the registered command' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
++          }
 +          # Waits for it (15 minutes at most) and returns its output.
 +          function Complete-ApkOpen($run, [string] $what) {
 +            if (-not $run.Process.WaitForExit(900000)) { $run.Process.Kill($true); throw "$what did not end within 15 minutes" }
@@ -1282,7 +1521,8 @@ index f9e65608b..aaa8eeca4 100644
 +          $registry = Join-Path $stageParent 'packages.list'
 +          if (Select-String -LiteralPath $registry -Pattern '^com\.gesher\.splitcontract\t' -Quiet) {
 +            throw 'a mismatched digest published an installed package'
-+          }
+           }
+-          'PASS  installer: .apk opens with gesher-app through the registered command' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
 +          $expectedHashes = @{}
 +          foreach ($name in @($looseInputs.Values) + 'base.dm') {
 +            $expectedHashes[$name] = (Get-FileHash -LiteralPath (Join-Path $loose $name)).Hash
@@ -1315,7 +1555,7 @@ index f9e65608b..aaa8eeca4 100644
            # Gesher's toast activator (ADR 0051): a local server running gesher-app toast-activated.
            $activator = (Get-ItemProperty "$cls\CLSID\{C18D9445-A7F0-472E-985F-AC354EBEB660}\LocalServer32" -ErrorAction SilentlyContinue).'(default)'
            Write-Host "toast activator: $activator"
-@@ -1540,7 +2404,7 @@ jobs:
+@@ -1540,7 +2450,7 @@ jobs:
            # The device outlives the console that started it.
            $running = DevicePids
            if ($running.Count -ne 3) { throw "The Gesher device did not outlive the .apk open command's console: $running" }
@@ -1324,7 +1564,7 @@ index f9e65608b..aaa8eeca4 100644
            # An app's window on the device (docs/graphics.md, ADR 0029): the
            # installed gesher-app launches uiapp.apk with a hidden window; the
            # app process the system server starts draws its UI into a Win32
-@@ -1825,6 +2689,16 @@ jobs:
+@@ -1825,6 +2735,16 @@ jobs:
            Set-Content $sentinel 'not Gesher''s'
            # An app id as the system server registers one for an app's toasts (ADR 0038), which uninstalling must remove.
            $null = New-Item 'HKCU:\Software\Classes\AppUserModelId\Gesher.App.com.gesher.ci' -Force
@@ -1341,7 +1581,7 @@ index f9e65608b..aaa8eeca4 100644
            Start-Process "$app\unins000.exe" -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES' -Wait
            # The uninstaller hands over to a copy of itself and returns at once.
            for ($i = 0; $i -lt 60 -and (Test-Path "$app\unins000.exe"); $i++) { Start-Sleep 1 }
-@@ -1832,6 +2706,10 @@ jobs:
+@@ -1832,6 +2752,10 @@ jobs:
            if ($left) { throw "Uninstall left the Gesher device's processes running: $left" }
            if (Test-Path "$env:LOCALAPPDATA\Gesher") { throw "Uninstall left $env:LOCALAPPDATA\Gesher" }
            'PASS  installer: uninstall stops the Gesher device and removes its data' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
@@ -1352,7 +1592,7 @@ index f9e65608b..aaa8eeca4 100644
            $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
            if ($userPath -split ';' -contains $app) { throw 'Uninstall left Gesher on PATH' }
            if (Test-Path "$app\dalvikvm.exe") { throw 'Uninstall left dalvikvm.exe' }
-@@ -1839,6 +2717,13 @@ jobs:
+@@ -1839,6 +2763,13 @@ jobs:
            if ((Get-ItemProperty "$cls\.apk" -ErrorAction SilentlyContinue).'(default)' -eq 'Gesher.Apk') { throw "Uninstall left .apk's default on Gesher.Apk" }
            if ($null -ne (Get-ItemProperty "$cls\.apk\OpenWithProgids" -ErrorAction SilentlyContinue).'Gesher.Apk') { throw 'Uninstall left Gesher.Apk in OpenWithProgids' }
            'PASS  installer: uninstall removes the .apk association' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
@@ -1366,7 +1606,7 @@ index f9e65608b..aaa8eeca4 100644
            if (Test-Path "$cls\CLSID\{C18D9445-A7F0-472E-985F-AC354EBEB660}") { throw 'Uninstall left the toast activator' }
            $appIds = @(Get-ChildItem "$cls\AppUserModelId" -ErrorAction SilentlyContinue | Where-Object PSChildName -like 'Gesher.App.*')
            if ($appIds) { throw "Uninstall left app ids: $($appIds.PSChildName -join ', ')" }
-@@ -1851,6 +2736,14 @@ jobs:
+@@ -1851,14 +2782,22 @@ jobs:
            'PASS  installer: uninstall removes the Gesher Apps Start menu folder with the apps'' shortcuts, and nothing else of the Start menu' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
            'PASS  installer: installs, runs Hello and gesher-app, uninstalls' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
 
@@ -1381,7 +1621,17 @@ index f9e65608b..aaa8eeca4 100644
    # End-to-end with real apps (docs/e2e.md): the installer from the package job on a
    # clean runner runs real, unmodified open-source apps from F-Droid
    # (tests/e2e/apps.json, pinned by SHA-256), each in an off-desktop window that is
-@@ -1875,6 +2768,7 @@ jobs:
+   # read back, given input and closed: tests/e2e/run-e2e.ps1.
+   e2e:
+-    needs: [package]
++    needs: [plan, package]
+     # The package job uploads the installer before its own checks.
+-    if: ${{ !cancelled() && needs.package.result != 'skipped' }}
++    if: ${{ !cancelled() && needs.package.result != 'skipped' && needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'e2e') }}
+     strategy:
+       fail-fast: false
+       matrix:
+@@ -1875,6 +2814,7 @@ jobs:
              tools/ci
              tools/surface
              tests/windows/graphics
@@ -1389,7 +1639,7 @@ index f9e65608b..aaa8eeca4 100644
 
        - name: Verify and assemble gesher-setup artifact
          shell: pwsh
-@@ -1916,9 +2810,22 @@ jobs:
+@@ -1916,9 +2856,22 @@ jobs:
            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
            $setup = (Get-ChildItem installer\gesher-setup-*.exe).FullName
            $env:GESHER_TRACE_MISSING_BOOT_CLASSES = '1'
@@ -1412,7 +1662,27 @@ index f9e65608b..aaa8eeca4 100644
        - name: Validate and publish real-app coverage
          if: always()
          shell: pwsh
-@@ -2025,6 +2932,11 @@ jobs:
+@@ -1942,7 +2895,8 @@ jobs:
+   # (20 API requests each) with one bundle receipt per shard (7 requests).
+   # The repository's GITHUB_TOKEN quota is shared by every concurrent run.
+   core-suppliers:
+-    needs: [build, framework, native-libs, libs, graphics, angle, boot-image, webview, exec, media, posix, arm64, surfaces, native2]
++    needs: [plan, build, framework, native-libs, libs, graphics, angle, boot-image, webview, exec, media, posix, arm64, surfaces, native2]
++    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'core-suppliers') }}
+     runs-on: ubuntu-24.04
+     # Room for a reachable wait on the shared hourly API quota.
+     timeout-minutes: 90
+@@ -1968,7 +2922,8 @@ jobs:
+
+   test-shards:
+     name: test-${{ matrix.shard }} (${{ matrix.os }})
+-    needs: [core-suppliers, build, framework, native-libs, libs, graphics, angle, boot-image, webview, exec, media, posix, arm64, surfaces, native2, supplier-correlation]
++    needs: [plan, core-suppliers, build, framework, native-libs, libs, graphics, angle, boot-image, webview, exec, media, posix, arm64, surfaces, native2, supplier-correlation]
++    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'test-shards') }}
+     strategy:
+       fail-fast: false
+       matrix:
+@@ -2025,6 +2980,11 @@ jobs:
            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
            & ./dist/binder_reply_allocations_test.exe gate
            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -1424,7 +1694,7 @@ index f9e65608b..aaa8eeca4 100644
            & ./dist/layered_bitmap_cache_test.exe gate
            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
            & ./dist/structured_logging_test.exe
-@@ -2042,6 +2954,14 @@ jobs:
+@@ -2042,6 +3002,14 @@ jobs:
            & ./dist/sqlite_path_test.exe
            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -1439,7 +1709,7 @@ index f9e65608b..aaa8eeca4 100644
        - name: Verify and assemble framework artifact
          shell: pwsh
          run: |
-@@ -2060,11 +2980,13 @@ jobs:
+@@ -2060,11 +3028,13 @@ jobs:
            python tools/surface/assemble-artifacts.py --source ci-suppliers/core/artifacts/arm64 --destination dist --ledger ci-owners.json --owner arm64
            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -1454,7 +1724,7 @@ index f9e65608b..aaa8eeca4 100644
            & ./dist/arm64_tls_lifecycle_test.exe gate ./dist/gesher_arm64.dll
            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-@@ -2215,6 +3137,8 @@ jobs:
+@@ -2215,6 +3185,8 @@ jobs:
            path: |
              results.txt
              ci-owners.json
@@ -1463,15 +1733,114 @@ index f9e65608b..aaa8eeca4 100644
              dist/realtime-signals-evidence/**/*.json
              ${{ runner.temp }}/gesher-root/devsvc-toast-*-projection.jsonl
              ${{ runner.temp }}/gesher-root/logs/system_server.log
-@@ -2613,7 +3537,7 @@ jobs:
+@@ -2224,8 +3196,8 @@ jobs:
+
+   test:
+     name: test (${{ matrix.os }})
+-    needs: [test-shards]
+-    if: always()
++    needs: [plan, test-shards]
++    if: ${{ always() && needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'test') }}
+     strategy:
+       fail-fast: false
+       matrix:
+@@ -2240,7 +3212,8 @@ jobs:
+   # Extra isolated jobs execute the real regression in the SAME canonical
+   # full. Only these jobs download the separately named hook artifact.
+   web3-query-regression:
+-    needs: [build, framework, native-libs, graphics, angle, boot-image, webview, exec, media, arm64]
++    needs: [plan, build, framework, native-libs, graphics, angle, boot-image, webview, exec, media, arm64]
++    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'web3-query-regression') }}
+     strategy:
+       fail-fast: false
+       matrix:
+@@ -2301,11 +3274,13 @@ jobs:
+   # Ordinary Binder scope is mandatory and separate from production installer
+   # payload and query-hook runtime. No raw/public-prefix transport-loss gate.
+   binder2-sg-fixtures:
+-    needs: [source-identity]
++    needs: [plan, source-identity]
++    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'binder2-sg-fixtures') }}
+     uses: ./.github/workflows/binder2-sg-full-fixtures.yml
+
+   binder2-sg-regression:
+-    needs: [build, framework, arm64, boot-image, binder2-sg-fixtures]
++    needs: [plan, build, framework, arm64, boot-image, binder2-sg-fixtures]
++    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'binder2-sg-regression') }}
+     strategy:
+       fail-fast: false
+       matrix:
+@@ -2363,7 +3338,8 @@ jobs:
+
+   # Current selected TCP role; historical canonical red remains separately preserved.
+   compile:
+-    needs: [source-identity]
++    needs: [plan, source-identity]
++    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'compile') }}
+     name: compile-${{ matrix.supplier }}
+     strategy:
+       fail-fast: false
+@@ -2508,7 +3484,8 @@ jobs:
+           if-no-files-found: error
+           retention-days: 14
+   linux-reference:
+-    needs: [source-identity]
++    needs: [plan, source-identity]
++    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'linux-reference') }}
+     env:
+       GH_TOKEN: ${{ github.token }}
+       TCP_EVIDENCE_SCOPE: ${{ github.repository == 'gesher-runtime/gesher' && 'canonical' || 'fork-diagnostic' }}
+@@ -2533,7 +3510,8 @@ jobs:
+           g++ -std=c++20 -Wall -Wextra -Werror -pthread tests/net-tcp-priority/contract.cc -o /tmp/tcp-priority-reference
+           timeout 20 /tmp/tcp-priority-reference
+   supplier-correlation:
+-    needs: [source-identity, build, compile]
++    needs: [plan, source-identity, build, compile]
++    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'supplier-correlation') }}
+     runs-on: ubuntu-24.04
+     # +61 minutes: a quota-exhausted GitHub read may wait up to 61 minutes for the
+     # published hourly reset instead of failing the job.
+@@ -2570,7 +3548,8 @@ jobs:
+           if [[ "$TCP_EVIDENCE_SCOPE" == fork-diagnostic ]]; then args+=(--fork-diagnostic); fi
+           python3 tools/toolchain/coherent_supplier_correlation.py "${args[@]}"
+   windows:
+-    needs: [source-identity, compile, linux-reference, supplier-correlation]
++    needs: [plan, source-identity, compile, linux-reference, supplier-correlation]
++    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'windows') }}
+     strategy:
+       fail-fast: false
+       matrix:
+@@ -2613,10 +3592,28 @@ jobs:
    ci-required:
      name: ci-required
      if: always()
 -    needs: [source-identity, automerge-script, windows-host-contracts, api37-report-tests, union-tsf, union-services, union-native-blocking, artifact-preflight, build-framework-assets, build, native3-locks-reference, native3-locks-regression, framework, native-libs, bluetooth, exec, libs, arm64, native2, posix, graphics, angle, webview, boot-image, media, surfaces, asm-port, package, e2e, core-suppliers, test-shards, test, web3-query-regression, binder2-sg-fixtures, binder2-sg-regression, compile, linux-reference, supplier-correlation, windows]
-+    needs: [source-identity, automerge-script, network-cost-client, windows-host-contracts, api37-report-tests, union-tsf, union-services, union-native-blocking, artifact-preflight, build-framework-assets, build, native3-locks-reference, native3-locks-regression, framework, native-libs, bluetooth, exec, libs, arm64, native2, posix, graphics, angle, webview, boot-image, media, surfaces, asm-port, package, e2e, core-suppliers, test-shards, test, web3-query-regression, binder2-sg-fixtures, binder2-sg-regression, compile, linux-reference, supplier-correlation, windows]
++    needs: [plan, source-identity, automerge-script, network-cost-client, windows-host-contracts, api37-report-tests, union-tsf, union-services, union-native-blocking, artifact-preflight, build-framework-assets, build, native3-locks-reference, native3-locks-regression, framework, native-libs, bluetooth, exec, libs, arm64, native2, posix, graphics, angle, webview, boot-image, media, surfaces, asm-port, package, e2e, core-suppliers, test-shards, test, web3-query-regression, binder2-sg-fixtures, binder2-sg-regression, compile, linux-reference, supplier-correlation, windows]
      runs-on: ubuntu-24.04
++    timeout-minutes: 10
      steps:
-       - name: Require every production CI job
+-      - name: Require every production CI job
++      - uses: actions/checkout@v4
++        if: github.event_name == 'pull_request'
++        with:
++          persist-credentials: false
++          sparse-checkout: |
++            .github/workflows
++            tools/ci
++      - name: Require successful selected jobs and intentional skips
++        if: github.event_name == 'pull_request'
++        env:
++          SELECTED: ${{ needs.plan.outputs.selected }}
++          JOB_RESULTS: ${{ toJSON(needs) }}
++        run: |
++          python3 -m pip install PyYAML==6.0.3
++          python3 tools/ci/select_pr_jobs.py verify --workflow ci
++      # Keep the full-run verdict in the workflow definition used by the release publisher.
++      - name: Require every job on push or manual runs
++        if: github.event_name != 'pull_request'
+         env:
+           JOB_RESULTS: ${{ toJSON(needs) }}
+         run: |
 diff --git a/compat/bionic/posix_bionic.cc b/compat/bionic/posix_bionic.cc
 index 1f3394e95..550eb5826 100644
 --- a/compat/bionic/posix_bionic.cc
@@ -2375,7 +2744,7 @@ index fcd68fdfa..2904c3999 100644
       b'while (n > 0) {', 'scandir reverse endpoint'),
      ('public export', b'E("scandir", Scandir);', b'E("scandir", ScandirWrong);', 'scandir reverse endpoint'),
 diff --git a/tools/net-tcp-priority/test-selected-policy.py b/tools/net-tcp-priority/test-selected-policy.py
-index 5f0fff857..fd1b8a6ef 100644
+index 5f0fff857..48e69244f 100644
 --- a/tools/net-tcp-priority/test-selected-policy.py
 +++ b/tools/net-tcp-priority/test-selected-policy.py
 @@ -265,7 +265,144 @@ RECEIPT_SOURCE_BLOCK=b'''  if ($null -ne $SourceIdentity) {
@@ -2768,7 +3137,7 @@ index 5f0fff857..fd1b8a6ef 100644
  # Bionic's independently reviewed memmem search changes only this include and
  # complete wrapper. Restore those exact bytes before applying the UNCHANGED
  # OFD qualification digest. Pin the new pure-search helper separately: no other
-@@ -394,12 +718,276 @@ PIPE_POLL_ERROR_REPLACEMENTS = (
+@@ -394,12 +718,321 @@ PIPE_POLL_ERROR_REPLACEMENTS = (
          if (!result) waiting_files = true;
  '''),
  )
@@ -2895,7 +3264,13 @@ index 5f0fff857..fd1b8a6ef 100644
 + return after
 +
 +
-+USB_BLOCK_TRANSITION_SHA256 = '378e672a36341b5cd1f0f274e606a11f865b1c916860ee52161d8c6f7dc19dd8'
++USB_BLOCK_TRANSITION_SHA256 = 'a284f7eff3ca5546d8164071711b86f27a2a8942e8364a89806bf508b35d1517'
++USB_NETLINK_MAIN = '279966e6bcb842ae8a44fef87d740baed6818208'
++USB_NETLINK_PATHS = {
++ 'compat/posix/posix.cmake',
++ 'compat/posix/src/fd.cc',
++ 'compat/posix/src/system.cc',
++}
 +USB_BLOCK_PATH_BASES['compat/posix/include/gesher/file_description.h'] = '82bb674a00ed50fcfa5c234fcd7f9830d08d443e'
 +USB_BLOCK_PATH_BASES['compat/binder/binderd.cc'] = 'a025ba60e321a0238c0da90808e2ec9cc69f64ca'
 +USB_BLOCK_TRANSITION_PATHS = (
@@ -2962,8 +3337,9 @@ index 5f0fff857..fd1b8a6ef 100644
 +                 input=delta,cwd=work,check=True,capture_output=True)
 +  for path in paths:
 +   preceding[path] = (work/path).read_bytes()
++   base = USB_NETLINK_MAIN if path in USB_NETLINK_PATHS else USB_BLOCK_PATH_BASES.get(path, USB_BLOCK_BASE)
 +   historical = main513[path] if path in main513 else subprocess.check_output(
-+       ['git','-C',str(ROOT),'show',USB_BLOCK_PATH_BASES.get(path, USB_BLOCK_BASE)+':'+path])
++       ['git','-C',str(ROOT),'show',base+':'+path])
 +   assert preceding[path] == historical, path
 +  subprocess.run(['git','apply','--unidiff-zero','--check','-'],input=delta,cwd=work,check=True,capture_output=True)
 +  subprocess.run(['git','apply','--unidiff-zero','-'],input=delta,cwd=work,check=True,capture_output=True)
@@ -2976,6 +3352,43 @@ index 5f0fff857..fd1b8a6ef 100644
 +# exact main checkpoint before running EVERY original receipt and TCP check.
 +# The helper pins bind the new references to their reviewed source bytes only:
 +# neither this transition nor a passing source check qualifies native execution.
++# Route netlink extends the socket path covered by the existing receipts.
++# Reverse its exact delta before running those checks on their original inputs.
++NETLINK_PATCH='tools/net-tcp-priority/qualified/netlink-source.patch'
++NETLINK_RECEIPT='tools/net-tcp-priority/qualified/netlink-source.json'
++NETLINK_RECEIPT_SHA256='585c1908cd44fb873cf65f24f70c8b78f68ae15e170aae3134e7e4ae5b152ed1'
++
++def preceding_netlink_sources(usb_block):
++ raw=(ROOT/NETLINK_RECEIPT).read_bytes()
++ assert hashlib.sha256(raw).hexdigest()==NETLINK_RECEIPT_SHA256,NETLINK_RECEIPT
++ receipt=json.loads(raw)
++ patch=(ROOT/NETLINK_PATCH).read_bytes()
++ assert hashlib.sha256(patch).hexdigest()==receipt['patch_sha256'],NETLINK_PATCH
++ paths=sorted(receipt['after_sha256'])
++ assert paths==sorted(receipt['before_sha256'])
++ assert set(usb_block).intersection(paths)==USB_NETLINK_PATHS,'USB/Netlink qualification overlap changed'
++ assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==paths
++ current={path:usb_block[path] if path in usb_block else (ROOT/path).read_bytes() for path in paths}
++ with tempfile.TemporaryDirectory(prefix='gesher-netlink-qualification-') as temporary:
++  work=Path(temporary)
++  for path,source in current.items():
++   assert hashlib.sha256(source).hexdigest()==receipt['after_sha256'][path],path
++   (work/path).parent.mkdir(parents=True,exist_ok=True)
++   (work/path).write_bytes(source)
++  subprocess.run(['git','apply','--reverse','--unidiff-zero','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
++  subprocess.run(['git','apply','--reverse','--unidiff-zero','-'],input=patch,cwd=work,check=True,capture_output=True)
++  before={path:(work/path).read_bytes() for path in paths}
++  for path,source in before.items():
++   assert hashlib.sha256(source).hexdigest()==receipt['before_sha256'][path],path
++   assert source==subprocess.check_output(['git','-C',str(ROOT),'show',receipt['baseline']+':'+path]),path
++   if path in USB_NETLINK_PATHS:
++    usb_base=USB_BLOCK_PATH_BASES.get(path,USB_BLOCK_BASE)
++    assert source==subprocess.check_output(['git','-C',str(ROOT),'show',usb_base+':'+path]),('Netlink reverse and original USB endpoints disagree',path)
++  subprocess.run(['git','apply','--unidiff-zero','-'],input=patch,cwd=work,check=True,capture_output=True)
++  for path,source in current.items():
++   assert (work/path).read_bytes()==source,path
++ return before
++
 +STORAGE_POLICY_QUALIFICATION='tools/net-tcp-priority/qualified/storage-policy-source.json'
 +STORAGE_POLICY_PATCH='tools/net-tcp-priority/qualified/storage-policy-source.patch'
 +STORAGE_POLICY_QUALIFICATION_SHA256='1274a14dce7607f2ea1a6eea833f4036a48a8fe306b58e799cb04080e613cc41'
@@ -2998,7 +3411,7 @@ index 5f0fff857..fd1b8a6ef 100644
 + 'compat/posix/src/storage_policy.cc',
 + 'compat/posix/src/storage_policy.h',
 +]
-+def preceding_storage_policy_sources(usb_block):
++def preceding_storage_policy_sources(before_features):
 + raw=(ROOT/STORAGE_POLICY_QUALIFICATION).read_bytes()
 + assert hashlib.sha256(raw).hexdigest()==STORAGE_POLICY_QUALIFICATION_SHA256,'storage policy source qualification changed'
 + qualification=json.loads(raw)
@@ -3011,11 +3424,12 @@ index 5f0fff857..fd1b8a6ef 100644
 + baseline_policy=subprocess.check_output(['git','-C',str(ROOT),'show',STORAGE_POLICY_BASELINE+':tools/net-tcp-priority/test-selected-policy.py'])
 + assert hashlib.sha256(baseline_policy).hexdigest()==qualification['baseline_policy_sha256'],'storage policy baseline policy changed'
 + for path in STORAGE_POLICY_HELPERS:
-+  assert hashlib.sha256(usb_block.get(path,(ROOT/path).read_bytes())).hexdigest()==qualification['helper_sha256'][path],path
++  assert hashlib.sha256(before_features.get(path,(ROOT/path).read_bytes())).hexdigest()==qualification['helper_sha256'][path],path
 + patch=(ROOT/STORAGE_POLICY_PATCH).read_bytes()
 + assert hashlib.sha256(patch).hexdigest()==qualification['patch_sha256'],'storage policy transition patch changed'
 + assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==STORAGE_POLICY_PATHS
-+ current={path:usb_block.get(path,(ROOT/path).read_bytes()) for path in STORAGE_POLICY_PATHS}
++ current={path:before_features[path] if path in before_features else (ROOT/path).read_bytes()
++          for path in STORAGE_POLICY_PATHS}
 + baseline={path:subprocess.check_output(['git','-C',str(ROOT),'show',STORAGE_POLICY_BASELINE+':'+path]) for path in STORAGE_POLICY_PATHS}
 + for path in STORAGE_POLICY_PATHS:
 +  assert hashlib.sha256(current[path]).hexdigest()==qualification['source_sha256'][path],path
@@ -3047,7 +3461,7 @@ index 5f0fff857..fd1b8a6ef 100644
  def preceding_scandir_source(current):
   folder=ROOT/'tools/net-tcp-priority/qualified'
   raw=(folder/'scandir-source.json').read_bytes()
-@@ -436,9 +1024,9 @@ def preceding_scandir_source(current):
+@@ -436,9 +1069,9 @@ def preceding_scandir_source(current):
  # Reverse only the reviewed bounded memrchr word-search delta to the exact
  # public main source before the unchanged OFD digest is checked. This admits
  # no other POSIX byte and grants no supplier, controller or runtime approval.
@@ -3059,7 +3473,7 @@ index 5f0fff857..fd1b8a6ef 100644
  def preceding_memrchr_source(qualification):
   folder=ROOT/'tools/net-tcp-priority/qualified'
   raw=(folder/'memrchr-source.json').read_bytes()
-@@ -475,6 +1063,9 @@ def preceding_memrchr_source(qualification):
+@@ -475,6 +1108,9 @@ def preceding_memrchr_source(qualification):
   return baseline
 
  def preceding_ofd_sources():
@@ -3069,12 +3483,14 @@ index 5f0fff857..fd1b8a6ef 100644
   folder=ROOT/'tools/net-tcp-priority/qualified'
   raw=(folder/'ofd-stream-source.json').read_bytes()
   assert hashlib.sha256(raw).hexdigest()==OFD_QUALIFICATION_SHA256,'OFD source qualification changed'
-@@ -485,10 +1076,29 @@ def preceding_ofd_sources():
+@@ -485,10 +1121,31 @@ def preceding_ofd_sources():
          'compat/posix/src/system.cc','compat/posix/src/winsock.cc']
   assert qualification['paths']==paths
   assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==paths
 - shared_stdio=preceding_shared_stdio_sources(qualification)
 + usb_block=preceding_usb_block_sources(folder)
++ netlink=preceding_netlink_sources(usb_block)
++ before_features={**usb_block,**netlink}  # The overlapping Netlink endpoints are the older bytes.
 + memfd_lease=preceding_memfd_lease_sources(usb_block)
 + shared_input={path:stdio_main[path] if path in stdio_main else (ROOT/path).read_bytes() for path in SHARED_STDIO_PATHS}
 + shared_stdio=preceding_shared_stdio_sources(qualification,shared_input)
@@ -3089,10 +3505,10 @@ index 5f0fff857..fd1b8a6ef 100644
 +   assert current==expected,('current main misc endpoint changed',path)
 +  else:
 +   assert current==previous,('historical stdio and current-main normalization disagree',path)
-+ storage_policy=preceding_storage_policy_sources(usb_block)
++ storage_policy=preceding_storage_policy_sources(before_features)
 + assert memfd_lease.keys().isdisjoint(shared_stdio.keys()|stdio_main.keys()),'source qualifications overlap'
 + assert storage_policy.keys().isdisjoint(memfd_lease.keys()|shared_stdio.keys()|stdio_main.keys()),'source qualifications overlap'
-+ preceding={**usb_block,**memfd_lease,**stdio_main,**shared_stdio,**storage_policy}
++ preceding={**before_features,**memfd_lease,**stdio_main,**shared_stdio,**storage_policy}
   for path,digest in qualification['source_sha256'].items():
 -  actual=shared_stdio[path] if path in shared_stdio else (ROOT/path).read_bytes()
 -  if path=='compat/posix/src/system_properties.cc':actual=preceding_logging_property_source()
@@ -3102,7 +3518,7 @@ index 5f0fff857..fd1b8a6ef 100644
    if path=='compat/bionic/shim.cc':actual=preceding_memmem_source(actual)
    if path==MEMRCHR_SOURCE:actual=preceding_memrchr_source(qualification)
    assert hashlib.sha256(actual).hexdigest()==digest,path
-@@ -496,7 +1106,7 @@ def preceding_ofd_sources():
+@@ -496,7 +1153,7 @@ def preceding_ofd_sources():
    work=Path(temporary)
    for path in paths:
     (work/path).parent.mkdir(parents=True,exist_ok=True)
@@ -3111,7 +3527,16 @@ index 5f0fff857..fd1b8a6ef 100644
    subprocess.run(['git','apply','--reverse','--unidiff-zero','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
    subprocess.run(['git','apply','--reverse','--unidiff-zero','-'],input=patch,cwd=work,check=True,capture_output=True)
    previous={path:(work/path).read_bytes() for path in paths}
-@@ -521,6 +1131,32 @@ def preceding_ofd_sources():
+@@ -512,7 +1169,7 @@ def preceding_ofd_sources():
+    'compat/posix/src/fd.cc':[b'bool Remove(',b'void Insert(',b'bool ReplaceSocket(',b'bool LookupSocket(',b'static int PollFdsImpl('],
+    'compat/posix/src/system.cc':[b'bool SocketIo('],
+  }.items():
+-  current=(ROOT/path).read_bytes()
++  current=netlink.get(path,(ROOT/path).read_bytes())
+   for marker in markers:
+    actual=function(current,marker);expected=function(previous[path],marker)
+    if marker==b'static int PollFdsImpl(':
+@@ -521,6 +1178,32 @@ def preceding_ofd_sources():
       actual=actual.replace(after,before,1)
     assert actual==expected,(path,marker)
   return previous
@@ -3144,7 +3569,7 @@ index 5f0fff857..fd1b8a6ef 100644
  # AF_UNIX credentials and descriptor passing (ADR 0088) and memfd seals change
  # these selected sources after REVIEWED_CHECKPOINT, a commit on main. The
  # pinned REVIEWED_PATCH lists each changed line as an exact hunk at its line in
-@@ -529,7 +1165,9 @@ def preceding_ofd_sources():
+@@ -529,7 +1212,9 @@ def preceding_ofd_sources():
  # checkpoint's bytes. Any other change fails here as before.
  REVIEWED_CHECKPOINT='7a45c2468c270bfe68ee5f854aa9d4feaf2208b3'
  REVIEWED_PATCH='tools/net-tcp-priority/reviewed-adr0088-memfd-seals.json'
@@ -3155,7 +3580,7 @@ index 5f0fff857..fd1b8a6ef 100644
  def reviewed(path,actual):
   raw=(ROOT/REVIEWED_PATCH).read_bytes()
   assert hashlib.sha256(raw).hexdigest()==REVIEWED_PATCH_SHA256,REVIEWED_PATCH
-@@ -555,10 +1193,66 @@ NDK_ARCHIVE_SHARING={
+@@ -555,10 +1240,66 @@ NDK_ARCHIVE_SHARING={
    b"archive = Path('tcp-ndk-archive/android-ndk-r27c-linux.zip')\narchive.parent.mkdir(exist_ok=True)\n",
    b"# Shares native2's publisher-archive cache entry (same path and key), so one copy is kept.\narchive = Path('dns-ndk.zip')\n"),
  }
@@ -3222,7 +3647,7 @@ index 5f0fff857..fd1b8a6ef 100644
   assert hashlib.sha256((ROOT/OWNER_THREAD_DIAGNOSTIC_PATH).read_bytes()).hexdigest()==OWNER_THREAD_DIAGNOSTIC_SHA256,OWNER_THREAD_DIAGNOSTIC_PATH
   assert hashlib.sha256((ROOT/FD_POLL_SCRATCH_HEADER).read_bytes()).hexdigest()==FD_POLL_SCRATCH_SHA256,FD_POLL_SCRATCH_HEADER
   paths=subprocess.check_output(['git','-C',str(ROOT),'diff','1745e99d7f2849ba81784545e07d60cb2b7800c3^','1745e99d7f2849ba81784545e07d60cb2b7800c3','--name-only'],text=True).splitlines()
-@@ -570,6 +1264,9 @@ def check():
+@@ -570,6 +1311,9 @@ def check():
           CONTROL_BASE if path=='tools/windows4/test-tsf-job-supervisor.ps1' else BASE)
    expected=subprocess.check_output(['git','-C',str(ROOT),'show',epoch+':'+path])
    actual=preceding.get(path,(ROOT/path).read_bytes())
@@ -3232,7 +3657,7 @@ index 5f0fff857..fd1b8a6ef 100644
    if path=='compat/posix/src/winsock.cc':
     assert actual.count(TCP_PRIORITY_WAKE_AFTER)==1 and TCP_PRIORITY_WAKE_BEFORE not in actual,path
     actual=actual.replace(TCP_PRIORITY_WAKE_AFTER,TCP_PRIORITY_WAKE_BEFORE,1)
-@@ -663,10 +1360,146 @@ def check():
+@@ -663,10 +1407,147 @@ def check():
   assert pin['ordered_patch_sha256']=={'minimum-detached-retirement.patch':'ebc5aac990c6ec075431d0c25a9b74ecadc0940da1bdad9503f358d4fe3431ad','minimum-noattach-join.patch':'c4f47903af720542a584fa743932316d86c45683da70a4c8620d7a71d3eb7f96'}
   for name,digest in pin['ordered_patch_sha256'].items():assert hashlib.sha256((ROOT/'tools/host-pthread-authority'/name).read_bytes()).hexdigest()==digest
   for path in ['tools/net-tcp-priority/manifest.py','tools/host-pthread-authority/minimum_receipt.py']:ast.parse((ROOT/path).read_text(encoding='utf-8'))
@@ -3296,10 +3721,11 @@ index 5f0fff857..fd1b8a6ef 100644
 + from unittest.mock import patch
 + original=Path.read_bytes
 + qualification=json.loads(original(ROOT/STORAGE_POLICY_QUALIFICATION))
++ before_features={**usb_preceding,**preceding_netlink_sources(usb_preceding)}
 + checked=repinned=0
 + for name in STORAGE_POLICY_PATHS+STORAGE_POLICY_HELPERS+[STORAGE_POLICY_PATCH]:
 +  target=ROOT/name
-+  source=usb_preceding.get(name,original(target))
++  source=before_features.get(name,original(target))
 +  data=source.replace(b'@@',b'@x',1) if name==STORAGE_POLICY_PATCH else source+b'\n'
 +  assert data!=source,name
 +  for repin in (False,True) if name in STORAGE_POLICY_PATHS or name==STORAGE_POLICY_PATCH else (False,):
@@ -3316,7 +3742,7 @@ index 5f0fff857..fd1b8a6ef 100644
 +    if path==target:return data
 +    if receipt is not None and path==ROOT/STORAGE_POLICY_QUALIFICATION:return receipt
 +    return original(path)
-+   stage=dict(usb_preceding)
++   stage=dict(before_features)
 +   if name in stage:stage[name]=data
 +   rejected=None
 +   with patch.object(Path,'read_bytes',reads),patch.dict(globals(),pins):
@@ -3335,7 +3761,7 @@ index 5f0fff857..fd1b8a6ef 100644
 +  def reads(path):return receipt if path==ROOT/STORAGE_POLICY_QUALIFICATION else original(path)
 +  rejected=None
 +  with patch.object(Path,'read_bytes',reads),patch.dict(globals(),{'STORAGE_POLICY_QUALIFICATION_SHA256':hashlib.sha256(receipt).hexdigest()}):
-+   try:preceding_storage_policy_sources(usb_preceding)
++   try:preceding_storage_policy_sources(before_features)
 +   except (AssertionError,subprocess.CalledProcessError) as error:rejected=error
 +  assert rejected is not None,'storage historical endpoint changed: '+field
 +  checked+=1
@@ -3380,7 +3806,7 @@ index 5f0fff857..fd1b8a6ef 100644
   cases=[
    ('compat/posix/src/fd.cc',b'--state->description->descriptor_refs == 0',b'--state->description->descriptor_refs == 1'),
    ('compat/posix/src/fd.cc',b'return TransferPipe(snapshot, bytes, count, false);',b'return 0;'),
-@@ -675,6 +1508,9 @@ def transition_negative_controls():
+@@ -675,6 +1556,9 @@ def transition_negative_controls():
    ('compat/posix/src/ofd.cc',b'InterlockedCompareExchange(&shared->flags,',b'InterlockedExchange(&shared->flags,'),
    ('compat/elf/exec/shell_execute.inc',b'gesher::ReadPipeDescriptionInterruptible(description, value, 1, interrupted)',b'gesher::ReadFileDescription(description, value, 1)'),
    ('tools/net-tcp-priority/qualified/ofd-stream-source.patch',b'@@',b'@x'),
@@ -3390,17 +3816,19 @@ index 5f0fff857..fd1b8a6ef 100644
    ('compat/posix/src/fd.cc',b'if (result < 0) return -1;',b'if (result < 0) return 0;'),
    ('compat/posix/src/fd.cc',b'SocketRegistry& socket_registry = *new (socket_registry_storage) SocketRegistry;',b'SocketRegistry socket_registry;'),
    ('compat/posix/src/stdio_output.cc',b'if (locked_stream_) _lock_file(locked_stream_);',b'if (locked_stream_) {}'),
-@@ -689,6 +1525,9 @@ def transition_negative_controls():
+@@ -689,6 +1573,11 @@ def transition_negative_controls():
    ('compat/posix/src/system_properties.cc',b'SetWideEnvironment(L"GESHER_PROPERTY_ROOT", root.c_str())',b'_wputenv_s(L"GESHER_PROPERTY_ROOT", root.c_str())'),
    ('compat/posix/include/gesher/system_properties.h',b'uint32_t generation = 0;',b'uint64_t generation = 0;'),
    ('tools/net-tcp-priority/qualified/native13-property-source.patch',b'@@',b'@x'),
 +  # #421's build.prop filter admits its exact reviewed delta only.
 +  ('compat/posix/src/system_properties.cc',b'if (!ServedBuildProperty(key, value)) continue;',b'if (!ServedBuildProperty(key, value)) {}'),
 +  (GLES_PROPERTY_PATCH,b'@@',b'@x'),
++  (NETLINK_PATCH,b'@@',b'@x'),
++  ('compat/posix/src/socket.cc',b'if (protocol != NETLINK_ROUTE)',b'if (protocol == NETLINK_ROUTE)'),
    # The memmem normalization admits its exact reviewed delta only. The old
    # whole-file digest must still reject any unrelated shim change afterwards.
    ('compat/bionic/shim.cc',b'size_t n = std::strlen(s) + 1;',b'size_t n = std::strlen(s) + 2;'),
-@@ -696,6 +1535,40 @@ def transition_negative_controls():
+@@ -696,6 +1585,40 @@ def transition_negative_controls():
    ('compat/bionic/shim.cc',b'#include "memmem_search.h"\n',b''),
    ('compat/bionic/shim.cc',b'#include "memmem_search.h"\n',b'#include "memmem_search.h"\n#include "memmem_search.h"\n'),
    (MEMMEM_HEADER,b'if (needle_size == 0) return haystack_data;',b'if (needle_size == 0) return nullptr;'),
@@ -3441,7 +3869,7 @@ index 5f0fff857..fd1b8a6ef 100644
   ]
   for name,before,after in cases:
    target=ROOT/name
-@@ -703,22 +1576,158 @@ def transition_negative_controls():
+@@ -703,22 +1626,158 @@ def transition_negative_controls():
    def changed(path):
     raw=original(path)
     return raw.replace(before,after,1) if path==target else raw

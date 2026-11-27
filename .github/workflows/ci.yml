@@ -29,6 +29,24 @@ env:
   LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
 
 jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      selected: ${{ steps.selection.outputs.selected }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: ${{ github.event_name == 'pull_request' && '0' || '1' }}
+          sparse-checkout: |
+            .github/workflows
+            tools/ci
+      - name: Select checks for this change
+        id: selection
+        run: |
+          python3 -m pip install PyYAML==6.0.3
+          python3 tools/ci/select_pr_jobs.py plan --workflow ci
   source-identity:
     runs-on: ubuntu-24.04
     outputs:
@@ -80,12 +98,14 @@ jobs:
           python3 tools/ci/test_release_workflows.py
           python3 -m unittest discover -s tools/ci -p test_cache_policy.py
           python3 -m unittest discover -s tools/ci -p test_prune_caches.py
+          python3 -m unittest discover -s tools/ci -p test_select_pr_jobs.py
   # The hosted Server images can expose NLM without its cost backend. Their
   # contracts below prove that absence independently and check failed-start
   # cleanup. This client job unconditionally requires the real subscription.
   network-cost-client:
     name: Windows client network cost
-    needs: [source-identity]
+    needs: [plan, source-identity]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'network-cost-client') }}
     runs-on: windows-11-arm
     timeout-minutes: 10
     steps:
@@ -122,7 +142,8 @@ jobs:
   # Every check step runs even after an earlier one fails, so one failure
   # does not hide another.
   windows-host-contracts:
-    needs: [source-identity]
+    needs: [plan, source-identity]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'windows-host-contracts') }}
     strategy:
       fail-fast: false
       matrix:
@@ -576,7 +597,8 @@ jobs:
           PYTHONIOENCODING: utf-8
         run: python tools/ci/run_api37_report_tests.py --profile windows
   api37-report-tests:
-    needs: [source-identity]
+    needs: [plan, source-identity]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'api37-report-tests') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
@@ -601,18 +623,22 @@ jobs:
         shell: bash
         run: python tools/ci/run_api37_report_tests.py --profile linux
   union-tsf:
-    needs: [source-identity]
+    needs: [plan, source-identity]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'union-tsf') }}
     uses: ./.github/workflows/tsf-format-component.yml
   union-services:
-    needs: [source-identity]
+    needs: [plan, source-identity]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'union-services') }}
     uses: ./.github/workflows/services-geocoder-worker-component.yml
   union-native-blocking:
-    needs: [source-identity]
+    needs: [plan, source-identity]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'union-native-blocking') }}
     uses: ./.github/workflows/native3-locks-blocking.yml
   # Host-only contract tests. Builds no longer wait for them: they run
   # alongside the build jobs and ci-required still requires them to pass.
   artifact-preflight:
-    needs: [source-identity]
+    needs: [plan, source-identity]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'artifact-preflight') }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -1010,7 +1036,8 @@ jobs:
         run: python3 tools/test_app_crash_diagnostics.py
 
   build-framework-assets:
-    needs: [source-identity]
+    needs: [plan, source-identity]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'build-framework-assets') }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -1130,7 +1157,8 @@ jobs:
   # Everything is cross-compiled on Linux with llvm-mingw, then executed on
   # real Windows runners.
   build:
-    needs: [source-identity]
+    needs: [plan, source-identity]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'build') }}
     runs-on: ubuntu-24.04
     env:
       GESHER_HOST_PTHREAD_SELECTION: ${{ (github.ref == 'refs/heads/wip/pthread-production-factory' || github.ref == 'refs/heads/wip/coherent-selected-tcp') && 'selected-minimum' || 'publisher-cancel' }}
@@ -1411,7 +1439,8 @@ jobs:
           if-no-files-found: error
 
   native3-locks-reference:
-    needs: [source-identity]
+    needs: [plan, source-identity]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'native3-locks-reference') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 8
     steps:
@@ -1425,7 +1454,8 @@ jobs:
           if-no-files-found: error
 
   native3-locks-regression:
-    needs: [build, native3-locks-reference]
+    needs: [plan, build, native3-locks-reference]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'native3-locks-regression') }}
     strategy:
       fail-fast: false
       matrix:
@@ -1477,7 +1507,8 @@ jobs:
   # tools/framework/build.py): .github/workflows/framework.yml, which also
   # runs on its own (gh workflow run framework --ref <branch>).
   framework:
-    needs: [source-identity]
+    needs: [plan, source-identity]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'framework') }}
     # A local call runs the framework.yml of the commit under test, so a
     # framework.yml change takes effect in the same PR. Hosted build runners;
     # see docs/self-hosted-ci.md before routing it to the restricted group.
@@ -1488,63 +1519,73 @@ jobs:
   # Phase 6 (native libraries): the Android NDK test .so files, built on the
   # Linux runner. .github/workflows/native-libs.yml, which also runs on its own.
   native-libs:
-    needs: [source-identity]
+    needs: [plan, source-identity]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'native-libs') }}
     uses: ./.github/workflows/native-libs.yml
 
   # The Bluetooth backend's probe (docs/bluetooth.md): built on the Linux
   # runner, run against Windows' real APIs (no radio) and the test radio.
   bluetooth:
-    needs: [source-identity]
+    needs: [plan, source-identity]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'bluetooth') }}
     uses: ./.github/workflows/bluetooth.yml
 
   # Android ELF executables run as processes (docs/exec.md): the NDK test
   # executable and gesher.ExecTest's dex: .github/workflows/exec.yml.
   exec:
-    needs: [source-identity]
+    needs: [plan, source-identity]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'exec') }}
     uses: ./.github/workflows/exec.yml
 
   # The core libraries' own unit tests (AOSP's cc_test modules), built for
   # the test job: .github/workflows/libs.yml.
   libs:
-    needs: [source-identity]
+    needs: [plan, source-identity]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'libs') }}
     uses: ./.github/workflows/libs.yml
 
   # Phase 7 (arm64 translation): gesher_arm64.dll, the arm64 translator
   # (dynarmic) dalvikvm LoadLibrary()s for arm64-v8a apps (docs/arm64.md,
   # ADR 0047). .github/workflows/arm64.yml, which also runs on its own.
   arm64:
-    needs: [source-identity]
+    needs: [plan, source-identity]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'arm64') }}
     uses: ./.github/workflows/arm64.yml
 
   # The native2 track's NDK test programs (shim extras, platform dlopen,
   # popular NDK libraries' self-tests): .github/workflows/native2.yml.
   native2:
-    needs: [source-identity]
+    needs: [plan, source-identity]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'native2') }}
     uses: ./.github/workflows/native2.yml
 
   # ART's own gtests for libartbase and libdexfile (docs/posix.md):
   # .github/workflows/posix.yml, which also runs on its own.
   posix:
-    needs: [source-identity]
+    needs: [plan, source-identity]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'posix') }}
     uses: ./.github/workflows/posix.yml
 
   # Skia, hwui and the graphics probes (docs/graphics.md):
   # .github/workflows/graphics.yml, which also runs on its own.
   graphics:
-    needs: [source-identity]
+    needs: [plan, source-identity]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'graphics') }}
     uses: ./.github/workflows/graphics.yml
 
   # ANGLE's libEGL.dll and libGLESv2.dll (GLES over Direct3D 11) and their
   # probe (docs/angle.md): .github/workflows/angle.yml, which also runs on its own.
   angle:
-    needs: [source-identity]
+    needs: [plan, source-identity]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'angle') }}
     uses: ./.github/workflows/angle.yml
 
   # android.webkit.WebView on WebView2 (docs/webview.md): the WebView2 probes
   # and webapp.apk (built from the framework job's artifacts):
   # .github/workflows/webview.yml, which also runs on its own.
   webview:
-    needs: [framework]
+    needs: [plan, framework]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'webview') }}
     uses: ./.github/workflows/webview.yml
     with:
       apk: true
@@ -1552,24 +1593,28 @@ jobs:
   # Gesher's boot image (docs/boot-image.md): dex2oat.exe from the build job
   # compiles the boot class path on Windows: .github/workflows/boot-image.yml.
   boot-image:
-    needs: [build, framework]
+    needs: [plan, build, framework]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'boot-image') }}
     uses: ./.github/workflows/boot-image.yml
 
   # Media (docs/media.md): the media track's test apps, built against this
   # run's framework classes: .github/workflows/media.yml.
   media:
-    needs: [framework]
+    needs: [plan, framework]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'media') }}
     uses: ./.github/workflows/media.yml
 
   # The surfaces track's NDK test app (surfacegl.apk: EGL into a SurfaceView):
   # .github/workflows/surfaces.yml.
   surfaces:
-    needs: [source-identity]
+    needs: [plan, source-identity]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'surfaces') }}
     uses: ./.github/workflows/surfaces.yml
 
   # What is left of porting ART's x86-64 assembly to Windows; informational.
   asm-port:
-    needs: [source-identity]
+    needs: [plan, source-identity]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'asm-port') }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -1605,7 +1650,8 @@ jobs:
   # The Windows installer (tools/package/gesher.iss), installed and tried on a
   # clean runner: Hello through the installed `gesher` command, then uninstall.
   package:
-    needs: [build, framework, graphics, angle, boot-image, media, arm64, exec]
+    needs: [plan, build, framework, graphics, angle, boot-image, media, arm64, exec]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'package') }}
     runs-on: windows-2022
     env:
       GH_TOKEN: ${{ github.token }}
@@ -2749,9 +2795,9 @@ jobs:
   # (tests/e2e/apps.json, pinned by SHA-256), each in an off-desktop window that is
   # read back, given input and closed: tests/e2e/run-e2e.ps1.
   e2e:
-    needs: [package]
+    needs: [plan, package]
     # The package job uploads the installer before its own checks.
-    if: ${{ !cancelled() && needs.package.result != 'skipped' }}
+    if: ${{ !cancelled() && needs.package.result != 'skipped' && needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'e2e') }}
     strategy:
       fail-fast: false
       matrix:
@@ -2849,7 +2895,8 @@ jobs:
   # (20 API requests each) with one bundle receipt per shard (7 requests).
   # The repository's GITHUB_TOKEN quota is shared by every concurrent run.
   core-suppliers:
-    needs: [build, framework, native-libs, libs, graphics, angle, boot-image, webview, exec, media, posix, arm64, surfaces, native2]
+    needs: [plan, build, framework, native-libs, libs, graphics, angle, boot-image, webview, exec, media, posix, arm64, surfaces, native2]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'core-suppliers') }}
     runs-on: ubuntu-24.04
     # Room for a reachable wait on the shared hourly API quota.
     timeout-minutes: 90
@@ -2875,7 +2922,8 @@ jobs:
 
   test-shards:
     name: test-${{ matrix.shard }} (${{ matrix.os }})
-    needs: [core-suppliers, build, framework, native-libs, libs, graphics, angle, boot-image, webview, exec, media, posix, arm64, surfaces, native2, supplier-correlation]
+    needs: [plan, core-suppliers, build, framework, native-libs, libs, graphics, angle, boot-image, webview, exec, media, posix, arm64, surfaces, native2, supplier-correlation]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'test-shards') }}
     strategy:
       fail-fast: false
       matrix:
@@ -3148,8 +3196,8 @@ jobs:
 
   test:
     name: test (${{ matrix.os }})
-    needs: [test-shards]
-    if: always()
+    needs: [plan, test-shards]
+    if: ${{ always() && needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'test') }}
     strategy:
       fail-fast: false
       matrix:
@@ -3164,7 +3212,8 @@ jobs:
   # Extra isolated jobs execute the real regression in the SAME canonical
   # full. Only these jobs download the separately named hook artifact.
   web3-query-regression:
-    needs: [build, framework, native-libs, graphics, angle, boot-image, webview, exec, media, arm64]
+    needs: [plan, build, framework, native-libs, graphics, angle, boot-image, webview, exec, media, arm64]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'web3-query-regression') }}
     strategy:
       fail-fast: false
       matrix:
@@ -3225,11 +3274,13 @@ jobs:
   # Ordinary Binder scope is mandatory and separate from production installer
   # payload and query-hook runtime. No raw/public-prefix transport-loss gate.
   binder2-sg-fixtures:
-    needs: [source-identity]
+    needs: [plan, source-identity]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'binder2-sg-fixtures') }}
     uses: ./.github/workflows/binder2-sg-full-fixtures.yml
 
   binder2-sg-regression:
-    needs: [build, framework, arm64, boot-image, binder2-sg-fixtures]
+    needs: [plan, build, framework, arm64, boot-image, binder2-sg-fixtures]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'binder2-sg-regression') }}
     strategy:
       fail-fast: false
       matrix:
@@ -3287,7 +3338,8 @@ jobs:
 
   # Current selected TCP role; historical canonical red remains separately preserved.
   compile:
-    needs: [source-identity]
+    needs: [plan, source-identity]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'compile') }}
     name: compile-${{ matrix.supplier }}
     strategy:
       fail-fast: false
@@ -3432,7 +3484,8 @@ jobs:
           if-no-files-found: error
           retention-days: 14
   linux-reference:
-    needs: [source-identity]
+    needs: [plan, source-identity]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'linux-reference') }}
     env:
       GH_TOKEN: ${{ github.token }}
       TCP_EVIDENCE_SCOPE: ${{ github.repository == 'gesher-runtime/gesher' && 'canonical' || 'fork-diagnostic' }}
@@ -3457,7 +3510,8 @@ jobs:
           g++ -std=c++20 -Wall -Wextra -Werror -pthread tests/net-tcp-priority/contract.cc -o /tmp/tcp-priority-reference
           timeout 20 /tmp/tcp-priority-reference
   supplier-correlation:
-    needs: [source-identity, build, compile]
+    needs: [plan, source-identity, build, compile]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'supplier-correlation') }}
     runs-on: ubuntu-24.04
     # +61 minutes: a quota-exhausted GitHub read may wait up to 61 minutes for the
     # published hourly reset instead of failing the job.
@@ -3494,7 +3548,8 @@ jobs:
           if [[ "$TCP_EVIDENCE_SCOPE" == fork-diagnostic ]]; then args+=(--fork-diagnostic); fi
           python3 tools/toolchain/coherent_supplier_correlation.py "${args[@]}"
   windows:
-    needs: [source-identity, compile, linux-reference, supplier-correlation]
+    needs: [plan, source-identity, compile, linux-reference, supplier-correlation]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'windows') }}
     strategy:
       fail-fast: false
       matrix:
@@ -3537,10 +3592,28 @@ jobs:
   ci-required:
     name: ci-required
     if: always()
-    needs: [source-identity, automerge-script, network-cost-client, windows-host-contracts, api37-report-tests, union-tsf, union-services, union-native-blocking, artifact-preflight, build-framework-assets, build, native3-locks-reference, native3-locks-regression, framework, native-libs, bluetooth, exec, libs, arm64, native2, posix, graphics, angle, webview, boot-image, media, surfaces, asm-port, package, e2e, core-suppliers, test-shards, test, web3-query-regression, binder2-sg-fixtures, binder2-sg-regression, compile, linux-reference, supplier-correlation, windows]
+    needs: [plan, source-identity, automerge-script, network-cost-client, windows-host-contracts, api37-report-tests, union-tsf, union-services, union-native-blocking, artifact-preflight, build-framework-assets, build, native3-locks-reference, native3-locks-regression, framework, native-libs, bluetooth, exec, libs, arm64, native2, posix, graphics, angle, webview, boot-image, media, surfaces, asm-port, package, e2e, core-suppliers, test-shards, test, web3-query-regression, binder2-sg-fixtures, binder2-sg-regression, compile, linux-reference, supplier-correlation, windows]
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
-      - name: Require every production CI job
+      - uses: actions/checkout@v4
+        if: github.event_name == 'pull_request'
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            .github/workflows
+            tools/ci
+      - name: Require successful selected jobs and intentional skips
+        if: github.event_name == 'pull_request'
+        env:
+          SELECTED: ${{ needs.plan.outputs.selected }}
+          JOB_RESULTS: ${{ toJSON(needs) }}
+        run: |
+          python3 -m pip install PyYAML==6.0.3
+          python3 tools/ci/select_pr_jobs.py verify --workflow ci
+      # Keep the full-run verdict in the workflow definition used by the release publisher.
+      - name: Require every job on push or manual runs
+        if: github.event_name != 'pull_request'
         env:
           JOB_RESULTS: ${{ toJSON(needs) }}
         run: |

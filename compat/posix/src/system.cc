@@ -46,6 +46,7 @@
 #include "linux_socket.h"
 #include "record_lock_descriptors.h"
 #include "record_lock_duplicate.h"
+#include "netlink_internal.h"
 #include "socket_internal.h"
 
 namespace {
@@ -349,6 +350,8 @@ int ioctl(int fd, unsigned long request, ...) {
   if (gesher::SyncFileIoctl(fd, request, argp, &fence_result)) return fence_result;
   gesher::SocketFd state;
   if (gesher::LookupSocket(fd, &state)) {
+    // Android's untrusted app domains cannot issue route netlink ioctls.
+    if (state.description->netlink) return errno = EACCES, -1;
     if (!argp && (request == FIONREAD || request == FIONBIO)) return errno = EFAULT, -1;
     if (request == FIONREAD) {
       if (gesher::ws::Available(state.socket, argp) != 0) return -1;
@@ -444,6 +447,11 @@ int fcntl(int fd, int cmd, ...) {
     if (h == INVALID_HANDLE_VALUE) return errno = EBADF, -1;
     gesher::SocketFd state;
     if (gesher::LookupSocket(fd, &state)) {
+      if (state.description->netlink) {
+        if (cmd == F_GETFL) return gesher::NetlinkGetStatus(*state.description->netlink);
+        if (cmd == F_SETFL)
+          return gesher::NetlinkSetStatus(*state.description->netlink, (arg & O_NONBLOCK) != 0);
+      }
       switch (cmd) {
         case F_GETFL:
           return O_RDWR | (state.description->nonblocking.load() ? O_NONBLOCK : 0);

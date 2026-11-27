@@ -59,9 +59,16 @@ review the result and reapply the label; success alone does not restore approval
 label and keeps the QA gate pending. Approve and run both required PR workflows;
 their completion events recheck the existing exact-head approval automatically.
 
-`ci-required` covers every root production CI job, including Windows shards,
-packaging and e2e; failed, cancelled or skipped root jobs fail it. `arm64-required`
-covers source identity and the ARM64 build. The deployed configuration is
+Both PR workflows run a planner against the PR's change set. Approved
+documentation paths can skip production jobs. Scoped changes select their
+jobs and the dependencies that produce their inputs. Changes outside the
+planner's allowlist and runs on push or manual dispatch use full coverage.
+The plan and source identity must succeed, along with the automerge contract
+tests in `ci`. `ci-required` and `arm64-required` check the result of every job.
+Selected jobs must succeed and omitted jobs must be reported as skipped. See
+[the planner](../../tools/ci/select_pr_jobs.py) for the path rules.
+
+The deployed configuration is
 `.github/automerge-ruleset.json`: PR review and resolved discussions are required,
 all three contexts are bound to GitHub Actions, force pushes/deletion are blocked,
 and there are no permanent bypass actors. Branch updates may need fresh CI;

@@ -780,7 +780,7 @@ index b2d4c09ab6b900e6a54f3231a303648396255882..b1428283797d7b51e028fb74f7cb35b8
 +  DescriptorSnapshot* previous_capture = nullptr;
 +  DescriptorSnapshot* next_capture = nullptr;
 diff --git a/compat/posix/posix.cmake b/compat/posix/posix.cmake
-index 869d3d90bc3..7c7cb1f91c9 100644
+index 0f910493e..ef1df5da9 100644
 --- a/compat/posix/posix.cmake
 +++ b/compat/posix/posix.cmake
 @@ -3,0 +4,4 @@ add_library(gesher_posix STATIC
@@ -790,15 +790,15 @@ index 869d3d90bc3..7c7cb1f91c9 100644
 +  ${CMAKE_CURRENT_LIST_DIR}/src/usb_block.cc
 @@ -4,0 +9 @@ add_library(gesher_posix STATIC
 +  ${CMAKE_CURRENT_LIST_DIR}/src/binder_transport.cc
-@@ -43,0 +49 @@ add_library(gesher_posix STATIC
+@@ -44,0 +50 @@ add_library(gesher_posix STATIC
 +  ${CMAKE_CURRENT_LIST_DIR}/src/protected_startup.cc
-@@ -102,0 +109,5 @@ target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_environment_anchor_v1)
+@@ -103,0 +110,5 @@ target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_environment_anchor_v1)
 +# Native bootstrap routes belong to the executable even when Binder and JNI
 +# callers are linked into separate AOSP DLLs.
 +target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_binder_transport_anchor_v1)
 +target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_usb_block_owner_anchor_v1)
 +target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_protected_runtime_anchor)
-@@ -125,0 +137,6 @@ set_source_files_properties(${CMAKE_CURRENT_LIST_DIR}/src/binder.cc PROPERTIES
+@@ -126,0 +138,6 @@ set_source_files_properties(${CMAKE_CURRENT_LIST_DIR}/src/binder.cc PROPERTIES
 +set_source_files_properties(${CMAKE_CURRENT_LIST_DIR}/../binder/protected_data_client.cc PROPERTIES
 +  COMPILE_OPTIONS "-fexceptions")
 +set_source_files_properties(${CMAKE_CURRENT_LIST_DIR}/../usb_storage/protected_runtime_client.cc PROPERTIES
@@ -935,17 +935,17 @@ index 50a85fb801e..049f1e45577 100644
 +  // -> {magic, version, source_handle (u64), exact_size (u64)}; <- {Win32 status}
 +  kPublishApplicationSharedMemory = 12,
 diff --git a/compat/posix/src/fd.cc b/compat/posix/src/fd.cc
-index a8fb022e2de..153ab18cfd8 100644
+index 050eb5646..04c8ed665 100644
 --- a/compat/posix/src/fd.cc
 +++ b/compat/posix/src/fd.cc
 @@ -32,0 +33,2 @@
 +#include "ofd_internal.h"
 +#include "usb_block_internal.h"
-@@ -128 +130,2 @@ int ReadDevice(Device device, void* buf, unsigned int count) {
+@@ -129 +131,2 @@ int ReadDevice(Device device, void* buf, unsigned int count) {
 -int ReserveFd() {
 +HANDLE OpenFdPlaceholder(bool* pipe) {
 +  if (pipe) *pipe = false;
-@@ -130,0 +134,21 @@ int ReserveFd() {
+@@ -131,0 +135,21 @@ int ReserveFd() {
 +  if (h != INVALID_HANDLE_VALUE) return h;
 +  const DWORD nul_error = GetLastError();
 +  DWORD in_container = 0, size = 0;
@@ -967,30 +967,30 @@ index a8fb022e2de..153ab18cfd8 100644
 +int ReserveFd() {
 +  bool use_pipe = false;
 +  HANDLE h = OpenFdPlaceholder(&use_pipe);
-@@ -135 +159,2 @@ int ReserveFd() {
+@@ -136 +160,2 @@ int ReserveFd() {
 -  else if (SetDescriptorKind(fd, DescriptorKind::kUnshareable) < 0) {
 +  else if ((use_pipe && RegisterOfd(fd, O_RDWR) < 0) ||
 +           SetDescriptorKind(fd, DescriptorKind::kUnshareable) < 0) {
-@@ -137,0 +163 @@ int ReserveFd() {
+@@ -138,0 +164 @@ int ReserveFd() {
 +    if (use_pipe) ForgetOfd(fd);
-@@ -224,0 +251 @@ bool NativePipeIo(int fd, void* buffer, unsigned int count, bool writing, int* r
+@@ -242,0 +269 @@ bool NativePipeIo(int fd, void* buffer, unsigned int count, bool writing, int* r
 +  if (snapshot && snapshot->kind == gesher::DescriptorKind::kUnshareable) return false;
-@@ -408,0 +436,5 @@ int ReadFileDescription(const DescriptorSnapshotPtr& snapshot, void* bytes, unsi
+@@ -426,0 +454,5 @@ int ReadFileDescription(const DescriptorSnapshotPtr& snapshot, void* bytes, unsi
 +  if (snapshot && snapshot->description && !snapshot->description->virtual_directory.empty()) {
 +    return errno = EISDIR, -1;
 +  }
 +  int block_result;
 +  if (usb_block::Io(snapshot, bytes, count, false, -1, &block_result)) return block_result;
-@@ -424,0 +457,5 @@ int WriteFileDescription(const DescriptorSnapshotPtr& snapshot, const void* byte
+@@ -442,0 +475,5 @@ int WriteFileDescription(const DescriptorSnapshotPtr& snapshot, const void* byte
 +  if (snapshot && snapshot->description && !snapshot->description->virtual_directory.empty()) {
 +    return errno = EISDIR, -1;
 +  }
 +  int block_result;
 +  if (usb_block::Io(snapshot, const_cast<void*>(bytes), count, true, -1, &block_result)) return block_result;
-@@ -676 +713 @@ int PollFile(pollfd* p) {
+@@ -694 +731 @@ int PollFile(pollfd* p) {
 -  // The NUL fd reserves a number, but an epoll is readable only when its
 +  // The underlying handle reserves a number, but an epoll is readable only when its
-@@ -693,0 +731,4 @@ int PollFile(pollfd* p) {
+@@ -711,0 +749,4 @@ int PollFile(pollfd* p) {
 +  if (snapshot->kind == gesher::DescriptorKind::kUnshareable) {
 +    p->revents = p->events & (kIn | kOut);
 +    return true;
@@ -1276,15 +1276,15 @@ index bfa1fe81677..fca36f32665 100644
 -  LoadPolicy(policy_path, identity.package, identity.uid, &mode, &media_mask);
 +  LoadPolicy(identity.policy_path, identity.package, identity.uid, &mode, &media_mask);
 diff --git a/compat/posix/src/system.cc b/compat/posix/src/system.cc
-index 00aaf9f45b1..71a00db87ad 100644
+index 98cee968a..3f9268368 100644
 --- a/compat/posix/src/system.cc
 +++ b/compat/posix/src/system.cc
 @@ -40,0 +41 @@
 +#include "usb_block_internal.h"
-@@ -374,0 +376,2 @@ int ioctl(int fd, unsigned long request, ...) {
+@@ -377,0 +379,2 @@ int ioctl(int fd, unsigned long request, ...) {
 +  int block_result;
 +  if (gesher::usb_block::Ioctl(snapshot, request, argp, &block_result)) return block_result;
-@@ -376,0 +380,5 @@ int ioctl(int fd, unsigned long request, ...) {
+@@ -379,0 +383,5 @@ int ioctl(int fd, unsigned long request, ...) {
 +  if (snapshot->kind == gesher::DescriptorKind::kUnshareable) {
 +    if (request != FIONREAD) return errno = ENOTTY, -1;
 +    *argp = 0;
