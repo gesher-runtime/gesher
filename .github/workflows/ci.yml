@@ -183,6 +183,11 @@ jobs:
             type usb-protected-launch.log
             exit /b 1
           )
+          cl /nologo /std:c11 /GS- /W4 /WX /D_WIN32_WINNT=0x0A00 /DGESHER_PROBE_USER32_LATE tests\native\usb_guest_loader_probe.c /Fe:guest-user32-late.exe /link /NODEFAULTLIB /ENTRY:GuestLoaderProbeEntry /SUBSYSTEM:CONSOLE kernel32.lib >> usb-protected-launch.log 2>&1
+          if errorlevel 1 (
+            type usb-protected-launch.log
+            exit /b 1
+          )
           python -c "from datetime import datetime, timezone; print('Protected launch: fixture-start-utc=' + datetime.now(timezone.utc).isoformat(timespec='microseconds'))" >> usb-protected-launch.log 2>&1
           usb_protected_launch_test.exe --scm-profile-control --lowbox-iat-trace >> usb-protected-launch.log 2>&1
           set "GESHER_PROTECTED_LAUNCH_NATIVE_EXIT=%errorlevel%"

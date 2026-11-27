@@ -174,7 +174,18 @@ struct NamespaceCollisionEvidence {
   wchar_t security[2048]{};
   char stage[96] = "not-attempted";
 };
-constexpr const wchar_t* kGuestLoaderProbes[] = {L"guest-kernel32.exe", L"guest-user32.exe"};
+constexpr const wchar_t* kGuestLoaderProbes[] = {
+    L"guest-kernel32.exe", L"guest-user32.exe", L"guest-user32-late.exe"};
+constexpr wchar_t kDesktopAccessFile[] = L"desktop-access.bin";
+struct DesktopObjectCapture {
+  DWORD status = ERROR_NOT_READY, label_status = ERROR_NOT_READY;
+  DWORD name_matches = 0, bytes = 0;
+  alignas(SECURITY_DESCRIPTOR_RELATIVE) BYTE descriptor[4096]{};
+};
+struct DesktopObjectAccess {
+  DWORD capture_status = ERROR_NOT_READY, label_status = ERROR_NOT_READY, label_rid = 0, name_matches = 0;
+  DWORD evaluation_status = ERROR_NOT_READY, checked = 0, private_allowed = 0, guest_allowed = 0;
+};
 struct GuestLoaderEvidence {
   DWORD attempted = 0, prepare_status = ERROR_SUCCESS, start_status = ERROR_NOT_READY, resume_status = ERROR_NOT_READY;
   DWORD wait_status = ERROR_NOT_READY, exit_code = ERROR_NOT_READY, stop_status = ERROR_NOT_READY;
@@ -198,6 +209,8 @@ struct Evidence {
   SessionObjectsEvidence app_container_objects;
   PackageLeafEvidence package_leaf;
   NamespaceCollisionEvidence namespace_collision;
+  DWORD desktop_snapshot_status = ERROR_NOT_READY;
+  DesktopObjectAccess desktop_access[2]{};
   GuestLoaderEvidence guest_loader[std::size(kGuestLoaderProbes)]{};
   lowbox_trace::LowboxIatTraceEvidence lowbox_trace;
   EquivalentTokenEvidence equivalent;
@@ -396,10 +409,46 @@ void Denied(HANDLE desktop, const std::wstring& path, DWORD access) {
   if (!RevertToSelf()) std::abort();
   Require(error == ERROR_ACCESS_DENIED, "desktop-mutation-denied", error ? error : ERROR_ACCESS_DENIED);
 }
-void DesktopHelper(HANDLE desktop, HANDLE job, PSID user, PSID capability) {
+void CaptureDesktopAccess(const wchar_t* path) {
+  DesktopObjectCapture capture[2]{};
+  const HANDLE objects[] = {GetProcessWindowStation(), GetThreadDesktop(GetCurrentThreadId())};
+  const wchar_t* expected[] = {L"WinSta0", L"Default"};
+  constexpr SECURITY_INFORMATION basic = OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION |
+      DACL_SECURITY_INFORMATION;
+  for (size_t i = 0; i < std::size(capture); ++i) {
+    auto& row = capture[i];
+    if (!objects[i]) continue;
+    wchar_t name[64]{};
+    DWORD name_bytes = 0;
+    row.name_matches = GetUserObjectInformationW(objects[i], UOI_NAME, name, sizeof(name), &name_bytes) &&
+        name_bytes <= sizeof(name) && std::wmemchr(name, L'\0', std::size(name)) &&
+        CompareStringOrdinal(name, -1, expected[i], -1, TRUE) == CSTR_EQUAL;
+    SECURITY_INFORMATION request = basic | LABEL_SECURITY_INFORMATION;
+    const BOOL got_label = GetUserObjectSecurity(objects[i], &request, row.descriptor,
+        sizeof(row.descriptor), &row.bytes);
+    row.label_status = got_label ? ERROR_SUCCESS : GetLastError();
+    if (got_label) {
+      row.status = ERROR_SUCCESS;
+    } else {
+      request = basic;
+      row.status = GetUserObjectSecurity(objects[i], &request, row.descriptor,
+          sizeof(row.descriptor), &row.bytes) ? ERROR_SUCCESS : GetLastError();
+    }
+    if (row.status == ERROR_SUCCESS && !row.bytes) row.bytes = sizeof(row.descriptor);
+  }
+  const Handle file(CreateFileW(path, FILE_WRITE_DATA | FILE_READ_ATTRIBUTES, FILE_SHARE_READ, nullptr,
+      OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+  BY_HANDLE_FILE_INFORMATION info{};
+  if (file.get() == INVALID_HANDLE_VALUE || !GetFileInformationByHandle(file.get(), &info) ||
+      info.nNumberOfLinks != 1 || (info.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT))) return;
+  DWORD written = 0;
+  WriteFile(file.get(), capture, sizeof(capture), &written, nullptr);
+}
+void DesktopHelper(HANDLE desktop, HANDLE job, PSID user, PSID capability, const std::wstring& snapshot) {
   const Local descriptor = Security();
   SECURITY_ATTRIBUTES security{sizeof(security), descriptor.get(), FALSE};
   std::wstring command = Quote(config.image) + L" --prepare-desktop " + Quote(SidText(user)) + L" " + Quote(SidText(capability));
+  if (!snapshot.empty()) command += L" " + Quote(snapshot);
   SIZE_T needed = 0;
   InitializeProcThreadAttributeList(nullptr, 1, 0, &needed);
   Require(needed != 0, "desktop-helper-attribute-size");
@@ -2651,6 +2700,91 @@ void PrintSessionObjects(const char* root, DWORD private_grant, const SessionObj
     }
   }
 }
+bool ReadDesktopDescriptor(const DesktopObjectCapture& capture, DWORD* label_rid) {
+  const auto* start = capture.descriptor;
+  if (capture.bytes < sizeof(SECURITY_DESCRIPTOR_RELATIVE) || capture.bytes > sizeof(capture.descriptor)) return false;
+  const auto& relative = *reinterpret_cast<const SECURITY_DESCRIPTOR_RELATIVE*>(start);
+  if (relative.Revision != SECURITY_DESCRIPTOR_REVISION || !(relative.Control & SE_SELF_RELATIVE)) return false;
+  const auto sid = [&](DWORD offset) {
+    return offset >= sizeof(relative) && offset < capture.bytes && (offset % alignof(DWORD)) == 0 &&
+        BoundedSid(start, capture.bytes, const_cast<BYTE*>(start + offset));
+  };
+  const auto acl = [&](DWORD offset) -> const ACL* {
+    if (offset < sizeof(relative) || offset > capture.bytes - sizeof(ACL) || offset % alignof(ACL)) return nullptr;
+    const auto* value = reinterpret_cast<const ACL*>(start + offset);
+    return value->AclSize >= sizeof(ACL) && value->AclSize <= capture.bytes - offset &&
+        IsValidAcl(const_cast<PACL>(value)) ? value : nullptr;
+  };
+  if (!sid(relative.Owner) || !sid(relative.Group) || !acl(relative.Dacl)) return false;
+  if (relative.Sacl) {
+    const auto* label = acl(relative.Sacl);
+    if (!label) return false;
+    for (DWORD i = 0; i < label->AceCount; ++i) {
+      void* raw = nullptr;
+      if (!GetAce(const_cast<PACL>(label), i, &raw)) return false;
+      const auto& header = *static_cast<const ACE_HEADER*>(raw);
+      if (header.AceType != SYSTEM_MANDATORY_LABEL_ACE_TYPE) continue;
+      if (header.AceSize < offsetof(SYSTEM_MANDATORY_LABEL_ACE, SidStart)) return false;
+      const auto& ace = *static_cast<const SYSTEM_MANDATORY_LABEL_ACE*>(raw);
+      PSID subject = const_cast<DWORD*>(&ace.SidStart);
+      if (!BoundedSid(raw, ace.Header.AceSize, subject) || *GetSidSubAuthorityCount(subject) != 1) return false;
+      *label_rid = *GetSidSubAuthority(subject, 0);
+    }
+  }
+  return IsValidSecurityDescriptor(const_cast<BYTE*>(start)) != FALSE;
+}
+void ObserveDesktopAccess(const std::wstring& path, HANDLE private_token, HANDLE guest_token,
+                          const storage::AuthorityLaunchSpec& spec, Evidence* evidence) {
+  try {
+    DesktopObjectCapture captured[2]{};
+    const auto bytes = Read(path, sizeof(captured));
+    Require(bytes.size() == sizeof(captured), "desktop-snapshot-size", ERROR_INVALID_DATA);
+    std::memcpy(captured, bytes.data(), sizeof(captured));
+    evidence->desktop_snapshot_status = ERROR_SUCCESS;
+    DWORD status = ERROR_NOT_READY;
+    const Handle private_client = DirectoryAccessContext(private_token, spec, &status);
+    Check(status, "desktop-snapshot-private-client");
+    const Handle guest_client = DirectoryAccessContext(guest_token, spec, &status);
+    Check(status, "desktop-snapshot-guest-client");
+    constexpr DWORD examined[] = {
+        WINSTA_ENUMDESKTOPS | WINSTA_READATTRIBUTES | WINSTA_ACCESSCLIPBOARD | WINSTA_CREATEDESKTOP |
+            WINSTA_WRITEATTRIBUTES | WINSTA_ACCESSGLOBALATOMS | WINSTA_EXITWINDOWS | WINSTA_ENUMERATE |
+            WINSTA_READSCREEN | READ_CONTROL | WRITE_DAC | WRITE_OWNER,
+        DESKTOP_READOBJECTS | DESKTOP_CREATEWINDOW | DESKTOP_CREATEMENU | DESKTOP_HOOKCONTROL |
+            DESKTOP_JOURNALRECORD | DESKTOP_JOURNALPLAYBACK | DESKTOP_ENUMERATE | DESKTOP_WRITEOBJECTS |
+            DESKTOP_SWITCHDESKTOP | READ_CONTROL | WRITE_DAC | WRITE_OWNER,
+    };
+    for (size_t i = 0; i < std::size(captured); ++i) {
+      const auto& source = captured[i];
+      auto& row = evidence->desktop_access[i];
+      row.capture_status = source.status;
+      row.label_status = source.label_status;
+      row.name_matches = source.name_matches == 1;
+      if (source.status != ERROR_SUCCESS || !row.name_matches) continue;
+      if (!ReadDesktopDescriptor(source, &row.label_rid)) {
+        row.evaluation_status = ERROR_INVALID_SECURITY_DESCR;
+        continue;
+      }
+      try {
+        auto* descriptor = const_cast<BYTE*>(source.descriptor);
+        for (DWORD bits = examined[i]; bits; bits &= bits - 1) {
+          const DWORD access = bits & (~bits + 1u);
+          row.private_allowed |= SessionAllowed(descriptor, private_client.get(), access);
+          row.guest_allowed |= SessionAllowed(descriptor, guest_client.get(), access);
+          row.checked |= access;
+        }
+        row.evaluation_status = ERROR_SUCCESS;
+      } catch (const Failure& failure) {
+        row.evaluation_status = failure.status;
+      }
+    }
+  } catch (const Failure& failure) {
+    evidence->desktop_snapshot_status = failure.status;
+  } catch (...) {
+    evidence->desktop_snapshot_status = ERROR_NOT_ENOUGH_MEMORY;
+  }
+}
+
 void ObserveGuestLoader(HANDLE token, const storage::AuthorityLaunchSpec& original,
                         const storage::AuthorityLaunch& first,
                         GuestLoaderEvidence (&evidence)[std::size(kGuestLoaderProbes)]) {
@@ -2760,7 +2894,19 @@ Evidence RunSystem() {
         }
       }
     }
-    DesktopHelper(desktop.get(), service_job.get(), identity->sid(), capability.value);
+    std::wstring desktop_snapshot;
+    if (config.lowbox_iat_trace) {
+      try {
+        desktop_snapshot = config.directory + L"\\" + kDesktopAccessFile;
+        WriteNew(desktop_snapshot, "", 0);
+        Check(container::Grant(desktop_snapshot, desktop_user, FILE_WRITE_DATA | FILE_READ_ATTRIBUTES, false),
+            "desktop-snapshot-file-access");
+      } catch (const Failure& failure) {
+        evidence.desktop_snapshot_status = failure.status;
+        desktop_snapshot.clear();
+      }
+    }
+    DesktopHelper(desktop.get(), service_job.get(), identity->sid(), capability.value, desktop_snapshot);
     const std::wstring temporary = config.directory + L"\\private-data";
     PrivateDirectory(temporary, true);
     Check(container::Grant(temporary, identity->sid(), FILE_ALL_ACCESS, true), "private-data-user-acl");
@@ -3010,8 +3156,10 @@ Evidence RunSystem() {
     Require(WaitForSingleObject(child->process(), 10000) == WAIT_OBJECT_0, "guest-completion", ERROR_TIMEOUT);
     DWORD code = 0;
     Require(GetExitCodeProcess(child->process(), &code), "guest-exit-query");
-    if (code == 0xc0000142 && config.lowbox_iat_trace)
+    if (code == 0xc0000142 && config.lowbox_iat_trace) {
+      if (!desktop_snapshot.empty()) ObserveDesktopAccess(desktop_snapshot, identity->token(), guest_token.get(), spec, &evidence);
       ObserveGuestLoader(identity->token(), spec, *child, evidence.guest_loader);
+    }
     Check(code, "guest-private-environment-witness");
     Check(child->Stop(0), "idempotent-exited-stop");
     Require(child->Resume() == ERROR_PROCESS_ABORTED, "deny-resume-after-stop", ERROR_INVALID_DATA);
@@ -3265,6 +3413,19 @@ DWORD Controller(bool explicit_scm_control, bool explicit_lowbox_trace) {
             static_cast<unsigned long>(probe.wait_status), static_cast<unsigned long>(probe.exit_code),
             static_cast<unsigned long>(probe.stop_status));
     }
+    if (explicit_lowbox_trace && evidence.status == 0xc0000142) {
+      std::printf("Protected desktop snapshot: win32=%lu\n", static_cast<unsigned long>(evidence.desktop_snapshot_status));
+      for (size_t i = 0; i < std::size(evidence.desktop_access); ++i) {
+        const auto& row = evidence.desktop_access[i];
+        std::printf("Protected desktop access: object=%s name-match=%lu query=%lu label-query=%lu label-rid=0x%04lx "
+            "accesscheck=%lu checked=0x%08lx private=0x%08lx lowbox=0x%08lx\n",
+            i == 0 ? "WinSta0" : "Default", static_cast<unsigned long>(row.name_matches),
+            static_cast<unsigned long>(row.capture_status), static_cast<unsigned long>(row.label_status),
+            static_cast<unsigned long>(row.label_rid), static_cast<unsigned long>(row.evaluation_status),
+            static_cast<unsigned long>(row.checked), static_cast<unsigned long>(row.private_allowed),
+            static_cast<unsigned long>(row.guest_allowed));
+      }
+    }
     std::printf("Protected launch: profile-identity-created=%lu own-unload-attempted=%lu own-unload-win32=%lu privilege-restore-win32=%lu\n",
         static_cast<unsigned long>(evidence.profile_identity_created), static_cast<unsigned long>(evidence.profile_unload_attempted),
         static_cast<unsigned long>(evidence.profile_unload_status), static_cast<unsigned long>(evidence.profile_privilege_restore_status));
@@ -3424,6 +3585,7 @@ DWORD Controller(bool explicit_scm_control, bool explicit_lowbox_trace) {
           if (error != ERROR_FILE_NOT_FOUND && error != ERROR_PATH_NOT_FOUND) record_cleanup(error, "delete-fixture-private-data");
         }
         remove_file(directory + L"\\result.bin", "delete-fixture-evidence");
+        remove_file(directory + L"\\" + kDesktopAccessFile, "delete-fixture-desktop-snapshot");
         for (const auto* name : kGuestLoaderProbes)
           remove_file(directory + L"\\" + name, "delete-fixture-loader-probe");
         remove_file(image, "delete-fixture-image");
@@ -3452,7 +3614,11 @@ int wmain(int argc, wchar_t** argv) {
   DWORD control_exit = ERROR_INVALID_PARAMETER;
   if (profile_control::DispatchScmProfileControlService(argc, argv, &control_exit)) return static_cast<int>(control_exit);
   if (argc == 2 && std::wstring_view(argv[1]) == L"runtime-identity") return storage::RunRuntimeIdentityService();
-  if (argc == 4 && std::wstring_view(argv[1]) == L"--prepare-desktop") return static_cast<int>(storage::PrepareRuntimeDesktop(argv[2], argv[3]));
+  if ((argc == 4 || argc == 5) && std::wstring_view(argv[1]) == L"--prepare-desktop") {
+    const DWORD status = storage::PrepareRuntimeDesktop(argv[2], argv[3]);
+    if (status == ERROR_SUCCESS && argc == 5) CaptureDesktopAccess(argv[4]);
+    return static_cast<int>(status);
+  }
   if (argc == 3 && std::wstring_view(argv[1]) == L"--guest") return static_cast<int>(Guest(argv[2]));
   if (argc >= 5 && argc <= 7 && std::wstring_view(argv[1]) == L"--test-service") {
     try {
