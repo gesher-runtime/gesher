@@ -407,9 +407,9 @@ void SocketOptions() {
     value = 1;
     Require(lane.client->Control(relay::Option::kKeepAlive, true, &value) == 0,
         "real control remains usable behind full receive buffer");
-    int small = 1024;
-    Require(setsockopt(peer, SOL_SOCKET, SO_RCVBUF, reinterpret_cast<const char*>(&small),
-        sizeof(small)) == 0, "small real receive buffer for outbound backpressure");
+    int receive_capacity = 1024;
+    Require(setsockopt(peer, SOL_SOCKET, SO_RCVBUF, reinterpret_cast<const char*>(&receive_capacity),
+        sizeof(receive_capacity)) == 0, "small real receive buffer for outbound backpressure");
     std::array<std::byte, 8192> bytes{};
     deadline = GetTickCount64() + 3000;
     ULONGLONG stalled = 0;

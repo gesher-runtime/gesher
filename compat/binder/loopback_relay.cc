@@ -617,13 +617,13 @@ void Client::Session::Run() {
           if (!credit || credit > kQueue - send_credit) error = WSAECONNABORTED;
           else { send_credit += credit; channel.Pop(); notify = true; }
         } else if (h.kind == kOptionReply && control_pending && control_sent && !control_done) {
-          OptionMessage reply{};
-          std::memcpy(&reply, channel.incoming.bytes.data(), sizeof(reply));
-          if (reply.sequence != control.sequence || reply.option != control.option ||
-              reply.set != control.set || (reply.error && !WsaError(reply.error))) {
+          OptionMessage option_reply{};
+          std::memcpy(&option_reply, channel.incoming.bytes.data(), sizeof(option_reply));
+          if (option_reply.sequence != control.sequence || option_reply.option != control.option ||
+              option_reply.set != control.set || (option_reply.error && !WsaError(option_reply.error))) {
             error = WSAECONNABORTED;
           } else {
-            control = reply;
+            control = option_reply;
             control_done = true;
             channel.Pop();
             notify = true;
