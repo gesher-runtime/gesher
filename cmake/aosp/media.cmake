@@ -393,7 +393,8 @@ add_custom_command(OUTPUT "${_rgba_video}" "${_rgba_encoder}" "${_rgba_callbacks
   DEPENDS "${CMAKE_SOURCE_DIR}/tools/test_rgba_i420.py"
     "${CMAKE_SOURCE_DIR}/tests/media/rgba_i420_callbacks.h.in"
     "${_media}/video/video_decoder.cc" "${_media}/encode/soft_avc_encoder.cc"
-    "${_media}/jni/media_codec_jni.cc" "${_media}/record/recorder.cc"
+    "${_media}/jni/media_codec_jni.cc" "${_media}/codec/codec_engine.cc"
+    "${CMAKE_SOURCE_DIR}/tools/codec_contract_source.py" "${_media}/record/recorder.cc"
   VERBATIM)
 add_executable(media_rgba_i420_test
   "${CMAKE_SOURCE_DIR}/tests/media/rgba_i420_test.cc"
