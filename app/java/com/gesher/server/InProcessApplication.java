@@ -141,6 +141,7 @@ public final class InProcessApplication implements AutoCloseable {
         requireCurrent();
         if (!mPm.isCohost()) {
             mOwner.prepareDataDirectories();
+            LegacyKeyStoreArchive.prepare(mOwner);
             return;
         }
         if (!Zygote.nativeCohostOwnsData(

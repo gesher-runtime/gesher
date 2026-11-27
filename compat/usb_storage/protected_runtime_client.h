@@ -25,6 +25,11 @@ uint32_t ProtectedPropertyMutex(uint64_t* handle);
 // An owned reduced duplicate of the authority-created mutex for this package's
 // log, shared by its admitted processes and by every DLL in one executable.
 uint32_t ProtectedLogMutex(uint64_t* handle);
+// Only the enrolled system_server may migrate a CE/DE store. The authority
+// derives both roots from its sealed device; no key bytes cross this RPC.
+uint32_t ArchiveProtectedLegacyKeys(const std::u16string& data_directory,
+    const std::u16string& archive_root, const std::u16string& binding);
+
 enum class UsbObservationKind : uint32_t;
 // Copies one bounded, read-only descriptor snapshot from the authority. Only
 // authenticated system_server can call this; device handles never cross it.

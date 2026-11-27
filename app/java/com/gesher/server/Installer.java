@@ -707,6 +707,7 @@ final class Installer {
                 installed.prepareInstallDataDirectories(old != null || previous != null);
                 // Keep the running generation until parsing and native extraction succeed.
                 if (old != null || previous != null) mAtm.forceStopPackage(pkg);
+                LegacyKeyStoreArchive.prepare(previous != null ? previous : installed);
                 if (previous != null && !previous.hasVerifiedSigningIdentity()) {
                     mPm.permissions().forgetPackage(pkg);
                     NotificationManagerService notifications = NotificationManagerService.sLast;

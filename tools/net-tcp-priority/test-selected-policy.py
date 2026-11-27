@@ -1216,7 +1216,7 @@ def check_appcontainer_donor_receipts():
 APPCONTAINER_INTEGRATION_BASE = 'ff2c1870053c9d0332e6abef07a25fc282d384b5'
 APPCONTAINER_INTEGRATION_PATCH = 'tools/net-tcp-priority/qualified/appcontainer-integration-source.patch'
 APPCONTAINER_INTEGRATION_QUALIFICATION = 'tools/net-tcp-priority/qualified/appcontainer-integration-source.json'
-APPCONTAINER_INTEGRATION_QUALIFICATION_SHA256 = '21aa55ea117efbb3929cd737e011c19c85f1c34af0789d2617268b3dbc90a87f'
+APPCONTAINER_INTEGRATION_QUALIFICATION_SHA256 = '0419885c149eb677857efdbd5f5af1ee9129b32c5d1428bfc764c18eb515e751'
 # In addition to the donor identity surface, the merged startup/fork path
 # intersects the exact USB and child-wait source qualification.
 APPCONTAINER_INTEGRATION_PATHS = sorted(APPCONTAINER_IDENTITY_SOURCE_SHA256.keys() | {
@@ -1224,6 +1224,11 @@ APPCONTAINER_INTEGRATION_PATHS = sorted(APPCONTAINER_IDENTITY_SOURCE_SHA256.keys
  'compat/elf/exec/exec.cmake', 'compat/elf/exec/gesher_tools.cc',
  'compat/posix/src/binder_transport.cc', 'compat/posix/src/process.cc', 'compat/posix/src/storage_policy.cc',
  'compat/posix/src/storage_policy.h',
+ # Host-only legacy-key archiving extends the contained runtime. Reconstruct
+ # these exact pre-RPC inputs before replaying every historical USB proof.
+ 'compat/usb_storage/CMakeLists.txt', 'compat/usb_storage/protected_runtime_client.cc',
+ 'compat/usb_storage/protected_runtime_client.h', 'compat/usb_storage/protected_runtime_session.cc',
+ 'compat/usb_storage/protected_runtime_wire.h',
 })
 
 def preceding_appcontainer_integration_sources(receipt_sha256):

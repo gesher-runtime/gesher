@@ -288,6 +288,22 @@ uint32_t ProtectedLogMutex(uint64_t* handle) {
   return query ? query(handle) : ERROR_ACCESS_DENIED;
 }
 
+uint32_t ArchiveProtectedLegacyKeys(const std::u16string& data_directory,
+    const std::u16string& archive_root, const std::u16string& binding) try {
+  if (!ProtectedRuntimeIsSystemServer()) return ERROR_ACCESS_DENIED;
+  std::vector<std::byte> payload;
+  if (!wire::Append(&payload, data_directory) || !wire::Append(&payload, archive_root) ||
+      !wire::Append(&payload, binding)) return ERROR_INVALID_PARAMETER;
+  wire::Request request{};
+  request.operation = wire::Operation::kArchiveLegacyKeys;
+  request.pid = GetCurrentProcessId();
+  FILETIME created{}, exited{}, kernel{}, user{};
+  if (!GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user)) return GetLastError();
+  request.start_time = (static_cast<uint64_t>(created.dwHighDateTime) << 32) | created.dwLowDateTime;
+  wire::Reply reply{};
+  return Call(request, payload, &reply);
+} catch (const std::bad_alloc&) { return ERROR_NOT_ENOUGH_MEMORY; }
+
 uint32_t ProtectedUsbObservation(UsbObservationKind kind, std::wstring_view path,
     std::vector<std::byte>* output) try {
   if (!output || !output->empty()) return ERROR_INVALID_PARAMETER;

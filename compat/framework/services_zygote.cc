@@ -1025,9 +1025,15 @@ int SpawnProtectedApp(const std::u16string& command_line, const std::vector<std:
   auto unset_child_environment = unset;
   unset_child_environment.push_back(u"GESHER_STORAGE_MEDIA_NT_PATH");
   if (!unisolated_approved) {
-    const wchar_t* data = _wgetenv(L"GESHER_ANDROID_DATA_HOST_PATH");
-    if (data != nullptr && *data != L'\0') {
-      const std::wstring path = std::wstring(data) + L"\\media\\0";
+    constexpr wchar_t data_variable[] = L"GESHER_ANDROID_DATA_HOST_PATH";
+    const DWORD capacity = GetEnvironmentVariableW(data_variable, nullptr, 0);
+    if (capacity != 0) {
+      if (capacity > 32768) return -ERROR_FILENAME_EXCED_RANGE;
+      std::wstring path(capacity, L'\0');
+      const DWORD length = GetEnvironmentVariableW(data_variable, path.data(), capacity);
+      if (length == 0 || length >= capacity) return -ERROR_ACCESS_DENIED;
+      path.resize(length);
+      path += L"\\media\\0";
       peer::OwnedHandle root(CreateFileW(path.c_str(), FILE_READ_ATTRIBUTES,
           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
           FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));

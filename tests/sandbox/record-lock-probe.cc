@@ -22,6 +22,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <vector>
 #include "exec_spawn.h"
 #include "services_zygote.h"
@@ -345,10 +346,10 @@ int StandaloneGuest(const fs::path& dir) {
 bool BrokerStopped(const fs::path& dir) {
   std::ifstream log(dir / L"standalone.log");
   std::string line;
-  constexpr char tag[] = "broker-pid ";
+  constexpr std::string_view tag = "broker-pid ";
   while (std::getline(log, line)) {
     if (!line.starts_with(tag)) continue;
-    const auto pid = std::strtoul(line.c_str() + sizeof(tag) - 1, nullptr, 10);
+    const auto pid = std::strtoul(line.c_str() + tag.size(), nullptr, 10);
     if (pid == 0) return false;
     HANDLE process = OpenProcess(SYNCHRONIZE, FALSE, pid);
     if (!process) return GetLastError() == ERROR_INVALID_PARAMETER;

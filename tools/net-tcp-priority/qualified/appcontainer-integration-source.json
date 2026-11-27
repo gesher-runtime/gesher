@@ -1,7 +1,7 @@
 {
   "baseline": "ff2c1870053c9d0332e6abef07a25fc282d384b5",
   "native_runtime_approval": false,
-  "patch_sha256": "602f3fe06832733c9c8bb4a639c431a07739f24594454b16f602d48970bbe7d2",
+  "patch_sha256": "b1faf9450fe3d70b44117811b391171316f44eac6ee5b2b519462d1d21f22f6c",
   "paths": [
     "compat/binder/binderd.cc",
     "compat/bionic/process_bionic.cc",
@@ -39,6 +39,11 @@
     "compat/posix/src/system_properties.cc",
     "compat/posix/src/unistd.cc",
     "compat/posix/src/unix_rights.cc",
+    "compat/usb_storage/CMakeLists.txt",
+    "compat/usb_storage/protected_runtime_client.cc",
+    "compat/usb_storage/protected_runtime_client.h",
+    "compat/usb_storage/protected_runtime_session.cc",
+    "compat/usb_storage/protected_runtime_wire.h",
     "tests/native/ofd_transfer_host_test.cc.in",
     "tools/test_ofd_transfer_contracts.py",
     "tools/test_revocable_file_contracts.py"
@@ -80,6 +85,11 @@
     "compat/posix/src/system_properties.cc": "629caa8394efd4f9e8cfbd4774b9982c217947b781dc304a563807ca82314302",
     "compat/posix/src/unistd.cc": "b7c40bb1e4a0ea39ea40a57dd116d6c58931ca4225015847264e13cc75764a73",
     "compat/posix/src/unix_rights.cc": "f865b09316112ec4c7b282b78561130e76f67419a19e78dfcc732a23370311df",
+    "compat/usb_storage/CMakeLists.txt": "a91566c9cf6c8b9c4b43cfd22bacc37091b4e46c83ed59f960c97ee683439f02",
+    "compat/usb_storage/protected_runtime_client.cc": "fc1d583b86e6d41fcd23ded1628ea84a0bcc566176d5382e80fb29bd3967d7f8",
+    "compat/usb_storage/protected_runtime_client.h": "f7b4a813232da587c8e6f6c4d4ecdd0438a1b7de731becd210499f3a818f4d3c",
+    "compat/usb_storage/protected_runtime_session.cc": "8dd10095c54bf9ce4a56b2fc51728fe5689c5d33baaad6be192618b03df9c413",
+    "compat/usb_storage/protected_runtime_wire.h": "1d33de3b55aad36da6203ac9925e9dedc8479109adfeee3a972c15fd7588ca53",
     "tests/native/ofd_transfer_host_test.cc.in": "fca1a570c9f3a7183f235409ee076e9051a28fda2d4c953acd0989a56003d4b8",
     "tools/test_ofd_transfer_contracts.py": "d8bba7afe3b5e269587c1118711ed4fd5033426ad6b5ad8b584aa524aa2dda9b",
     "tools/test_revocable_file_contracts.py": "cc80b55db916cf21301dee4d9aae814570531636d885b8968bd76506a51b8681"
@@ -121,6 +131,11 @@
     "compat/posix/src/system_properties.cc": "ce1ebd4a654ddddedb921499f6ae1801eda100a2d286f228f7043f22874ada4f",
     "compat/posix/src/unistd.cc": "c2920185c45919493eb1d299cda6c0f42bf81b6028fe2e66730a39e0cebb0d55",
     "compat/posix/src/unix_rights.cc": "96ed7c176ef4a9933a269b6cf5cfac623abcc3868d991e3b312f8e1693ca5755",
+    "compat/usb_storage/CMakeLists.txt": "4887720fa596f7224d3d96a0838d2f4b3d727de4dce9a4c9ede8f04d929fcbfe",
+    "compat/usb_storage/protected_runtime_client.cc": "09c0e3036da1a0763a61ddc27755f90b0a0faabfd047a0a4d7755c43793df640",
+    "compat/usb_storage/protected_runtime_client.h": "e453abc971e6e576127e61658ace4b08e052d3042628cbfa40e9523fef42d091",
+    "compat/usb_storage/protected_runtime_session.cc": "a7617802ace6379953cebf66cc315fe89f77e3ae94542694ef19fa358aa6cef1",
+    "compat/usb_storage/protected_runtime_wire.h": "1077ca344b755f7ecf5a358a5608bfa4e67243c241491aec688f10681af2acd8",
     "tests/native/ofd_transfer_host_test.cc.in": "f6072bbec3bcea28b6780a0ac1cc11ee625e5b92cf5ce86d455fe989f8a23e52",
     "tools/test_ofd_transfer_contracts.py": "6a0515f2f8ccad82c7cd8a1e1bceb25474af46db5d6ab2894441f7f644eaa545",
     "tools/test_revocable_file_contracts.py": "7a47c95932e421deecf31456aee22eb3358a713550eb57f6a39cb837c4d37019"

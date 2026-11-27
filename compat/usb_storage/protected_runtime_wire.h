@@ -16,7 +16,7 @@ inline constexpr uint32_t kVersion = 3;
 inline constexpr uint32_t kMaximumPayload = 64 * 1024;
 enum class Operation : uint32_t {
   kSpawn = 1, kStatus, kKill, kGrantBlock, kRevokeBlock, kInitialize, kSpawnCommand, kSignal,
-  kUsbObservation
+  kUsbObservation, kArchiveLegacyKeys
 };
 struct Request {
   uint32_t magic = kMagic;

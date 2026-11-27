@@ -43,6 +43,7 @@
 #include "../posix/src/ofd_internal.h"
 #include "rooted_storage_server.h"
 #include "services_zygote.h"
+#include "legacy_keystore_archive.h"
 #include "services_dexopt_watch.h"
 #include "../usb_storage/protected_runtime_client.h"
 
@@ -1004,7 +1005,26 @@ static jstring Zygote_exePath(JNIEnv* env, jclass) {
     return ZygoteJavaString(env, gesher::zygote::ExePath());
 }
 
+static jint Zygote_archiveLegacyKeys(JNIEnv* env, jclass, jstring data, jstring archive, jstring binding) {
+    HANDLE token = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return GetLastError();
+    DWORD contained = 0, bytes = 0;
+    const BOOL queried = GetTokenInformation(token, TokenIsAppContainer, &contained, sizeof(contained), &bytes);
+    const DWORD error = queried ? ERROR_SUCCESS : GetLastError();
+    CloseHandle(token);
+    if (error) return static_cast<jint>(error);
+    if (contained) {
+        if (!gesher::usb_storage::ProtectedRuntimeIsSystemServer()) return ERROR_ACCESS_DENIED;
+        return static_cast<jint>(gesher::usb_storage::ArchiveProtectedLegacyKeys(
+            ZygoteString(env, data), ZygoteString(env, archive), ZygoteString(env, binding)));
+    }
+    return static_cast<jint>(gesher::keystore::ArchiveLegacy(
+        ZygoteString(env, data), ZygoteString(env, archive), ZygoteString(env, binding)));
+}
+
 static const JNINativeMethod gZygoteMethods[] = {
+    {"nativeArchiveLegacyKeys", "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)I",
+     GESHER_JNI(Zygote_archiveLegacyKeys)},
     {"nativeProtectedRuntimeEnabled", "()Z", GESHER_JNI(Zygote_protectedRuntimeEnabled)},
     {"nativeStartProtectedRuntime", "(Ljava/lang/String;)I", GESHER_JNI(Zygote_startProtectedRuntime)},
     {"nativeSpawnProtected",

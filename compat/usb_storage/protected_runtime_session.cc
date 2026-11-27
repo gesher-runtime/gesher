@@ -5,6 +5,7 @@
 #endif
 #include "protected_runtime_session.h"
 #include "protected_runtime_wire.h"
+#include "protected_legacy_archive.h"
 #include "protected_identity.h"
 #include "authority_launch.h"
 #include "authority_peer.h"
@@ -17,6 +18,7 @@
 #include "protected_tool_paths.h"
 #include "protected_usb_observation.h"
 #include "../framework/app_container.h"
+#include "../framework/legacy_keystore_archive.h"
 
 #include <aclapi.h>
 #include <bcrypt.h>
@@ -430,6 +432,7 @@ class Session {
   void Reap();
   DWORD TerminateTree(Entry& entry, DWORD code);
   DWORD Dispatch(Entry& entry, const wire::Request& request, const std::vector<std::byte>& payload, wire::Reply* reply);
+  DWORD ArchiveLegacyKeys(Entry& entry, const wire::Request& request, const std::vector<std::byte>& payload, wire::Reply* reply);
   DWORD Spawn(Entry& requester, const wire::Request& request, const std::vector<std::byte>& payload, wire::Reply* reply);
   DWORD SpawnCommand(Entry& requester, const wire::Request& request, const std::vector<std::byte>& payload, wire::Reply* reply);
   DWORD Initialize(Entry& entry, wire::Reply* reply);
@@ -1011,6 +1014,42 @@ DWORD Session::Dispatch(Entry& entry, const wire::Request& request,
   }
 }
 
+DWORD Session::ArchiveLegacyKeys(Entry& entry, const wire::Request& request,
+    const std::vector<std::byte>& payload, wire::Reply* reply) try {
+  std::u16string admitted, archive, binding;
+  {
+    std::lock_guard lock(mutex_);
+    if (WaitForSingleObject(stop_, 0) != WAIT_TIMEOUT) return ERROR_OPERATION_ABORTED;
+    if (request.magic != wire::kMagic || request.version != wire::kVersion || request.reserved ||
+        request.operation != wire::Operation::kArchiveLegacyKeys ||
+        request.payload_bytes != payload.size() || request.payload_bytes > wire::kMaximumPayload ||
+        request.standard_handles[0] || request.standard_handles[1] || request.standard_handles[2] ||
+        request.uid || request.target_sdk || request.flags || request.start_sequence ||
+        request.lifetime_milliseconds) return ERROR_INVALID_DATA;
+    // Role/generation are authority-owned enrollment, not caller claims.
+    if (!entry.initialized || !entry.system_server || entry.uid != 1000 ||
+        request.pid != entry.launch->pid() || request.start_time != entry.start_time)
+      return ERROR_ACCESS_DENIED;
+    if (!ResolveLegacyArchivePaths(data_, payload, &admitted, &archive, &binding))
+      return ERROR_INVALID_DATA;
+  }
+  // Like ObserveUsb, this Entry and its exact peer/process stay alive for this
+  // Serve worker. The registry lock is released before provider-lock waits and
+  // disk I/O, so other clients and shutdown/reaping can continue. Synchronous
+  // filesystem flushes have no invented cancellation or finite-time guarantee.
+  DWORD status = entry.peer->Authenticate();
+  if (status == ERROR_SUCCESS && WaitForSingleObject(stop_, 0) != WAIT_TIMEOUT)
+    status = ERROR_OPERATION_ABORTED;
+  if (status == ERROR_SUCCESS)
+    status = gesher::keystore::ArchiveLegacy(admitted, archive, binding);
+  if (status == ERROR_SUCCESS) status = entry.peer->Authenticate();
+  if (status == ERROR_SUCCESS && WaitForSingleObject(stop_, 0) != WAIT_TIMEOUT)
+    status = ERROR_OPERATION_ABORTED;
+  reply->pid = request.pid;
+  reply->start_time = request.start_time;
+  return status;
+} catch (const std::bad_alloc&) { return ERROR_NOT_ENOUGH_MEMORY; }
+
 DWORD Session::ValidateUsbObservation(const Entry& entry, const wire::Request& request,
     const std::vector<std::byte>& payload, UsbQuery* query) try {
   if (WaitForSingleObject(stop_, 0) != WAIT_TIMEOUT) return ERROR_OPERATION_ABORTED;
@@ -1116,6 +1155,8 @@ void Session::Serve(Entry& entry) {
         reply.status = ValidateUsbObservation(entry, request, payload, &query);
       }
       if (reply.status == ERROR_SUCCESS) reply.status = ObserveUsb(entry, query, &reply);
+    } else if (request.operation == wire::Operation::kArchiveLegacyKeys) {
+      reply.status = ArchiveLegacyKeys(entry, request, payload, &reply);
     } else {
       std::lock_guard lock(mutex_);
       reply.status = Dispatch(entry, request, payload, &reply);

@@ -7,15 +7,23 @@ identity, so all credential features and requests stay unavailable there.
 Biometric-only and keystore-bound verification remain unavailable. Authenticating the
 Windows user does not authorize access to AndroidKeyStore keys.
 
-The software AndroidKeyStore rejects new keys that require user authentication. The old
-GKS1 store did not record whether a secret or private key requested authentication,
-so the provider refuses to return those keys. Upgrading alone does not rewrite the file.
-When the app next saves its store, GKS2 retains the old records and marks those keys
-unrecoverable. Trusted certificates and newly created non-authenticated keys remain
-accessible. A malformed store reports an error and stays untouched. Record changes are
-published only after atomic replacement, and failed writes leave the previous file and
-in-memory aliases in place. This changes provider access only; it does not encrypt the
-previously stored bytes or give them hardware protection.
+The software AndroidKeyStore rejects new keys that require user authentication. GKS1 did
+not record whether a secret or private key needed authentication. Before starting an app,
+the host preserves the original legacy records in a Windows-protected archive and removes
+the old key encodings from the store the app can read. The store preserves aliases and
+certificates and marks the old keys unrecoverable. The provider refuses raw legacy stores
+until the host has migrated them. Trusted certificates and new keys that do not require
+authentication remain accessible. Concurrent processes serialize store updates before
+replacing the file. Failed writes leave the previous file and in-memory aliases in place.
+
+The archive is outside the app's sandbox. Its Windows ACL excludes isolated applications.
+An application running with the host's full Windows token has that user's filesystem access.
+Gesher cannot revoke copies of key material already obtained by an application, and the
+archive provides no encryption or hardware-backed protection. In the private USB
+runtime, only the enrolled system server can request archival; the SYSTEM authority
+validates the fixed package data roots and performs the migration. Applications
+cannot use the request to select an arbitrary source or archive directory. No raw
+key bytes are returned over JNI or the service protocol.
 
 ## Context
 
