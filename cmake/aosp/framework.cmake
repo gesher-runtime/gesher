@@ -119,6 +119,7 @@ add_library(framework_runtime OBJECT
   ${CMAKE_SOURCE_DIR}/compat/framework/services_dexopt_watch.cc
   ${CMAKE_SOURCE_DIR}/compat/framework/attach_standins.cc
   ${CMAKE_SOURCE_DIR}/compat/framework/shared_memory.cc
+  ${CMAKE_SOURCE_DIR}/compat/framework/apk_integrity.cc
   ${CMAKE_SOURCE_DIR}/compat/framework/memory_file.cc
   ${CMAKE_SOURCE_DIR}/compat/framework/memory_int_array.cc
   ${CMAKE_SOURCE_DIR}/compat/framework/scrypt.cc

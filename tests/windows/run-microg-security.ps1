@@ -368,6 +368,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Actual package lifecycle event regression failed.' }
     Passed 'package lifecycle notifications and metadata refresh in actual app processes'
     Guest 'SigningTest' @($fixtures)
+    Guest 'PackageArchiveInfoTest' @($fixtures) 'PackageArchiveInfoTest all passed:'
     Guest 'InstallerSigningTest' @($fixtures)
     Guest 'PackageInstallerSessionTest' @($fixtures) 'PackageInstallerSessionTest all passed:'
     Guest 'PackageUninstallTest' @((AndroidPath (Join-Path $Dir 'packageevents-target-v1.apk')),

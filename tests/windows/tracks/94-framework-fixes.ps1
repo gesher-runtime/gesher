@@ -855,6 +855,15 @@ Check 'services: a v2-signed APK answers its key, an unsigned one none' {
 } @('SigningTest: a v2-signed APK answers its key, an unsigned one none',
   'SigningTest all passed')
 
+$archiveOut = FixesRun ($dvmFixes + 'gesher.services.PackageArchiveInfoTest' + (NoDrive (Join-Path $PSScriptRoot '../../dex-services/fixtures'))) 90
+$archiveCode = $LASTEXITCODE
+Check 'packages: real framework archive parsing verifies signed content without IncFS' {
+  $global:LASTEXITCODE = $archiveCode
+  $archiveOut
+} @('PackageArchiveInfoTest: signed v2 and rotated v3 archives retain verified identities',
+    'PackageArchiveInfoTest: tampered, unsigned, malformed and missing archives rejected',
+    'PackageArchiveInfoTest all passed:')
+
 $recognitionBrokerOut = FixesRun ($dvmFixes + 'com.gesher.server.SpeechRecognitionContractTest') 45
 $recognitionBrokerCode = $LASTEXITCODE
 Check 'services: speech provider ownership, lifecycle, support and download callbacks' {
