@@ -1,5 +1,6 @@
-"""One PR CI run covers every job and native auto-merge retains QA gating."""
+"""Required PR CI jobs and native auto-merge retain QA gating."""
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -33,16 +34,75 @@ class QueueWorkflows(unittest.TestCase):
             doc = yaml.safe_load((ROOT / f'.github/workflows/{workflow}.yml').read_text(encoding='utf-8'))
             # PyYAML's YAML 1.1 reader treats the unquoted key 'on' as True.
             self.assertIn('pull_request', doc[True])
+            pr = doc[True]['pull_request'] or {}
+            self.assertNotIn('paths', pr)
+            self.assertNotIn('paths-ignore', pr)
             self.assertNotIn('merge_group', doc[True])
             jobs = doc['jobs']
-            self.assertEqual(set(jobs[gate]['needs']), set(jobs) - {gate})
+            required = {'plan', 'source-identity'}
+            if workflow == 'ci':
+                required.add('automerge-script')
+            tracked = set(jobs) - {gate}
+            selectable = sorted(tracked - required)
+            self.assertEqual(jobs[gate]['name'], gate)
+            self.assertEqual(set(jobs[gate]['needs']), tracked)
             self.assertEqual(jobs[gate]['if'], 'always()')
-            body = jobs[gate]['steps'][0]['run'].split("<<'PY'\n", 1)[1].rsplit('\nPY', 1)[0]
-            for result in ['success', 'failure', 'cancelled', 'skipped']:
-                import os
-                env = dict(os.environ, JOB_RESULTS=json.dumps({'producer': {'result': result}}))
-                run = subprocess.run([sys.executable, '-c', body], env=env, capture_output=True)
-                self.assertEqual(run.returncode == 0, result == 'success')
+            planner = jobs['plan']
+            step = next(step for step in planner['steps'] if 'select_pr_jobs.py plan' in step.get('run', ''))
+            self.assertEqual(planner['outputs']['selected'], '${{ steps.' + step['id'] + '.outputs.selected }}')
+            self.assertIn(f'python3 tools/ci/select_pr_jobs.py plan --workflow {workflow}', step['run'].splitlines())
+            for job in required:
+                self.assertNotIn('if', jobs[job])
+            for job in selectable:
+                with self.subTest(workflow=workflow, job=job):
+                    self.assertIn('plan', jobs[job]['needs'])
+                    self.assertIn("needs.plan.result == 'success'", jobs[job]['if'])
+                    self.assertRegex(jobs[job]['if'],
+                                     rf"contains\(fromJSON\(needs\.plan\.outputs\.selected[^)]*\), '{job}'\)")
+
+            verify = next(step for step in jobs[gate]['steps']
+                          if 'select_pr_jobs.py verify' in step.get('run', ''))
+            self.assertEqual(verify['if'], "github.event_name == 'pull_request'")
+            self.assertEqual(verify['env']['SELECTED'], '${{ needs.plan.outputs.selected }}')
+            self.assertEqual(verify['env']['JOB_RESULTS'], '${{ toJSON(needs) }}')
+            verification_lines = [line for line in verify['run'].splitlines() if 'select_pr_jobs.py' in line]
+            self.assertEqual(verification_lines, [f'python3 tools/ci/select_pr_jobs.py verify --workflow {workflow}'])
+            command = [sys.executable, *verification_lines[0].split()[1:]]
+
+            full = {job: {'result': 'success'} for job in tracked}
+            docs_only = {job: {'result': 'success' if job in required else 'skipped'} for job in tracked}
+            worker = selectable[0]
+            cases = [
+                ('full', selectable, full, True),
+                ('docs only', [], docs_only, True),
+                ('failed plan', [], dict(docs_only, plan={'result': 'failure'}), False),
+                ('unknown job', ['unknown'], docs_only, False),
+                ('selected job missing', selectable, {k: v for k, v in full.items() if k != worker}, False),
+                ('unselected job ran', [], full, False),
+                *((result, selectable, dict(full, **{worker: {'result': result}}), False)
+                  for result in ['failure', 'cancelled', 'skipped']),
+            ]
+            for name, selected, results, succeeds in cases:
+                with self.subTest(workflow=workflow, case=name):
+                    env = dict(os.environ, SELECTED=json.dumps(selected), JOB_RESULTS=json.dumps(results))
+                    run = subprocess.run(command, cwd=ROOT, env=env, capture_output=True, text=True)
+                    self.assertEqual(run.returncode == 0, succeeds, run.stderr or run.stdout)
+
+    def test_non_pr_required_checks_reject_every_skip(self):
+        for workflow, gate in [('ci', 'ci-required'), ('arm64-windows', 'arm64-required')]:
+            doc = yaml.safe_load((ROOT / f'.github/workflows/{workflow}.yml').read_text(encoding='utf-8'))
+            job = doc['jobs'][gate]
+            step = next(step for step in job['steps'] if step.get('if') == "github.event_name != 'pull_request'")
+            self.assertEqual(step['env']['JOB_RESULTS'], '${{ toJSON(needs) }}')
+            body = step['run'].split("<<'PY'\n", 1)[1].rsplit('\nPY', 1)[0]
+            outcomes = {name: {'result': 'success'} for name in job['needs']}
+            worker = next(name for name in job['needs'] if name != 'plan')
+            for result in ['success', 'skipped', 'failure', 'cancelled']:
+                with self.subTest(workflow=workflow, result=result):
+                    outcomes[worker]['result'] = result
+                    env = dict(os.environ, JOB_RESULTS=json.dumps(outcomes))
+                    run = subprocess.run([sys.executable, '-c', body], env=env, capture_output=True)
+                    self.assertEqual(run.returncode == 0, result == 'success', run.stderr)
 
     def test_release_publish_uses_only_protected_workflow_code(self):
         ci = yaml.safe_load((ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8'))

@@ -89,5 +89,7 @@ inline int FromType(ws::Type type) {
 
 // Network interface ioctls on ifreq/ifconf; false for unhandled requests.
 bool InterfaceIoctl(unsigned long request, void* arg, int* result);
+// Shared normalized interface enumeration (netdb.cc).
+bool ListNamedInterfaces(std::vector<ws::Interface>* interfaces);
 
 }  // namespace gesher::sock
