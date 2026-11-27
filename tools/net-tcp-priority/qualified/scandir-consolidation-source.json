@@ -1,6 +1,6 @@
 {
   "after_sha256": {
-    ".github/workflows/ci.yml": "544cca108f21a0a0db8582abcdc8b208730f5fe69d1074b78cf6f23f7873311e",
+    ".github/workflows/ci.yml": "41d94d3ba97b7aca5720a28acce65da235e4db8cd26e212f2b49e78ed8e30133",
     "compat/bionic/posix_bionic.cc": "9ba77321ff4a4fedd64b9dfc433a5c93349daf6eef90552bda95763b0ef3a531",
     "compat/bionic/shim_internal.h": "409e4cecd58a5bda0593d55f62788b53963f8cf9b10540f1e212cafea2c9504d",
     "tests/native/directory_contract_host_test.cc.in": "6cd6730ccfc054cfef011fb2e5210d1db06d2686a86a3ce464d6cbd6f8d06dfc",
@@ -47,7 +47,7 @@
     "tools/test_scandir_sort.py": "1803419db9667a88427a33735310eb555cec71250cf8d895c2194b67f66ed07a"
   },
   "native_runtime_approval": false,
-  "patch_sha256": "892065b49a3d28507c6bbee8bfd6d31cbaabd8399c358a7e2a1435ecf2f6c040",
+  "patch_sha256": "693f349f4b9a8094ee4467b3941246b595f1aca6bc1245d89c2e934b789069ec",
   "paths": [
     ".github/workflows/ci.yml",
     "compat/bionic/posix_bionic.cc",
