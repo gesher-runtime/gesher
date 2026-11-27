@@ -625,6 +625,75 @@ public final class SafDocumentsContractTest {
         } finally { dialog.finish.countDown(); h.settled(); h.grants.flush(); }
     }
 
+    static void storageSelectionBoundaries(File dir) throws Exception {
+        Class<?> picker = type("DocumentPicker"), provider = type("DocumentsStorageProvider");
+        for (String root : List.of("/", "/mnt/c", "/mnt/D", "/mnt/unc/server/share")) {
+            check((boolean)call(provider, "isFilesystemRoot", new Class<?>[]{File.class}, new File(root)),
+                    "Recognize the actual filesystem boundary: " + root);
+        }
+        for (String child : List.of("/mnt", "/mnt/unc", "/mnt/unc/server", "/mnt/c/child",
+                "/mnt/unc/server/share/child")) {
+            check(!(boolean)call(provider, "isFilesystemRoot", new Class<?>[]{File.class}, new File(child)),
+                    "A namespace prefix or child is not a filesystem root: " + child);
+        }
+        Harness normal = new Harness(new File(dir, "volume-boundaries.xml"));
+        File ordinary = new File(dir, "ordinary-volume-document.txt");
+        Files.writeString(ordinary.toPath(), "real file outside Android private directories");
+        List<java.nio.file.Path> owned = new ArrayList<>();
+        try {
+            File external = android.os.Environment.getExternalStorageDirectory();
+            for (String name : List.of("data", "obb", "sandbox")) {
+                File root = new File(external, "Android/" + name);
+                // This fixture owns ANDROID_DATA; keep existing roots and remove
+                // only the fresh child containing this test's document.
+                Files.createDirectories(root.toPath());
+                java.nio.file.Path child = Files.createTempDirectory(root.toPath(), "saf-boundary-");
+                owned.add(child);
+                File secret = child.resolve("private.txt").toFile();
+                Files.writeString(secret.toPath(), "private document");
+                check((boolean)call(picker, "blockedAndroidDirectory", new Class<?>[]{File.class}, secret),
+                        "Real Android/" + name + " descendants remain blocked");
+                check((boolean)call(picker, "blockedAndroidDirectory", new Class<?>[]{File.class},
+                        new File(child.toFile(), "../" + child.getFileName() + "/private.txt")),
+                        "Parent traversal cannot bypass the Android/" + name + " identity check");
+                if (nativeFiles) {
+                    File alias = new File(secret.getPath().replace("/Android/" + name + "/",
+                            "/ANDROID/" + name.toUpperCase(Locale.ROOT) + "/"));
+                    check(Files.isSameFile(secret.toPath(), alias.toPath()),
+                            "The Windows case alias names the same protected file: " + name);
+                    check((boolean)call(picker, "blockedAndroidDirectory", new Class<?>[]{File.class}, alias),
+                            "A Windows case alias cannot bypass the protected-directory identity: " + name);
+                }
+                Harness denied = new Harness(new File(dir, "blocked-" + name + ".xml"));
+                Dialog dialog = new Dialog(); dialog.install(denied);
+                check(denied.start(open(), denied.activity("Origin", "RESUMED")) == ActivityManager.START_SUCCESS,
+                        "Protected-document request starts normally: " + name);
+                ResultInfo result = finishSelection(denied, dialog, secret.getPath());
+                check(result.mResultCode == Activity.RESULT_CANCELED && result.mData == null
+                        && !denied.grants.canAccess(denied.client, document(secret), READ | WRITE, 0),
+                        "Protected selection returns cancellation without a URI grant: " + name);
+                denied.grants.flush();
+            }
+            check((boolean)call(picker, "blockedAndroidDirectory", new Class<?>[]{File.class},
+                    new File(dir, "absent-boundary-document")), "Real ancestor identity errors still fail closed");
+            check(!(boolean)call(picker, "blockedAndroidDirectory", new Class<?>[]{File.class}, ordinary),
+                    "An accessible ordinary file is allowed with all protected Android directories present");
+            Dialog dialog = new Dialog(); dialog.install(normal);
+            check(normal.start(open(), normal.activity("Origin", "RESUMED")) == ActivityManager.START_SUCCESS,
+                    "Ordinary volume selection starts");
+            ResultInfo result = finishSelection(normal, dialog, ordinary.getPath());
+            check(result.mResultCode == Activity.RESULT_OK && document(ordinary).equals(result.mData.getData())
+                    && normal.grants.canAccess(normal.client, document(ordinary), READ, 0),
+                    "Ordinary volume selection returns the real document and its URI grant");
+        } finally {
+            normal.grants.flush();
+            for (java.nio.file.Path child : owned) {
+                Files.deleteIfExists(child.resolve("private.txt"));
+                Files.delete(child);
+            }
+        }
+    }
+
     static void localOnly(File dir) throws Exception {
         for (String action : List.of(Intent.ACTION_OPEN_DOCUMENT, Intent.ACTION_GET_CONTENT,
                 Intent.ACTION_CREATE_DOCUMENT, Intent.ACTION_OPEN_DOCUMENT_TREE)) {
@@ -1378,7 +1447,7 @@ public final class SafDocumentsContractTest {
         fixtureMimeMap();
         nativeFiles=descriptors;field(Class.forName("com.gesher.app.locale.SystemLocale"),"sIs24Hour").set(null,Boolean.TRUE);
         File dir=Files.createTempDirectory("gesher-saf-production-").toFile().getCanonicalFile();
-        try{provider(dir);persistence(dir);deletionLifecycle(dir);selection(dir);selectionCounts(dir);localOnly(dir);failures(dir);actions(dir);pickImagesAndChooser(dir);lifecycle(dir);idleOwnership(dir);combinedNativeUi(dir);appTaskNativeUi(dir);
+        try{provider(dir);persistence(dir);deletionLifecycle(dir);storageSelectionBoundaries(dir);selection(dir);selectionCounts(dir);localOnly(dir);failures(dir);actions(dir);pickImagesAndChooser(dir);lifecycle(dir);idleOwnership(dir);combinedNativeUi(dir);appTaskNativeUi(dir);
             if(nativeFiles){
                 check(nativeIncoming.get()>nativeOtherIncoming.get()&&nativeOtherIncoming.get()>0,
                         "SAF exercised actual incoming Binder transactions from both ordinary peers");

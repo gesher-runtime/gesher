@@ -173,7 +173,7 @@ public final class DocumentsStorageProvider extends DocumentsProvider {
         return flags;
     }
 
-    private static boolean isFilesystemRoot(File file) {
+    static boolean isFilesystemRoot(File file) {
         return file.getParentFile() == null || file.getPath().matches("/mnt/[A-Za-z]")
                 || file.getPath().matches("/mnt/unc/[^/]+/[^/]+");
     }
