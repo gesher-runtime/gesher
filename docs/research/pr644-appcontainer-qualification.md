@@ -437,3 +437,70 @@ same-owner update/restart, actual legacy-key denial and new-owner consent. The
 exact previous production source fails the new reinstall assertion. Independent
 review reproduced both outcomes. This qualifies the persistence and identity
 boundary, not physical USB transfers or the elevated raw-storage route.
+
+## Hosted station repair and independent launch contexts
+
+Run `46028406729` on `f697bef10` passes the original actual protected runtime
+identity/AppContainer launch gate on both Windows versions. The installation
+owner/retirement/inherited-ACL and protected-wire contracts also pass on both.
+This is execution evidence for the station descriptor-read repair, rather
+than inference from the earlier owned-object matrix.
+
+The subsequent observer-free run stops at its untouched precondition:
+`refuse-preexisting-runtime-profile`, error 183. The first run successfully
+unloaded its owned hive and stopped its exact processes, but Windows retained
+the profile with a recorded sharing error 32. The fixture deliberately retains
+its ownership artifacts instead of deleting or reusing a preexisting profile.
+Both logs are preserved in `out/pr644-gdi-f697/windows-2022` and
+`out/pr644-gdi-f697/windows-2025` in the PR worktree.
+
+The same observer-free executable invocation now runs in a separate required
+job on a fresh Windows runner for each OS. Its native assertions, preexisting
+profile refusal, three guest probe builds, timeout and native exit handling
+are preserved. Selection and failure-propagation checks pass. Actual fresh-job
+execution is still pending the next CI run; the observed result does not
+establish observer-free or full installed CardWake qualification.
+
+That run also reaches two previously hidden extraction failures. The native
+Poll allocation fixture now explicitly rejects relay-backed sockets at its
+native-only boundary, preserving the extracted production Poll and all its
+allocation assertions. Current and main each pass 1,074 Windows checks; the
+historical source fails its original priority assertion. The Binder receive
+fixture likewise declares its existing plain-handle sender boundary before
+the new relay guard. Its actual send/receive/OFD extraction and budgets are
+unchanged. An independently repeated Windows CRT projection passes 7,940
+current checks and reproduces all six historical resource failures. Linux
+sanitizer execution remains a separate pending requirement.
+
+The native preflight in that same completed run is green, including the
+repaired stdio adapter and scanning fixtures under Linux sanitizers and their
+historical failure controls. This closes the earlier stdio extraction failure;
+it does not close the separate Binder receive or native Poll build failures.
+The complete log is `out/pr644-f697-native.log` in the PR worktree.
+
+## Relay worker exit gate
+
+Continued integrated review found that a relay worker dropped its worker
+counter before real Windows TLS/FLS teardown. With the last client gone, the
+native fork guard could admit a snapshot while that worker's real FLS callback
+was still running. An actual Windows probe reproduced this with the unchanged
+fork-lock registry; it did not demonstrate an actual cloned-process deadlock.
+
+The relay start interface now requires an explicit exit hook. Its sole
+production caller supplies the real native `ThreadLeaving` under fork support.
+The worker destroys its session/context before registering with that gate,
+retains its worker count through registration, and keeps its original module
+pin until `FreeLibraryAndExitThread`. Standalone transport fixtures explicitly
+pass no hook because they have no native fork domain.
+
+The tracked regression fixture links the real relay and `fork_locks.cc`, holds
+an actual FLS exit callback, and requires native fork admission to fail until
+the actual thread exits. The omission control instead observes fork admission
+and returns its specific expected failure. Both require exact thread, handle,
+FLS and final-idle cleanup. Only the unused cloned-child and logging functions
+are fixture boundaries; no actual clone is claimed. The configured production
+runtime/broker links build, the exact configured positive/negative fixture
+passes, and independent Windows execution passes all nine relay transport
+cases and 27 framing controls. CI now requires the named omission failure and
+the corrected real-exit success. Full ART fork and shipping-default approval
+remain separate gates.

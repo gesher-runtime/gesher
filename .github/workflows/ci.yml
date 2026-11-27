@@ -1460,7 +1460,7 @@ jobs:
           ninja -C out thread_watch_clock_test dlopen_errors_test
           ninja -C out
           # Native fixtures are CI-only; none is installed by gesher.iss.
-          ninja -C out install_pipe_test account_chooser_test window_promotion_test permission_dialog_test binder_protected_admission_test loopback_relay_test loopback_relay_frames_test canonical_file_name_test window_frame_test
+          ninja -C out install_pipe_test account_chooser_test window_promotion_test permission_dialog_test binder_protected_admission_test loopback_relay_test loopback_relay_frames_test relay_worker_exit_test canonical_file_name_test window_frame_test
           ninja -C out arm64_numeric_return_host arm64_numeric_fenv_test
           ninja -C out font_environment_test
 
@@ -2015,6 +2015,19 @@ jobs:
           }
           & .\dist\gesher-exec.exe --elf "$PWD\exec-input\locale-info-x86_64" locale-info
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Real relay thread exit excludes native fork
+        if: ${{ !cancelled() && steps.build_installer.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          $negative = & .\dist\relay_worker_exit_test.exe --omit-gate 2>&1
+          $negativeCode = $LASTEXITCODE
+          $negative | Write-Output
+          if ($negativeCode -ne 1 -or ($negative -join "`n") -notmatch 'FAIL relay exit: fork accepted while real FLS exit callback was active') {
+            throw 'Relay exit negative control did not reproduce the original fork admission defect'
+          }
+          & .\dist\relay_worker_exit_test.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Real relay exit gate failed' }
 
       - name: Canonical file identity and case preservation
         if: ${{ !cancelled() && steps.build_installer.outcome == 'success' }}

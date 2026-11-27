@@ -1,7 +1,7 @@
 {
   "baseline": "ff2c1870053c9d0332e6abef07a25fc282d384b5",
   "native_runtime_approval": false,
-  "patch_sha256": "e3997a3522f1a16f4788fd9f4c1ec50f03ced89456428bddda4d0e89737f6ba6",
+  "patch_sha256": "0ed11a4520da8332bad90b9154fa7d8e3ffde600e7d683aa0adf4c23cfe6a9d7",
   "paths": [
     "compat/binder/binderd.cc",
     "compat/bionic/process_bionic.cc",
@@ -153,7 +153,7 @@
     "compat/posix/src/system_properties.cc": "ce1ebd4a654ddddedb921499f6ae1801eda100a2d286f228f7043f22874ada4f",
     "compat/posix/src/unistd.cc": "0f89522671b40e3306d9b46e026ada42bcc2e044bb5a86e8ed2c846a6e56591c",
     "compat/posix/src/unix_rights.cc": "af04b1a89e623b4cec010292e2a31eebc3caac45fb328a024c2e3088c4a7ece2",
-    "compat/posix/src/winsock.cc": "6ad9f3ba794d59d0746438386dc73befe0a0718ae35e85145bd38e130ad4ce97",
+    "compat/posix/src/winsock.cc": "24204f49b2081c47f088cbd5e5dae11c2296c7f772f5c66328f025625cf942a4",
     "compat/usb_storage/CMakeLists.txt": "4887720fa596f7224d3d96a0838d2f4b3d727de4dce9a4c9ede8f04d929fcbfe",
     "compat/usb_storage/binder_authority_control.cc": "520beb57081148cece4698ecb646ef12e8ef6876ca00443742404fe2de5f086a",
     "compat/usb_storage/binder_authority_control.h": "756c79fdb19fae42d217fbbfd42dccccccee71608974dcc7bf467ebe8dbb65c7",

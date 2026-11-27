@@ -5128,7 +5128,7 @@ index e5b6f58..65856e9 100644
        // the NUL reservation behind its descriptor (which cannot be shared).
        fence = TransferNativeFence(fd, &handle, &metadata);
 diff --git a/compat/posix/src/winsock.cc b/compat/posix/src/winsock.cc
-index 68f27ff..f1b9fca 100644
+index 68f27ff..962f42a 100644
 --- a/compat/posix/src/winsock.cc
 +++ b/compat/posix/src/winsock.cc
 @@ -8,6 +8,7 @@
@@ -5170,7 +5170,7 @@ index 68f27ff..f1b9fca 100644
  bool CopyFromUser(void* destination, const void* source, size_t size) {
    return usercopy::From(destination, source, size);
  }
-@@ -290,6 +313,298 @@ bool Startup() {
+@@ -290,6 +313,304 @@ bool Startup() {
    return true;
  }
 
@@ -5381,7 +5381,13 @@ index 68f27ff..f1b9fca 100644
 +  if (description->connect_generation == UINT64_MAX) return errno = EOVERFLOW, -1;
 +  auto relay = loopback_relay::Client::Start(request,
 +      [](const auto& operation) { return binder_endpoint::OpenLoopbackRelay(operation); },
-+      [] { gesher::WakePollers(); });
++      [] { gesher::WakePollers(); },
++#ifdef GESHER_FORK_LOCK
++      &gesher::ThreadLeaving
++#else
++      nullptr
++#endif
++      );
 +  if (!relay) return errno = ENOMEM, -1;
 +  ++description->connect_generation;
 +  description->connect_error = description->connect_result = 0;
@@ -5469,7 +5475,7 @@ index 68f27ff..f1b9fca 100644
  Socket Open(Family family, Type type, int protocol, bool process_binding) {
    int win_family = ToWinFamily(family);
    int win_type = ToWinType(type);
-@@ -455,6 +770,7 @@ int Close(Socket s, const std::shared_ptr<SocketDescription>& description, bool
+@@ -455,6 +776,7 @@ int Close(Socket s, const std::shared_ptr<SocketDescription>& description, bool
      return 0;
    }
    if (!description) return closesocket(static_cast<SOCKET>(s)) == 0 ? 0 : Fail();
@@ -5477,7 +5483,7 @@ index 68f27ff..f1b9fca 100644
    {
      std::lock_guard<std::mutex> lock(description->error_mutex);
      description->native_closing = true;
-@@ -518,6 +834,7 @@ int Bind(Socket s, const Address& address, const std::shared_ptr<SocketDescripti
+@@ -518,6 +840,7 @@ int Bind(Socket s, const Address& address, const std::shared_ptr<SocketDescripti
      native_call = std::unique_lock<std::mutex>(description->native_call_mutex);
      std::lock_guard<std::mutex> lock(description->error_mutex);
      if (description->native_closed || description->native_closing) return errno = EBADF, -1;
@@ -5485,7 +5491,7 @@ index 68f27ff..f1b9fca 100644
    }
    sockaddr_storage ss;
    int len;
-@@ -792,6 +1109,7 @@ bool ReadConnectOwnerCensus(OwnerCensus* result) {
+@@ -792,6 +1115,7 @@ bool ReadConnectOwnerCensus(OwnerCensus* result) {
  }
 
  void RefreshConnect(const std::shared_ptr<SocketDescription>& description) {
@@ -5493,7 +5499,7 @@ index 68f27ff..f1b9fca 100644
    std::lock_guard<std::mutex> lock(description->error_mutex);
    auto operation = description->connect_operation;
    if (operation && WaitForSingleObject(operation->submitted, 0) == WAIT_OBJECT_0) FinishConnect(operation);
-@@ -843,6 +1161,7 @@ int Listen(Socket s, int backlog, const std::shared_ptr<SocketDescription>& desc
+@@ -843,6 +1167,7 @@ int Listen(Socket s, int backlog, const std::shared_ptr<SocketDescription>& desc
      native_call = std::unique_lock<std::mutex>(description->native_call_mutex);
      std::lock_guard<std::mutex> lock(description->error_mutex);
      if (description->native_closed || description->native_closing) return errno = EBADF, -1;
@@ -5501,7 +5507,7 @@ index 68f27ff..f1b9fca 100644
    }
    return Api().listen(static_cast<SOCKET>(s), backlog) == 0 ? 0 : Fail();
  }
-@@ -861,7 +1180,25 @@ Socket Accept(Socket s, Address* peer) {
+@@ -861,7 +1186,25 @@ Socket Accept(Socket s, Address* peer) {
    return static_cast<Socket>(result);
  }
 
@@ -5528,7 +5534,7 @@ index 68f27ff..f1b9fca 100644
    sockaddr_storage ss;
    int len = sizeof(ss);
    if (Api().getsockname(static_cast<SOCKET>(s), reinterpret_cast<sockaddr*>(&ss), &len) != 0) {
-@@ -871,7 +1208,12 @@ int GetSockName(Socket s, Address* address) {
+@@ -871,7 +1214,12 @@ int GetSockName(Socket s, Address* address) {
    return 0;
  }
 
@@ -5542,7 +5548,7 @@ index 68f27ff..f1b9fca 100644
    sockaddr_storage ss;
    int len = sizeof(ss);
    if (Api().getpeername(static_cast<SOCKET>(s), reinterpret_cast<sockaddr*>(&ss), &len) != 0) {
-@@ -881,12 +1223,20 @@ int GetPeerName(Socket s, Address* address) {
+@@ -881,12 +1229,20 @@ int GetPeerName(Socket s, Address* address) {
    return 0;
  }
 
@@ -5565,7 +5571,7 @@ index 68f27ff..f1b9fca 100644
    u_long n = 0;
    if (ioctlsocket(static_cast<SOCKET>(s), FIONREAD, &n) != 0) return Fail();
    *bytes = static_cast<int>(n);
-@@ -1410,6 +1760,95 @@ bool StreamPorts(Socket s, SocketDescription& description, uint16_t* local, uint
+@@ -1410,6 +1766,95 @@ bool StreamPorts(Socket s, SocketDescription& description, uint16_t* local, uint
    return true;
  }
 
@@ -5661,7 +5667,7 @@ index 68f27ff..f1b9fca 100644
  ptrdiff_t SendOwned(Socket s, const Buffer* buffers, size_t count, int flags, const Address* to,
                      std::shared_ptr<SocketDescription>& description, bool dont_wait,
                      const RightsToken* rights) {
-@@ -1417,6 +1856,10 @@ ptrdiff_t SendOwned(Socket s, const Buffer* buffers, size_t count, int flags, co
+@@ -1417,6 +1862,10 @@ ptrdiff_t SendOwned(Socket s, const Buffer* buffers, size_t count, int flags, co
      if (rights != nullptr && rights->count != 0) return errno = EOPNOTSUPP, -1;
      return gesher::NetlinkSend(*description->netlink, buffers, count, 0, nullptr, 0);
    }
@@ -5672,7 +5678,7 @@ index 68f27ff..f1b9fca 100644
    if (description->unix_datagram_pair.load()) {
      return SendUnixDatagram(s, buffers, count, flags, to, description, dont_wait, rights);
    }
-@@ -1442,6 +1885,14 @@ ptrdiff_t RecvOwned(Socket s, Buffer* buffers, size_t count, int flags, Address*
+@@ -1442,6 +1891,14 @@ ptrdiff_t RecvOwned(Socket s, Buffer* buffers, size_t count, int flags, Address*
      return gesher::NetlinkRecv(description, buffers, count, 0, nullptr, nullptr,
                                 dont_wait, result_flags);
    }
@@ -5687,7 +5693,7 @@ index 68f27ff..f1b9fca 100644
    if (description->unix_datagram_pair.load()) {
      return RecvUnixDatagram(s, buffers, count, flags, from, description, dont_wait, result_flags,
                              credentials, rights);
-@@ -1698,7 +2149,14 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms, NativePollObserver ob
+@@ -1698,7 +2155,14 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms, NativePollObserver ob
    bool has_owned_pending = false;
    bool has_netlink = false;
    bool has_netlink_ready = false;
@@ -5702,7 +5708,7 @@ index 68f27ff..f1b9fca 100644
      if (entries[i].description && entries[i].description->netlink) {
        has_netlink = true;
        fds[i].fd = INVALID_SOCKET;
-@@ -1759,9 +2217,9 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms, NativePollObserver ob
+@@ -1759,9 +2223,9 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms, NativePollObserver ob
    }
    // Band-only WSAPoll never wakes for failed ConnectEx. Sample its owned
    // completion on the same bounded slices already used for mixed poll sources.
@@ -5714,7 +5720,7 @@ index 68f27ff..f1b9fca 100644
                                   (timeout_ms < 0 || timeout_ms > 10)
                               ? 10
                               : timeout_ms;
-@@ -1775,7 +2233,7 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms, NativePollObserver ob
+@@ -1775,7 +2239,7 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms, NativePollObserver ob
    active.reserve(count + (wake != kInvalidSocket ? 1 : 0));
    active_index.reserve(count);
    for (size_t i = 0; i < count; ++i) {
@@ -5723,7 +5729,7 @@ index 68f27ff..f1b9fca 100644
          !(entries[i].description && entries[i].description->netlink)) {
        active.push_back(fds[i]);
        active_index.push_back(i);
-@@ -1835,6 +2293,11 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms, NativePollObserver ob
+@@ -1835,6 +2299,11 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms, NativePollObserver ob
    bool suppressed_datagram_read = false;
    for (size_t i = 0; i < count; ++i) {
      SHORT r = fds[i].revents;

@@ -59,6 +59,17 @@ add_executable(loopback_relay_frames_test EXCLUDE_FROM_ALL
 set_target_properties(loopback_relay_frames_test PROPERTIES LINK_LIBRARIES "ws2_32")
 target_compile_options(loopback_relay_frames_test PRIVATE -Wall -Wextra -Werror)
 
+# Real Windows TLS/FLS exit and the actual native fork exit gate. The fixture
+# declares only unused logging/cloned-child boundaries; it never clones ART.
+add_executable(relay_worker_exit_test EXCLUDE_FROM_ALL
+  ${CMAKE_SOURCE_DIR}/tests/native/relay_worker_exit_test.cc
+  ${CMAKE_SOURCE_DIR}/compat/binder/loopback_relay.cc
+  ${CMAKE_SOURCE_DIR}/compat/posix/src/fork_locks.cc)
+target_include_directories(relay_worker_exit_test PRIVATE ${CMAKE_SOURCE_DIR}/compat/posix/include)
+target_compile_definitions(relay_worker_exit_test PRIVATE GESHER_RELAY_EXIT_TEST_BOUNDARIES)
+target_compile_options(relay_worker_exit_test PRIVATE -Wall -Wextra -Werror)
+set_target_properties(relay_worker_exit_test PROPERTIES LINK_LIBRARIES "ws2_32")
+
 add_executable(canonical_file_name_test EXCLUDE_FROM_ALL
   ${CMAKE_SOURCE_DIR}/tests/native/canonical_file_name_test.cc)
 target_include_directories(canonical_file_name_test PRIVATE ${CMAKE_SOURCE_DIR}/compat/posix/include)
