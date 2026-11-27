@@ -162,6 +162,7 @@
                         <Button Name="BtnEnableMicrog" Style="{StaticResource PrimaryButton}" Content="{DynamicResource Text_cp_btn_enable_microg}" Margin="0,0,8,8"/>
                         <Button Name="BtnGoogleLogin" Content="{DynamicResource Text_cp_btn_google_login}" Margin="0,0,8,8"/>
                         <Button Name="BtnMicrogSettings" Content="{DynamicResource Text_cp_btn_microg_settings}" Margin="0,0,8,8"/>
+                        <Button Name="BtnManageAccounts" Content="{DynamicResource Text_cp_btn_manage_accounts}" Margin="0,0,8,8"/>
                         <Button Name="BtnDisableMicrog" Style="{StaticResource DangerButton}" Content="{DynamicResource Text_cp_btn_disable_microg}" Margin="0,0,8,8"/>
                     </WrapPanel>
                 </StackPanel>

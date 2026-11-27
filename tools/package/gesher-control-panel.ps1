@@ -648,6 +648,7 @@ $microgBadgeText = $window.FindName('MicrogBadgeText')
 $btnEnableMicrog = $window.FindName('BtnEnableMicrog')
 $btnGoogleLogin = $window.FindName('BtnGoogleLogin')
 $btnMicrogSettings = $window.FindName('BtnMicrogSettings')
+$btnManageAccounts = $window.FindName('BtnManageAccounts')
 $btnDisableMicrog = $window.FindName('BtnDisableMicrog')
 $storeBadge = $window.FindName('StoreBadge')
 $storeBadgeText = $window.FindName('StoreBadgeText')
@@ -747,6 +748,7 @@ function Update-MicrogView([bool] $microgEnabled) {
         $btnEnableMicrog.Visibility = [System.Windows.Visibility]::Collapsed
         $btnGoogleLogin.Visibility = [System.Windows.Visibility]::Visible
         $btnMicrogSettings.Visibility = [System.Windows.Visibility]::Visible
+        $btnManageAccounts.Visibility = [System.Windows.Visibility]::Visible
         $btnDisableMicrog.Visibility = [System.Windows.Visibility]::Visible
     } else {
         $microgBadge.Background = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#F2F4F7')
@@ -755,6 +757,7 @@ function Update-MicrogView([bool] $microgEnabled) {
         $btnEnableMicrog.Visibility = [System.Windows.Visibility]::Visible
         $btnGoogleLogin.Visibility = [System.Windows.Visibility]::Collapsed
         $btnMicrogSettings.Visibility = [System.Windows.Visibility]::Collapsed
+        $btnManageAccounts.Visibility = [System.Windows.Visibility]::Collapsed
         $btnDisableMicrog.Visibility = [System.Windows.Visibility]::Collapsed
     }
 }
@@ -2095,6 +2098,285 @@ $btnGoogleLogin.Add_Click({
 $btnMicrogSettings.Add_Click({
     if ($script:IsBusy) { return }
     Start-Process -FilePath (Join-Path $here 'gesher-launch.exe') -ArgumentList 'launch', 'com.google.android.gms' -WindowStyle Hidden
+})
+
+function ConvertFrom-AccountsOutput([string[]] $lines) {
+    $accounts = [Collections.Generic.List[object]]::new()
+    $utf8 = [Text.UTF8Encoding]::new($false, $true)
+    foreach ($line in $lines) {
+        if ($line.StartsWith("account64`t", [StringComparison]::Ordinal)) {
+            # Account names and types may contain tabs, newlines, quotes and Unicode.
+            # Keep the process protocol ASCII and decode only after framing it.
+            $fields = $line.Split([char]9)
+            if ($fields.Count -ne 3) { throw 'Invalid account response' }
+            $type = $utf8.GetString([Convert]::FromBase64String($fields[1]))
+            $name = $utf8.GetString([Convert]::FromBase64String($fields[2]))
+            if (-not $type.Length -or -not $name.Length) { throw 'Invalid account response' }
+            $accounts.Add([PSCustomObject]@{ Type = $type; Name = $name })
+        }
+    }
+    return $accounts.ToArray()
+}
+
+function Invoke-PanelAccounts([string[]] $arguments) {
+    $appScript = Join-Path $here 'gesher-app.ps1'
+    $system = [Environment]::GetFolderPath('System')
+    $quotedArgs = foreach ($arg in $arguments) {
+        $escaped = if ($null -eq $arg) { '' } else { ([string]$arg -replace '(\\*)"', '$1$1\"' -replace '(\\+)$', '$1$1') }
+        '"' + $escaped + '"'
+    }
+    $info = [System.Diagnostics.ProcessStartInfo]::new((Join-Path $system 'WindowsPowerShell\v1.0\powershell.exe'))
+    $info.Arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + $appScript + '" accounts ' + ($quotedArgs -join ' ')
+    $info.UseShellExecute = $false
+    $info.CreateNoWindow = $true
+    $info.RedirectStandardOutput = $true
+    $info.RedirectStandardError = $true
+    $process = [System.Diagnostics.Process]::Start($info)
+    try {
+        $output = $process.StandardOutput.ReadToEndAsync()
+        $errors = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit($script:AccountsTimeoutMs)) {
+            try {
+                $kill = [System.Diagnostics.ProcessStartInfo]::new((Join-Path $system 'taskkill.exe'), "/PID $($process.Id) /T /F")
+                $kill.UseShellExecute = $false; $kill.CreateNoWindow = $true
+                $killer = [System.Diagnostics.ProcessStartInfo]::Start($kill)
+                $null = $killer.WaitForExit(10000); $killer.Dispose()
+            } catch { }
+            try { if (-not $process.HasExited) { $process.Kill() } } catch { }
+            return [PSCustomObject]@{ ExitCode = -1; Lines = @() }
+        }
+        $process.WaitForExit()
+        $null = $errors.Result
+        return [PSCustomObject]@{ ExitCode = $process.ExitCode; Lines = @($output.Result -split "`r?`n") }
+    } finally { $process.Dispose() }
+}
+
+function Start-PanelAccounts([string[]] $arguments, [int] $timeoutMs = 60000) {
+    $powerShell = [PowerShell]::Create()
+    try {
+        $body = "param(`$here, `$timeout, `$arguments)`n`$script:AccountsTimeoutMs = `$timeout`n" +
+            "function Invoke-PanelAccounts {`n$((Get-Command Invoke-PanelAccounts).Definition)`n}`n" +
+            "Invoke-PanelAccounts `$arguments"
+        $null = $powerShell.AddScript($body).AddArgument($here).AddArgument($timeoutMs).AddArgument([string[]]$arguments)
+        return [PSCustomObject]@{ PowerShell = $powerShell; Handle = $powerShell.BeginInvoke() }
+    } catch {
+        $powerShell.Dispose()
+        throw
+    }
+}
+
+function Show-AccountsDialog {
+    [xml]$dialogXaml = @"
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Width="480" SizeToContent="Height"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize"
+        ShowInTaskbar="False"
+        FlowDirection="$flowDirection"
+        FontFamily="Segoe UI, Tahoma, Arial"
+        Background="#FFFFFF">
+    <Window.Resources>
+        <Style TargetType="Button">
+            <Setter Property="Padding" Value="14,7"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="BorderBrush" Value="#D0D5DD"/>
+            <Setter Property="Background" Value="#FFFFFF"/>
+            <Setter Property="Foreground" Value="#344054"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="6"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+    <Border Padding="22">
+        <StackPanel>
+            <TextBlock Name="DialogHeading" FontSize="16" FontWeight="Bold" Foreground="#101828"/>
+            <TextBlock Name="DialogDesc" FontSize="12" Foreground="#667085" TextWrapping="Wrap" Margin="0,4,0,14"/>
+            <TextBlock Name="AccountsStatus" FontSize="12" Foreground="#475467" TextWrapping="Wrap" Margin="0,0,0,8"/>
+            <ScrollViewer MaxHeight="280" VerticalScrollBarVisibility="Auto">
+                <StackPanel Name="AccountsList"/>
+            </ScrollViewer>
+            <TextBlock Name="AccountsError" FontSize="12" Foreground="#B42318" TextWrapping="Wrap" Margin="0,8,0,0" Visibility="Collapsed"/>
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,18,0,0">
+                <Button Name="BtnClose" IsCancel="True" IsDefault="True" MinWidth="85"/>
+            </StackPanel>
+        </StackPanel>
+    </Border>
+</Window>
+"@
+    $dialog = [System.Windows.Markup.XamlReader]::Load([System.Xml.XmlNodeReader]::new($dialogXaml))
+    $dialog.Title = Get-GesherText 'cp_accounts_title'
+    $dialog.FindName('DialogHeading').Text = Get-GesherText 'cp_accounts_title'
+    $dialog.FindName('DialogDesc').Text = Get-GesherText 'cp_accounts_desc'
+    $dialog.FindName('BtnClose').Content = Get-GesherText 'cp_app_info_close'
+    $statusText = $dialog.FindName('AccountsStatus')
+    $listPanel = $dialog.FindName('AccountsList')
+    $errorText = $dialog.FindName('AccountsError')
+    $dialog.Owner = $window
+    if ($window.Icon) { $dialog.Icon = $window.Icon }
+
+    $state = @{ Closed = $false; Query = $null; Removing = $null; RemovingName = $null }
+    $startQuery = {
+        $errorText.Visibility = 'Collapsed'
+        $listPanel.Children.Clear()
+        $statusText.Text = Get-GesherText 'cp_accounts_loading'
+        $statusText.Visibility = 'Visible'
+        try {
+            $state.Query = Start-PanelAccounts -arguments @('list-encoded')
+        } catch {
+            $statusText.Visibility = 'Collapsed'
+            $errorText.Text = Get-GesherText 'cp_accounts_error'
+            $errorText.Visibility = 'Visible'
+        }
+    }
+
+    $timer = [System.Windows.Threading.DispatcherTimer]::new()
+    $timer.Interval = [TimeSpan]::FromMilliseconds(100)
+    $timer.Add_Tick({
+        if ($state.Closed) { return }
+        try {
+            if ($state.Query -and $state.Query.Handle.IsCompleted) {
+                $worker = $state.Query
+                $state.Query = $null
+                $result = Receive-PanelSpecialAccess $worker
+                $statusText.Visibility = 'Collapsed'
+                $listPanel.Children.Clear()
+                if ($result.ExitCode -ne 0) {
+                    $errorText.Text = Get-GesherText 'cp_accounts_error'
+                    $errorText.Visibility = 'Visible'
+                } else {
+                    $items = @(ConvertFrom-AccountsOutput $result.Lines)
+                    if ($items.Count -eq 0) {
+                        $statusText.Text = Get-GesherText 'cp_accounts_empty'
+                        $statusText.Visibility = 'Visible'
+                    } else {
+                        foreach ($acct in $items) {
+                            $border = [System.Windows.Controls.Border]::new()
+                            $border.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#E4E7EC')
+                            $border.BorderThickness = [System.Windows.Thickness]::new(1)
+                            $border.CornerRadius = [System.Windows.CornerRadius]::new(8)
+                            $border.Padding = [System.Windows.Thickness]::new(12, 10, 12, 10)
+                            $border.Margin = [System.Windows.Thickness]::new(0, 0, 0, 8)
+                            $grid = [System.Windows.Controls.Grid]::new()
+                            $col0 = [System.Windows.Controls.ColumnDefinition]::new()
+                            $col0.Width = [System.Windows.GridLength]::new(1, [System.Windows.GridUnitType]::Star)
+                            $col1 = [System.Windows.Controls.ColumnDefinition]::new()
+                            $col1.Width = [System.Windows.GridLength]::Auto
+                            [void]$grid.ColumnDefinitions.Add($col0)
+                            [void]$grid.ColumnDefinitions.Add($col1)
+
+                            $info = [System.Windows.Controls.StackPanel]::new()
+                            $nameText = [System.Windows.Controls.TextBlock]::new()
+                            $nameText.Text = $acct.Name
+                            $nameText.FontSize = 13
+                            $nameText.FontWeight = [System.Windows.FontWeights]::SemiBold
+                            $nameText.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#101828')
+                            $typeText = [System.Windows.Controls.TextBlock]::new()
+                            $typeText.Text = $acct.Type
+                            $typeText.FontSize = 11
+                            $typeText.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#667085')
+                            [void]$info.Children.Add($nameText)
+                            [void]$info.Children.Add($typeText)
+                            [System.Windows.Controls.Grid]::SetColumn($info, 0)
+                            [void]$grid.Children.Add($info)
+
+                            $btnRemove = [System.Windows.Controls.Button]::new()
+                            $btnRemove.Content = Get-GesherText 'cp_btn_remove_account'
+                            $btnRemove.Tag = $acct
+                            $btnRemove.Foreground = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#D92D20')
+                            $btnRemove.BorderBrush = [System.Windows.Media.BrushConverter]::new().ConvertFromString('#FDA29B')
+                            $btnRemove.VerticalAlignment = [System.Windows.VerticalAlignment]::Center
+                            $btnRemove.Add_Click({
+                                param($sender, $e)
+                                if ($state.Removing -or $state.Query) { return }
+                                $target = $sender.Tag
+                                $confirmed = Show-ModernConfirmDialog `
+                                    -Title (Get-GesherText 'cp_remove_account_title') `
+                                    -Message (Get-GesherText 'cp_remove_account_confirm' @($target.Name, $target.Type)) `
+                                    -ConfirmText (Get-GesherText 'cp_btn_remove_account') `
+                                    -IsDanger
+                                if (-not $confirmed) { return }
+                                $sender.IsEnabled = $false
+                                $errorText.Visibility = 'Collapsed'
+                                try {
+                                    $state.RemovingName = $target.Name
+                                    $encodedType = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($target.Type))
+                                    $encodedName = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($target.Name))
+                                    # An authenticator may display its own confirmation UI and
+                                    # has a 15-minute session lifetime. Keep the worker alive
+                                    # through that lifecycle, with a margin for IPC cleanup.
+                                    $state.Removing = Start-PanelAccounts -arguments @('remove-encoded', $encodedType, $encodedName) -timeoutMs 960000
+                                } catch {
+                                    $sender.IsEnabled = $true
+                                    $errorText.Text = Get-GesherText 'cp_remove_account_failed' @($target.Name)
+                                    $errorText.Visibility = 'Visible'
+                                }
+                            })
+                            [System.Windows.Controls.Grid]::SetColumn($btnRemove, 1)
+                            [void]$grid.Children.Add($btnRemove)
+                            $border.Child = $grid
+                            [void]$listPanel.Children.Add($border)
+                        }
+                    }
+                }
+            }
+            if ($state.Removing -and $state.Removing.Handle.IsCompleted) {
+                $worker = $state.Removing
+                $targetName = $state.RemovingName
+                $state.Removing = $null
+                $state.RemovingName = $null
+                $result = Receive-PanelSpecialAccess $worker
+                if ($result.ExitCode -eq 0) {
+                    & $startQuery
+                } else {
+                    foreach ($child in @($listPanel.Children)) {
+                        if ($child -is [System.Windows.Controls.Border] -and $child.Child -is [System.Windows.Controls.Grid]) {
+                            foreach ($el in @($child.Child.Children)) {
+                                if ($el -is [System.Windows.Controls.Button]) { $el.IsEnabled = $true }
+                            }
+                        }
+                    }
+                    $errorText.Text = Get-GesherText 'cp_remove_account_failed' @($targetName)
+                    $errorText.Visibility = 'Visible'
+                }
+            }
+        } catch {
+            Write-PanelLog "accounts dialog: $($_.Exception.Message)"
+            $statusText.Visibility = 'Collapsed'
+            $errorText.Text = Get-GesherText 'cp_accounts_error'
+            $errorText.Visibility = 'Visible'
+        }
+    })
+    $dialog.Add_Closed({
+        $timer.Stop()
+        $state.Closed = $true
+        if ($state.Query) { $script:OrphanSpecialAccessWorkers.Add($state.Query); $state.Query = $null }
+        if ($state.Removing) { $script:OrphanSpecialAccessWorkers.Add($state.Removing); $state.Removing = $null }
+    })
+    $dialog.Add_Loaded({
+        if ($state.Closed) { return }
+        & $startQuery
+        $timer.Start()
+    })
+    $dialog.ShowDialog() | Out-Null
+}
+
+$btnManageAccounts.Add_Click({
+    if ($script:IsBusy) { return }
+    Show-AccountsDialog
 })
 
 $btnDisableMicrog.Add_Click({

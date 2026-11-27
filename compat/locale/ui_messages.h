@@ -340,5 +340,16 @@ static inline const wchar_t* GesherUiText(enum GesherUiLanguage lang, const char
   if (strcmp(key, "update_done_text") == 0) return lang == GESHER_UI_HE ? L"{0} \u05e2\u05d5\u05d3\u05db\u05df." : L"{0} was updated.";
   if (strcmp(key, "install_open_button") == 0) return lang == GESHER_UI_HE ? L"\u05e4\u05ea\u05d9\u05d7\u05d4" : L"Open";
   if (strcmp(key, "install_done_button") == 0) return lang == GESHER_UI_HE ? L"\u05e1\u05d9\u05d5\u05dd" : L"Done";
+  if (strcmp(key, "account_not_found") == 0) return lang == GESHER_UI_HE ? L"\u05d4\u05d7\u05e9\u05d1\u05d5\u05df \u05dc\u05d0 \u05e0\u05de\u05e6\u05d0: {0}" : L"Account not found: {0}";
+  if (strcmp(key, "cp_btn_manage_accounts") == 0) return lang == GESHER_UI_HE ? L"\u05e0\u05d9\u05d4\u05d5\u05dc \u05d7\u05e9\u05d1\u05d5\u05e0\u05d5\u05ea" : L"Manage Accounts";
+  if (strcmp(key, "cp_accounts_title") == 0) return lang == GESHER_UI_HE ? L"\u05d7\u05e9\u05d1\u05d5\u05e0\u05d5\u05ea" : L"Accounts";
+  if (strcmp(key, "cp_accounts_desc") == 0) return lang == GESHER_UI_HE ? L"\u05d4\u05e1\u05e8\u05ea \u05d7\u05e9\u05d1\u05d5\u05df \u05e9\u05de\u05d5\u05e8 \u05de\u05e1\u05d1\u05d9\u05d1\u05ea \u05d2\u05e9\u05e8 \u05d6\u05d5." : L"Remove a saved account from this Gesher device.";
+  if (strcmp(key, "cp_accounts_loading") == 0) return lang == GESHER_UI_HE ? L"\u05d8\u05d5\u05e2\u05df \u05d7\u05e9\u05d1\u05d5\u05e0\u05d5\u05ea..." : L"Loading accounts...";
+  if (strcmp(key, "cp_accounts_empty") == 0) return lang == GESHER_UI_HE ? L"\u05d0\u05d9\u05df \u05db\u05e8\u05d2\u05e2 \u05d7\u05e9\u05d1\u05d5\u05e0\u05d5\u05ea \u05de\u05d7\u05d5\u05d1\u05e8\u05d9\u05dd." : L"No accounts are currently signed in.";
+  if (strcmp(key, "cp_accounts_error") == 0) return lang == GESHER_UI_HE ? L"\u05dc\u05d0 \u05e0\u05d9\u05ea\u05df \u05dc\u05d8\u05e2\u05d5\u05df \u05d0\u05ea \u05d4\u05d7\u05e9\u05d1\u05d5\u05e0\u05d5\u05ea. \u05d5\u05d3\u05d0 \u05e9\u05e1\u05d1\u05d9\u05d1\u05ea \u05d2\u05e9\u05e8 \u05e4\u05e2\u05d9\u05dc\u05d4 \u05d5\u05e0\u05e1\u05d4 \u05e9\u05d5\u05d1." : L"Could not load accounts. Make sure the Gesher device can start and try again.";
+  if (strcmp(key, "cp_btn_remove_account") == 0) return lang == GESHER_UI_HE ? L"\u05d4\u05e1\u05e8" : L"Remove";
+  if (strcmp(key, "cp_remove_account_title") == 0) return lang == GESHER_UI_HE ? L"\u05d4\u05e1\u05e8\u05ea \u05d7\u05e9\u05d1\u05d5\u05df" : L"Remove Account";
+  if (strcmp(key, "cp_remove_account_confirm") == 0) return lang == GESHER_UI_HE ? L"\u05dc\u05d4\u05e1\u05d9\u05e8 \u05d0\u05ea \u05d4\u05d7\u05e9\u05d1\u05d5\u05df {0} ({1}) \u05de\u05d2\u05e9\u05e8? \u05d0\u05e4\u05dc\u05d9\u05e7\u05e6\u05d9\u05d5\u05ea \u05d4\u05de\u05e9\u05ea\u05de\u05e9\u05d5\u05ea \u05d1\u05d7\u05e9\u05d1\u05d5\u05df \u05d6\u05d4 \u05d9\u05ea\u05e0\u05ea\u05e7\u05d5 \u05de\u05de\u05e0\u05d5." : L"Remove account {0} ({1}) from Gesher? Apps using this account will be signed out.";
+  if (strcmp(key, "cp_remove_account_failed") == 0) return lang == GESHER_UI_HE ? L"\u05dc\u05d0 \u05e0\u05d9\u05ea\u05df \u05dc\u05d4\u05e1\u05d9\u05e8 \u05d0\u05ea \u05d4\u05d7\u05e9\u05d1\u05d5\u05df {0}." : L"Could not remove account {0}.";
   return L"";
 }

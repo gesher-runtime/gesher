@@ -40,6 +40,7 @@
 #                                      allow|deny`: the user's choice for one
 #   gesher-app settings-closed TOKEN...  (the Control Center runs it) the app details it
 #                                      showed for these Settings requests closed
+#   gesher-app accounts [list | remove TYPE NAME]  list saved accounts or remove one
 #   gesher-app list                    the installed packages
 #   gesher-app status                  the device's processes
 #   gesher-app cameras                 list Windows cameras and their frame sizes
@@ -112,10 +113,10 @@ $root = Set-GesherProfileEnvironment $here
 # The optional addon installer records an explicit per-profile choice. An explicit
 # environment value (including 0) takes precedence for a single invocation.
 $enableMicrogForProfile = -not $env:GESHER_MICROG_SPOOF -and (Test-Path (Join-Path $root 'microg.enabled'))
-$commands = 'install', 'uninstall', 'view', 'list', 'status', 'start', 'shutdown', 'launch', 'protected-launch', 'toast-activated', 'apk-icon', 'apk-info', 'proxy', 'windows', 'app-isolation', 'special-access', 'settings-closed', 'settings-shown', 'sync-shortcuts', 'cameras', 'spell-checker', 'mobile-data'
+$commands = 'install', 'uninstall', 'view', 'list', 'status', 'start', 'shutdown', 'launch', 'protected-launch', 'toast-activated', 'apk-icon', 'apk-info', 'proxy', 'windows', 'app-isolation', 'special-access', 'accounts', 'settings-closed', 'settings-shown', 'sync-shortcuts', 'cameras', 'spell-checker', 'mobile-data'
 if ($Arguments.Count -eq 0) {
   Write-Host ((Get-GesherText 'usage') + 'gesher-app APK [--window | --hidden-window | --headless [--keep-task]] [--activity CLASS] [--ez KEY true|false]... [--proxy host:port|direct|windows] [--detach | --wait | --single-process | --system-server]')
-  Write-Host '       gesher-app launch PACKAGE|APK [options] | install APK [--desktop-shortcut] | uninstall PACKAGE | view PACKAGE URL | list | status | start | shutdown | proxy [[PACKAGE] host:port|direct|windows] | windows PACKAGE separate|shared'
+  Write-Host '       gesher-app launch PACKAGE|APK [options] | install APK [--desktop-shortcut] | uninstall PACKAGE | view PACKAGE URL | accounts [list | remove TYPE NAME] | list | status | start | shutdown | proxy [[PACKAGE] host:port|direct|windows] | windows PACKAGE separate|shared'
   Write-Host '       gesher-app spell-checker list|use COMPONENT|automatic|enable|disable|language ID'
   Write-Host '       gesher-app cameras [rear CAMERA_ID | reset]'
   Write-Host '       gesher-app protected-launch APK'
