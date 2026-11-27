@@ -320,7 +320,7 @@ try {
     # Separate empty device; actual Binder descriptor transfer and cancellation.
     # The CI client never commits, so no native installation dialog can appear.
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$PSScriptRoot/run-package-installer.ps1" `
-        -Dir $Dir -ServicesDex $ServicesDex -SigningFixtures $SigningFixtures -EvidenceDir (Join-Path $EvidenceDir 'installer') -RequireBootImages
+        -Dir $Dir -ServicesDex $ServicesDex -ProbeApk $ProbeApk -SigningFixtures $SigningFixtures -EvidenceDir (Join-Path $EvidenceDir 'installer') -RequireBootImages
     if ($LASTEXITCODE -ne 0) { throw 'Actual Binder package-installer regression failed.' }
     Passed 'package installer actual Binder transport and cancellation'
     foreach ($chooserLocale in 'en-US', 'he-IL') {
