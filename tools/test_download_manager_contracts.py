@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import http.client
 import os
 from pathlib import Path
 import shutil
@@ -26,6 +27,7 @@ import subprocess
 import sys
 import tempfile
 import urllib.request
+import urllib.error
 
 ROOT = Path(__file__).resolve().parents[1]
 PRODUCTION = ('DownloadTransfer', 'DownloadRequests', 'DownloadQueue', 'DeviceConstraints',
@@ -51,8 +53,24 @@ def fetch(cache: Path, name: str) -> Path:
     if target.is_file() and hashlib.sha256(target.read_bytes()).hexdigest() == digest:
         return target
     cache.mkdir(parents=True, exist_ok=True)
-    with urllib.request.urlopen(url, timeout=120) as response:
-        data = response.read()
+    urls = [url]
+    if name == 'sqlite-jdbc-3.46.1.3.jar':
+        # Google's Central mirror is independent of Central's rate limiting.
+        urls.append('https://maven-central.storage-download.googleapis.com/maven2/'
+                    'org/xerial/sqlite-jdbc/3.46.1.3/sqlite-jdbc-3.46.1.3.jar')
+    for index, candidate in enumerate(urls):
+        try:
+            with urllib.request.urlopen(candidate, timeout=120) as response:
+                data = response.read()
+            break
+        except urllib.error.HTTPError as error:
+            error.close()
+            if index + 1 == len(urls) or (error.code != 429 and not 500 <= error.code < 600):
+                raise
+        except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.IncompleteRead):
+            if index + 1 == len(urls):
+                raise
+    # Content failures never trigger a mirror request or publish unverified bytes.
     actual = hashlib.sha256(data).hexdigest()
     if actual != digest:
         raise RuntimeError(f'{name}: SHA-256 {actual} does not match the pinned {digest}')
