@@ -620,8 +620,13 @@ jobs:
           fetch-depth: 0
       - name: Install media contract encoder and decoder tools
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ffmpeg
+          # FFmpeg comes from Ubuntu. Keep third-party repositories out of this update.
+          ubuntu_sources=(
+            -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/ubuntu.sources
+            -o Dir::Etc::sourceparts=-
+          )
+          sudo apt-get "${ubuntu_sources[@]}" update
+          sudo apt-get "${ubuntu_sources[@]}" install -y --no-install-recommends ffmpeg
 
       - name: Windows test shard coverage, dependencies and failure controls
         shell: pwsh
@@ -1032,8 +1037,13 @@ jobs:
 
       - name: Recorder lifecycle and complete-container size budgets
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ffmpeg
+          # FFmpeg comes from Ubuntu. Keep third-party repositories out of this update.
+          ubuntu_sources=(
+            -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/ubuntu.sources
+            -o Dir::Etc::sourceparts=-
+          )
+          sudo apt-get "${ubuntu_sources[@]}" update
+          sudo apt-get "${ubuntu_sources[@]}" install -y --no-install-recommends ffmpeg
           python3 tools/test_media_recorder_lifecycle.py
           python3 tools/test_media_recorder_rollover.py --sanitize
           python3 tools/test_mp4_rollover_work.py

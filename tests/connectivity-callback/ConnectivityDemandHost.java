@@ -349,8 +349,9 @@ public final class ConnectivityDemandHost {
                 new Class<?>[]{server("ActivityTaskManagerService"), server("PackageManagerService")}, atm, pm);
         field(am.getClass(), "mBroadcasts").set(am, broadcasts);
         Object created = make(server("Services$Created"), new Class<?>[]{server("PackageManagerService"),
-                server("ActivityTaskManagerService"), server("ActivityManagerService"), server("ClipboardService"), java.util.Map.class},
-                pm, atm, am, null, java.util.Map.of());
+                server("ActivityTaskManagerService"), server("ActivityManagerService"), server("ClipboardService"),
+                server("UsbService"), java.util.Map.class},
+                pm, atm, am, null, null, java.util.Map.of());
         field(server("Services"), "sLast").set(null, created);
         Object process = ((List<?>)get(atm, "mProcesses")).get(0);
         List<Intent> delivered = Collections.synchronizedList(new ArrayList<>());

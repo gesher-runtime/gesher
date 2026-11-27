@@ -1615,7 +1615,8 @@ public final class WifiServiceHost {
             WifiService service = new WifiService(h.am, h.atm, h.pm, () -> h.location,
                     h.radio, h.ui, blocked::add);
             h.location = false;
-            h.grant(h.owner, ACCESS, CHANGE);
+            // The manifest grants the normal Wi-Fi permissions; the harness starts with FINE granted.
+            h.revoke(h.owner, FINE);
             h.owner.call(() -> {
                 check(!service.startScan(h.owner.name(), "wifi"), "Scan blocked without location grant");
                 check(service.getScanResults(h.owner.name(), "wifi").isEmpty(), "Results empty without location grant");
