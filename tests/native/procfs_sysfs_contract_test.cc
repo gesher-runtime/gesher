@@ -1206,6 +1206,89 @@ static void TestDiskGetdents() {
   RemoveDirectoryW(root.c_str());
 }
 
+// Issue #649: native ART symbol resolvers parse maps pathnames with %s.
+// Use real mapped files, not a synthetic maps line, and reopen the advertised
+// path to prove it still names the backing file. Keep long library basenames.
+static void TestMappedPathAliases() {
+  wchar_t cwd[4096];
+  CHECK(GetCurrentDirectoryW(4096, cwd) > 0);
+  const std::wstring root = std::wstring(cwd) + L"\\procfs-path-" +
+                            std::to_wstring(GetCurrentProcessId());
+  CHECK(CreateDirectoryW(root.c_str(), nullptr));
+  for (const wchar_t* sub : {L"plain", L"space dir", L"\u05d3\u05d5\u05d3 \u05db\u05d4\u05df"}) {
+    const std::wstring dir = root + L"\\" + sub;
+    CHECK(CreateDirectoryW(dir.c_str(), nullptr));
+    wchar_t alias[4096];
+    const DWORD alias_length = GetShortPathNameW(dir.c_str(), alias, 4096);
+    const bool short_available = alias_length > 0 && alias_length < 4096 &&
+        std::wstring(alias).find_first_of(L" \t\r\n\v\f") == std::wstring::npos;
+    if (!short_available) printf("  (no whitespace-free directory alias: parser check skipped)\n");
+    for (const wchar_t* basename : {L"libart.so", L"libdexfile.so"}) {
+      const std::wstring file = dir + L"\\" + basename;
+      HANDLE handle = CreateFileW(file.c_str(), GENERIC_READ | GENERIC_WRITE,
+                                 FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                 nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+      CHECK(handle != INVALID_HANDLE_VALUE);
+      if (handle == INVALID_HANDLE_VALUE) continue;
+      char bytes[4096] = "mapped file identity";
+      DWORD written = 0;
+      CHECK(WriteFile(handle, bytes, sizeof(bytes), &written, nullptr) && written == sizeof(bytes));
+      HANDLE section = CreateFileMappingW(handle, nullptr, PAGE_READONLY, 0, 0, nullptr);
+      CHECK(section != nullptr);
+      void* view = section ? MapViewOfFile(section, FILE_MAP_READ, 0, 0, 0) : nullptr;
+      CHECK(view != nullptr);
+      if (view) {
+        const std::string maps = ReadAll("/proc/self/maps");
+        bool found = false;
+        for (size_t at = 0; at < maps.size();) {
+          unsigned long long lo = 0, hi = 0;
+          char name[4096] = {};
+          if (sscanf(maps.c_str() + at, "%llx-%llx %*s %*s %*s %*s %4095[^\n]", &lo, &hi, name) == 3 &&
+              lo == reinterpret_cast<uintptr_t>(view)) {
+            found = true;
+            const std::string path(name);
+            const std::string leaf = basename == std::wstring(L"libart.so") ? "/libart.so" : "/libdexfile.so";
+            CHECK(path.size() >= leaf.size() && path.substr(path.size() - leaf.size()) == leaf);
+            if (short_available) {
+              char token[4096] = {};
+              CHECK(sscanf(maps.c_str() + at, "%*s %*s %*s %*s %*s %4095s", token) == 1 && path == token);
+            }
+            const int fd = open(path.c_str(), O_RDONLY);
+            CHECK(fd >= 0);
+            if (fd >= 0) {
+              BY_HANDLE_FILE_INFORMATION original{}, reopened{};
+              CHECK(GetFileInformationByHandle(handle, &original));
+              CHECK(GetFileInformationByHandle(reinterpret_cast<HANDLE>(_get_osfhandle(fd)), &reopened));
+              CHECK(original.dwVolumeSerialNumber == reopened.dwVolumeSerialNumber &&
+                    original.nFileIndexHigh == reopened.nFileIndexHigh &&
+                    original.nFileIndexLow == reopened.nFileIndexLow);
+              char content[sizeof(bytes)] = {};
+              CHECK(read(fd, content, sizeof(content)) == sizeof(content) &&
+                    memcmp(content, bytes, sizeof(bytes)) == 0);
+              close(fd);
+            }
+            char link_name[128], target[4096];
+            snprintf(link_name, sizeof(link_name), "/proc/self/map_files/%llx-%llx", lo, hi);
+            const ssize_t n = readlink(link_name, target, sizeof(target));
+            CHECK(n > 0 && std::string(target, n) == path);
+            break;
+          }
+          const size_t end = maps.find('\n', at);
+          if (end == std::string::npos) break;
+          at = end + 1;
+        }
+        CHECK(found);
+        UnmapViewOfFile(view);
+      }
+      if (section) CloseHandle(section);
+      CloseHandle(handle);
+      CHECK(DeleteFileW(file.c_str()));
+    }
+    CHECK(RemoveDirectoryW(dir.c_str()));
+  }
+  CHECK(RemoveDirectoryW(root.c_str()));
+}
+
 int main(int argc, char** argv) {
   if (argc == 2 && strcmp(argv[1], "--boot-id") == 0) {
     std::string id = ReadAll("/proc/sys/kernel/random/boot_id");
@@ -1215,6 +1298,7 @@ int main(int argc, char** argv) {
   }
   TestAuxv();
   TestMaps();
+  TestMappedPathAliases();
   TestCmdline();
   TestCpuinfo();
   TestMeminfo();
