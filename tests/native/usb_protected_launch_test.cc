@@ -128,6 +128,11 @@ struct ChildEventEvidence {
   DWORD waited = WAIT_FAILED, wait_error = ERROR_SUCCESS;
   DWORD type_matches = 0, name_matches = 0, granted_access = 0;
 };
+struct PackagePipePinEvidence {
+  DWORD called = 0, present = 0, info_ok = 0, info_status = ERROR_NOT_READY, flags = 0;
+  DWORD granted_access = 0, type_matches = 0, name_matches = 0;
+  wchar_t name[kNamespacePathCharacters]{};
+};
 struct PackageLeafEvidence {
   DWORD absent_before_launch = 0, captured = 0, control = 0, status = ERROR_NOT_READY;
   DWORD policy_verified = 0, launch_pin_verified = 0;
@@ -138,6 +143,7 @@ struct PackageLeafEvidence {
   DWORD sacl_mutation_denials = 0, unprotected_reuse_rejected = 0, audit_reuse_rejected = 0;
   DWORD audit_preserved = 0, sacl_fixture_restored = 0;
   DWORD pipe_pin_verified = 0, pipe_policy_verified = 0, pipe_positive = 0;
+  PackagePipePinEvidence pipe_pin;
   DWORD pipe_denials = 0, pipe_reused = 0, pipe_changed_policy_rejected = 0;
   DWORD policy_own_read = 0, policy_other_denied = 0, policy_write_denials = 0;
   DWORD policy_replacement = 0, policy_bad_path_denied = 0;
@@ -1658,12 +1664,23 @@ Handle OpenPackagePipe(const storage::AuthorityLaunchSpec& spec, ACCESS_MASK acc
 }
 void ObservePackagePipe(const storage::AuthorityLaunch& launch, const storage::AuthorityLaunchSpec& spec,
                         HANDLE guest, HANDLE other, HANDLE desktop, PackageLeafEvidence* evidence) {
+  auto& observed = evidence->pipe_pin;
+  observed.called = 1;
   const HANDLE pipe = launch.package_pipe_objects();
-  DWORD flags = 0;
-  Require(pipe && GetHandleInformation(pipe, &flags) && !(flags & HANDLE_FLAG_INHERIT) &&
-      SessionObjectAccess(pipe) == (READ_CONTROL | SYNCHRONIZE) &&
-      SessionObjectText(pipe, ObjectTypeInformation) == L"File" &&
-      SessionObjectText(pipe, static_cast<OBJECT_INFORMATION_CLASS>(1)) == PackagePipePath(spec),
+  observed.present = pipe != nullptr;
+  if (pipe) {
+    observed.info_ok = GetHandleInformation(pipe, &observed.flags) != FALSE;
+    observed.info_status = observed.info_ok ? ERROR_SUCCESS : GetLastError();
+    if (observed.info_ok) {
+      observed.granted_access = SessionObjectAccess(pipe);
+      observed.type_matches = SessionObjectText(pipe, ObjectTypeInformation) == L"File";
+      const auto actual = SessionObjectText(pipe, static_cast<OBJECT_INFORMATION_CLASS>(1));
+      CopyNamespaceText(actual, observed.name);
+      observed.name_matches = actual == PackagePipePath(spec);
+    }
+  }
+  Require(observed.present && observed.info_ok && !(observed.flags & HANDLE_FLAG_INHERIT) &&
+      observed.granted_access == (READ_CONTROL | SYNCHRONIZE) && observed.type_matches && observed.name_matches,
       "pipe-leaf-launch-owns-exact-readonly-pin", ERROR_INVALID_HANDLE);
   evidence->pipe_pin_verified = 1;
   const Local descriptor = SessionObjectSecurity(pipe);
@@ -2461,6 +2478,15 @@ void PrintPackageNamespace(const PackageLeafEvidence& leaf, const NamespaceColli
       static_cast<unsigned long>(leaf.pipe_pin_verified), static_cast<unsigned long>(leaf.pipe_policy_verified),
       static_cast<unsigned long>(leaf.pipe_positive), static_cast<unsigned long>(leaf.pipe_denials),
       static_cast<unsigned long>(leaf.pipe_reused), static_cast<unsigned long>(leaf.pipe_changed_policy_rejected));
+  const auto& pipe = leaf.pipe_pin;
+  if (pipe.called)
+    std::printf("Protected pipe pin: handle=%lu info-ok=%lu info-win32=%lu flags=0x%08lx access=0x%08lx "
+        "expected=0x%08lx type-match=%lu name-match=%lu name=%ls\n",
+        static_cast<unsigned long>(pipe.present), static_cast<unsigned long>(pipe.info_ok),
+        static_cast<unsigned long>(pipe.info_status),
+        static_cast<unsigned long>(pipe.flags), static_cast<unsigned long>(pipe.granted_access),
+        static_cast<unsigned long>(READ_CONTROL | SYNCHRONIZE), static_cast<unsigned long>(pipe.type_matches),
+        static_cast<unsigned long>(pipe.name_matches), NamespacePathForPrint(pipe.name));
   std::printf("Protected SACL controls: mutation-denials=%lu preexisting-unprotected-rejected=%lu extra-audit-rejected=%lu audit-preserved=%lu fixture-restored=%lu\n",
       static_cast<unsigned long>(leaf.sacl_mutation_denials), static_cast<unsigned long>(leaf.unprotected_reuse_rejected),
       static_cast<unsigned long>(leaf.audit_reuse_rejected), static_cast<unsigned long>(leaf.audit_preserved),
