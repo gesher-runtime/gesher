@@ -752,6 +752,22 @@
       "en": "Ready",
       "he": "מוכן"
     },
+    "cp_btn_sponsor": {
+      "en": "Say thanks & support",
+      "he": "אומרים תודה ותומכים"
+    },
+    "cp_sponsor_title": {
+      "en": "Enjoying Gesher?",
+      "he": "נהנים מגשר?"
+    },
+    "cp_sponsor_description": {
+      "en": "Your support is a way to say thanks for Gesher and help me keep building and improving it.",
+      "he": "התמיכה שלכם היא דרך לומר תודה על גשר ולעזור לי להמשיך לפתח ולשפר אותו."
+    },
+    "cp_sponsor_open_failed": {
+      "en": "Could not open the sponsorship page: ⁨{0}⁩",
+      "he": "לא ניתן לפתוח את עמוד התמיכה: ⁨{0}⁩"
+    },
     "cp_btn_open_logs": {
       "en": "Open logs location",
       "he": "פתח את מיקום הלוגים"
