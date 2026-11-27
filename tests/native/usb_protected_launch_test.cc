@@ -2840,13 +2840,14 @@ void ObserveGuestLoader(HANDLE token, const storage::AuthorityLaunchSpec& origin
 
 // Test-only controls: the actual private identity, same desktop/environment,
 // same mitigation/job and exact guest default DACL, without lowbox membership.
-// Report medium and low integrity separately. Never substitute for the guest.
+// Both rows use medium integrity and vary only the process-object DACL.
+// Never substitute for the original guest or change production security.
 void ObservePrivateLoader(HANDLE source, HANDLE lowbox, const storage::AuthorityLaunchSpec& spec,
                          GuestLoaderEvidence (&rows)[2][std::size(kGuestLoaderProbes)]) {
   const ULONGLONG deadline = std::min(config.worker_deadline, GetTickCount64() + 5000);
-  for (size_t low = 0; low < 2; ++low) for (size_t i = 0; i < std::size(kGuestLoaderProbes); ++i) {
+  for (size_t variant = 0; variant < 2; ++variant) for (size_t i = 0; i < std::size(kGuestLoaderProbes); ++i) {
     if (GetTickCount64() >= deadline) return;
-    auto& row = rows[low][i];
+    auto& row = rows[variant][i];
     row.attempted = 1;
     Handle process, thread;
     try {
@@ -2863,7 +2864,6 @@ void ObservePrivateLoader(HANDLE source, HANDLE lowbox, const storage::Authority
             SetTokenInformation(token.get(), type, buffer.data(), bytes), "private-control-token-value");
       };
       copy(TokenDefaultDacl);
-      if (low) copy(TokenIntegrityLevel);
       DWORD bytes = 0, session = MAXDWORD, contained = 1;
       TOKEN_STATISTICS a{}, b{};
       Require(GetTokenInformation(source, TokenStatistics, &a, sizeof(a), &bytes) &&
@@ -2874,8 +2874,40 @@ void ObservePrivateLoader(HANDLE source, HANDLE lowbox, const storage::Authority
           a.AuthenticationId.LowPart == b.AuthenticationId.LowPart &&
           a.AuthenticationId.HighPart == b.AuthenticationId.HighPart,
           "private-control-identity", ERROR_ACCESS_DENIED);
-      const Local descriptor = Security();
-      SECURITY_ATTRIBUTES security{sizeof(security), descriptor.get(), FALSE};
+      // Match AuthorityLaunch's process/thread policy exactly. Security() is
+      // for administrator-owned fixture files and is not this object policy.
+      PSECURITY_DESCRIPTOR raw_descriptor = nullptr;
+      Require(ConvertStringSecurityDescriptorToSecurityDescriptorW(
+          L"O:SYG:SYD:P(A;;0x001fffff;;;SY)", SDDL_REVISION_1,
+          &raw_descriptor, nullptr), "private-control-authority-object-policy");
+      const Local descriptor(raw_descriptor);
+      // Second row changes only these disposable process/thread object DACLs:
+      // use the same exact token default ACL already installed for all rows.
+      // Owner/group remain SYSTEM. This is never an authority/guest fallback.
+      SECURITY_DESCRIPTOR default_objects{};
+      std::vector<BYTE> object_acl;
+      void* object_descriptor = descriptor.get();
+      if (variant == 1) {
+        DWORD acl_bytes = 0;
+        GetTokenInformation(token.get(), TokenDefaultDacl, nullptr, 0, &acl_bytes);
+        Require(acl_bytes && acl_bytes <= 65536, "private-control-object-acl-size", ERROR_INVALID_DATA);
+        object_acl.resize(acl_bytes);
+        Require(GetTokenInformation(token.get(), TokenDefaultDacl, object_acl.data(), acl_bytes, &acl_bytes),
+            "private-control-object-acl");
+        PSID owner = nullptr, group = nullptr;
+        BOOL defaulted = FALSE;
+        auto* acl = reinterpret_cast<TOKEN_DEFAULT_DACL*>(object_acl.data())->DefaultDacl;
+        Require(GetSecurityDescriptorOwner(descriptor.get(), &owner, &defaulted) &&
+            GetSecurityDescriptorGroup(descriptor.get(), &group, &defaulted) &&
+            InitializeSecurityDescriptor(&default_objects, SECURITY_DESCRIPTOR_REVISION) &&
+            SetSecurityDescriptorOwner(&default_objects, owner, FALSE) &&
+            SetSecurityDescriptorGroup(&default_objects, group, FALSE) &&
+            SetSecurityDescriptorDacl(&default_objects, TRUE, acl, FALSE) &&
+            SetSecurityDescriptorControl(&default_objects, SE_DACL_PROTECTED, SE_DACL_PROTECTED),
+            "private-control-object-descriptor");
+        object_descriptor = &default_objects;
+      }
+      SECURITY_ATTRIBUTES security{sizeof(security), object_descriptor, FALSE};
       SIZE_T needed = 0;
       InitializeProcThreadAttributeList(nullptr, 2, 0, &needed);
       std::vector<BYTE> memory(needed);
@@ -2917,6 +2949,59 @@ void ObservePrivateLoader(HANDLE source, HANDLE lowbox, const storage::Authority
           CREATE_NO_WINDOW, environment.data(), spec.directory, &startup.StartupInfo, &child),
           "private-control-create");
       process.reset(child.hProcess); thread.reset(child.hThread);
+      // Read back both real kernel objects before comparing loader results.
+      const auto verify_acl = [&](HANDLE object) {
+        DWORD size = 0;
+        constexpr SECURITY_INFORMATION info = OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION |
+            DACL_SECURITY_INFORMATION;
+        GetKernelObjectSecurity(object, info, nullptr, 0, &size);
+        Require(size && size <= 65536, "private-control-object-security-size", ERROR_INVALID_DATA);
+        std::vector<BYTE> observed(size);
+        Require(GetKernelObjectSecurity(object, info, observed.data(), size, &size),
+            "private-control-object-security");
+        PACL expected = nullptr, actual = nullptr;
+        BOOL present = FALSE, defaulted = FALSE;
+        PSID expected_owner = nullptr, actual_owner = nullptr;
+        PSID expected_group = nullptr, actual_group = nullptr;
+        Require(GetSecurityDescriptorOwner(object_descriptor, &expected_owner, &defaulted) &&
+            GetSecurityDescriptorOwner(observed.data(), &actual_owner, &defaulted) &&
+            GetSecurityDescriptorGroup(object_descriptor, &expected_group, &defaulted) &&
+            GetSecurityDescriptorGroup(observed.data(), &actual_group, &defaulted) &&
+            expected_owner && actual_owner && expected_group && actual_group &&
+            IsValidSid(expected_owner) && IsValidSid(actual_owner) &&
+            IsValidSid(expected_group) && IsValidSid(actual_group) &&
+            IsWellKnownSid(expected_owner, WinLocalSystemSid) &&
+            IsWellKnownSid(expected_group, WinLocalSystemSid) &&
+            EqualSid(expected_owner, actual_owner) && EqualSid(expected_group, actual_group),
+            "private-control-object-owner-group", ERROR_INVALID_OWNER);
+        Require(GetSecurityDescriptorDacl(object_descriptor, &present, &expected, &defaulted) &&
+            present && expected && IsValidAcl(expected) &&
+            GetSecurityDescriptorDacl(observed.data(), &present, &actual, &defaulted) &&
+            present && actual && IsValidAcl(actual) && expected->AceCount == actual->AceCount,
+            "private-control-object-acl-shape", ERROR_INVALID_ACL);
+        SECURITY_DESCRIPTOR_CONTROL control{};
+        DWORD revision = 0;
+        Require(GetSecurityDescriptorControl(observed.data(), &control, &revision) &&
+            (control & SE_DACL_PROTECTED), "private-control-protected-object", ERROR_INVALID_ACL);
+        for (DWORD ace = 0; ace < expected->AceCount; ++ace) {
+          void* a = nullptr; void* b = nullptr;
+          Require(GetAce(expected, ace, &a) && GetAce(actual, ace, &b), "private-control-object-ace");
+          const auto* header = static_cast<ACE_HEADER*>(a);
+          Require(header->AceType == ACCESS_ALLOWED_ACE_TYPE &&
+              header->AceSize == static_cast<ACE_HEADER*>(b)->AceSize,
+              "private-control-object-ace-type", ERROR_INVALID_ACL);
+          std::vector<BYTE> mapped(header->AceSize);
+          std::memcpy(mapped.data(), a, mapped.size());
+          auto* allowed = reinterpret_cast<ACCESS_ALLOWED_ACE*>(mapped.data());
+          Require(!(allowed->Mask & (GENERIC_READ | GENERIC_WRITE | GENERIC_EXECUTE)),
+              "private-control-object-ace-mask", ERROR_INVALID_ACL);
+          GENERIC_MAPPING mapping{0, 0, 0, PROCESS_ALL_ACCESS};
+          MapGenericMask(&allowed->Mask, &mapping);
+          Require(std::memcmp(mapped.data(), b, mapped.size()) == 0,
+              "private-control-object-acl-readback", ERROR_INVALID_ACL);
+        }
+      };
+      verify_acl(process.get()); verify_acl(thread.get());
       row.start_status = ERROR_SUCCESS;
       row.resume_status = ResumeThread(thread.get()) == 1 ? ERROR_SUCCESS : ERROR_INVALID_STATE;
       if (!row.resume_status) {
@@ -3692,10 +3777,11 @@ DWORD Controller(bool explicit_scm_control, bool explicit_lowbox_trace) {
             static_cast<unsigned long>(probe.wait_status), static_cast<unsigned long>(probe.exit_code),
             static_cast<unsigned long>(probe.stop_status));
     }
-    for (size_t low = 0; low < 2; ++low) for (size_t i = 0; i < std::size(kGuestLoaderProbes); ++i) {
-      const auto& p = evidence.private_loader[low][i];
-      if (p.attempted) std::printf("Protected private loader control: low-integrity=%zu image=%ls start=%lu stage=%.*s resume=%lu wait=0x%08lx exit-read=%lu exit=0x%08lx stop=%lu\n",
-          low, kGuestLoaderProbes[i], static_cast<unsigned long>(p.start_status),
+    for (size_t variant = 0; variant < 2; ++variant) for (size_t i = 0; i < std::size(kGuestLoaderProbes); ++i) {
+      const auto& p = evidence.private_loader[variant][i];
+      if (p.attempted) std::printf("Protected private loader control: low-integrity=%lu object-policy=%s image=%ls start=%lu stage=%.*s resume=%lu wait=0x%08lx exit-read=%lu exit=0x%08lx stop=%lu\n",
+          0ul, variant == 1 ? "guest-default" : "SYSTEM-only",
+          kGuestLoaderProbes[i], static_cast<unsigned long>(p.start_status),
           static_cast<int>(sizeof(p.stage)), p.stage, static_cast<unsigned long>(p.resume_status),
           static_cast<unsigned long>(p.wait_status), static_cast<unsigned long>(p.exit_read),
           static_cast<unsigned long>(p.exit_code), static_cast<unsigned long>(p.stop_status));

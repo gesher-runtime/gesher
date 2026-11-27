@@ -169,6 +169,8 @@ template<class Owner, class ThreadType = Thread, class TransactionType = Transac
 }
 }
 int main() {
+  // The ordinary broker lifecycle fixture does not enable protected admission.
+  @USB_HANDLER_REFERENCE@
   Cycle(false, false); // Initialize the CRT/thread machinery outside accounting.
   accounting::enabled = true;
   for (int n = 0; n < 100; ++n) Cycle(n % 2, n % 3 == 0);

@@ -39,10 +39,14 @@ def main():
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes((ROOT / 'compat/posix/src' / name).read_bytes())
         source = work / 'lifetime.cc'
-        source.write_text((ROOT / 'tests/native/binder_lifetime_test.cc').read_text().replace('@BROKER_SOURCE@', broker.as_posix()))
+        template = (ROOT / 'tests/native/binder_lifetime_test.cc').read_text()
+        usb_handler_present = 'void ServeUsbProtectedConnection(' in broker.read_text(encoding='utf-8')
+        source.write_text(template.replace('@BROKER_SOURCE@', broker.as_posix()).replace(
+            '@USB_HANDLER_REFERENCE@', '(void)&ServeUsbProtectedConnection;' if usb_handler_present else ''))
         binary = args.output.resolve() if args.output else work / 'lifetime.exe'
         binary.parent.mkdir(parents=True, exist_ok=True)
         subprocess.run(shlex.split(args.cxx) + ['-std=c++20', '-O1', '-g', '-Wall', '-Wextra', '-Werror', '-fno-exceptions', '-static', '-pthread',
+                       '-D_WIN32_WINNT=0x0A00',
                        '-I' + str(ROOT / 'compat/posix/include'), '-idirafter', str(args.aosp_dir / 'bionic/libc/kernel/uapi'),
                        # binderd's sandbox mode (ADR 0090): its pipe descriptor and client checks.
                        str(source), str(ROOT / 'compat/framework/app_container.cc'), '-o', str(binary),
