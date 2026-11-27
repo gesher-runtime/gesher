@@ -3,6 +3,7 @@
 #include <windows.h>
 #include <dirent.h>
 #include <fcntl.h>
+#include <sqlite3.h>
 #include <unistd.h>
 #include <gesher/storage_policy.h>
 #include <gesher/binder_endpoint.h>
@@ -63,6 +64,16 @@ bool List(const std::string& path, const char* expected) {
   }
   closedir(dir);
   return found;
+}
+
+bool CheckSqliteAccess(const std::string& path, bool expected_write) {
+  auto* vfs = sqlite3_vfs_find(nullptr);
+  char name[32768]{};
+  int readable = 0, writable = -1;
+  return vfs && vfs->xFullPathname(vfs, path.c_str(), sizeof(name), name) == SQLITE_OK &&
+      vfs->xAccess(vfs, name, SQLITE_ACCESS_READ, &readable) == SQLITE_OK && readable == 1 &&
+      vfs->xAccess(vfs, name, SQLITE_ACCESS_READWRITE, &writable) == SQLITE_OK &&
+      writable == static_cast<int>(expected_write);
 }
 
 template <typename Predicate>
@@ -135,6 +146,8 @@ int Guest(const fs::path& dir, const std::wstring& mode) {
     ok &= Check(stat(photo.c_str(), &info) == 0 && info.st_size == 1 &&
         access(photo.c_str(), R_OK) == 0 && access(photo.c_str(), W_OK) == -1,
         "metadata and access follow host media authorization");
+    ok &= Check(CheckSqliteAccess(photo, false) && CheckSqliteAccess(root + "/DCIM", false),
+        "SQLite reports the real read-only media grant for a file and directory");
     const int fd = open((root + "/DCIM").c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
     const int child = fd < 0 ? -1 : openat(fd, "photo.jpg", O_RDONLY | O_CLOEXEC);
     if (child >= 0) close(child);
@@ -159,6 +172,8 @@ int Guest(const fs::path& dir, const std::wstring& mode) {
     const auto made = root + "/new";
     const auto first = made + "/first.txt";
     const auto second = made + "/second.txt";
+    ok &= Check(CheckSqliteAccess(photo, true) && CheckSqliteAccess(root + "/DCIM", true),
+        "SQLite reports the authenticated manager write grant for a file and directory");
     ok &= Check(Read(movie, 'V') && mkdir(made.c_str(), 0755) == 0 && Write(first) &&
         rename(first.c_str(), second.c_str()) == 0 && Read(second, 'x') && unlink(second.c_str()) == 0 &&
         rmdir(made.c_str()) == 0, "manager reads and writes through actual rooted file operations");

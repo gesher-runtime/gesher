@@ -29,6 +29,9 @@ try {
   Check 'sandbox: real AppContainer preserves Binder admission, record locks and directory descriptors' {
     & "$Dir/appcontainer_record_lock_probe.exe" $Dir (Join-Path $root 'sandbox-record-locks')
   } @('protected server drives fixture: ok')
+  Check 'sandbox: actual SQLite WAL and metadata operations use the exact rooted AppContainer scope' {
+    & "$Dir/rooted_storage_host_probe.exe" (Join-Path $root 'sandbox-rooted-sqlite')
+  } @('production rooted host serves only exact scope and selected area: ok')
   Check 'sandbox: installed AppContainer mediates scoped and shared storage operations' {
     & "$Dir/appcontainer_installed_media_probe.exe" $Dir (Join-Path $root 'sandbox-installed-media')
   } @('installed media probe all passed')

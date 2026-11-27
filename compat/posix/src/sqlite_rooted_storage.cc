@@ -5,6 +5,7 @@
 // the path-based file operations need a broker when the original filename is
 // in a contained standalone application's admitted data roots.
 #include <errno.h>
+#include <sqlite3.h>
 #include <windows.h>
 
 #include "rooted_storage_client.h"
@@ -48,6 +49,23 @@ bool ReadInfo(const storage::Selection& path, BY_HANDLE_FILE_INFORMATION* info) 
   return okay;
 }
 }  // namespace
+
+extern "C" int gesher_sqlite_rooted_access_w(LPCWSTR name, int access) {
+  if (access != SQLITE_ACCESS_READWRITE) return 1;
+  const auto path = storage::Lookup(name);
+  if (path.error != 0) return 0;
+  if (!path.IsInstalledMedia()) return 1;
+  // xAccess reads filesystem attributes through the broker afterward. Those
+  // attributes cannot express an app's current read-only Android grant.
+  // Match POSIX access(W_OK): its metadata-only request works for directories
+  // and files, checks the live grant, and never creates or changes an object.
+  HANDLE handle;
+  constexpr DWORD share = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
+  const uint32_t flags = wire::kMetadataWrite | wire::kShareOverride | (share << wire::kShareShift);
+  if (storage::Open(path, flags, &handle) != 0) return 0;
+  CloseHandle(handle);
+  return 1;
+}
 
 extern "C" HANDLE WINAPI gesher_sqlite_create_file_w(LPCWSTR name, DWORD access, DWORD share,
     LPSECURITY_ATTRIBUTES security, DWORD disposition, DWORD attributes, HANDLE template_file) {

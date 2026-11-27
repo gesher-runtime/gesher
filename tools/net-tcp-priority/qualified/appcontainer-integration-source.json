@@ -1,7 +1,7 @@
 {
   "baseline": "ff2c1870053c9d0332e6abef07a25fc282d384b5",
   "native_runtime_approval": false,
-  "patch_sha256": "b1faf9450fe3d70b44117811b391171316f44eac6ee5b2b519462d1d21f22f6c",
+  "patch_sha256": "b04a2ad63709a80f937fb168abd1d314df9d28357014234a57b00c5b97e5a784",
   "paths": [
     "compat/binder/binderd.cc",
     "compat/bionic/process_bionic.cc",
@@ -123,9 +123,9 @@
     "compat/posix/src/record_lock_duplicate.cc": "abef70af64712de119341bb4f2aa625a02833ab76f92391e444221081a306f8c",
     "compat/posix/src/record_lock_operation.cc": "5a61fd0f2c6dcd3204205cbbc35fb125efea21b155530816d9a0204e974d079f",
     "compat/posix/src/record_lock_operation.h": "90634149c714c0c0f8ac0e7e2af46a91f750981456ff90ac473243e8c661020a",
-    "compat/posix/src/sqlite_path.cc": "d95bfd33272b53af59d5f3b0783f661c8bb454d67bd033565c1f711fa8ddd5b9",
+    "compat/posix/src/sqlite_path.cc": "f6c24b21358231d0eeb2d4cf5823bfcbb3a148910b23c4d5b06c7f7b243115a2",
     "compat/posix/src/stat.cc": "2ce3c8ec64313dba48777d65273a40876215bca1573d1b3cd5bfddc57d331529",
-    "compat/posix/src/storage_policy.cc": "4761be29caec3b6dc7dac64fb2bae099cc88c051cbaab25a7af9cf417fc8ace4",
+    "compat/posix/src/storage_policy.cc": "71b59a1852ece2d563d68da76df84c01989b91034b8f7d4ac295066307cef90b",
     "compat/posix/src/storage_policy.h": "9498785f85ba2784217180bb8363adf26598fef9785353a38eec1ff33653cb03",
     "compat/posix/src/system.cc": "11a9a339da09785127a546f4fa98ad8f23d40c4e50e28e781cb1a401d0a63165",
     "compat/posix/src/system_properties.cc": "ce1ebd4a654ddddedb921499f6ae1801eda100a2d286f228f7043f22874ada4f",

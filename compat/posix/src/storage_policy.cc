@@ -492,6 +492,11 @@ bool CheckExternalStorageHandle(HANDLE handle, AccessKind kind) {
   if (length && length < 32768) {
     return CheckCanonicalPath(identity, LexicalCanonicalize(std::wstring(path, length)), kind);
   }
+  // Standalone roots have their own sealed NT identities. The actual handle
+  // can be resolved through one of those roots even without a media NT root.
+  if (auto rooted = storage_root::DescriptorPath(handle); !rooted.empty()) {
+    return CheckCanonicalPath(identity, LexicalCanonicalize(std::move(rooted)), kind);
+  }
   const auto& root = identity.media_nt_root;
   if (identity.media_root.empty() || !StartsWithIgnoreCase(root, L"\\Device\\")) {
     return errno = EACCES, false;

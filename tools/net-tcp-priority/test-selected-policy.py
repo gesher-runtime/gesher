@@ -1216,7 +1216,7 @@ def check_appcontainer_donor_receipts():
 APPCONTAINER_INTEGRATION_BASE = 'ff2c1870053c9d0332e6abef07a25fc282d384b5'
 APPCONTAINER_INTEGRATION_PATCH = 'tools/net-tcp-priority/qualified/appcontainer-integration-source.patch'
 APPCONTAINER_INTEGRATION_QUALIFICATION = 'tools/net-tcp-priority/qualified/appcontainer-integration-source.json'
-APPCONTAINER_INTEGRATION_QUALIFICATION_SHA256 = '0419885c149eb677857efdbd5f5af1ee9129b32c5d1428bfc764c18eb515e751'
+APPCONTAINER_INTEGRATION_QUALIFICATION_SHA256 = '3d5813b92bd74a796d391a48cd9ef29d78453ee246656fc05ccff3471389e22d'
 # In addition to the donor identity surface, the merged startup/fork path
 # intersects the exact USB and child-wait source qualification.
 APPCONTAINER_INTEGRATION_PATHS = sorted(APPCONTAINER_IDENTITY_SOURCE_SHA256.keys() | {

@@ -1,6 +1,7 @@
 // Copyright (C) 2026 The Gesher Authors
 // SPDX-License-Identifier: Apache-2.0
 #include <windows.h>
+#include <sqlite3.h>
 #include <sys/statvfs.h>
 
 #include <cstdio>
@@ -8,6 +9,7 @@
 #include <fstream>
 
 #include <gesher/binder_bootstrap.h>
+#include <gesher/cohost_bootstrap.h>
 #include <gesher/filesystem_capacity.h>
 #include <gesher/rooted_storage_wire.h>
 
@@ -20,6 +22,8 @@ namespace ac = gesher::appcontainer;
 namespace fs = std::filesystem;
 namespace storage = gesher::rooted_storage;
 namespace wire = gesher::rooted_storage_wire;
+namespace boot = gesher::binder_bootstrap;
+namespace cohost = gesher::cohost_bootstrap;
 using gesher::binder_bootstrap::Transfer;
 using gesher::binder_peer::OwnedHandle;
 
@@ -98,6 +102,52 @@ bool CheckCapacity(const wchar_t* name, uint64_t expected_total) {
                "Android /data status has no guest-specified path");
 }
 
+bool SqliteValue(sqlite3* db, const char* sql, std::string_view expected) {
+  sqlite3_stmt* stmt = nullptr;
+  const int prepared = sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr);
+  const auto* value = prepared == SQLITE_OK && sqlite3_step(stmt) == SQLITE_ROW
+      ? sqlite3_column_text(stmt, 0) : nullptr;
+  const bool matches = value && reinterpret_cast<const char*>(value) == expected;
+  return sqlite3_finalize(stmt) == SQLITE_OK && matches;
+}
+
+bool CheckSqlite(const fs::path& seed) {
+  const auto& scope = cohost::Current();
+  if (!Check(scope && !scope.storage_pipe.empty(), "SQLite guest has the sealed standalone storage scope")) return false;
+  const auto name = (seed.parent_path() / L"rooted.db").u8string();
+  const auto* path = reinterpret_cast<const char*>(name.c_str());
+  sqlite3* writer = nullptr;
+  sqlite3* reader = nullptr;
+  const int first = sqlite3_open_v2(path, &writer, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, nullptr);
+  bool okay = Check(first == SQLITE_OK, "SQLite creates a database through the real rooted Win32 VFS");
+  if (!okay) {
+    std::fprintf(stderr, "rooted SQLite open: %d (extended %d, system %d) %s\n", first,
+                 sqlite3_extended_errcode(writer), sqlite3_system_errno(writer), sqlite3_errmsg(writer));
+  }
+  if (okay) {
+    okay = Check(SqliteValue(writer, "PRAGMA journal_mode=WAL", "wal") &&
+                 sqlite3_exec(writer, "CREATE TABLE rows(value); INSERT INTO rows VALUES(42);",
+                              nullptr, nullptr, nullptr) == SQLITE_OK,
+                 "rooted SQLite writes a committed row using WAL and shared memory");
+  }
+  if (okay) {
+    okay = Check(sqlite3_open_v2(path, &reader, SQLITE_OPEN_READONLY, nullptr) == SQLITE_OK &&
+                 SqliteValue(reader, "SELECT value FROM rows", "42"),
+                 "a concurrent read-only SQLite connection sees the actual committed row");
+  }
+  if (reader && sqlite3_close(reader) != SQLITE_OK) okay = false;
+  if (writer && sqlite3_close(writer) != SQLITE_OK) okay = false;
+  if (!okay) return false;
+  auto* vfs = sqlite3_vfs_find(nullptr);
+  char full[32768]{};
+  int exists = 0;
+  return Check(vfs && vfs->xFullPathname(vfs, path, sizeof(full), full) == SQLITE_OK &&
+               vfs->xAccess(vfs, full, SQLITE_ACCESS_EXISTS, &exists) == SQLITE_OK && exists &&
+               vfs->xDelete(vfs, full, 0) == SQLITE_OK &&
+               vfs->xAccess(vfs, full, SQLITE_ACCESS_EXISTS, &exists) == SQLITE_OK && !exists,
+               "SQLite uses brokered metadata and deletes its actual database");
+}
+
 int Guest(const wchar_t* name, const wchar_t* host_path, const wchar_t* volume_total, bool denied) {
   if (!Check(Lowbox(), "fixture uses an actual Windows AppContainer")) return 1;
   bool opened = false;
@@ -164,7 +214,12 @@ int Guest(const wchar_t* name, const wchar_t* host_path, const wchar_t* volume_t
     if (handles_now <= handles_before) break;
     Sleep(5);
   } while (GetTickCount64() < deadline);
-  return Check(handles_now == handles_before, "abandoned offer is withdrawn by the host") ? 0 : 1;
+  const fs::path seed(host_path);
+  const auto data = seed.parent_path().parent_path().native();
+  return Check(handles_now == handles_before, "abandoned offer is withdrawn by the host") &&
+      _wputenv_s(L"GESHER_APP_PACKAGE", L"com.gesher.test.rooted") == 0 &&
+      _wputenv_s(L"ANDROID_DATA", data.c_str()) == 0 &&
+      _wputenv_s(L"GESHER_STORAGE_MEDIA_NT_PATH", L"") == 0 && CheckSqlite(seed) ? 0 : 1;
 }
 
 struct Child {
@@ -172,7 +227,8 @@ struct Child {
   OwnedHandle thread;
 };
 
-Child Spawn(const fs::path& executable, const std::wstring& arguments, PSID sid, const fs::path& log) {
+Child Spawn(const fs::path& executable, const std::wstring& arguments, PSID sid, const fs::path& log,
+            boot::Startup* record = nullptr) {
   SECURITY_CAPABILITIES capabilities{sid, nullptr, 0, 0};
   SECURITY_ATTRIBUTES inherit{sizeof(inherit), nullptr, TRUE};
   HANDLE output = CreateFileW(log.c_str(), GENERIC_WRITE, FILE_SHARE_READ, &inherit,
@@ -181,7 +237,13 @@ Child Spawn(const fs::path& executable, const std::wstring& arguments, PSID sid,
                              OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
   OwnedHandle output_owner(output), input_owner(input);
   if (output == INVALID_HANDLE_VALUE || input == INVALID_HANDLE_VALUE) return {};
-  HANDLE inherited[] = {input, output};
+  std::vector<HANDLE> inherited{input, output};
+  if (record) {
+    inherited.push_back(boot::DecodeHandle(record->cohost_section));
+    inherited.push_back(boot::DecodeHandle(record->cohost_host));
+    record->null_device = boot::EncodeHandle(input);
+    record->broker = record->cohost_host;
+  }
   SIZE_T bytes = 0;
   InitializeProcThreadAttributeList(nullptr, 2, 0, &bytes);
   std::vector<BYTE> storage(bytes);
@@ -190,13 +252,17 @@ Child Spawn(const fs::path& executable, const std::wstring& arguments, PSID sid,
   const bool configured = UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
                                                      &capabilities, sizeof(capabilities), nullptr, nullptr) &&
       UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
-                               inherited, sizeof(inherited), nullptr, nullptr);
+                               inherited.data(), inherited.size() * sizeof(HANDLE), nullptr, nullptr);
   STARTUPINFOEXW startup{};
   startup.StartupInfo.cb = sizeof(startup);
   startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
   startup.StartupInfo.hStdInput = input;
   startup.StartupInfo.hStdOutput = output;
   startup.StartupInfo.hStdError = output;
+  if (record) {
+    startup.StartupInfo.lpReserved2 = reinterpret_cast<BYTE*>(record);
+    startup.StartupInfo.cbReserved2 = sizeof(*record);
+  }
   startup.lpAttributeList = attributes;
   PROCESS_INFORMATION child{};
   std::wstring command = L"\"" + executable.wstring() + L"\" " + arguments;
@@ -212,6 +278,19 @@ OwnedHandle Pin(const fs::path& path) {
                              FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
                              FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
   return result == INVALID_HANDLE_VALUE ? OwnedHandle() : OwnedHandle(result);
+}
+
+std::wstring ObjectName(HANDLE object, DWORD volume) {
+  wchar_t path[32768];
+  const DWORD used = GetFinalPathNameByHandleW(object, path, std::size(path), FILE_NAME_NORMALIZED | volume);
+  return used && used < std::size(path) ? std::wstring(path, used) : std::wstring{};
+}
+
+bool StorageRoot(HANDLE root, const fs::path& path, auto* original, auto* dos, auto* nt) {
+  const auto canonical = ObjectName(root, VOLUME_NAME_DOS);
+  const auto native = ObjectName(root, VOLUME_NAME_NT);
+  return !canonical.empty() && !native.empty() && cohost::Store(original, path.native()) &&
+      cohost::Store(dos, canonical) && cohost::Store(nt, native);
 }
 
 bool CheckUnisolatedEnrollment(HANDLE contained, PSID sid) {
@@ -259,11 +338,34 @@ bool Host(const fs::path& dir, const fs::path& executable, const std::wstring& p
   OwnedHandle root_external = Pin(dir / L"external");
   if (!root_ce || !root_de || !root_external) return false;
   storage::Server server({root_ce.get(), root_de.get(), {root_external.get()}});
+  using Metadata = cohost::Metadata;
+  OwnedHandle mapping(CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE,
+      0, sizeof(Metadata), nullptr));
+  auto* record = mapping ? static_cast<Metadata*>(MapViewOfFile(mapping.get(), FILE_MAP_WRITE, 0, 0, sizeof(Metadata))) : nullptr;
+  if (!record) return false;
+  new (record) Metadata;
+  const bool stored = cohost::Store(&record->storage_pipe, server.name()) &&
+      StorageRoot(root_ce.get(), dir / L"ce", &record->credential, &record->credential_canonical, &record->credential_nt) &&
+      StorageRoot(root_de.get(), dir / L"de", &record->device, &record->device_canonical, &record->device_nt);
+  UnmapViewOfFile(record);
+  auto inherit = [](HANDLE handle, DWORD access) {
+    HANDLE copy = nullptr;
+    DuplicateHandle(GetCurrentProcess(), handle, GetCurrentProcess(), &copy, access, TRUE, 0);
+    return OwnedHandle(copy);
+  };
+  const auto section = inherit(mapping.get(), FILE_MAP_READ);
+  const auto host = inherit(GetCurrentProcess(), PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE);
+  if (!stored || !section || !host) return false;
+  boot::Startup startup;
+  startup.endpoint = boot::Endpoint::kStandalone;
+  startup.uid = 11005;
+  startup.cohost_section = boot::EncodeHandle(section.get());
+  startup.cohost_host = boot::EncodeHandle(host.get());
   struct statvfs legacy{};
   if (statvfs("/data", &legacy) != 0) return false;
   const auto arguments = L" \"" + server.name() + L"\" \"" + (dir / L"ce/seed").wstring() + L"\" " +
       std::to_wstring(legacy.f_blocks * legacy.f_frsize);
-  Child legitimate = Spawn(fixture, L"--guest" + arguments, sid.value, dir / L"guest.log");
+  Child legitimate = Spawn(fixture, L"--guest" + arguments, sid.value, dir / L"guest.log", &startup);
   Child outside = Spawn(fixture, L"--outside" + arguments, sid.value, dir / L"outside.log");
   OwnedHandle job(CreateJobObjectW(nullptr, nullptr));
   const bool ready = legitimate.process && outside.process && job &&
