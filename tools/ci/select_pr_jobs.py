@@ -11,6 +11,8 @@ import sys
 
 import yaml
 
+from preflight_plan import GROUPS as PREFLIGHT_GROUPS, SCRIPT_GROUPS
+
 
 ROOT = Path(__file__).resolve().parents[2]
 GATES = {"ci": "ci-required", "arm64-windows": "arm64-required"}
@@ -51,6 +53,22 @@ SCOPED = {
     "tests/e2e/test_evidence_process.py": {"e2e"},
     "tests/e2e/render-readiness.test.ps1": {"e2e"},
 }
+SHARDS = ("native", "desktop", "windowing", "services", "contracts", "media", "compilation")
+WINDOWS = ("windows-2022", "windows-2025")
+
+
+def track_shards():
+    """Use the same manifest as the actual Windows track loader."""
+    manifest = json.loads((ROOT / "tests/windows/test-shards.json").read_text(encoding="utf-8"))
+    if set(manifest) != set(SHARDS):
+        raise ValueError("unknown or missing Windows shard")
+    consumers = {}
+    for shard, group in manifest.items():
+        for track in [*group["tracks"], *group["helpers"], "30-graphics.ps1", "32-fonts.ps1"]:
+            consumers.setdefault("tests/windows/tracks/" + track, set()).add(shard)
+    return consumers
+
+
 SHA = re.compile(r"[0-9a-f]{40}")
 REGULAR_FILE = re.compile(rb":(?:000000|100644) (?:000000|100644) [0-9a-f]+ [0-9a-f]+ [AMD]")
 
@@ -141,7 +159,9 @@ def changed_paths(event, checkout_sha):
 
 
 def select_jobs(workflow, name, paths):
-    if not paths or paths - DOCS - SCOPED.keys():
+    tracks = track_shards()
+    known = DOCS | SCOPED.keys() | tracks.keys() | SCRIPT_GROUPS.keys()
+    if not paths or paths - known:
         return workflow.work, "full CI for an empty or unmapped change"
     component_paths = paths - DOCS
     if not component_paths:
@@ -149,19 +169,57 @@ def select_jobs(workflow, name, paths):
     wanted = set()
     if name == "ci":
         for path in component_paths:
-            wanted.update(SCOPED[path])
+            if path in tracks:
+                # Tracks are also consumed by supplier source guards and package probes.
+                # Retain those jobs; only narrow the separately inventoried test matrix.
+                wanted.update(workflow.work)
+            elif path in SCRIPT_GROUPS:
+                wanted.add("artifact-preflight")
+            wanted.update(SCOPED.get(path, set()))
     return workflow.closure(wanted) & workflow.work, "scoped component checks"
 
 
-def plan(workflow, name):
+def matrix_selection(jobs, name, paths, full=False):
+    if name != "ci":
+        return [], []
+    shards = set()
+    groups = set()
+    tracks = {} if full else track_shards()
+    for path in paths - DOCS:
+        if path in tracks:
+            shards.update(tracks[path])
+            # Source-contract checks and track-manifest checks consume these scripts.
+            groups.update(PREFLIGHT_GROUPS)
+        elif path in SCRIPT_GROUPS:
+            groups.update(SCRIPT_GROUPS[path])
+        elif path in SCOPED:
+            shards.update(SHARDS)
+            groups.update(PREFLIGHT_GROUPS)
+    if full:
+        shards.update(SHARDS)
+        groups.update(PREFLIGHT_GROUPS)
+    return (sorted(shards) if "test-shards" in jobs else [],
+            sorted(groups) if "artifact-preflight" in jobs else [])
+
+
+def plan_details(workflow, name):
     if os.environ.get("GITHUB_EVENT_NAME") != "pull_request":
-        return workflow.work, "full CI for a non-PR event"
-    try:
-        event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text(encoding="utf-8"))
-        paths = changed_paths(event, os.environ["GITHUB_SHA"])
-    except (OSError, KeyError, ValueError, TypeError, subprocess.CalledProcessError):
-        return workflow.work, "full CI because the PR diff could not be verified"
-    return select_jobs(workflow, name, paths)
+        jobs, reason, paths, full = workflow.work, "full CI for a non-PR event", set(), True
+    else:
+        try:
+            event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text(encoding="utf-8"))
+            paths = changed_paths(event, os.environ["GITHUB_SHA"])
+            jobs, reason = select_jobs(workflow, name, paths)
+            full = reason.startswith("full CI")
+        except (OSError, KeyError, ValueError, TypeError, subprocess.CalledProcessError):
+            jobs, reason, paths, full = workflow.work, "full CI because the PR diff could not be verified", set(), True
+    shards, groups = matrix_selection(jobs, name, paths, full)
+    return jobs, reason, shards, groups
+
+
+def plan(workflow, name):
+    jobs, reason, _, _ = plan_details(workflow, name)
+    return jobs, reason
 
 
 def verify(workflow, selected, results):
@@ -185,6 +243,33 @@ def verify(workflow, selected, results):
         raise ValueError("\n".join(mismatches))
 
 
+def verify_matrix_jobs(jobs, shards, groups, context=None):
+    """Require every selected matrix cell in the current attempt to have succeeded."""
+    expected = {f"test-{shard} ({os_name})" for shard in shards for os_name in WINDOWS}
+    expected.update(f"artifact-preflight ({group})" for group in groups)
+    observed = set()
+    for job in jobs:
+        name = job["name"]
+        matrix_cell = re.fullmatch(r"test-\w+ \(windows-20(?:22|25)\)|artifact-preflight \([a-z]+\)", name)
+        if not matrix_cell:
+            continue
+        if context is not None and (job.get("run_id") != context["run_id"]
+                or job.get("head_sha") != context["head_sha"]
+                or type(job.get("run_attempt")) is not int
+                or not 1 <= job["run_attempt"] <= context["attempt"]):
+            raise ValueError("matrix cell source/run/attempt mismatch: " + name)
+        if name in observed:
+            raise ValueError("duplicate matrix cell: " + name)
+        observed.add(name)
+        if name in expected:
+            if job["status"] != "completed" or job["conclusion"] != "success":
+                raise ValueError("selected matrix cell did not succeed: " + name)
+        elif job["conclusion"] != "skipped":
+            raise ValueError("unselected matrix cell ran: " + name)
+    if expected - observed:
+        raise ValueError("missing selected matrix cells: " + ", ".join(sorted(expected - observed)))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=["plan", "verify"])
@@ -192,18 +277,39 @@ def main():
     args = parser.parse_args()
     try:
         workflow = load_workflow(args.workflow)
+        jobs, reason, shards, groups = plan_details(workflow, args.workflow)
+        values = {"selected": sorted(jobs), "shards": shards, "preflight_groups": groups}
         if args.command == "plan":
-            jobs, reason = plan(workflow, args.workflow)
-            selected = json.dumps(sorted(jobs))
             with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as outputs:
-                print(f"selected={selected}", file=outputs)
-            print(f"{reason}. Selected jobs: {selected}")
+                for key, value in values.items():
+                    print(f"{key}={json.dumps(value)}", file=outputs)
+            message = f"{reason}. Selected jobs: {json.dumps(values['selected'])}"
+            print(message)
+            print(f"Windows shards: {json.dumps(shards)}; preflight groups: {json.dumps(groups)}")
             if summary := os.environ.get("GITHUB_STEP_SUMMARY"):
                 with Path(summary).open("a", encoding="utf-8") as output:
-                    print(f"{reason.capitalize()}.", file=output)
-                    print(f"\nSelected jobs: `{selected}`", file=output)
+                    print(message, file=output)
+                    print(f"Windows shards: {shards}; preflight groups: {groups}", file=output)
         else:
-            verify(workflow, json.loads(os.environ["SELECTED"]), json.loads(os.environ["JOB_RESULTS"]))
+            for key, expected in values.items():
+                actual = json.loads(os.environ[key.upper()])
+                if actual != expected:
+                    raise ValueError("selection differs from the independently recomputed plan: " + key)
+            verify(workflow, values["selected"], json.loads(os.environ["JOB_RESULTS"]))
+            if args.workflow == "ci":
+                from github_jobs import get_jobs
+                repo = os.environ["GITHUB_REPOSITORY"]
+                run = os.environ["GITHUB_RUN_ID"]
+                attempt = os.environ["GITHUB_RUN_ATTEMPT"]
+                # The latest per-job inventory retains successful cells when only failed
+                # jobs rerun. Every cell must still belong to this run and source.
+                inventory = get_jobs(f"repos/{repo}/actions/runs/{run}/jobs")
+                source = os.environ["GITHUB_SHA"]
+                if os.environ.get("GITHUB_EVENT_NAME") == "pull_request":
+                    event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text(encoding="utf-8"))
+                    source = event["pull_request"]["head"]["sha"]
+                context = {"run_id": int(run), "attempt": int(attempt), "head_sha": source}
+                verify_matrix_jobs(inventory["jobs"], shards, groups, context)
     except (KeyError, OSError, TypeError, ValueError, yaml.YAMLError) as error:
         print(f"CI {args.command} failed: {error}", file=sys.stderr)
         return 1

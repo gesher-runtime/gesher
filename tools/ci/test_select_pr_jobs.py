@@ -94,6 +94,78 @@ class PlanTests(unittest.TestCase):
                 planner.verify(self.ci, invalid, results)
 
 
+    def test_track_changes_select_owners_and_consumed_helpers(self):
+        path = "tests/windows/tracks/61-aot2.ps1"
+        selected, reason = planner.select_jobs(self.ci, "ci", {path})
+        shards, groups = planner.matrix_selection(selected, "ci", {path})
+        self.assertEqual(shards, ["compilation", "contracts", "native"])
+        self.assertEqual(set(groups), set(planner.PREFLIGHT_GROUPS))
+        self.assertIn("test-shards", selected)
+        self.assertIn("test", selected)
+        self.assertEqual(self.selection([path], "arm64-windows"), set())
+
+    def test_shared_graphics_and_font_tracks_select_every_shard(self):
+        for path in ("30-graphics.ps1", "32-fonts.ps1"):
+            paths = {"tests/windows/tracks/" + path}
+            selected, _ = planner.select_jobs(self.ci, "ci", paths)
+            self.assertEqual(set(planner.matrix_selection(selected, "ci", paths)[0]),
+                             set(planner.SHARDS))
+
+    def test_unmapped_mixed_track_change_restores_full_matrix(self):
+        for paths in (set(), {"tests/windows/tracks/61-aot2.ps1", "CMakeLists.txt"}):
+            selected, reason = planner.select_jobs(self.ci, "ci", paths)
+            shards, groups = planner.matrix_selection(
+                selected, "ci", paths, reason.startswith("full CI"))
+            self.assertEqual(set(shards), set(planner.SHARDS))
+            self.assertEqual(set(groups), set(planner.PREFLIGHT_GROUPS))
+        selected, reason = planner.select_jobs(self.ci, "ci", {"docs/logging.md"})
+        self.assertEqual(planner.matrix_selection(selected, "ci", {"docs/logging.md"}), ([], []))
+
+    def test_matrix_inventory_rejects_missing_failed_duplicate_and_extra_cells(self):
+        names = ["test-native (windows-2022)", "test-native (windows-2025)",
+                 "artifact-preflight (native)"]
+        jobs = [{"name": name, "status": "completed", "conclusion": "success"} for name in names]
+        planner.verify_matrix_jobs(jobs, ["native"], ["native"])
+        for mutated in (jobs[:-1], jobs + [jobs[0]],
+                        [jobs[0] | {"conclusion": "skipped"}, *jobs[1:]],
+                        jobs + [{"name": "test-media (windows-2022)", "status": "completed",
+                                 "conclusion": "success"}]):
+            with self.subTest(mutated=mutated), self.assertRaises(ValueError):
+                planner.verify_matrix_jobs(mutated, ["native"], ["native"])
+        planner.verify_matrix_jobs(
+            [{"name": "test-native (windows-2022)", "status": "completed", "conclusion": "skipped"}],
+            [], [])
+
+
+
+    def test_retained_successful_cells_keep_same_run_and_source_on_failed_rerun(self):
+        context = {"run_id": 45, "attempt": 2, "head_sha": "a" * 40}
+        jobs = [
+            {"name": "test-native (windows-2022)", "status": "completed",
+             "conclusion": "success", "run_id": 45, "run_attempt": 1, "head_sha": "a" * 40},
+            {"name": "test-native (windows-2025)", "status": "completed",
+             "conclusion": "success", "run_id": 45, "run_attempt": 2, "head_sha": "a" * 40},
+        ]
+        planner.verify_matrix_jobs(jobs, ["native"], [], context)
+        for changed in ({"run_id": 46}, {"run_attempt": 3}, {"run_attempt": 0},
+                        {"head_sha": "b" * 40}):
+            with self.subTest(changed=changed), self.assertRaisesRegex(ValueError, "mismatch"):
+                planner.verify_matrix_jobs([jobs[0] | changed, jobs[1]], ["native"], [], context)
+
+    def test_cli_rejects_under_selected_plan_before_requesting_inventory(self):
+        jobs = sorted(self.ci.work)
+        environment = {
+            "GITHUB_EVENT_NAME": "push", "SELECTED": json.dumps(jobs[:-1]),
+            "SHARDS": json.dumps(sorted(planner.SHARDS)),
+            "PREFLIGHT_GROUPS": json.dumps(sorted(planner.PREFLIGHT_GROUPS)),
+        }
+        with patch.dict(os.environ, environment, clear=True), \
+                patch("sys.argv", ["select_pr_jobs.py", "verify", "--workflow", "ci"]):
+            self.assertEqual(planner.main(), 1)
+
+
+
+
 class PullRequestDiffTests(unittest.TestCase):
     def setUp(self):
         self.workflow = planner.load_workflow("ci")
