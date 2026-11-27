@@ -440,7 +440,7 @@ public class FeaturesActivity extends Activity {
     }
 
     private void intentStep(int step) {
-        if (step == 3) { say("done"); return; }
+        if (step == 3) { downloadStep(0); return; }
         String name = new String[] {"default", "explicit", "veto"}[step];
         IntentObserver observer = step == 0 ? new IntentObserver(name, step)
                 : new IntentObserver(name, step) {
@@ -452,6 +452,176 @@ public class FeaturesActivity extends Activity {
         mNav.setWebViewClient(observer);
         mHandler.postDelayed(observer.timeout, 30000);
         mNav.loadUrl(observer.source);
+    }
+
+    /** Real attachment/unsupported-MIME handoff leaves the loaded page usable. */
+    private void downloadStep(int step) {
+        if (step == 4) { downloadIsolation(0); return; }
+        String name = new String[] {"attachment", "mime", "redirect", "auth"}[step];
+        final boolean[] clicked = {false};
+        final int[] downloads = {0}, errors = {0};
+        String source = mServerHttp + "/download-source/" + name;
+        mNav.setDownloadListener((url, agent, disposition, mime, length) -> {
+            if (!url.equals(mServerHttp + "/download-file/" + (step == 2 ? "attachment" : name))
+                    || length <= 0 || !mime.equals("application/octet-stream")) {
+                throw new AssertionError("Wrong download metadata: " + url + " " + mime + " " + length);
+            }
+            downloads[0]++;
+        });
+        mNav.setWebViewClient(new WebViewClient() {
+            @Override public void onReceivedHttpAuthRequest(WebView view, HttpAuthHandler handler,
+                    String host, String realm) {
+                if (!name.equals("auth") || !realm.equals("gesher-download")) {
+                    throw new AssertionError("Unexpected download authentication: " + realm);
+                }
+                say("download auth credentials requested");
+                handler.proceed("download", "secret");
+            }
+            @Override public void onReceivedError(WebView view, WebResourceRequest request,
+                    android.webkit.WebResourceError error) {
+                if (request.isForMainFrame()) errors[0]++;
+            }
+            @Override public void onPageFinished(WebView view, String url) {
+                if (!url.equals(source) || clicked[0]) return;
+                clicked[0] = true;
+                mNav.evaluateJavascript("document.getElementById('download').click()", null);
+                mHandler.postDelayed(() -> {
+                    if (downloads[0] != 1 || errors[0] != 0) {
+                        throw new AssertionError("Download " + name + " callbacks " + downloads[0]
+                                + " errors " + errors[0]);
+                    }
+                    mNav.evaluateJavascript("document.title", title -> {
+                        if (!title.equals("\"download source " + name + "\"")) {
+                            throw new AssertionError("Download replaced source: " + title);
+                        }
+                        say("download " + name + " handed off once without network error; source retained");
+                        downloadStep(step + 1);
+                    });
+                }, 2000);
+            }
+        });
+        mNav.loadUrl(source);
+    }
+
+    /** A past download, including one in a child frame, must not mask a new request. */
+    private void downloadIsolation(int step) {
+        if (step == 2) { downloadFailure(); return; }
+        String name = step == 0 ? "repeat-main" : "repeat-frame";
+        String source = mServerHttp + "/download-source/" + name;
+        String target = mServerHttp + "/download-repeat/" + name;
+        final int[] downloads = {0}, errors = {0};
+        final boolean[] clicked = {false}, failing = {false}, complete = {false};
+        Runnable timeout = () -> { if (!complete[0]) throw new AssertionError(name + " timed out"); };
+        mHandler.postDelayed(timeout, 15000);
+        mNav.setDownloadListener((url, agent, disposition, mime, length) -> {
+            if (!url.equals(target) || !mime.equals("application/octet-stream") || length <= 0
+                    || ++downloads[0] != 1 || failing[0]) {
+                throw new AssertionError("Unexpected " + name + " download " + url);
+            }
+            mHandler.postDelayed(() -> {
+                if (errors[0] != 0) throw new AssertionError(name + " handoff reported a network error");
+                mNav.evaluateJavascript("document.title", title -> {
+                    if (!title.equals("\"download source " + name + "\"")) {
+                        throw new AssertionError(name + " replaced its source document: " + title);
+                    }
+                    failing[0] = true;
+                    mNav.loadUrl(target); // The server now closes this exact URL without a response.
+                });
+            }, 500);
+        });
+        mNav.setWebViewClient(new WebViewClient() {
+            @Override public void onReceivedError(WebView view, WebResourceRequest request,
+                    android.webkit.WebResourceError failure) {
+                if (request.isForMainFrame()) {
+                    if (!failing[0] || !request.getUrl().toString().equals(target)) {
+                        throw new AssertionError("Unexpected " + name + " main-frame error");
+                    }
+                    errors[0]++;
+                }
+            }
+            @Override public void onPageFinished(WebView view, String url) {
+                if (url.equals(source) && !clicked[0]) {
+                    clicked[0] = true;
+                    mNav.evaluateJavascript("document.getElementById('download').click()", null);
+                } else if (url.equals(target) && failing[0] && !complete[0]) {
+                    if (errors[0] != 1 || downloads[0] != 1) {
+                        throw new AssertionError(name + " hid or duplicated the repeated request failure: "
+                                + errors[0] + " errors, " + downloads[0] + " downloads");
+                    }
+                    complete[0] = true;
+                    mHandler.removeCallbacks(timeout);
+                    say("download " + name + " same URL network failure preserved");
+                    mHandler.post(() -> downloadIsolation(step + 1));
+                }
+            }
+        });
+        mNav.loadUrl(source);
+    }
+
+    private void downloadFailure() {
+        mNav.setDownloadListener((url, agent, disposition, mime, length) -> {
+            throw new AssertionError("Network failure became download");
+        });
+        final boolean[] error = {false};
+        mNav.setWebViewClient(new WebViewClient() {
+            @Override public void onReceivedError(WebView view, WebResourceRequest request,
+                    android.webkit.WebResourceError failure) {
+                if (request.isForMainFrame()) error[0] = true;
+            }
+            @Override public void onPageFinished(WebView view, String url) {
+                if (!error[0]) throw new AssertionError("Real network failure hidden");
+                say("download adjacent network failure preserved");
+                mHandler.post(() -> truncatedDownloadResponse(0));
+            }
+        });
+        mNav.loadUrl(mServerHttp + "/network-failure");
+    }
+
+    /** COM completion can precede the CDP body failure: preserve one ordered terminal. */
+    private void truncatedDownloadResponse(int step) {
+        boolean httpFailure = step == 1;
+        String name = httpFailure ? "http500-truncated" : "http200-truncated";
+        String target = mServerHttp + "/" + name;
+        int[] errors = {0}, httpErrors = {0}, finishes = {0};
+        boolean[] complete = {false};
+        Runnable timeout = () -> { if (!complete[0]) throw new AssertionError(name + " timed out"); };
+        mHandler.postDelayed(timeout, 10000);
+        mNav.setWebViewClient(new WebViewClient() {
+            @Override public void onReceivedError(WebView view, WebResourceRequest request,
+                    android.webkit.WebResourceError failure) {
+                if (request.isForMainFrame()) {
+                    if (finishes[0] != 0) throw new AssertionError(name + " network error arrived after finish");
+                    errors[0]++;
+                }
+            }
+            @Override public void onReceivedHttpError(WebView view, WebResourceRequest request,
+                    android.webkit.WebResourceResponse response) {
+                if (request.isForMainFrame()) {
+                    if (response.getStatusCode() != 500 || finishes[0] != 0) {
+                        throw new AssertionError(name + " HTTP error order/status");
+                    }
+                    httpErrors[0]++;
+                }
+            }
+            @Override public void onPageFinished(WebView view, String url) {
+                if (!url.equals(target)) throw new AssertionError(name + " wrong terminal URL " + url);
+                if (++finishes[0] != 1 || errors[0] != (httpFailure ? 0 : 1)
+                        || httpErrors[0] != (httpFailure ? 1 : 0)) {
+                    throw new AssertionError(name + " terminal order/count: network=" + errors[0]
+                            + ", HTTP=" + httpErrors[0] + ", finish=" + finishes[0]);
+                }
+                mHandler.postDelayed(() -> {
+                    if (finishes[0] != 1 || errors[0] != (httpFailure ? 0 : 1)) {
+                        throw new AssertionError(name + " duplicated late terminal");
+                    }
+                    complete[0] = true;
+                    mHandler.removeCallbacks(timeout);
+                    say("download " + name + " one ordered error and finish preserved");
+                    if (httpFailure) say("done"); else truncatedDownloadResponse(1);
+                }, 500);
+            }
+        });
+        mNav.loadUrl(target);
     }
 
     /** The default case inherits shouldOverrideUrlLoading, but observes real page callbacks. */

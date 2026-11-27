@@ -96,6 +96,10 @@ class Listener {
   // WebView2 before this callback, excluding loads merely queued by the app.
   virtual bool OnNavigationStarting(const std::wstring& url, bool user_initiated,
                                     bool redirect, int64_t handed) = 0;
+  // Internal CDP document identity metadata, synchronously on the WebView STA.
+  // "initialize" accepts the initial frame tree; false retains COM fallback.
+  // 0: unavailable, 1: accepted, 2: accepted but stop this view for resource pressure.
+  virtual int OnNetworkEvent(const std::wstring&, const std::wstring&) { return 0; }
   // A request the Listener asked to see (SetSettings' intercept_all, file
   // URLs, documents): answer with Host::RespondToRequest(id, ...), from any
   // thread, later. On the WebView thread.

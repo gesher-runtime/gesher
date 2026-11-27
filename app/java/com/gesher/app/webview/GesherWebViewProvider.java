@@ -346,6 +346,7 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
     }
     /** The WebView's own loads not started yet (onNavigationStarting). */
     private final ApiNavigations mApiNavigations = new ApiNavigations();
+    private final NetworkNavigationErrors mNetworkErrors = new NetworkNavigationErrors();
     /** The WebView thread's last NavigationStarting was one of the WebView's own loads. */
     private boolean mStartingApi;
     /** A pending intent fallback cannot replace a newer navigation or stop request. */
@@ -529,6 +530,7 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
 
     @Override
     public void destroy() {
+        mNetworkErrors.clear();
         mNavigationGeneration.incrementAndGet();
         WebView2Host host;
         synchronized (mPagePorts) {
@@ -2061,6 +2063,46 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
     }
 
     @Override
+    public int onNetworkEvent(String event, String json) {
+        if (event.equals("initialize")) return mNetworkErrors.initialize(json) ? 1 : 0;
+        if (event.equals("clear")) { mNetworkErrors.clear(); return 1; }
+        try {
+            NetworkNavigationErrors.Result result = mNetworkErrors.event(event, json);
+            if (result != null) mUi.post(() -> reportNetworkFailure(result));
+            return result != null && result.limited ? 2 : 1;
+        } catch (IllegalArgumentException e) {
+            // Do not print protocol JSON or parse exception text: it may contain credentials.
+            mNetworkErrors.clear();
+            return 0;
+        }
+    }
+
+    private void reportNetworkFailure(NetworkNavigationErrors.Result failure) {
+        if (mDestroyed) return;
+        String url = FileUrls.fromWebView2(failure.url);
+        if (!failure.canceled) {
+            Request request = new Request(url, failure.mainFrame, false, false, failure.method, null);
+            String description = failure.error;
+            final int code = networkErrorCode(description);
+            mClient.onReceivedError(mView, request, new WebResourceError() {
+                @Override public int getErrorCode() { return code; }
+                @Override public CharSequence getDescription() { return description; }
+            });
+        }
+    }
+
+    private static int networkErrorCode(String error) {
+        if (error.equals("net::ERR_INSUFFICIENT_RESOURCES")) return WebViewClient.ERROR_TOO_MANY_REQUESTS;
+        for (int status = 0; status <= 18; status++) {
+            if (error.equals("net::" + errorName(status)) || error.equals(errorName(status))) {
+                return errorCode(status);
+            }
+        }
+        if (error.startsWith("net::ERR_CERT_")) return WebViewClient.ERROR_FAILED_SSL_HANDSHAKE;
+        return WebViewClient.ERROR_IO;
+    }
+
+    @Override
     public boolean onNavigationStarting(String url, boolean userInitiated, boolean redirect, long handed) {
         final long generation = mNavigationGeneration.incrementAndGet();
         // WebView2Host knows one outstanding load of the WebView's own at a time; a second
@@ -2347,7 +2389,8 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
                 if (http >= 400) {
                     mClient.onReceivedHttpError(mView, request, new WebResourceResponse(
                             "text/html", null, http, "HTTP " + http, null, null));
-                } else if (arg >= 0 && arg != 14 /* OPERATION_CANCELED */) {
+                } else if (arg >= 0 && arg != 14 /* OPERATION_CANCELED */
+                        && !"network-errors".equals(c)) {
                     final int code = errorCode(arg);
                     final String description = "net::" + errorName(arg);
                     mClient.onReceivedError(mView, request, new WebResourceError() {

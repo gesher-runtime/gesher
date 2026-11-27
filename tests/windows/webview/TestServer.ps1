@@ -14,6 +14,7 @@ if (-not ('GesherWebTestServer' -as [type])) {
   Add-Type -TypeDefinition @'
 using System;
 using System.IO;
+using System.Collections.Generic;
 using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
@@ -24,11 +25,13 @@ using System.Text;
 using System.Threading;
 public static class GesherWebTestServer {
   static TcpListener http, https;
+  static readonly Dictionary<string, int> downloadRequests = new Dictionary<string, int>();
   static X509Certificate2 cert;
   public static volatile string Log = "";
   static void Say(string s) { lock (typeof(GesherWebTestServer)) Log += s + "\n"; }
 
   public static string Start() {
+    lock (downloadRequests) downloadRequests.Clear();
     using (var rsa = RSA.Create(2048)) {
       var req = new CertificateRequest("CN=127.0.0.1", rsa, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
       var san = new SubjectAlternativeNameBuilder();
@@ -101,8 +104,52 @@ public static class GesherWebTestServer {
           for (int read = 0; read < length;) { int n = s.Read(body, read, length - read); if (n <= 0) break; read += n; }
           Say((tls ? "https " : "http ") + method + " " + path + (auth != null ? " (authorization)" : "") + (length > 0 ? " body " + Encoding.UTF8.GetString(body) : ""));
           int status = 200; string extra = "", markup = ""; string title;
+          string contentType = "text/html; charset=utf-8";
+          if (!tls && (path == "/http200-truncated" || path == "/http500-truncated")) {
+            byte[] partial = Encoding.ASCII.GetBytes("HTTP/1.1 "
+                + (path.Contains("500") ? "500 Internal Server Error" : "200 OK")
+                + "\r\nContent-Type: text/html\r\nContent-Length: 10000\r\nConnection: close\r\n\r\n<html><title>truncated fixture</title>");
+            s.Write(partial, 0, partial.Length); s.Flush(); return;
+          }
+          if (!tls && path == "/network-failure") return;
           if (tls) {
             title = "tls client certificate: " + clientCert;
+          } else if (path.StartsWith("/download-source/")) {
+            string name = path.Substring("/download-source/".Length);
+            title = "download source " + name;
+            string target = name.StartsWith("repeat-") ? "/download-repeat/" + name
+                : name == "redirect" ? "/download-redirect" : "/download-file/" + name;
+            markup = "<iframe name='download-frame'></iframe><a id='download' "
+                + (name == "repeat-frame" ? "target='download-frame' " : "")
+                + "href='" + target + "'>download</a>";
+          } else if (path.StartsWith("/download-repeat/")) {
+            int count;
+            lock (downloadRequests) {
+              downloadRequests.TryGetValue(path, out count);
+              downloadRequests[path] = ++count;
+            }
+            Say("download repeat " + path + " request " + count);
+            if (count > 1) return; // Exact same URL now has a real failed request.
+            title = "download payload";
+            contentType = "application/octet-stream";
+            extra = "Content-Disposition: attachment; filename=fixture.bin\r\n";
+          } else if (path == "/download-redirect") {
+            status = 302; title = "redirect";
+            extra = "Location: /download-file/attachment\r\n";
+          } else if (path.StartsWith("/download-file/")) {
+            title = "download payload";
+            contentType = "application/octet-stream";
+            if (path.EndsWith("/attachment")) extra = "Content-Disposition: attachment; filename=fixture.bin\r\n";
+            if (path.EndsWith("/auth")) {
+              string want = "Basic " + Convert.ToBase64String(Encoding.ASCII.GetBytes("download:secret"));
+              if (auth == want) {
+                extra = "Content-Disposition: attachment; filename=authenticated.bin\r\n";
+              } else {
+                status = 401; title = "download auth needed";
+                contentType = "text/html; charset=utf-8";
+                extra = "WWW-Authenticate: Basic realm=\"gesher-download\"\r\n";
+              }
+            }
           } else if (path.StartsWith("/auth")) {
             string want = "Basic " + Convert.ToBase64String(Encoding.ASCII.GetBytes("gesher:secret"));
             if (auth == want) { title = "auth ok"; }
@@ -132,7 +179,7 @@ public static class GesherWebTestServer {
           byte[] page = Encoding.UTF8.GetBytes("<!doctype html><html><head><title>" + WebUtility.HtmlEncode(title)
               + "</title></head><body style='background:#ffff00'>" + WebUtility.HtmlEncode(title) + markup + "</body></html>");
           string head = "HTTP/1.1 " + status + (status == 200 ? " OK" : status == 401 ? " Unauthorized" : " Not Found")
-              + "\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: " + page.Length
+              + "\r\nContent-Type: " + contentType + "\r\nContent-Length: " + page.Length
               + "\r\nCache-Control: no-store\r\n" + extra + "\r\n";
           byte[] hb = Encoding.ASCII.GetBytes(head);
           s.Write(hb, 0, hb.Length); s.Write(page, 0, page.Length); s.Flush();

@@ -101,7 +101,7 @@ final class WebView2Host {
     void destroy() { destroyed = true; }
 }
 final class CleanupBoundary {
-    void close() {} void pageGone() {} void onMessage(JSONObject message, String source) {}
+    void close() {} void clear() {} void pageGone() {} void onMessage(JSONObject message, String source) {}
 }
 final class SupportLib {
     static void deliver(GesherWebViewProvider page, GesherWebViewProvider.MessageListener listener,
@@ -116,6 +116,8 @@ final class GesherWebViewProvider {
     boolean mDestroyed;
     final CleanupBoundary mBridgeDispatcher = new CleanupBoundary();
     final CleanupBoundary mGeolocation = new CleanupBoundary();
+    // Network state is independently exercised by test_webview_download_navigation.
+    final CleanupBoundary mNetworkErrors = new CleanupBoundary();
     static final class MessageListener {}
     final java.util.Map<String,MessageListener> mMessageListeners = new java.util.HashMap<>();
     void removeListeners() {}

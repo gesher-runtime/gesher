@@ -78,6 +78,7 @@ public final class WebView2Host {
 
         /** True cancels the navigation; handed is the last API load already sent to WebView2. */
         boolean onNavigationStarting(String url, boolean userInitiated, boolean redirect, long handed);
+        default int onNetworkEvent(String event, String json) { return 0; }
 
         /** Answer with {@link #respond}, from any thread. */
         void onResourceRequest(long id, String url, String method, String headers, int context,
@@ -472,6 +473,9 @@ public final class WebView2Host {
 
     private boolean onNavigationStarting(String url, boolean user, boolean redirect, long handed) {
         return mClient.onNavigationStarting(url, user, redirect, handed);
+    }
+    private int onNetworkEvent(String event, String json) {
+        return mClient.onNetworkEvent(event, json);
     }
 
     private void onResourceRequest(long id, String url, String method, String headers,

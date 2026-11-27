@@ -39,6 +39,13 @@ public final class WebViewOwnedResponsesHost {
     // A controlled worker dispatch boundary per fixture; production shares a pool.
     private final FixtureRequests sRequests = new FixtureRequests();
 
+    // CDP parsing has its own production executable suite; this fixture observes
+    // only the destroy boundary, while exercising the exact provider destroy method.
+    private static final class FixtureNetworkErrors {
+        boolean cleared;
+        void clear() { cleared = true; }
+    }
+    private final FixtureNetworkErrors mNetworkErrors = new FixtureNetworkErrors();
     private volatile WebView2Host mHost = new WebView2Host();
     private volatile Runnable beforeClaim;
     private String mOriginalUrl;
@@ -892,7 +899,10 @@ public final class WebViewOwnedResponsesHost {
             case "back": provider.goBack(); break;
             case "forward": provider.goForward(); break;
             case "history": provider.goBackOrForward(2); break;
-            case "destroy": provider.destroy(); break;
+            case "destroy":
+                provider.destroy();
+                if (@NETWORK_CLEAR_GATE@) check(provider.mNetworkErrors.cleared, "destroy did not retire the network observer");
+                break;
             default: throw new AssertionError(replacement);
         }
     }

@@ -519,6 +519,32 @@ struct Host::Impl : std::enable_shared_from_this<Host::Impl> {
   }
   std::wstring main_document;  // the URL of the main frame's navigation
   std::set<UINT64> cancelled;  // navigations the Listener took
+  bool network_capture = false;
+  ULONGLONG network_setup_deadline = 0;
+  bool host_timer = false;
+  std::map<UINT64, bool> network_navigations;
+  void NetworkNavigationStarted(UINT64 nav, const std::wstring& url) {
+    if (network_navigations.size() >= 64) network_navigations.erase(network_navigations.begin());
+    network_navigations[nav] = network_capture &&
+        (url.rfind(L"http://", 0) == 0 || url.rfind(L"https://", 0) == 0);
+  }
+  struct NetworkFinish {
+    int http;
+    int32_t status;
+    std::wstring url;
+    int64_t number;
+    ULONGLONG deadline;
+  };
+  uint64_t network_finish_id = 0;
+  std::map<uint64_t, NetworkFinish> network_finishes;
+  void ReportNetworkFinish(uint64_t id) {
+    auto it = network_finishes.find(id);
+    if (it == network_finishes.end()) return;
+    NetworkFinish finish = std::move(it->second);
+    network_finishes.erase(it);
+    if (!destroyed && !closing) Report(kPageFinished, finish.http, finish.status,
+        finish.url, std::to_wstring(finish.number), network_capture ? L"network-errors" : L"");
+  }
   // Basic authentication of the main document: WebView2 ends the navigation
   // (401) while it waits for the answer, and starts it again with the
   // credentials; to the app it is one page load. The 401's completion is held
@@ -594,6 +620,7 @@ struct Host::Impl : std::enable_shared_from_this<Host::Impl> {
   Com<ICoreWebView2Find> find;
 
   std::vector<Com<ICoreWebView2DevToolsProtocolEventReceiver>> receivers;
+  bool network_observers = false;
   std::set<std::wstring> listened;  // ListenDevTools' events
   // Run once this (service) host is ready or has failed.
   std::vector<std::function<void(ICoreWebView2*)>> service_waiting;
@@ -625,6 +652,7 @@ std::set<Impl*> g_live;  // the WebView thread's: hosts with a controller
 // response before physically closing its controller. No Java arguments are in XHR.
 std::map<Impl*, std::shared_ptr<Impl>> g_retiring;
 bool FinishDestroy(const std::shared_ptr<Impl>& impl);
+void ReadyController(const std::shared_ptr<Impl>& impl);
 std::shared_ptr<Impl> g_service;  // a hidden host for cookies and data, when no WebView exists
 
 // This path is reserved on every origin, including absent/stale capabilities.
@@ -675,6 +703,17 @@ void CancelBridgeRequests(Impl* impl) {
 void CALLBACK BridgeTimeouts(HWND, UINT, UINT_PTR, DWORD) {
   ULONGLONG now = GetTickCount64();
   for (Impl* impl : g_live) {
+    if (impl->network_setup_deadline && now >= impl->network_setup_deadline) {
+      impl->network_setup_deadline = 0;
+      impl->listener->OnNetworkEvent(L"clear", L"{}");
+      ReadyController(impl->shared_from_this());
+    }
+    for (auto it = impl->network_finishes.begin(); it != impl->network_finishes.end();) {
+      uint64_t id = it->first;
+      bool expired = it->second.deadline <= now;
+      ++it;
+      if (expired) impl->ReportNetworkFinish(id);
+    }
     for (auto it = impl->prepared_calls.begin(); it != impl->prepared_calls.end();) {
       if (it->second.deadline <= now) it = impl->prepared_calls.erase(it);
       else ++it;
@@ -1292,7 +1331,8 @@ bool AddHandlers(const std::shared_ptr<Impl>& shared) {
           COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_ALL));
   // Shared/service-worker requests may reach multiple controllers in one environment;
   // each only denies them. DOCUMENT includes frames and dedicated workers.
-  if (SetTimer(g_task_window, 0x4742, 1000, BridgeTimeouts) == 0) impl->bridge_guarded = false;
+  impl->host_timer = SetTimer(g_task_window, 0x4742, 1000, BridgeTimeouts) != 0;
+  if (!impl->host_timer) impl->bridge_guarded = false;
 
   wv->add_NavigationStarting(
       GESHER_CALLBACK(ICoreWebView2NavigationStartingEventHandler,
@@ -1333,6 +1373,7 @@ bool AddHandlers(const std::shared_ptr<Impl>& shared) {
                           impl->main_document = url;
                           UINT64 nav = 0;
                           args->get_NavigationId(&nav);
+                          impl->NetworkNavigationStarted(nav, url);
                           impl->NavigationStarted(nav, started_number);
                           return S_OK;
                         }
@@ -1350,6 +1391,9 @@ bool AddHandlers(const std::shared_ptr<Impl>& shared) {
                           return S_OK;
                         }
                         impl->main_document = url;
+                        UINT64 download_nav = 0;
+                        args->get_NavigationId(&download_nav);
+                        if (!redirect) impl->NetworkNavigationStarted(download_nav, url);
                         if (!redirect) {
                           CancelBridgeRequests(impl.get());
                           UINT64 nav = 0;
@@ -1396,12 +1440,34 @@ bool AddHandlers(const std::shared_ptr<Impl>& shared) {
                             static_cast<long long>(started),
                             static_cast<long long>(impl->api_number), ok != FALSE,
                             static_cast<int>(status), http);
+                        auto network = impl->network_navigations.find(nav);
+                        bool network_owned = impl->network_capture && network != impl->network_navigations.end()
+                            && network->second && !ok && http < 400 && !auth_wait;
+                        if (network != impl->network_navigations.end()) impl->network_navigations.erase(network);
                         if (auth_wait) {
                           impl->auth_finish = {true, http, static_cast<int32_t>(status), url, started};
                           return S_OK;
                         }
-                        impl->Report(kPageFinished, http, ok ? -1 : static_cast<int32_t>(status), url,
-                                     std::to_wstring(started));
+                        if (network_owned) {
+                          // A read-only protocol round trip lets already queued network events
+                          // reach Java before the original COM terminal. No CDP/COM ID mapping.
+                          if (impl->network_finishes.size() >= 64) {
+                            impl->ReportNetworkFinish(impl->network_finishes.begin()->first);
+                          }
+                          uint64_t finish = ++impl->network_finish_id;
+                          impl->network_finishes.emplace(finish, Impl::NetworkFinish{
+                              http, static_cast<int32_t>(status), url, started, GetTickCount64() + 1000});
+                          HRESULT barrier = impl->webview->CallDevToolsProtocolMethod(L"Page.getFrameTree", L"{}",
+                              GESHER_CALLBACK(ICoreWebView2CallDevToolsProtocolMethodCompletedHandler,
+                                  [weak, finish](HRESULT, LPCWSTR) -> HRESULT {
+                                    if (auto impl = weak.lock()) impl->ReportNetworkFinish(finish);
+                                    return S_OK;
+                                  }).get());
+                          if (FAILED(barrier)) impl->ReportNetworkFinish(finish);
+                        } else {
+                          impl->Report(kPageFinished, http, ok ? -1 : static_cast<int32_t>(status), url,
+                                       std::to_wstring(started));
+                        }
                         return S_OK;
                       })
           .get(),
@@ -1819,6 +1885,9 @@ bool AddHandlers(const std::shared_ptr<Impl>& shared) {
                         COREWEBVIEW2_PROCESS_FAILED_KIND kind =
                             COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED;
                         args->get_ProcessFailedKind(&kind);
+                        impl->network_capture = false;
+                        impl->network_navigations.clear();
+                        impl->listener->OnNetworkEvent(L"clear", L"{}");
                         impl->Report(kProcessFailed, 0, static_cast<int32_t>(kind));
                         return S_OK;
                       })
@@ -1922,6 +1991,39 @@ bool AddHandlers(const std::shared_ptr<Impl>& shared) {
     impl->receivers.push_back(std::move(receiver));
   }
 
+  impl->network_observers = true;
+  for (const wchar_t* name : {L"Page.frameNavigated", L"Network.requestWillBeSent",
+          L"Network.responseReceived", L"Network.loadingFinished", L"Network.loadingFailed"}) {
+    Com<ICoreWebView2DevToolsProtocolEventReceiver> receiver;
+    if (FAILED(wv->GetDevToolsProtocolEventReceiver(name, receiver.Put())) || !receiver) {
+      impl->network_observers = false;
+      break;
+    }
+    std::wstring event = name;
+    HRESULT added = receiver->add_DevToolsProtocolEventReceived(
+        GESHER_CALLBACK(ICoreWebView2DevToolsProtocolEventReceivedEventHandler,
+            [weak, event](ICoreWebView2*, ICoreWebView2DevToolsProtocolEventReceivedEventArgs* args)
+                -> HRESULT {
+              auto impl = weak.lock();
+              if (!impl || impl->destroyed || impl->closing || !impl->network_capture) return S_OK;
+              CoString json;
+              int result = FAILED(args->get_ParameterObjectAsJson(json.Put())) ? 0
+                  : impl->listener->OnNetworkEvent(event, json.str());
+              if (result == 2) {
+                // Explicit local identity pressure: stop this view, remain reusable.
+                impl->webview->Stop();
+              } else if (result != 1) {
+                // Retain the original COM error path if the observer becomes unavailable.
+                impl->network_capture = false;
+                impl->listener->OnNetworkEvent(L"clear", L"{}");
+                impl->Report(kFailed, 0, E_FAIL, L"WebView network identity observer unavailable; using navigation errors");
+              }
+              return S_OK;
+            }).get(), &token);
+    if (FAILED(added)) { impl->network_observers = false; break; }
+    impl->receivers.push_back(std::move(receiver));
+  }
+
   // The JavaScript interfaces' host object.
   VARIANT bridge;
   VariantInit(&bridge);
@@ -1930,6 +2032,70 @@ bool AddHandlers(const std::shared_ptr<Impl>& shared) {
   wv->AddHostObjectToScript(L"gesherBridge", &bridge);
   VariantClear(&bridge);
   return true;
+}
+
+void ReadyController(const std::shared_ptr<Impl>& impl) {
+  if (impl->destroyed || impl->closing || impl->failed || impl->ready) return;
+  impl->network_setup_deadline = 0;
+  impl->ready = true;
+  if (impl->listener != &g_null_listener) g_live.insert(impl.get());
+  CoString version;
+  if (impl->env) impl->env->get_BrowserVersionString(version.Put());
+  impl->Report(kReady, 0, 0, version.str());
+  DrainPendingOperations(impl.get());
+  auto waiting = std::move(impl->service_waiting);
+  impl->service_waiting.clear();
+  for (auto& w : waiting) w(impl->webview.get());
+}
+
+void StartNetworkObserver(const std::shared_ptr<Impl>& impl) {
+  // All subscriptions and frame identity must exist before any queued API load.
+  if (!impl->network_observers || !impl->host_timer || impl->listener == &g_null_listener) {
+    ReadyController(impl);
+    return;
+  }
+  g_live.insert(impl.get());
+  impl->network_setup_deadline = GetTickCount64() + 5000;
+  std::weak_ptr<Impl> weak = impl;
+  HRESULT page = impl->webview->CallDevToolsProtocolMethod(L"Page.enable", L"{}",
+      GESHER_CALLBACK(ICoreWebView2CallDevToolsProtocolMethodCompletedHandler,
+          [weak](HRESULT hr, LPCWSTR) -> HRESULT {
+            auto impl = weak.lock();
+            if (!impl || impl->destroyed || impl->closing || impl->failed || impl->ready) return S_OK;
+            if (FAILED(hr)) { ReadyController(impl); return S_OK; }
+            HRESULT tree = impl->webview->CallDevToolsProtocolMethod(L"Page.getFrameTree", L"{}",
+                GESHER_CALLBACK(ICoreWebView2CallDevToolsProtocolMethodCompletedHandler,
+                    [weak](HRESULT hr, LPCWSTR json) -> HRESULT {
+                      auto impl = weak.lock();
+                      if (!impl || impl->destroyed || impl->closing || impl->failed || impl->ready) return S_OK;
+                      if (FAILED(hr) || json == nullptr
+                          || impl->listener->OnNetworkEvent(L"initialize", json) != 1) {
+                        ReadyController(impl);
+                        return S_OK;
+                      }
+                      // Zero response-body buffers; a positive 1-byte POST limit (0 is unlimited).
+                      HRESULT network = impl->webview->CallDevToolsProtocolMethod(L"Network.enable",
+                          L"{\"maxTotalBufferSize\":0,\"maxResourceBufferSize\":0,\"maxPostDataSize\":1}",
+                          GESHER_CALLBACK(ICoreWebView2CallDevToolsProtocolMethodCompletedHandler,
+                              [weak](HRESULT hr, LPCWSTR) -> HRESULT {
+                                auto impl = weak.lock();
+                                if (!impl || impl->destroyed || impl->closing || impl->failed) return S_OK;
+                                if (impl->ready) {
+                                  if (SUCCEEDED(hr)) impl->webview->CallDevToolsProtocolMethod(
+                                      L"Network.disable", L"{}", nullptr);
+                                  return S_OK;
+                                }
+                                impl->network_capture = SUCCEEDED(hr);
+                                ReadyController(impl);
+                                return S_OK;
+                              }).get());
+                      if (FAILED(network)) ReadyController(impl);
+                      return S_OK;
+                    }).get());
+            if (FAILED(tree)) ReadyController(impl);
+            return S_OK;
+          }).get());
+  if (FAILED(page)) ReadyController(impl);
 }
 
 void OnController(const std::shared_ptr<Impl>& impl, HRESULT hr,
@@ -1967,15 +2133,7 @@ void OnController(const std::shared_ptr<Impl>& impl, HRESULT hr,
   }
   if (impl->has_settings) ApplySettings(impl.get());
   ApplyBounds(impl.get());
-  impl->ready = true;
-  if (impl->listener != &g_null_listener) g_live.insert(impl.get());
-  CoString version;
-  if (impl->env) impl->env->get_BrowserVersionString(version.Put());
-  impl->Report(kReady, 0, 0, version.str());
-  DrainPendingOperations(impl.get());
-  auto waiting = std::move(impl->service_waiting);
-  impl->service_waiting.clear();
-  for (auto& w : waiting) w(impl->webview.get());
+  StartNetworkObserver(impl);
 }
 
 // Controller creations waiting for the one in progress (the WebView thread).
@@ -2159,6 +2317,10 @@ bool FinishDestroy(const std::shared_ptr<Impl>& impl) {
     if (!impl->bridge_acknowledgments.empty()) return false;
     bool ok = true;
     impl->destroyed = true;
+    impl->network_capture = false;
+    impl->network_navigations.clear();
+    impl->network_finishes.clear();
+    impl->listener->OnNetworkEvent(L"clear", L"{}");
     impl->CancelPendingNewWindows();
     // Bridge deferrals have been denied while the controller was still alive;
     // JavaScript consumed their responses and acknowledged them before this close.

@@ -340,6 +340,26 @@ function FeaturesCheck {
     }
   }
   foreach ($want in $patterns) { if ("$text" -notmatch $want) { $problems += "missing /$want/" } }
+  foreach ($case in 'attachment','mime','redirect','auth') {
+    $want = "Features download $case handed off once without network error; source retained"
+    if (-not "$text".Contains($want)) { $problems += "missing '$want'" }
+  }
+  foreach ($case in 'http200-truncated','http500-truncated') {
+    $want = "Features download $case one ordered error and finish preserved"
+    if (-not "$text".Contains($want)) { $problems += "missing '$want'" }
+  }
+  foreach ($case in 'repeat-main','repeat-frame') {
+    $want = "Features download $case same URL network failure preserved"
+    if (-not "$text".Contains($want)) { $problems += "missing '$want'" }
+    $requests = [regex]::Matches([GesherWebTestServer]::Log, "(?m)^download repeat /download-repeat/$case request [0-9]+\r?$")
+    if ($requests.Count -lt 2) { $problems += "same-URL $case did not exercise a download followed by a real failed request" }
+  }
+  if (-not "$text".Contains('Features download auth credentials requested')) {
+    $problems += 'authenticated download did not exercise the Basic-auth retry'
+  }
+  if (-not "$text".Contains('Features download adjacent network failure preserved')) {
+    $problems += 'download correlation hid a real network failure'
+  }
   if ("$text" -match 'page mousedown at 3[23]\d,3[23]\d') {
     $problems += 'the page got the click on the button'
   }

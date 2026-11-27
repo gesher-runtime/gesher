@@ -1,5 +1,58 @@
 # WebView on WebView2 (roadmap phase 5)
 
+## Download navigation cancellation
+
+WebView2's download handoff can finish the main-frame navigation with
+`ConnectionAborted` while the actual download proceeds through Android's
+`DownloadListener`. This must not cause an app to replace its page with an
+offline screen. Android WebView excludes Chromium `ERR_ABORTED` from
+`onReceivedError` ([AwContents](https://chromium.googlesource.com/chromium/src/+/f08cb003ea22c8c126279a8de1ac604e4dd13b0f/android_webview/java/src/org/chromium/android_webview/AwContents.java)).
+WebView2's [DownloadStarting](https://learn.microsoft.com/en-us/microsoft-edge/webview2/reference/win32/icorewebview2_4)
+event supplies the download URI but no navigation ID, and its
+[error status](https://learn.microsoft.com/en-us/dotnet/api/microsoft.web.webview2.core.corewebview2weberrorstatus)
+alone does not establish a download.
+
+Gesher enables the CDP Network and Page observers before releasing queued API
+loads, initializes the root frame identity and retains only root HTTP(S)
+Document request metadata. A request ID owns its loader, frame, final URL,
+method and response status. Redirects update that same request ID; an iframe's
+identical URL and a later navigation's identical URL cannot cancel another
+request's real error. `loadingFailed` distinguishes Chromium `ERR_ABORTED`
+from a genuine `ERR_CONNECTION_ABORTED`. Canceled requests report no network
+error. HTTP errors (including authentication consent/retries) stay with the
+existing COM path. Successful downloads remain the app's operation through its
+DownloadListener; the observer never reports a download as completed.
+
+COM retains every existing page-start/page-finish, veto and API-load ownership
+rule. CDP reports only the exact noncanceled network errors. Failed captured
+COM finishes make a read-only `Page.getFrameTree` round trip before delivery;
+the original captured API number is preserved. An outstanding finish is bounded
+to one second plus the existing one-second sweep, and at most 64 are retained.
+Actual WebView2 158 probes observed canceled download and explicit stop events
+before COM completion; a truncated HTTP 200 body failed after COM completion
+but before the round-trip callback. This improves error-before-finish delivery
+without assuming a mapping between COM navigation IDs and CDP request IDs.
+The probes do not establish a formal ordering guarantee across all runtimes.
+
+Only 256 outstanding root document identities are retained. Local identity
+pressure reports `ERROR_TOO_MANY_REQUESTS` for the incoming request and stops
+the view; the view remains reusable and pending cancellations follow normal
+COM lifecycle delivery. Full browser-accepted URLs are kept without truncation.
+Setup failure or a five-second setup timeout keeps the existing COM error path;
+a malformed/unavailable observer restores that path and logs a diagnostic.
+Process loss and destruction clear the observer. No CDP JSON, headers or bodies
+are logged or retained by Gesher. Response-body buffers are explicitly zero;
+the POST serialization limit is one byte because zero means unlimited in
+[Chromium's inspector](https://raw.githubusercontent.com/chromium/chromium/main/third_party/blink/renderer/core/inspector/inspector_network_agent.cc).
+The [CDP schema](https://raw.githubusercontent.com/ChromeDevTools/devtools-protocol/master/pdl/domains/Network.pdl)
+defines the request/loader/frame identities and cancellation/error fields.
+
+`tools/test_webview_download_navigation.py` exercises production JSON identity
+handling and resource/lifecycle limits. The Windows `FeaturesActivity` fixture
+exercises attachments, unsupported MIME, redirects, Basic authentication,
+repeated same-URL main/frame downloads and adjacent real failures through
+WebView2. Host tests alone do not establish COM event order or app behavior.
+
 Goal: `android.webkit.WebView` works in Gesher's apps, backed by Microsoft
 Edge WebView2 (the Chromium runtime Windows 10/11 ship), with no WebView APK.
 Work happens on branch `wip/webview`; the decision record is
