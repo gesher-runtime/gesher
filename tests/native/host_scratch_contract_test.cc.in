@@ -308,6 +308,20 @@ int PollFds(pollfd*, nfds_t, int, HANDLE, bool*);
 }
 
 namespace gesher::ws {
+// This corpus creates native sockets only. A real relay would need its broker
+// and transport; refuse it rather than pretend the Linux poll seam models it.
+bool HasLoopbackRelay(const std::shared_ptr<SocketDescription>& description) {
+  return []<typename Description>(const std::shared_ptr<Description>& current) {
+    // Historical source controls predate the relay member.
+    if constexpr (requires { current->relay; }) {
+      if (current) {
+        std::lock_guard<std::mutex> lock(current->error_mutex);
+        if (current->relay) std::abort();
+      }
+    }
+    return false;
+  }(description);
+}
 static thread_local int injected_error = 0;
 static thread_local size_t transport_calls = 0;
 Socket NewWakeSocket(uint16_t* port) {
