@@ -2963,16 +2963,16 @@ void ObserveGuestLoaderTrace(HANDLE token, const storage::AuthorityLaunchSpec& o
     trace->setup = ERROR_SUCCESS;
     auto spec = original;
     spec.executable = image.c_str();
-    spec.arguments = {};
+    spec.arguments = L"--wait-for-loader-debugger";
     spec.termination_error = nullptr;
     spec.expected_package_objects = first.package_objects();
     trace->launch = storage::AuthorityLaunch::Create(token, spec, &probe);
     if (trace->launch == ERROR_SUCCESS && probe) {
-      attached = DebugActiveProcess(probe->pid()) != FALSE;
-      trace->attach = attached ? ERROR_SUCCESS : GetLastError();
-      if (attached) {
-        trace->resume = probe->Resume();
-        if (trace->resume == ERROR_SUCCESS) ReadGuestLoaderEvents(*probe, deadline, trace);
+      trace->resume = probe->Resume();
+      if (trace->resume == ERROR_SUCCESS) {
+        attached = DebugActiveProcess(probe->pid()) != FALSE;
+        trace->attach = attached ? ERROR_SUCCESS : GetLastError();
+        if (attached) ReadGuestLoaderEvents(*probe, deadline, trace);
       }
     }
   } catch (const Failure& failure) {
@@ -2983,6 +2983,7 @@ void ObserveGuestLoaderTrace(HANDLE token, const storage::AuthorityLaunchSpec& o
   if (attached && trace->wait != ERROR_SUCCESS)
     trace->detach = DebugActiveProcessStop(probe->pid()) ? ERROR_SUCCESS : GetLastError();
   if (probe) trace->stop = probe->Stop(500);
+  probe.reset();
   if (entry) RegCloseKey(entry);
   if (owns_entry) trace->registry_cleanup = RegDeleteKeyExW(parent, basename.c_str(), KEY_WOW64_64KEY, 0);
   if (parent) RegCloseKey(parent);

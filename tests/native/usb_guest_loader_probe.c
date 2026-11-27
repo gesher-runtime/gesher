@@ -14,6 +14,20 @@ void WINAPI GuestLoaderProbeEntry(void) {
 #ifdef GESHER_PROBE_USER32_LATE
   // This image reaches its entry with only KERNEL32 imported. Return the
   // exact Win32 loader result from trying USER32 after that point.
+  static const wchar_t wait_argument[] = L" --wait-for-loader-debugger";
+  const wchar_t* command = GetCommandLineW();
+  const int length = lstrlenW(command);
+  const int argument_length = (int)(sizeof(wait_argument) / sizeof(wait_argument[0])) - 1;
+  if (length >= argument_length && CompareStringOrdinal(command + length - argument_length,
+          argument_length, wait_argument, argument_length, FALSE) == CSTR_EQUAL) {
+    // Only the disposable traced copy waits. The authority resumes it in
+    // the normal way, without a debugger modifying its startup suspension.
+    const ULONGLONG deadline = GetTickCount64() + 3000;
+    while (!IsDebuggerPresent()) {
+      if (GetTickCount64() >= deadline) ExitProcess(ERROR_TIMEOUT);
+      Sleep(10);
+    }
+  }
   const HMODULE library = LoadLibraryExW(L"user32.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
   if (!library) ExitProcess(WindowsError());
   FreeLibrary(library);
