@@ -130,7 +130,7 @@ struct ChildEventEvidence {
 };
 struct PackagePipePinEvidence {
   DWORD called = 0, present = 0, info_ok = 0, info_status = ERROR_NOT_READY, flags = 0;
-  DWORD granted_access = 0, type_matches = 0, name_matches = 0;
+  DWORD granted_access = 0, type_matches = 0, device_name_matches = 0;
   wchar_t name[kNamespacePathCharacters]{};
 };
 struct PackageLeafEvidence {
@@ -1676,17 +1676,27 @@ void ObservePackagePipe(const storage::AuthorityLaunch& launch, const storage::A
       observed.type_matches = SessionObjectText(pipe, ObjectTypeInformation) == L"File";
       const auto actual = SessionObjectText(pipe, static_cast<OBJECT_INFORMATION_CLASS>(1));
       CopyNamespaceText(actual, observed.name);
-      observed.name_matches = actual == PackagePipePath(spec);
+      // A secure NPFS directory can report the device name alone. This
+      // checks the namespace only. The exact-path open and package-specific
+      // security below, and the shared live DACL control on reuse, identify the leaf.
+      observed.device_name_matches = actual == L"\\Device\\NamedPipe" || actual == PackagePipePath(spec);
     }
   }
   Require(observed.present && observed.info_ok && !(observed.flags & HANDLE_FLAG_INHERIT) &&
-      observed.granted_access == (READ_CONTROL | SYNCHRONIZE) && observed.type_matches && observed.name_matches,
+      observed.granted_access == (READ_CONTROL | SYNCHRONIZE) && observed.type_matches &&
+      observed.device_name_matches,
       "pipe-leaf-launch-owns-exact-readonly-pin", ERROR_INVALID_HANDLE);
-  evidence->pipe_pin_verified = 1;
   const Local descriptor = SessionObjectSecurity(pipe);
   VerifyPackageLeafPolicy(descriptor.get(), spec, true);
-  evidence->pipe_policy_verified = 1;
   DWORD status = 0;
+  const Handle fresh = OpenPackagePipe(spec, READ_CONTROL | SYNCHRONIZE, nullptr, &status);
+  Require(status == 0 && fresh && fresh.get() != pipe &&
+      SessionObjectAccess(fresh.get()) == (READ_CONTROL | SYNCHRONIZE),
+      "pipe-leaf-independent-exact-path-open", ERROR_NOT_SAME_OBJECT);
+  const Local fresh_descriptor = SessionObjectSecurity(fresh.get());
+  VerifyPackageLeafPolicy(fresh_descriptor.get(), spec, true);
+  evidence->pipe_pin_verified = 1;
+  evidence->pipe_policy_verified = 1;
   const Handle own = OpenPackagePipe(spec, READ_CONTROL, guest, &status);
   Require(status == 0 && own, "pipe-leaf-actual-package-read-positive", ERROR_ACCESS_DENIED);
   evidence->pipe_positive = 1;
@@ -2128,17 +2138,32 @@ void ObservePackageReuse(HANDLE private_token, const storage::AuthorityLaunchSpe
   Check(SetSecurityInfo(pipe_writable.get(), SE_FILE_OBJECT,
       DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, nullptr, nullptr, pipe_changed_raw, nullptr),
       "pipe-reuse-apply-fixture-policy-change");
-  const Local pipe_applied = SessionObjectSecurity(pipe_writable.get());
-  PACL pipe_applied_acl = nullptr;
-  const bool pipe_change_observed = GetSecurityDescriptorDacl(pipe_applied.get(), &present, &pipe_applied_acl, &defaulted) &&
-      present && pipe_applied_acl && SessionAclBytes(pipe_applied_acl) == SessionAclBytes(pipe_changed_raw) &&
-      SessionAclBytes(pipe_applied_acl) != SessionAclBytes(pipe_acl);
+  // Different NPFS FILE_OBJECT handles can refer to the same secure prefix.
+  // Read the temporary DACL via both handles before restoring it, so the fixture
+  // proves that the retained read-only pin refers to this exact changed leaf.
+  PSECURITY_DESCRIPTOR pipe_applied_raw = nullptr, retained_applied_raw = nullptr;
+  const DWORD pipe_applied_status = GetSecurityInfo(pipe_writable.get(), SE_FILE_OBJECT,
+      DACL_SECURITY_INFORMATION, nullptr, nullptr, nullptr, nullptr, &pipe_applied_raw);
+  const DWORD retained_applied_status = GetSecurityInfo(first.package_pipe_objects(), SE_FILE_OBJECT,
+      DACL_SECURITY_INFORMATION, nullptr, nullptr, nullptr, nullptr, &retained_applied_raw);
+  const Local pipe_applied(pipe_applied_raw), retained_applied(retained_applied_raw);
   stage = "pipe-reuse.changed-policy";
   rejected = storage::AuthorityLaunch::Create(private_token, spec, &child, &stage);
   const DWORD pipe_restored = SetSecurityInfo(pipe_writable.get(), SE_FILE_OBJECT,
       DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, nullptr, nullptr, pipe_acl, nullptr);
   Check(pipe_restored, "pipe-reuse-restore-owned-fixture-policy");
-  Require(pipe_change_observed, "pipe-reuse-live-policy-change-observed", ERROR_INVALID_ACL);
+  const auto changed_bytes = SessionAclBytes(pipe_changed_raw);
+  const auto observed_change = [&changed_bytes](DWORD read_status, PSECURITY_DESCRIPTOR security) {
+    BOOL has_acl = FALSE, default_acl = FALSE;
+    PACL actual = nullptr;
+    return read_status == ERROR_SUCCESS && security &&
+        GetSecurityDescriptorDacl(security, &has_acl, &actual, &default_acl) &&
+        has_acl && actual && SessionAclBytes(actual) == changed_bytes;
+  };
+  Require(changed_bytes != SessionAclBytes(pipe_acl) &&
+      observed_change(pipe_applied_status, pipe_applied.get()) &&
+      observed_change(retained_applied_status, retained_applied.get()),
+      "pipe-reuse-exact-path-and-retained-pin-share-live-policy", ERROR_INVALID_ACL);
   const Local pipe_after = SessionObjectSecurity(first.package_pipe_objects());
   VerifyPackageLeafPolicy(pipe_after.get(), original, true);
   Require(rejected == ERROR_ACCESS_DENIED && !child && stage &&
@@ -2481,12 +2506,12 @@ void PrintPackageNamespace(const PackageLeafEvidence& leaf, const NamespaceColli
   const auto& pipe = leaf.pipe_pin;
   if (pipe.called)
     std::printf("Protected pipe pin: handle=%lu info-ok=%lu info-win32=%lu flags=0x%08lx access=0x%08lx "
-        "expected=0x%08lx type-match=%lu name-match=%lu name=%ls\n",
+        "expected=0x%08lx type-match=%lu device-name-match=%lu name=%ls\n",
         static_cast<unsigned long>(pipe.present), static_cast<unsigned long>(pipe.info_ok),
         static_cast<unsigned long>(pipe.info_status),
         static_cast<unsigned long>(pipe.flags), static_cast<unsigned long>(pipe.granted_access),
         static_cast<unsigned long>(READ_CONTROL | SYNCHRONIZE), static_cast<unsigned long>(pipe.type_matches),
-        static_cast<unsigned long>(pipe.name_matches), NamespacePathForPrint(pipe.name));
+        static_cast<unsigned long>(pipe.device_name_matches), NamespacePathForPrint(pipe.name));
   std::printf("Protected SACL controls: mutation-denials=%lu preexisting-unprotected-rejected=%lu extra-audit-rejected=%lu audit-preserved=%lu fixture-restored=%lu\n",
       static_cast<unsigned long>(leaf.sacl_mutation_denials), static_cast<unsigned long>(leaf.unprotected_reuse_rejected),
       static_cast<unsigned long>(leaf.audit_reuse_rejected), static_cast<unsigned long>(leaf.audit_preserved),
