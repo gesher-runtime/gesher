@@ -960,10 +960,23 @@ public final class AccountManagerService extends IAccountManager.Default {
         String[] rows = new String[visible.size()];
         for (int i = 0; i < visible.size(); i++) {
             Account account = visible.get(i);
-            rows[i] = Base64.getEncoder().encodeToString(account.type.getBytes(java.nio.charset.StandardCharsets.UTF_8))
-                    + "\t" + Base64.getEncoder().encodeToString(account.name.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            rows[i] = encodeAccountField(account.type) + "\t" + encodeAccountField(account.name);
         }
         return rows;
+    }
+
+    private static String encodeAccountField(String value) {
+        try {
+            java.nio.ByteBuffer utf8 = java.nio.charset.StandardCharsets.UTF_8.newEncoder()
+                    .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+                    .encode(java.nio.CharBuffer.wrap(value));
+            byte[] bytes = new byte[utf8.remaining()];
+            utf8.get(bytes);
+            return Base64.getEncoder().encodeToString(bytes);
+        } catch (java.nio.charset.CharacterCodingException e) {
+            throw new IllegalStateException("Account identity cannot be encoded as UTF-8", e);
+        }
     }
 
     /** User removal follows the authenticator's denial, error and Activity continuation. */

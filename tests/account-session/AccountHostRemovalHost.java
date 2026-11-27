@@ -84,9 +84,47 @@ public final class AccountHostRemovalHost {
             check(!h.entries.containsKey(A) && h.queue.tasks.size() == 1, "cleanup/removal notification order");
         }
     }
+    static void accountEncoding() throws Exception {
+        // Android Account permits any nonempty Java string, including unpaired
+        // UTF-16 surrogates. The list must fail rather than turn one into '?'
+        // and subsequently let the panel remove a different, real '?' account.
+        for (String malformed : new String[]{"\uD800", "\uDC00"}) {
+            for (boolean malformedType : new boolean[]{false, true}) {
+                try (var h = new AccountRetirementHost.H()) {
+                    h.entries.clear();
+                    Account bad = malformedType ? new Account("name", malformed) : new Account(malformed, "type");
+                    Account question = malformedType ? new Account("name", "?") : new Account("?", "type");
+                    h.entry(bad, AccountRetirementHost.OWNER);
+                    h.entry(question, AccountRetirementHost.OWNER);
+                    try {
+                        String[] rows = (String[])call(h.accounts, "listAccountsForHost", new Class<?>[0]);
+                        throw new AssertionError("Malformed account identity was silently encoded as a different account: "
+                                + java.util.Arrays.toString(rows));
+                    } catch (IllegalStateException expected) {
+                        check(expected.getCause() instanceof java.nio.charset.CharacterCodingException,
+                                "Malformed identity did not produce a visible encoding failure");
+                    }
+                    check(h.entries.containsKey(bad) && h.entries.containsKey(question) && h.entries.size() == 2,
+                            "Listing changed malformed or question-mark accounts");
+                    check(h.queue.tasks.isEmpty(), "Failed listing emitted account removal events");
+                }
+            }
+        }
+        try (var h = new AccountRetirementHost.H()) {
+            h.entries.clear();
+            Account exact = new Account("\u05e9\u05dd\t\n\"?\uD83D\uDE00", "type/\t\u05d0\uD83D\uDE00");
+            h.entry(exact, AccountRetirementHost.OWNER);
+            String[] rows = (String[])call(h.accounts, "listAccountsForHost", new Class<?>[0]);
+            String[] fields = rows[0].split("\\t", -1);
+            check(rows.length == 1 && fields.length == 2, "Valid Unicode identity broke account framing");
+            check(new String(java.util.Base64.getDecoder().decode(fields[0]), java.nio.charset.StandardCharsets.UTF_8).equals(exact.type)
+                    && new String(java.util.Base64.getDecoder().decode(fields[1]), java.nio.charset.StandardCharsets.UTF_8).equals(exact.name),
+                    "Valid Unicode identity changed during listing");
+        }
+    }
     public static void main(String[] args) throws Exception {
         System.load(args[0]); android.app.PropertyInvalidatedCache.setTestMode(true);
-        failedMarker(); replay(false); replay(true); generationAndRace();
+        failedMarker(); replay(false); replay(true); generationAndRace(); accountEncoding();
         System.out.println("Host account removal durability/generation/order passed: " + AccountRetirementHost.checks + " checks");
     }
 }
