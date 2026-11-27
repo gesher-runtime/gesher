@@ -37,6 +37,8 @@ void WideAsciiContracts(Bounded bounded, Restartable restartable, Legacy legacy,
         errno = 17;
         size_t count = bounded(reinterpret_cast<char*>(output.data() + 2),
                                &cursor, limit, cap, &state);
+        // The assertion callback may allocate while formatting its message.
+        int conversion_errno = errno;
         size_t expected = std::min({n, limit, cap});
         bool terminated = n < limit && n < cap;
         check(count == expected && cursor == (terminated ? nullptr : words.data() + expected),
@@ -47,12 +49,15 @@ void WideAsciiContracts(Bounded bounded, Restartable restartable, Legacy legacy,
                               : terminated && i == n ? 0 : 0xa5;
           bytes &= output[i + 2] == want;
         }
-        check(bytes && unchanged(state) && errno == 17,
+        check(bytes && unchanged(state) && conversion_errno == 17,
               "ASCII exact bytes, both guards, reserved state and errno");
         cursor = words.data();
         state = initial();
-        check(bounded(nullptr, &cursor, limit, cap, &state) == std::min(n, limit) &&
-                  cursor == words.data() && unchanged(state) && errno == 17,
+        errno = 17;
+        size_t measured = bounded(nullptr, &cursor, limit, cap, &state);
+        int measurement_errno = errno;
+        check(measured == std::min(n, limit) && cursor == words.data() &&
+                  unchanged(state) && measurement_errno == 17,
               "ASCII measurement ignores output capacity and leaves source/state");
       }
       std::vector<unsigned char> output(cap + 4, 0xa5);

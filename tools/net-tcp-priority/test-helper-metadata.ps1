@@ -7,9 +7,10 @@ $assignment=@($ast.FindAll({param($n) $n -is [Management.Automation.Language.Ass
 if($assignment.Count -ne 1){throw 'Helper pin map is missing/ambiguous'}
 $actual=$assignment[0].Right.Expression.SafeGetValue()
 $reviewed=@{
- 'tools/windows4/TsfJobSupervisor.cs'='625be4d5906bb48dd02d6103382fd2e85ac88738'
+ 'tools/windows4/TsfJobSupervisor.cs'='6e1d2673011603de136abbd1a9e7e773b3708bea'
  'tools/windows4/TsfJobWorker.cs'='e4392ea9ee4e8faf6d2f4b28424f8e05fe692ce1'
- 'tools/windows4/test-tsf-job-supervisor.ps1'='3b0f7ebb636b91859b86797f94136c0b6dccd5fd'
+ 'tools/windows4/test-tsf-job-supervisor.ps1'='6e97087bfa9473d3d28727c1447a5434f545aec4'
+ 'tools/windows4/TsfOutputMetadataChecks.cs'='5797032560aa535f84de5c35852b5defd4cf84a5'
  'tools/net-tcp-priority/qualified/TsfJobSupervisor.cs'='625be4d5906bb48dd02d6103382fd2e85ac88738'
  'tools/native3-locks/artifact/download-verified-artifact.py'='cd5cc415e53102c664edac22b1604df639c8804b'
  'tools/ci/receipt-diagnostics.ps1'='b89f2f3f8a54a8b23937bae48ad900c85d4d49e9'
@@ -28,6 +29,9 @@ foreach($entry in $actual.GetEnumerator()){
  if($LASTEXITCODE -ne 0 -or $blob -cne $entry.Value){throw "Actual source helper differs: $($entry.Key)"}
  $bad=$actual.Clone();$bad[$entry.Key]='0'*40;if(ExactMap $bad){throw 'Changed hash accepted'}
  $bad=$actual.Clone();$bad.Remove($entry.Key);if(ExactMap $bad){throw 'Missing helper accepted'}
+}
+foreach($previous in @(@{P='tools/windows4/TsfJobSupervisor.cs';H='625be4d5906bb48dd02d6103382fd2e85ac88738'},@{P='tools/windows4/test-tsf-job-supervisor.ps1';H='3b0f7ebb636b91859b86797f94136c0b6dccd5fd'})){
+ $bad=$actual.Clone();$bad[$previous.P]=$previous.H;if(ExactMap $bad){throw 'Pre-observer helper hash accepted'}
 }
 foreach($stale in @(@{P='tools/windows4/TsfJobSupervisor.cs';H='d1cf9319268df1bccf03177e7f8dde52a7f55510'},@{P='tools/windows4/TsfJobWorker.cs';H='08f29f78f56195825d96de2f2f6632bf91133e1e'},@{P='tools/windows4/test-tsf-job-supervisor.ps1';H='91e6946c4ab05a42ffbf6917166193c3dad07872'},
  @{P='tools/ci/github_read.py';H='997d37c8f6677bb8e1bbfb38d5c87f504b3eb0e4'},
@@ -54,4 +58,4 @@ foreach($call in $calls){
 }
 foreach($bad in @(-1,0,45001,90000)){if($bad -ge 1 -and $bad -le 45000){throw 'Invalid budget accepted'}}
 Write-Host 'TCP_CALLER_BUDGET_METADATA_PASS actual_controller_max=45000 actual_Run_calls=4 old90000=REJECTED boundary_mutants=4 native_processes_started=0'
-Write-Host "TCP_HELPER_METADATA_PASS pins=$($reviewed.Count) actual_sources=EXACT changed_missing_stale_additional_prequeue=REJECTED negative_cases=$($reviewed.Count * 2 + 5) native_processes_started=0 CSharp_compiles=0"
+Write-Host "TCP_HELPER_METADATA_PASS pins=$($reviewed.Count) actual_sources=EXACT changed_missing_stale_additional_prequeue=REJECTED negative_cases=$($reviewed.Count * 2 + 9) native_processes_started=0 CSharp_compiles=0"
