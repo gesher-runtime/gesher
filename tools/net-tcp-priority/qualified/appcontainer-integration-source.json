@@ -1,7 +1,7 @@
 {
   "baseline": "ff2c1870053c9d0332e6abef07a25fc282d384b5",
   "native_runtime_approval": false,
-  "patch_sha256": "0cca52f64e55b9068c94f42f91b593e5d8cb7e191bc4b712049421891dd516f9",
+  "patch_sha256": "621fcf5ecbf0e5c2058305151ba7a183c360f8c913697d811e5e62365004d09d",
   "paths": [
     "compat/binder/binderd.cc",
     "compat/bionic/process_bionic.cc",
@@ -47,6 +47,7 @@
     "compat/usb_storage/CMakeLists.txt",
     "compat/usb_storage/binder_authority_control.cc",
     "compat/usb_storage/binder_authority_control.h",
+    "compat/usb_storage/protected_identity.cc",
     "compat/usb_storage/protected_runtime_client.cc",
     "compat/usb_storage/protected_runtime_client.h",
     "compat/usb_storage/protected_runtime_session.cc",
@@ -100,6 +101,7 @@
     "compat/usb_storage/CMakeLists.txt": "a91566c9cf6c8b9c4b43cfd22bacc37091b4e46c83ed59f960c97ee683439f02",
     "compat/usb_storage/binder_authority_control.cc": "894b45bb3e893e34067f1acdd01e68a8c5c162cf40f50542981a89a60344c8ff",
     "compat/usb_storage/binder_authority_control.h": "94b726f5a12b3dfe5c4f08d69b7e5d3dac026e838f9cd90fd5dbdb085e471c68",
+    "compat/usb_storage/protected_identity.cc": "e4498ad693eaa8addfde6e82a503b914cc6caac296c859c3c198f0fb04490668",
     "compat/usb_storage/protected_runtime_client.cc": "fc1d583b86e6d41fcd23ded1628ea84a0bcc566176d5382e80fb29bd3967d7f8",
     "compat/usb_storage/protected_runtime_client.h": "f7b4a813232da587c8e6f6c4d4ecdd0438a1b7de731becd210499f3a818f4d3c",
     "compat/usb_storage/protected_runtime_session.cc": "8dd10095c54bf9ce4a56b2fc51728fe5689c5d33baaad6be192618b03df9c413",
@@ -153,6 +155,7 @@
     "compat/usb_storage/CMakeLists.txt": "4887720fa596f7224d3d96a0838d2f4b3d727de4dce9a4c9ede8f04d929fcbfe",
     "compat/usb_storage/binder_authority_control.cc": "520beb57081148cece4698ecb646ef12e8ef6876ca00443742404fe2de5f086a",
     "compat/usb_storage/binder_authority_control.h": "756c79fdb19fae42d217fbbfd42dccccccee71608974dcc7bf467ebe8dbb65c7",
+    "compat/usb_storage/protected_identity.cc": "29d5a34629f7e63fbf24baf47c105959111e225cea0fd40e217d0ef5a44a4dab",
     "compat/usb_storage/protected_runtime_client.cc": "09c0e3036da1a0763a61ddc27755f90b0a0faabfd047a0a4d7755c43793df640",
     "compat/usb_storage/protected_runtime_client.h": "e453abc971e6e576127e61658ace4b08e052d3042628cbfa40e9523fef42d091",
     "compat/usb_storage/protected_runtime_session.cc": "c6b21b775b89b4f694c8d56a32ed5b557e40803099976e3cedbbf20d5f3f1337",

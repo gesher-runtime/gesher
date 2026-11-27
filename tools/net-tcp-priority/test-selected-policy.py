@@ -1261,10 +1261,10 @@ def check_appcontainer_donor_receipts():
 # ends of each changed file are exact, and no runtime pass is granted here.
 APPCONTAINER_INTEGRATION_BASE = 'ff2c1870053c9d0332e6abef07a25fc282d384b5'
 # Independent historical endpoint pin remains fixed when the live side is refreshed.
-APPCONTAINER_INTEGRATION_PREVIOUS_SHA256 = '377e062070c4bb266a8998466e18410929e94a26aa7fde572b607d274bc136d3'
+APPCONTAINER_INTEGRATION_PREVIOUS_SHA256 = '943a2512b7a2b09c640bb050db5faae12419946a70b7f20de47165fbd5244f09'
 APPCONTAINER_INTEGRATION_PATCH = 'tools/net-tcp-priority/qualified/appcontainer-integration-source.patch'
 APPCONTAINER_INTEGRATION_QUALIFICATION = 'tools/net-tcp-priority/qualified/appcontainer-integration-source.json'
-APPCONTAINER_INTEGRATION_QUALIFICATION_SHA256 = '8ab0c6bfabbb9885a62b77f9c2c6b1780f98d4ac112fc6f8b24240a9c2ae8d8d'
+APPCONTAINER_INTEGRATION_QUALIFICATION_SHA256 = 'a4d9f7a4facb41c2315c5b8029891f173304da1201d8d8cffaa6198cac6b9e66'
 # In addition to the donor identity surface, the merged startup/fork path
 # intersects the exact USB and child-wait source qualification.
 APPCONTAINER_INTEGRATION_PATHS = sorted(APPCONTAINER_IDENTITY_SOURCE_SHA256.keys() | {
@@ -1283,6 +1283,8 @@ APPCONTAINER_INTEGRATION_PATHS = sorted(APPCONTAINER_IDENTITY_SOURCE_SHA256.keys
  'compat/usb_storage/protected_runtime_wire.h',
  # Preserve the original broker admission/error path before replaying its proof.
  'compat/usb_storage/binder_authority_control.cc', 'compat/usb_storage/binder_authority_control.h',
+ # Preserve the exact pre-change station initialization before the USB proof.
+ 'compat/usb_storage/protected_identity.cc',
 })
 
 def preceding_appcontainer_integration_sources(receipt_sha256):
