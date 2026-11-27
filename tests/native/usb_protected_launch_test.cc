@@ -165,6 +165,8 @@ struct NamespaceCollisionEvidence {
   DWORD private_open_status = ERROR_NOT_READY;
   DWORD launch_called = 0, launch_status = ERROR_NOT_READY, returned_child = 0;
   DWORD stopped_child = ERROR_NOT_READY, same_object_after = 0;
+  DWORD explicit_label = 0, policy_stage = 0;
+  DWORD labeled_launch_status = ERROR_NOT_READY, labeled_policy_stage = 0;
   wchar_t path[kNamespacePathCharacters]{};
   // This disposable collision has a small fixed ACE set. Preserve the complete
   // SDDL with the existing fail-closed copy check, leaving room in the bounded
@@ -2358,6 +2360,8 @@ void ObserveNamespaceCollision(storage::ProtectedIdentity& identity, HANDLE desk
       "collision-private-access-positive-control", ERROR_ACCESS_DENIED);
   auto spec = original;
   spec.capabilities.AppContainerSid = package->value;
+  storage::AuthorityNamespaceCreateResult namespace_result;
+  spec.namespace_create_result = &namespace_result;
   std::unique_ptr<storage::AuthorityLaunch> child;
   const char* stage = "collision.launch";
   evidence->launch_called = 1;
@@ -2374,9 +2378,52 @@ void ObserveNamespaceCollision(storage::ProtectedIdentity& identity, HANDLE desk
   Require(status == 0 && fresh && SameSessionObject(pinned.get(), fresh.get()),
       "collision-retained-exact-object", ERROR_NOT_SAME_OBJECT);
   evidence->same_object_after = 1;
-  Require(evidence->launch_status == ERROR_ACCESS_DENIED && !evidence->returned_child &&
-      stage && std::strcmp(stage, "lowbox.verify-package-namespace") == 0,
+  PACL label = nullptr;
+  Require(GetSecurityDescriptorSacl(observed.get(), &present, &label, &defaulted),
+      "collision-observed-label-presence", ERROR_INVALID_SECURITY_DESCR);
+  evidence->explicit_label = present && label;
+  using PolicyStage = storage::AuthorityNamespacePolicyStage;
+  evidence->policy_stage = static_cast<DWORD>(namespace_result.directory_policy.stage);
+  Require(evidence->launch_status == (evidence->explicit_label ? ERROR_ACCESS_DENIED : ERROR_INVALID_SECURITY_DESCR) &&
+      namespace_result.directory_policy.stage == (evidence->explicit_label ? PolicyStage::kPolicy : PolicyStage::kLabel) &&
+      !evidence->returned_child && stage && std::strcmp(stage, "lowbox.verify-package-namespace") == 0,
       "deny-desktop-owned-namespace-collision", ERROR_ACCESS_DENIED);
+
+  // A complete descriptor must still be rejected at the policy check. Give
+  // this disposable desktop-owned control an explicit label under SYSTEM,
+  // and leave its owner and DACL intact. Last close removes the temporary leaf.
+  PSECURITY_DESCRIPTOR labeled_raw = nullptr;
+  Require(ConvertStringSecurityDescriptorToSecurityDescriptorW(L"S:P(ML;;NW;;;LW)",
+      SDDL_REVISION_1, &labeled_raw, nullptr), "collision-complete-label-descriptor");
+  const Local labeled(labeled_raw);
+  const Handle label_writer = OpenFixtureSacl(path);
+  Require(SameSessionObject(pinned.get(), label_writer.get()),
+      "collision-label-control-exact-object", ERROR_NOT_SAME_OBJECT);
+  Require(SecuritySetter()(label_writer.get(), SACL_SECURITY_INFORMATION | PROTECTED_SACL_SECURITY_INFORMATION,
+      labeled.get()) == 0, "collision-complete-label-write", ERROR_ACCESS_DENIED);
+  const Local complete = SessionObjectSecurity(pinned.get());
+  PACL present_label = nullptr, unchanged_acl = nullptr;
+  Require(GetSecurityDescriptorOwner(complete.get(), &owner, &defaulted) && owner && EqualSid(owner, desktop_sid) &&
+      GetSecurityDescriptorSacl(complete.get(), &present, &present_label, &defaulted) && present && present_label &&
+      GetSecurityDescriptorDacl(complete.get(), &present, &unchanged_acl, &defaulted) && present && unchanged_acl &&
+      SessionAclBytes(unchanged_acl) == SessionAclBytes(actual_acl),
+      "collision-complete-label-and-unchanged-desktop-policy", ERROR_INVALID_SECURITY_DESCR);
+  namespace_result = {};
+  stage = "collision.labeled-launch";
+  evidence->labeled_launch_status = storage::AuthorityLaunch::Create(identity.token(), spec, &child, &stage);
+  evidence->labeled_policy_stage = static_cast<DWORD>(namespace_result.directory_policy.stage);
+  if (child) {
+    evidence->stopped_child = child->Stop(10000);
+    child.reset();
+    Check(evidence->stopped_child, "collision-stop-labeled-suspended-child");
+    Require(false, "deny-labeled-desktop-owned-namespace-collision", ERROR_ACCESS_DENIED);
+  }
+  const Handle after = OpenSessionDirectory(path, 0x00020003, nullptr, &status);
+  Require(evidence->labeled_launch_status == ERROR_ACCESS_DENIED &&
+      namespace_result.directory_policy.stage == PolicyStage::kPolicy &&
+      stage && std::strcmp(stage, "lowbox.verify-package-namespace") == 0 &&
+      status == 0 && after && SameSessionObject(pinned.get(), after.get()),
+      "deny-labeled-desktop-owned-namespace-collision", ERROR_ACCESS_DENIED);
   evidence->status = ERROR_SUCCESS;
 }
 void PrintPolicyReadback(const char* object, const storage::AuthorityNamespacePolicyResult& observed) {
@@ -2566,6 +2613,9 @@ void PrintPackageNamespace(const PackageLeafEvidence& leaf, const NamespaceColli
       static_cast<unsigned long>(collision.launch_called), static_cast<unsigned long>(collision.launch_status),
       static_cast<int>(sizeof(collision.stage)), collision.stage, static_cast<unsigned long>(collision.returned_child),
       static_cast<unsigned long>(collision.stopped_child), static_cast<unsigned long>(collision.same_object_after));
+  std::printf("Protected namespace collision policy: explicit-label=%lu native-policy-stage=%lu labeled-launch-win32=%lu labeled-policy-stage=%lu\n",
+      static_cast<unsigned long>(collision.explicit_label), static_cast<unsigned long>(collision.policy_stage),
+      static_cast<unsigned long>(collision.labeled_launch_status), static_cast<unsigned long>(collision.labeled_policy_stage));
 }
 void PrintSessionObjects(const char* root, DWORD private_grant, const SessionObjectsEvidence& evidence) {
   std::printf("Protected session objects: root=%s private-grant=0x%08lx\n", root, static_cast<unsigned long>(private_grant));
