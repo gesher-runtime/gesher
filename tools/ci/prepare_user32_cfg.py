@@ -185,29 +185,147 @@ def controls(metadata, blob):
     print('USER32_CFG_INTEGRITY_CONTROLS_PASS cases=' + str(len(changes)))
 
 
-def explain(log, blob, metadata):
+def bounded_string(image, rva, limit=512):
+    value = bytearray()
+    for offset in range(limit):
+        byte = image.bytes(rva + offset, 1)[0]
+        if not byte:
+            return value.decode('ascii')
+        assert 32 <= byte < 127, 'non-printable PE diagnostic name'
+        value.append(byte)
+    raise AssertionError('unterminated PE diagnostic name')
+
+
+def imports(image):
+    directory, size = struct.unpack_from('<II', image.blob, image.optional + 112 + 8)
+    assert 20 <= size <= 20 * 128 and size % 20 == 0, 'import descriptor bound'
+    result = {}
+    for offset in range(0, size, 20):
+        original, stamp, chain, name, first = struct.unpack('<5I', image.bytes(directory + offset, 20))
+        if not any((original, stamp, chain, name, first)):
+            return result
+        dll = bounded_string(image, name)
+        for index in range(8192):
+            thunk = struct.unpack('<Q', image.bytes((original or first) + index * 8, 8))[0]
+            if not thunk:
+                break
+            label = '#' + str(thunk & 0xffff) if thunk >> 63 else bounded_string(image, thunk + 2)
+            slot = first + index * 8
+            assert slot not in result, 'duplicate import slot'
+            result[slot] = (dll, label)
+        else:
+            raise AssertionError('import thunk bound')
+    raise AssertionError('missing import descriptor terminator')
+
+
+def pdb_identity(image):
+    blob = image.blob
+    debug, size = struct.unpack_from('<II', blob, image.optional + 112 + 6 * 8)
+    assert size <= 28 * 64 and size % 28 == 0, 'debug directory bound'
+    for at in range(0, size, 28):
+        _, _, _, _, kind, length, _, raw = struct.unpack('<IIHHIIII', image.bytes(debug + at, 28))
+        if kind == 2:
+            assert 24 < length <= 4096 and raw + length <= len(blob), 'CodeView bound'
+            data = blob[raw:raw + length]
+            if data[:4] == b'RSDS':
+                name = data[24:].split(b'\0', 1)[0].decode('ascii').replace('\\', '/').split('/')[-1]
+                assert len(name) <= 256 and all(32 <= ord(c) < 127 for c in name)
+                return name + ':' + uuid.UUID(bytes_le=data[4:20]).hex.upper() + format(struct.unpack_from('<I', data, 20)[0], 'X')
+    return 'unavailable'
+
+
+def initializer_export(image):
+    directory, size = struct.unpack_from('<II', image.blob, image.optional + 112)
+    assert size >= 40 and directory + size <= image.size, 'export directory bound'
+    fields = struct.unpack('<IIHHIIIIIII', image.bytes(directory, 40))
+    count, names_count, functions, names, ordinals = fields[6:11]
+    assert 0 < count <= 8192 and names_count <= count, 'export count bound'
+    for index in range(names_count):
+        name = struct.unpack('<I', image.bytes(names + index * 4, 4))[0]
+        if bounded_string(image, name) != 'GdiDllInitialize':
+            continue
+        ordinal = struct.unpack('<H', image.bytes(ordinals + index * 2, 2))[0]
+        assert ordinal < count, 'export ordinal bound'
+        target = struct.unpack('<I', image.bytes(functions + ordinal * 4, 4))[0]
+        assert 0 < target < image.size
+        return ('forwarder:' + bounded_string(image, target) if directory <= target < directory + size
+                else hex(target))
+    return 'unavailable'
+
+
+def diagnostic_controls(blob):
+    image = Image(blob)
+    imports(image)
+    pdb_identity(image)
+    cases = 0
+    for directory, offset, value, verify_function in (
+            (1, 4, 1, imports),
+            (6, 4, 1, pdb_identity)):
+        changed = bytearray(blob)
+        struct.pack_into('<I', changed, image.optional + 112 + directory * 8 + offset, value)
+        try:
+            verify_function(Image(changed))
+        except AssertionError:
+            cases += 1
+        else:
+            raise AssertionError('malformed PE diagnostic directory accepted')
+    exports, _ = struct.unpack_from('<II', blob, image.optional + 112)
+    changed = bytearray(blob)
+    struct.pack_into('<I', changed, image.offset(exports) + 20, 0)
+    try:
+        initializer_export(Image(changed))
+    except AssertionError:
+        cases += 1
+    else:
+        raise AssertionError('malformed PE export count accepted')
+    directory, _ = struct.unpack_from('<II', blob, image.optional + 112 + 8)
+    name = struct.unpack('<I', image.bytes(directory + 12, 4))[0]
+    assert image.bytes(name, 1) != b'\0'
+    try:
+        bounded_string(image, name, 1)
+    except AssertionError:
+        cases += 1
+    else:
+        raise AssertionError('unterminated bounded PE name accepted')
+    print('USER32_PE_DIAGNOSTIC_CONTROLS_PASS cases=' + str(cases))
+
+
+def explain(log, blob, metadata, directory):
     verify(metadata, blob)
     image = Image(blob)
     assert log.stat().st_size <= 2 * 1024 * 1024
     text = log.read_text(encoding='utf-8', errors='replace')
     addresses = []
-    for match in re.finditer(r'USER32 CFG: kind=\d+ rva=0x([0-9a-fA-F]{8})', text):
+    known = {row[0] for row in ROW.iter_unpack(metadata[HEADER.size:])}
+    for number, match in enumerate(re.finditer(r'USER32 CFG: kind=\d+ rva=0x([0-9a-fA-F]{8})', text)):
+        assert number < 128, 'CFG log event bound'
         address = int(match[1], 16)
+        assert address in known, 'CFG log instruction outside verified metadata'
         if address in addresses: addresses.remove(address)
         addresses.append(address)
-    debug, size = struct.unpack_from('<II', blob, image.optional + 112 + 6 * 8)
-    identity = 'unavailable'
-    if size and size <= 28 * 64 and size % 28 == 0:
-        for at in range(0, size, 28):
-            _, _, _, _, kind, length, _, raw = struct.unpack_from('<IIHHIIII', blob, image.offset(debug) + at)
-            if kind == 2 and 24 < length <= 4096 and raw + length <= len(blob):
-                data = blob[raw:raw + length]
-                if data[:4] == b'RSDS':
-                    name = data[24:].split(b'\0', 1)[0].decode('ascii').replace('\\', '/').split('/')[-1]
-                    identity = name + ':' + uuid.UUID(bytes_le=data[4:20]).hex.upper() + format(struct.unpack_from('<I', data, 20)[0], 'X')
-    print('USER32_CFG_EXPLAIN dll_sha256=' + hashlib.sha256(blob).hexdigest() + ' pdb=' + identity)
+    print('USER32_CFG_EXPLAIN dll_sha256=' + hashlib.sha256(blob).hexdigest() + ' pdb=' + pdb_identity(image))
+    # Bind the next investigation to these actual local System32 images. Never
+    # upload Windows DLLs and never infer that a standalone heap result proves
+    # which internal GDI operation failed.
+    for name in ('gdi32.dll', 'gdi32full.dll'):
+        source = (directory / name).read_bytes()
+        assert len(source) <= 32 * 1024 * 1024
+        dependency = Image(source)
+        print('USER32_CFG_MODULE name=' + name + ' sha256=' + hashlib.sha256(source).hexdigest() +
+              ' pdb=' + pdb_identity(dependency) + ' GdiDllInitialize=' + initializer_export(dependency))
+    import_slots = imports(image)
     decoder = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_64)
     decoder.detail = True
+    for address in addresses[-12:]:
+        instruction = next(decoder.disasm(image.bytes(address, 16), address, count=1), None)
+        assert instruction is not None and instruction.address == address
+        if instruction.group(capstone.CS_GRP_CALL) and len(instruction.operands) == 1:
+            operand = instruction.operands[0]
+            if operand.type == x86.X86_OP_MEM and operand.mem.base == x86.X86_REG_RIP and not operand.mem.index:
+                slot = instruction.address + instruction.size + operand.mem.disp
+                if slot in import_slots:
+                    dll, name = import_slots[slot]
+                    print('USER32_CFG_IMPORT rva=' + hex(address) + ' iat=' + hex(slot) + ' dll=' + dll + ' name=' + name)
     for address in addresses[-6:]:
         first, end = image.function(address)
         instructions = list(decoder.disasm(image.bytes(first, end - first), first))
@@ -232,10 +350,12 @@ def main():
     blob = args.dll.read_bytes()
     assert len(blob) <= 32 * 1024 * 1024
     if args.explain_log:
-        explain(args.explain_log, blob, args.metadata.read_bytes())
+        explain(args.explain_log, blob, args.metadata.read_bytes(), args.dll.parent)
         return
     metadata = generate(blob)
-    if args.selftest: controls(metadata, blob)
+    if args.selftest:
+        controls(metadata, blob)
+        diagnostic_controls(blob)
     args.output.write_bytes(metadata)
     print('USER32_CFG_PREPARED decoder=' + VERSION + ' dll_sha256=' + hashlib.sha256(blob).hexdigest() +
           ' instructions=' + str((len(metadata) - HEADER.size) // ROW.size) + ' event_budget=128')

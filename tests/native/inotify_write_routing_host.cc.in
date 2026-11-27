@@ -72,7 +72,8 @@ constexpr DWORD FILE_ATTRIBUTE_DIRECTORY = 16, FILE_ATTRIBUTE_NORMAL = 128,
                 FILE_FLAG_OPEN_REPARSE_POINT = 0x200000, FILE_FLAG_OVERLAPPED = 0x40000000;
 constexpr DWORD FILE_READ_ATTRIBUTES = 128, FILE_LIST_DIRECTORY = 1, GENERIC_READ = 0x80000000,
                 FILE_SHARE_READ = 1, FILE_SHARE_WRITE = 2, FILE_SHARE_DELETE = 4, OPEN_EXISTING = 3;
-constexpr DWORD FILE_NAME_NORMALIZED = 0, VOLUME_NAME_DOS = 0, FILE_TYPE_DISK = 1;
+constexpr DWORD FILE_NAME_NORMALIZED = 0, FILE_NAME_OPENED = 8, VOLUME_NAME_DOS = 0, FILE_TYPE_DISK = 1,
+                SYNCHRONIZE = 0x00100000;
 constexpr DWORD WAIT_OBJECT_0 = 0, WAIT_TIMEOUT = 258, INFINITE = ~DWORD{0}, MAXDWORD = ~DWORD{0};
 constexpr DWORD ERROR_SUCCESS = 0, ERROR_FILE_NOT_FOUND = ENOENT, ERROR_PATH_NOT_FOUND = ENOTDIR,
                 ERROR_DELETE_PENDING = 303, ERROR_SHARING_VIOLATION = EBUSY,
@@ -262,6 +263,22 @@ namespace gesher {
 // separate native storage_policy_host_test coverage, including revocation.
 enum class AccessKind { kStat, kRead, kWrite };
 static bool CheckExternalStorageAccess(const std::wstring&, AccessKind) { return true; }
+static bool CheckExternalStorageHandle(HANDLE, AccessKind) { return true; }
+namespace directory_reopen {
+// Linux models the Windows held-directory reopen with the real opened inode,
+// never a fresh lookup of the pathname that selected it. Windows access and NT
+// file-object semantics are outside this host routing fixture.
+static DWORD Open(HANDLE source, HANDLE* result, bool overlapped) {
+  *result = INVALID_HANDLE_VALUE;
+  struct stat info{};
+  if (!overlapped || !source || source == INVALID_HANDLE_VALUE) return EINVAL;
+  if (fstat(source->fd, &info) != 0) return errno;
+  if (!S_ISDIR(info.st_mode)) return ENOTDIR;
+  *result = ReOpenFile(source, FILE_LIST_DIRECTORY, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                       FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED);
+  return *result == INVALID_HANDLE_VALUE ? GetLastError() : ERROR_SUCCESS;
+}
+}
 struct EventFd { bool nonblocking = true, readable = false; };
 static std::shared_ptr<EventFd> NewReadiness(bool nonblocking) {
   auto source = std::make_shared<EventFd>(); source->nonblocking = nonblocking; return source;

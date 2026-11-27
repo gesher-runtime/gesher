@@ -16,10 +16,10 @@
     "tools/net-tcp-priority/qualified/scandir-source.patch": "c4e86a35706726bf358e74d49ca171afcf9c4ce32bfc513a400ec25a6fa4f83f",
     "tools/net-tcp-priority/qualified/shared-stdio-source.json": "8e28669c6d0d077f330d00191846c9b73e40afa12bde0da6ad0bbabd6203f013",
     "tools/net-tcp-priority/qualified/shared-stdio-source.patch": "ea01987859d3f53e6168db8a40c1e3ed726bdfe3d3e2209eaf00e0d9ab0a4ff0",
-    "tools/net-tcp-priority/test-memrchr-policy.py": "f05739ff79cc4c6ea6ddda9703819773ba5407bcd60022bd906080ec6700206b",
-    "tools/net-tcp-priority/test-scandir-policy.py": "8a0bc5f04ce128f85c5a9cd439fd4d21bcfc3e8d96f743220813e9373d43c174",
+    "tools/net-tcp-priority/test-memrchr-policy.py": "2f73273ddaa253a0844009423f32f5af02101c8dbe60331a6c31654a5b4c6f0a",
+    "tools/net-tcp-priority/test-scandir-policy.py": "7ab793b348256bfc6e54bc7ef6949d1b7861d066c898e3f0aef5e8510c8181fb",
     "tools/net-tcp-priority/test-selected-policy.py": "0dedfe3eba2035bbeb9ab010256e935fdc7ef4be5c5475801b4689ceb8684ce4",
-    "tools/test_memrchr_report.py": "9556ec1b47ac82094a55324f512bbda938e687b0578d42a26f52f3048aadaedf",
+    "tools/test_memrchr_report.py": "67a70c4217a705f3ae0c7736f4e715af1d0da3ca941fce07c35409e400c210b9",
     "tools/test_scandir_sort.py": "1803419db9667a88427a33735310eb555cec71250cf8d895c2194b67f66ed07a"
   },
   "baseline": "3a309b747fc604f84fa20a42bbd875d706116d6d",
@@ -47,7 +47,7 @@
     "tools/test_scandir_sort.py": "1803419db9667a88427a33735310eb555cec71250cf8d895c2194b67f66ed07a"
   },
   "native_runtime_approval": false,
-  "patch_sha256": "bec547927d3d6c53e7fc0930c9d09dada52bc919887f0fe81e09aeb956a15703",
+  "patch_sha256": "3fc01bdd4e8f25173bd3cf0906b168b66685b6dd8f994e2042ed33eebbdb41f4",
   "paths": [
     ".github/workflows/ci.yml",
     "compat/bionic/posix_bionic.cc",

@@ -8,6 +8,7 @@
 #include "../../compat/framework/app_container.h"
 #include "usb_lowbox_iat_trace.h"
 #include "usb_user32_cfg_trace.h"
+#include "usb_heap_control_wire.h"
 #include "usb_scm_profile_control.h"
 #include <aclapi.h>
 #include <securityappcontainer.h>
@@ -179,6 +180,13 @@ struct NamespaceCollisionEvidence {
 };
 constexpr const wchar_t* kGuestLoaderProbes[] = {
     L"guest-kernel32.exe", L"guest-user32.exe", L"guest-user32-late.exe"};
+constexpr const wchar_t* kHeapControlFiles[] = {
+    L"heap-private-system.bin", L"heap-private-guest.bin", L"heap-lowbox.bin"};
+struct HeapControlEvidence {
+  DWORD report_status = ERROR_NOT_READY;
+  GesherHeapControlReport report{};
+};
+static_assert(sizeof(GesherHeapControlReport) == 32);
 constexpr wchar_t kDesktopAccessFile[] = L"desktop-access.bin";
 struct DesktopObjectCapture {
   DWORD status = ERROR_NOT_READY, label_status = ERROR_NOT_READY;
@@ -195,6 +203,13 @@ struct GuestLoaderEvidence {
   DWORD exit_read = 0;
   char stage[96] = "not-attempted";
 };
+struct HeapControlFile {
+  GesherHeapControlReport report{};
+  DWORD report_status = ERROR_NOT_READY;
+  GuestLoaderEvidence process;
+};
+static_assert(offsetof(HeapControlFile, report) == 0 && offsetof(HeapControlFile, report_status) == 32 &&
+              offsetof(HeapControlFile, process) == 36);
 struct GuestLoaderTrace {
   DWORD attempted = 0, setup = ERROR_NOT_READY, launch = ERROR_NOT_READY;
   DWORD attach = ERROR_NOT_READY, resume = ERROR_NOT_READY, wait = ERROR_NOT_READY;
@@ -2799,29 +2814,115 @@ void ObserveDesktopAccess(const std::wstring& path, HANDLE private_token, HANDLE
   }
 }
 
+// Only these three diagnostic report leaves receive write access. The parent
+// directory, executables, metadata and original probes retain their policies.
+std::wstring PrepareHeapControl(size_t index, HANDLE token, const storage::AuthorityLaunchSpec& spec) {
+  Require(index < std::size(kHeapControlFiles), "heap-control-index", ERROR_INVALID_PARAMETER);
+  std::wstring path = config.directory + L"\\" + kHeapControlFiles[index];
+  PSECURITY_DESCRIPTOR raw = nullptr;
+  Require(ConvertStringSecurityDescriptorToSecurityDescriptorW(
+      L"O:SYG:SYD:P(A;;FA;;;SY)(A;;FA;;;BA)", SDDL_REVISION_1, &raw, nullptr), "heap-report-security");
+  const Local security(raw);
+  SECURITY_ATTRIBUTES attributes{sizeof(attributes), raw, FALSE};
+  {
+    const Handle file(CreateFileW(path.c_str(), FILE_WRITE_DATA, FILE_SHARE_READ, &attributes,
+        CREATE_NEW, FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+    Require(file.get() != INVALID_HANDLE_VALUE, "heap-report-create");
+    const HeapControlFile empty{};
+    DWORD written = 0;
+    Require(WriteFile(file.get(), &empty, sizeof(empty), &written, nullptr) && written == sizeof(empty),
+        "heap-report-initialize");
+  }
+  raw = nullptr;
+  Require(ConvertStringSecurityDescriptorToSecurityDescriptorW(L"S:(ML;;NW;;;LW)", SDDL_REVISION_1,
+      &raw, nullptr), "heap-report-low-label");
+  const Local low_label(raw);
+  BOOL present = FALSE, defaulted = FALSE;
+  PACL label = nullptr;
+  Require(GetSecurityDescriptorSacl(raw, &present, &label, &defaulted) && present && label,
+      "heap-report-label-present");
+  Check(SetNamedSecurityInfoW(path.data(), SE_FILE_OBJECT, LABEL_SECURITY_INFORMATION,
+      nullptr, nullptr, nullptr, label), "heap-report-exact-leaf-low-label");
+  const auto user = User(token);
+  Check(container::Grant(path, const_cast<BYTE*>(user.data()), FILE_WRITE_DATA | SYNCHRONIZE, false), "heap-report-private-write");
+  Check(container::Grant(path, spec.capabilities.AppContainerSid, FILE_WRITE_DATA | SYNCHRONIZE, false), "heap-report-package-write");
+  return path;
+}
+void ReadHeapControl(const std::wstring& path, HeapControlEvidence* evidence) {
+  try {
+    const auto bytes = Read(path, sizeof(HeapControlFile));
+    Require(bytes.size() == sizeof(HeapControlFile), "heap-report-size", ERROR_INVALID_DATA);
+    std::memcpy(&evidence->report, bytes.data(), sizeof(evidence->report));
+    const auto& r = evidence->report;
+    Require(r.magic == GESHER_HEAP_CONTROL_MAGIC && r.version == 1 && !r.reserved &&
+        r.create_success <= 1 && r.destroy_called == r.create_success && r.destroy_success <= r.destroy_called &&
+        (r.destroy_called || !r.destroy_error), "heap-report-schema", ERROR_INVALID_DATA);
+    evidence->report_status = ERROR_SUCCESS;
+  } catch (const Failure& failure) { evidence->report_status = failure.status; }
+  catch (...) { evidence->report_status = ERROR_NOT_ENOUGH_MEMORY; }
+}
+void PersistHeapControl(const std::wstring& path, const GuestLoaderEvidence& process,
+                        const HeapControlEvidence& evidence) {
+  // Keep the established service/controller IPC payload bound unchanged. This
+  // exact optional file already contains the child's independent first32 bytes.
+  try {
+    const auto checked = Read(path, sizeof(HeapControlFile));
+    Require(checked.size() == sizeof(HeapControlFile), "heap-report-persist-size", ERROR_INVALID_DATA);
+    HeapControlFile result{};
+    std::memcpy(&result.report, checked.data(), sizeof(result.report));
+    result.report_status = evidence.report_status;
+    result.process = process;
+    const Handle file(CreateFileW(path.c_str(), FILE_WRITE_DATA, FILE_SHARE_READ, nullptr,
+        OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+    Require(file.get() != INVALID_HANDLE_VALUE, "heap-report-persist-open");
+    DWORD written = 0;
+    Require(WriteFile(file.get(), &result, sizeof(result), &written, nullptr) && written == sizeof(result),
+        "heap-report-persist-write");
+  } catch (...) { /* Optional report remains incomplete; never change the original gate. */ }
+}
+void PrintHeapControl(const char* subject, const GuestLoaderEvidence& process, const HeapControlEvidence& heap) {
+  const auto& r = heap.report;
+  std::printf("Protected HeapCreate control: subject=%s start=%lu stage=%.*s resume=%lu wait=0x%08lx "
+      "exit-read=%lu process-exit=0x%08lx stop=%lu report-status=%lu create-success=%lu create-last-error=%lu "
+      "destroy-called=%lu destroy-success=%lu destroy-last-error=%lu\n", subject,
+      process.start_status, static_cast<int>(sizeof(process.stage)), process.stage, process.resume_status,
+      process.wait_status, process.exit_read, process.exit_code, process.stop_status, heap.report_status,
+      r.create_success, r.create_error, r.destroy_called, r.destroy_success, r.destroy_error);
+}
+
 void ObserveGuestLoader(HANDLE token, const storage::AuthorityLaunchSpec& original,
                         const storage::AuthorityLaunch& first,
-                        GuestLoaderEvidence (&evidence)[std::size(kGuestLoaderProbes)]) {
+                        GuestLoaderEvidence (&evidence)[std::size(kGuestLoaderProbes)], HeapControlEvidence* heap = nullptr) {
   // Bounded diagnostic only. It cannot change the original launch or cleanup
   // result, even if an optional probe cannot start or complete.
   const ULONGLONG deadline = std::min(config.worker_deadline, GetTickCount64() + 5000);
-  for (size_t i = 0; i < std::size(kGuestLoaderProbes); ++i) {
+  for (size_t i = heap ? 2 : 0; i < std::size(kGuestLoaderProbes); ++i) {
     auto& row = evidence[i];
     if (GetTickCount64() >= deadline) break;
     row.attempted = 1;
     if (row.prepare_status != ERROR_SUCCESS) continue;
+    std::wstring report;
     try {
       const std::wstring image = config.directory + L"\\" + kGuestLoaderProbes[i];
       auto spec = original;
       spec.executable = image.c_str();
+      std::wstring heap_arguments;
       spec.arguments = {};
+      if (heap) {
+        report = PrepareHeapControl(2, token, original);
+        heap_arguments = L"--heap-control=" + report;
+        spec.arguments = heap_arguments;
+      }
       spec.termination_error = nullptr;
       spec.expected_package_objects = first.package_objects();
       std::unique_ptr<storage::AuthorityLaunch> probe;
       const char* stage = "not-started";
       row.start_status = storage::AuthorityLaunch::Create(token, spec, &probe, &stage);
       std::snprintf(row.stage, sizeof(row.stage), "%s", stage ? stage : "<null>");
-      if (row.start_status != ERROR_SUCCESS || !probe) continue;
+      if (row.start_status != ERROR_SUCCESS || !probe) {
+        if (heap) PersistHeapControl(report, row, *heap);
+        continue;
+      }
       row.resume_status = probe->Resume();
       if (row.resume_status == ERROR_SUCCESS) {
         const ULONGLONG now = GetTickCount64();
@@ -2833,9 +2934,12 @@ void ObserveGuestLoader(HANDLE token, const storage::AuthorityLaunchSpec& origin
         }
       }
       row.stop_status = probe->Stop(500);
+      if (heap && row.wait_status == WAIT_OBJECT_0 && row.exit_read && row.exit_code == ERROR_SUCCESS)
+        ReadHeapControl(report, heap);
     } catch (...) {
       row.start_status = ERROR_NOT_ENOUGH_MEMORY;
     }
+    if (heap && !report.empty()) PersistHeapControl(report, row, *heap);
   }
 }
 
@@ -2844,13 +2948,14 @@ void ObserveGuestLoader(HANDLE token, const storage::AuthorityLaunchSpec& origin
 // Both rows use medium integrity and vary only the process-object DACL.
 // Never substitute for the original guest or change production security.
 void ObservePrivateLoader(HANDLE source, HANDLE lowbox, const storage::AuthorityLaunchSpec& spec,
-                         GuestLoaderEvidence (&rows)[2][std::size(kGuestLoaderProbes)]) {
+                         GuestLoaderEvidence (&rows)[2][std::size(kGuestLoaderProbes)], HeapControlEvidence* heap = nullptr) {
   const ULONGLONG deadline = std::min(config.worker_deadline, GetTickCount64() + 5000);
-  for (size_t variant = 0; variant < 2; ++variant) for (size_t i = 0; i < std::size(kGuestLoaderProbes); ++i) {
+  for (size_t variant = 0; variant < 2; ++variant) for (size_t i = heap ? 2 : 0; i < std::size(kGuestLoaderProbes); ++i) {
     if (GetTickCount64() >= deadline) return;
     auto& row = rows[variant][i];
     row.attempted = 1;
     Handle process, thread;
+    std::wstring report;
     try {
       HANDLE raw = nullptr;
       Require(CreateRestrictedToken(source, DISABLE_MAX_PRIVILEGE, 0, nullptr, 0, nullptr,
@@ -2939,6 +3044,10 @@ void ObservePrivateLoader(HANDLE source, HANDLE lowbox, const storage::Authority
       environment.push_back(0);
       const auto image = config.directory + L"\\" + kGuestLoaderProbes[i];
       std::wstring command = Quote(image);
+      if (heap) {
+        report = PrepareHeapControl(variant, token.get(), spec);
+        command += L" --heap-control=" + report;
+      }
       wchar_t desktop[] = L"winsta0\\default";
       STARTUPINFOEXW startup{};
       startup.StartupInfo.cb = sizeof(startup);
@@ -3021,7 +3130,10 @@ void ObservePrivateLoader(HANDLE source, HANDLE lowbox, const storage::Authority
     if (process) {
       if (WaitForSingleObject(process.get(), 0) != WAIT_OBJECT_0) TerminateProcess(process.get(), ERROR_TIMEOUT);
       row.stop_status = WaitForSingleObject(process.get(), 500) == WAIT_OBJECT_0 ? ERROR_SUCCESS : ERROR_TIMEOUT;
+      if (heap && row.wait_status == WAIT_OBJECT_0 && row.exit_read && row.exit_code == ERROR_SUCCESS)
+        ReadHeapControl(report, &heap[variant]);
     }
+    if (heap && !report.empty()) PersistHeapControl(report, row, heap[variant]);
   }
 }
 
@@ -3533,6 +3645,13 @@ Evidence RunSystem() {
         ObserveGuestLoaderTrace(identity->token(), spec, *child, identity->sid(), capability.value,
             desktop_user, &evidence.guest_loader_trace);
       }
+      // Separate heap witnesses run after every unchanged original loader row
+      // and CFG trace. They cannot replace or alter the original failing gate.
+      GuestLoaderEvidence private_heap_rows[2][std::size(kGuestLoaderProbes)]{};
+      GuestLoaderEvidence guest_heap_rows[std::size(kGuestLoaderProbes)]{};
+      HeapControlEvidence private_heaps[2]{}, guest_heap;
+      ObservePrivateLoader(identity->token(), guest_token.get(), spec, private_heap_rows, private_heaps);
+      ObserveGuestLoader(identity->token(), spec, *child, guest_heap_rows, &guest_heap);
     }
     Check(code, "guest-private-environment-witness");
     Check(child->Stop(0), "idempotent-exited-stop");
@@ -3798,6 +3917,32 @@ DWORD Controller(bool explicit_scm_control, bool explicit_lowbox_trace) {
           static_cast<unsigned long>(p.exit_code), static_cast<unsigned long>(p.stop_status));
     }
     if (explicit_lowbox_trace && evidence.status == 0xc0000142) {
+      const char* subjects[] = {"private-SYSTEM-only", "private-guest-default", "actual-lowbox"};
+      for (size_t i = 0; i < std::size(kHeapControlFiles); ++i) {
+        try {
+          const std::wstring path = directory + L"\\" + kHeapControlFiles[i];
+          if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES) {
+            std::printf("Protected HeapCreate control: subject=%s report-file-win32=%lu\n", subjects[i], GetLastError());
+            continue;
+          }
+          const auto bytes = Read(path, sizeof(HeapControlFile));
+          Require(bytes.size() == sizeof(HeapControlFile), "heap-controller-report-size", ERROR_INVALID_DATA);
+          HeapControlFile report{};
+          std::memcpy(&report, bytes.data(), sizeof(report));
+          Require(std::memchr(report.process.stage, 0, sizeof(report.process.stage)) != nullptr,
+              "heap-controller-report-stage", ERROR_INVALID_DATA);
+          HeapControlEvidence observed{report.report_status, report.report};
+          if (observed.report_status == ERROR_SUCCESS) ReadHeapControl(path, &observed);
+          PrintHeapControl(subjects[i], report.process, observed);
+        } catch (const Failure& failure) {
+          std::printf("Protected HeapCreate control: subject=%s report-read-error=%lu\n", subjects[i], failure.status);
+        } catch (...) {
+          std::printf("Protected HeapCreate control: subject=%s report-read-error=%lu\n", subjects[i],
+              static_cast<DWORD>(ERROR_NOT_ENOUGH_MEMORY));
+        }
+      }
+    }
+    if (explicit_lowbox_trace && evidence.status == 0xc0000142) {
       const auto& trace = evidence.guest_loader_trace;
       if (trace.attempted) {
         std::printf("Protected guest loader trace: setup=%lu launch=%lu attach=%lu resume=%lu wait=%lu detach=%lu "
@@ -3991,6 +4136,8 @@ DWORD Controller(bool explicit_scm_control, bool explicit_lowbox_trace) {
         remove_file(directory + L"\\" + kDesktopAccessFile, "delete-fixture-desktop-snapshot");
         for (const auto* name : kGuestLoaderProbes)
           remove_file(directory + L"\\" + name, "delete-fixture-loader-probe");
+        for (const auto* name : kHeapControlFiles)
+          remove_file(directory + L"\\" + name, "delete-fixture-heap-report");
         remove_file(directory + L"\\user32-cfg.bin", "delete-fixture-user32-metadata");
         remove_file(image, "delete-fixture-image");
         if (!RemoveDirectoryW(directory.c_str())) record_cleanup(GetLastError(), "delete-fixture-directory");
