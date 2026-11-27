@@ -18,7 +18,9 @@ import test_dns_resolver_admission as shared
 ROOT = Path(__file__).resolve().parents[1]
 WAIT = '''        until(() -> {
             Snapshot state = snapshot();
-            return state.requests == 32 && state.lookupQueue == 0;
+            boolean retired = state.requests == 32 && state.lookupQueue == 0;
+            if (!retired && observationWaiting != null) observationWaiting.countDown();
+            return retired;
         }, "queued timeout unlinks; timed-out uncancelable lookups keep their slots", end);'''
 IMMEDIATE = '''        check(snapshot().requests == 32 && snapshot().lookupQueue == 0,
                 "queued timeout unlinks; timed-out uncancelable lookups keep their slots");'''

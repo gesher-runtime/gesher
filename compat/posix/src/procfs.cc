@@ -480,9 +480,32 @@ std::string MappedFile(void* address) {
   for (const auto& dm : drives) {
     size_t t = dm.target.size();
     if (path.size() > t && _wcsnicmp(path.c_str(), dm.target.c_str(), t) == 0 && path[t] == L'\\') {
-      const std::wstring windows = dm.drive + path.substr(t);
+      std::wstring windows = dm.drive + path.substr(t);
       // Gesher's ELF loader, by its Android name (system_linker.h).
       if (system_linker::IsFile(windows)) return system_linker::kPath;
+      // GetMappedFileNameW returns the long name even if mmap opened an 8.3
+      // alias. Native ART symbol resolvers commonly scan maps with sscanf's
+      // %s (ADR 0086), so a space in the Windows profile hides libart.so from
+      // them. Prefer the file's real, whitespace-free alias when one exists.
+      // Keep the long name if short names are unavailable: never invent a
+      // pathname that callers could not open. map_files uses this name too.
+      if (windows.find_first_of(L" \t\r\n\v\f") != std::wstring::npos) {
+        // Keep the basename: resolvers also match names longer than 8.3,
+        // such as libdexfile.so, which must not become LIBDEX~1.SO.
+        const size_t slash = windows.find_last_of(L'\\');
+        const std::wstring directory = windows.substr(0, slash);
+        const DWORD size = GetShortPathNameW(directory.c_str(), nullptr, 0);
+        if (size != 0) {
+          std::wstring short_name(size, L'\0');
+          const DWORD length = GetShortPathNameW(directory.c_str(), short_name.data(), size);
+          if (length != 0 && length < size) {
+            short_name.resize(length);
+            if (short_name.find_first_of(L" \t\r\n\v\f") == std::wstring::npos) {
+              windows = short_name + windows.substr(slash);
+            }
+          }
+        }
+      }
       return LinuxPath(windows.c_str());
     }
   }
