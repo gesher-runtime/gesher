@@ -88,14 +88,32 @@ target_compile_options(gesher_media_player_core PRIVATE -Wall -Wextra -Werror
   -Wno-unused-parameter -Wno-deprecated-copy)
 set_target_properties(gesher_media_player_core PROPERTIES CXX_STANDARD 23)
 
-# The native APIs share the actual audio/file-player backend in both hosts.
+# Shared C++ codec engine and encoders (JNI-free), linked into both hosts.
+add_library(gesher_media_codec OBJECT
+  ${_media}/codec/codec_engine.cc
+  ${_media}/encode/encoder.cc
+  ${_media}/encode/mf_encoder.cc
+  ${_media}/encode/opus_encoder.cc
+  ${_media}/encode/soft_avc_encoder.cc)
+target_link_libraries(gesher_media_codec PUBLIC gesher_media_player_core
+  stagefright_foundation gesher_media_codecs gesher_bionic gesher_window_surface ole32 mmdevapi dxgi)
+target_include_directories(gesher_media_codec PRIVATE ${CMAKE_SOURCE_DIR}/compat/bionic)
+target_compile_options(gesher_media_codec PRIVATE -Wall -Wextra -Werror -Wno-unused-parameter
+  -Wno-deprecated-copy)
+set_target_properties(gesher_media_codec PROPERTIES CXX_STANDARD 23)
+add_dependencies(media_codecs_all gesher_media_codec)
+
+# The native APIs share the actual audio/file-player/codec backend in both hosts.
 add_library(gesher_media_ndk OBJECT
-  ${_media}/ndk/aaudio.cc ${_media}/ndk/opensles.cc ${_media}/ndk/media_extractor.cc)
-target_link_libraries(gesher_media_ndk PUBLIC gesher_media_audio gesher_media_player_core gesher_bionic)
+  ${_media}/ndk/aaudio.cc ${_media}/ndk/opensles.cc ${_media}/ndk/media_extractor.cc
+  ${_media}/ndk/media_codec.cc)
+target_link_libraries(gesher_media_ndk PUBLIC gesher_media_audio gesher_media_player_core
+  gesher_media_codec gesher_bionic)
 target_compile_options(gesher_media_ndk PRIVATE -Wall -Wextra -Werror -Wno-unused-parameter)
 set_target_properties(gesher_media_ndk PROPERTIES CXX_STANDARD 23)
 foreach(_host dalvikvm gesher-exec)
-  target_link_libraries(${_host} PRIVATE gesher_media_audio gesher_media_player_core gesher_media_ndk)
+  target_link_libraries(${_host} PRIVATE gesher_media_audio gesher_media_player_core
+    gesher_media_codec gesher_media_ndk)
 endforeach()
 
 # The actual container writers and pure packet metadata are shared by JNI
@@ -143,16 +161,13 @@ add_library(gesher_media_player OBJECT
   ${_media}/jni/media_jni_others.cc
   ${_media}/jni/media_extractor_jni.cc
   ${_media}/jni/soundpool_jni.cc
-  # Recording (media3, ADR 0059): encoders, container writers, MediaMuxer, MediaRecorder.
-  ${_media}/encode/encoder.cc
-  ${_media}/encode/mf_encoder.cc
-  ${_media}/encode/opus_encoder.cc
-  ${_media}/encode/soft_avc_encoder.cc
+  # Recording (media3, ADR 0059): container writers, MediaMuxer, MediaRecorder.
   ${_media}/record/recorder.cc
   ${_media}/jni/media_muxer_jni.cc
   ${_media}/jni/media_recorder_jni.cc)
 target_include_directories(gesher_media_player PRIVATE ${CMAKE_SOURCE_DIR}/compat/bionic)
-target_link_libraries(gesher_media_player PUBLIC gesher_media gesher_media_player_core gesher_media_ndk gesher_media_muxer gesher_media_codecs gesher_bionic
+target_link_libraries(gesher_media_player PUBLIC gesher_media gesher_media_player_core
+  gesher_media_codec gesher_media_ndk gesher_media_muxer gesher_media_codecs gesher_bionic
   winhttp ole32 mmdevapi dxgi)
 target_compile_options(gesher_media_player PRIVATE -Wall -Wextra -Werror -Wno-unused-parameter
   # libutils' TypeHelpers.h trips -Wdeprecated-copy on key_value_pair_t<String8, String8>.

@@ -134,7 +134,8 @@
       "71-media4-format.ps1",
       "76-media4-opensl.ps1",
       "79-media4-muxer.ps1",
-      "87-ndk-extractor.ps1"
+      "87-ndk-extractor.ps1",
+      "88-ndk-codec.ps1"
     ],
     "helpers": {
       "50-services.ps1": [

@@ -1,0 +1,276 @@
+// Actual JNI SetAsync/PostEvent and engine enqueue-gate bodies, over explicit
+// JNI object/monitor/Handler boundaries. The codec/NDK units are compiled whole
+// by test_ndk_codec_contracts.py; no Windows/ART execution is claimed here.
+// AOSP android-16.0.0_r4 MediaCodec.java (SHA256
+// c10ff4e847db3f25ec7a68741669b7478943c79edf9798d08a240c45e6666e93):
+// postEventFromNative only enqueues under mListenerLock, stop removes messages
+// after native_stop, and flush permits already enqueued outstanding callbacks.
+namespace jni_callbacks_host {
+using jint = int;
+using jlong = int64_t;
+constexpr int JNI_OK = 0;
+constexpr int kEventCallback = 1, kCbInputAvailable = 1,
+              kCbOutputAvailable = 2, kCbError = 3, kCbOutputFormatChange = 4;
+struct Object { std::recursive_mutex monitor; };
+using jobject = Object*;
+using jstring = Object*;
+struct WeakRef {
+  explicit WeakRef(jobject object) : object(object) {}
+  jobject get() const { return object; }
+  jobject object;
+};
+struct {
+  int listener_lock = 1, post_event = 2, buffer_info = 3,
+      buffer_info_ctor = 4, buffer_info_set = 5,
+      codec_exception = 6, codec_exception_ctor = 7;
+} gJ;
+enum class Boundary { kNone, kAttach, kFormat, kOutput, kError };
+thread_local int explicit_monitor_depth = 0;
+struct JNIEnv {
+  Object self, listener;
+  std::atomic<Boundary> pause_at{Boundary::kNone};
+  std::atomic<bool> observe_monitor{false};
+  Signal entered, resume, monitor_attempted;
+  std::mutex mu;
+  std::vector<std::unique_ptr<Object>> objects;
+  std::vector<std::pair<int, int>> events;
+
+  void Pause(Boundary boundary) {
+    if (pause_at.compare_exchange_strong(boundary, Boundary::kNone)) {
+      entered.Set();
+      resume.Wait();
+    }
+  }
+  jobject Allocate() {
+    std::lock_guard lock(mu);
+    objects.push_back(std::make_unique<Object>());
+    return objects.back().get();
+  }
+  int PushLocalFrame(int) { return 0; }
+  jobject PopLocalFrame(jobject value) { return value; }
+  jobject NewLocalRef(jobject value) { return value; }
+  void DeleteLocalRef(jobject) {}
+  jobject GetObjectField(jobject value, int field) {
+    Check(value == &self && field == gJ.listener_lock,
+          "JNI dispatch resolves the codec's own listener monitor");
+    return &listener;
+  }
+  int MonitorEnter(jobject value) {
+    Check(value == &listener, "JNI dispatch enters the listener monitor");
+    if (observe_monitor.exchange(false)) monitor_attempted.Set();
+    value->monitor.lock();
+    ++explicit_monitor_depth;
+    return JNI_OK;
+  }
+  int MonitorExit(jobject value) {
+    --explicit_monitor_depth;
+    value->monitor.unlock();
+    return JNI_OK;
+  }
+  template <class... Args>
+  jobject NewObject(int type, int, Args...) {
+    if (type == gJ.buffer_info) Pause(Boundary::kOutput);
+    return Allocate();
+  }
+  jstring NewStringUTF(const char*) {
+    Pause(Boundary::kError);
+    return Allocate();
+  }
+  void CallVoidMethod(jobject, int, jint, jint, jlong, jint) {}
+  void CallVoidMethod(jobject target, int method, int event, int what, int index, jobject) {
+    Check(target == &self && method == gJ.post_event && event == kEventCallback,
+          "actual JNI adapter calls the private callback enqueue method");
+    // AOSP's private Java method reenters the same monitor, then sends a
+    // Handler message; application callbacks run later on that Handler.
+    if (observe_monitor.exchange(false)) monitor_attempted.Set();
+    std::lock_guard listener_lock(listener.monitor);
+    Check(explicit_monitor_depth > 0,
+          "Java listener monitor precedes the engine enqueue gate");
+    std::lock_guard lock(mu);
+    events.emplace_back(what, index);
+  }
+  std::vector<std::pair<int, int>> Snapshot() {
+    std::lock_guard lock(mu);
+    return events;
+  }
+  size_t Count(int what) {
+    std::lock_guard lock(mu);
+    return std::count_if(events.begin(), events.end(),
+                         [what](auto event) { return event.first == what; });
+  }
+};
+std::atomic<JNIEnv*> environment{nullptr};
+JNIEnv* AttachedEnv(const char*) {
+  auto* env = environment.load();
+  env->Pause(Boundary::kAttach);
+  return env;
+}
+bool CheckException(JNIEnv*, const char*) { return false; }
+jobject FormatToMap(JNIEnv* env, const Format&) {
+  env->Pause(Boundary::kFormat);
+  return env->Allocate();
+}
+
+class Adapter {
+ public:
+  Adapter(std::shared_ptr<CodecEngine> engine, JNIEnv& env)
+      : engine_(std::move(engine)), self_(std::make_shared<WeakRef>(&env.self)) {}
+@SET_ASYNC@
+ private:
+@POST_EVENT@
+  std::shared_ptr<CodecEngine> engine_;
+  std::shared_ptr<WeakRef> self_;
+};
+
+std::shared_ptr<CodecEngine> Decoder() {
+  auto engine = std::make_shared<CodecEngine>(
+      *CodecEngine::FindByType("audio/raw", false));
+  Format format;
+  AMediaFormat_setString(format.get(), "mime", "audio/raw");
+  AMediaFormat_setInt32(format.get(), "max-input-size", 64);
+  std::string error;
+  Check(engine->Configure(std::move(format), nullptr, {}, &error),
+        "JNI notification decoder configured through production engine");
+  return engine;
+}
+
+void DelayedStart() {
+  JNIEnv env;
+  environment = &env;
+  std::weak_ptr<CodecEngine> retired;
+  {
+    auto engine = Decoder();
+    retired = engine;
+    Adapter adapter(engine, env);
+    Check(adapter.SetAsync(true), "actual JNI SetAsync registers callbacks");
+    env.pause_at = Boundary::kAttach;
+    std::thread original([&] {
+      std::string error;
+      Check(engine->Start(&error), "original JNI Start batch returns");
+    });
+    env.entered.Wait();
+    int status = 0;
+    engine->Flush(&status);
+    Check(status == 0, "flush completes with the original JNI batch detached");
+    std::string error;
+    Check(engine->Start(&error), "JNI restarts before the old batch resumes");
+    env.resume.Set();
+    original.join();
+    const auto events = env.Snapshot();
+    Check(events.size() == kCodecSlots,
+          "actual JNI dispatch drops the entire obsolete Start suffix");
+    std::vector<bool> seen(kCodecSlots, false);
+    for (auto [kind, index] : events) {
+      Check(kind == kCbInputAvailable && index >= 0 && index < kCodecSlots,
+            "Java Handler receives a real input event");
+      if (index >= 0 && index < kCodecSlots) {
+        Check(!seen[index], "no duplicate JNI input after flush and restart");
+        seen[index] = true;
+      }
+    }
+  }
+  Check(retired.expired(), "JNI callbacks do not form an engine ownership cycle");
+}
+
+void DelayedWorker(Boundary boundary, int kind) {
+  JNIEnv env;
+  environment = &env;
+  auto engine = Decoder();
+  Adapter adapter(engine, env);
+  Check(adapter.SetAsync(true), "JNI worker callbacks registered");
+  std::string error;
+  Check(engine->Start(&error), "JNI worker execution started");
+  env.pause_at = boundary;
+  if (boundary == Boundary::kError) decoded_channels = 0;
+  size_t capacity = 0;
+  auto* bytes = engine->GetInputBuffer(0, &capacity);
+  Check(bytes != nullptr && capacity >= 4, "JNI input slot has real storage");
+  std::memcpy(bytes, "abcd", 4);
+  Check(engine->QueueInput(0, 0, 4, 1234, kCodecFlagEndOfStream, &error),
+        "JNI worker receives PCM through actual queue");
+  env.entered.Wait();
+  Check(engine->IsCallbackCurrent(0), "paused worker event belongs to the initial epoch");
+  int status = 0;
+  std::thread flushing([&] { engine->Flush(&status); });
+  // Observe the real Flush epoch transition while its worker is deliberately
+  // paused outside mu_. The deadline only bounds a broken test; it never
+  // establishes the intended ordering by sleeping.
+  const auto deadline = std::chrono::steady_clock::now() + 5s;
+  while (engine->IsCallbackCurrent(0)) {
+    if (std::chrono::steady_clock::now() >= deadline) std::_Exit(2);
+    std::this_thread::yield();
+  }
+  env.resume.Set();
+  flushing.join();
+  Check(status == 0, "flush retires the delayed JNI worker event");
+  Check(env.Count(kind) == 0,
+        "JNI output, format and error conversions cannot publish a retired epoch");
+  decoded_channels = 2;
+  const size_t before = env.Count(kCbInputAvailable);
+  Check(engine->Start(&error), "JNI worker restart succeeds");
+  Check(env.Count(kCbInputAvailable) == before + kCodecSlots,
+        "new JNI epoch still publishes each current input once");
+}
+
+void ListenerLockOrder() {
+  JNIEnv env;
+  environment = &env;
+  auto engine = Decoder();
+  Adapter adapter(engine, env);
+  Check(adapter.SetAsync(true), "JNI listener-lock test configured");
+  std::unique_lock listener(env.listener.monitor);
+  env.observe_monitor = true;
+  std::thread posting([&] {
+    std::string error;
+    Check(engine->Start(&error), "JNI post completes after listener contention");
+  });
+  env.monitor_attempted.Wait();
+  // The public Java setter holds this same monitor while entering the engine.
+  // Reversing the order in PostEvent deadlocks this actual engine call.
+  engine->EnableFrameRendered(false);
+  Check(true, "listener setter can acquire engine state while a post waits on Java");
+  listener.unlock();
+  posting.join();
+}
+
+// Compile the exact production gate body with its state made visible only in
+// this isolated class. Another thread's try_lock proves the epoch mutex stays
+// held during enqueue, without a scheduling delay or a copied gate algorithm.
+class VisibleGate {
+ public:
+@ENQUEUE_GATE@
+  std::mutex mu_;
+  bool released_ = false;
+  uint64_t wait_generation_ = 7;
+};
+void GateAtomicity() {
+  VisibleGate gate;
+  bool called = false, held = false;
+  Check(gate.EnqueueCallbackIfCurrent(7, [&] {
+    called = true;
+    std::thread observer([&] {
+      held = !gate.mu_.try_lock();
+      if (!held) gate.mu_.unlock();
+    });
+    observer.join();
+  }), "current epoch is admitted by actual enqueue gate");
+  Check(called && held, "epoch validation and enqueue share one engine critical section");
+  called = false;
+  Check(!gate.EnqueueCallbackIfCurrent(6, [&] { called = true; }) && !called,
+        "actual enqueue gate rejects a stale epoch before posting");
+  gate.released_ = true;
+  Check(!gate.EnqueueCallbackIfCurrent(7, [&] { called = true; }) && !called,
+        "actual enqueue gate rejects a released owner before posting");
+}
+void Run() {
+  const int before = formats;
+  GateAtomicity();
+  DelayedStart();
+  DelayedWorker(Boundary::kFormat, kCbOutputFormatChange);
+  DelayedWorker(Boundary::kOutput, kCbOutputAvailable);
+  DelayedWorker(Boundary::kError, kCbError);
+  ListenerLockOrder();
+  Check(formats == before, "JNI dispatch fixtures retire every production format");
+  environment = nullptr;
+}
+}  // namespace jni_callbacks_host
