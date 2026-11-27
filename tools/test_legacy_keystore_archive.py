@@ -36,7 +36,7 @@ def main():
         parser_source = str(ROOT / "tests/native/protected_legacy_archive_wire_test.cc")
         parser_command = [part.replace(str(executable), str(parser_executable))
                           .replace(sources[0], parser_source)
-                          for part in command if part != sources[1]]
+                          for part in command if part not in {sources[1], "-municode"}]
         subprocess.run(parser_command, cwd=work, check=True, timeout=90)
         subprocess.run([str(parser_executable)], cwd=work, check=True, timeout=30)
 
