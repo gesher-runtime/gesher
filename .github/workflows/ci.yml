@@ -586,6 +586,7 @@ jobs:
           python3 tools/test_search_delete_report.py
           python3 tools/test_scandir_sort.py --sanitize --negative-controls --output-dir scandir-sort-contracts
           python3 tools/test_scandir_report.py
+          python3 -m unittest discover -s tools/tests -p test_scandir_report.py
           python3 tools/test_bionic_semaphore_contracts.py --sanitize
           python3 tools/test_file_allocation_contracts.py --sanitize
           python3 tools/test_positioned_io_contracts.py --sanitize

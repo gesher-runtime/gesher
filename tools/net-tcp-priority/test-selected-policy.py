@@ -814,6 +814,30 @@ def preceding_storage_policy_sources(before_netlink):
    assert (work/path).read_bytes()==current[path],('storage policy forward endpoint',path)
  return baseline
 
+# Reverse the one process collector transition to the unchanged OFD digest.
+# This source check does not qualify Windows execution.
+CHILD_WAIT_PATH='compat/bionic/process_bionic.cc'
+CHILD_WAIT_PATCH='tools/net-tcp-priority/qualified/child-wait-source.patch'
+CHILD_WAIT_PATCH_SHA256='a2c8cecd2c71a63adee65f5c6339cb876ac288d0895bdad530035817e0fbb62e'
+CHILD_WAIT_SOURCE_SHA256='70222a932a0ea37339d8d5b320e838ae44ee5fc5ebf2d741baf39ae679ded59a'
+
+def preceding_child_wait_source():
+ current=(ROOT/CHILD_WAIT_PATH).read_bytes()
+ patch=(ROOT/CHILD_WAIT_PATCH).read_bytes()
+ assert hashlib.sha256(current).hexdigest()==CHILD_WAIT_SOURCE_SHA256,CHILD_WAIT_PATH
+ assert hashlib.sha256(patch).hexdigest()==CHILD_WAIT_PATCH_SHA256,CHILD_WAIT_PATCH
+ assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==[CHILD_WAIT_PATH]
+ with tempfile.TemporaryDirectory(prefix='gesher-child-wait-qualification-') as temporary:
+  work=Path(temporary)
+  source=work/CHILD_WAIT_PATH
+  source.parent.mkdir(parents=True)
+  source.write_bytes(current)
+  subprocess.run(['git','apply','--reverse','--unidiff-zero','-'],input=patch,cwd=work,check=True,capture_output=True)
+  baseline=source.read_bytes()
+  subprocess.run(['git','apply','--unidiff-zero','-'],input=patch,cwd=work,check=True,capture_output=True)
+  assert source.read_bytes()==current,CHILD_WAIT_PATH
+ return baseline
+
 # Reverse only the reviewed adaptive stable-directory sort before the exact
 # Memrchr transition and all original OFD checks. It grants no supplier,
 # controller or runtime approval and admits no other POSIX source change.
@@ -929,6 +953,7 @@ def preceding_ofd_sources():
  preceding={**netlink,**memfd_lease,**stdio_main,**shared_stdio,**storage_policy}
  for path,digest in qualification['source_sha256'].items():
   actual=preceding[path] if path in preceding else (ROOT/path).read_bytes()
+  if path==CHILD_WAIT_PATH:actual=preceding_child_wait_source()
   if path=='compat/binder/binderd.cc':actual=preceding_composed_binder_output_source()
   if path=='compat/posix/src/system_properties.cc':actual=preceding_logging_property_source()
   if path=='compat/bionic/shim.cc':actual=preceding_memmem_source(actual)
@@ -1281,6 +1306,8 @@ def transition_negative_controls():
  from unittest.mock import patch
  original=Path.read_bytes
  cases=[
+  (CHILD_WAIT_PATH,b'needs_poll |= !child.watched;',b'needs_poll = false;'),
+  (CHILD_WAIT_PATCH,b'@@',b'@x'),
   ('compat/posix/src/fd.cc',b'--state->description->descriptor_refs == 0',b'--state->description->descriptor_refs == 1'),
   ('compat/posix/src/fd.cc',b'return TransferPipe(snapshot, bytes, count, false);',b'return 0;'),
   ('compat/posix/src/system.cc',b'gesher::ws::RecvOwned(state.socket,',b'gesher::ws::SendOwned(state.socket,'),
