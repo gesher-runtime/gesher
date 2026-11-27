@@ -1,6 +1,7 @@
 // Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0
 // The driver core and dispatch below are extracted verbatim from binderd.cc.
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cerrno>
 #include <chrono>
@@ -112,7 +113,12 @@ struct HandleCloser {
 };
 using OwnedHandle = std::unique_ptr<void, HandleCloser>;
 enum class Role { kServiceManager };
-struct Peer { const OwnedHandle process; const Role role; };
+struct Peer {
+  const OwnedHandle process;
+  const Role role;
+  // Keep excluded connection declarations well-formed; admission still aborts.
+  const std::array<uint8_t, 16> installation{};
+};
 struct Registry {
   using Lease = std::shared_ptr<const Peer>;
   bool Live(const Lease&) const { std::abort(); }

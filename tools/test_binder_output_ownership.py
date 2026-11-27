@@ -38,7 +38,8 @@ def generated(source: str) -> str:
         raise RuntimeError('AppContainer admission flag boundary is not unique')
     core = core.replace(sandbox_flag, '[[maybe_unused]] ' + sandbox_flag)
     for declaration in ('bool g_record_only = false;',
-                        'gesher::process_identity::Sid g_record_container;'):
+                        'gesher::process_identity::Sid g_record_container;',
+                        'std::atomic<unsigned> g_loopback_queries{0};'):
         if core.count(declaration) > 1:
             raise RuntimeError('Record admission boundary is not unique')
         core = core.replace(declaration, '[[maybe_unused]] ' + declaration)
