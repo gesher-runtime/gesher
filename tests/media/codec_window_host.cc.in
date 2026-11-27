@@ -116,7 +116,7 @@ int DeliverToReader(jobject, const VideoFrame&, int64_t timestamp_ns) {
 }
 constexpr int kSlots = 2;
 constexpr int kInfoTryAgainLater = -1, kInfoOutputFormatChanged = -2;
-constexpr int kCbInputAvailable = 1, kCbError = 3;
+constexpr int kCbError = 3;
 struct Slot {
   bool client = false;
   std::shared_ptr<VideoFrame> frame;

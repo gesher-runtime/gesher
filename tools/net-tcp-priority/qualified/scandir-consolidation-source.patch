@@ -1,8 +1,8 @@
 diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
-index f9e65608b..9dadf2751 100644
+index f9e65608b..69933ba7a 100644
 --- a/.github/workflows/ci.yml
 +++ b/.github/workflows/ci.yml
-@@ -29,6 +29,24 @@ env:
+@@ -29,6 +29,27 @@ env:
    LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
 
  jobs:
@@ -11,6 +11,8 @@ index f9e65608b..9dadf2751 100644
 +    timeout-minutes: 10
 +    outputs:
 +      selected: ${{ steps.selection.outputs.selected }}
++      shards: ${{ steps.selection.outputs.shards }}
++      preflight_groups: ${{ steps.selection.outputs.preflight_groups }}
 +    steps:
 +      - uses: actions/checkout@v4
 +        with:
@@ -19,6 +21,7 @@ index f9e65608b..9dadf2751 100644
 +          sparse-checkout: |
 +            .github/workflows
 +            tools/ci
++            tests/windows/test-shards.json
 +      - name: Select checks for this change
 +        id: selection
 +        run: |
@@ -27,11 +30,22 @@ index f9e65608b..9dadf2751 100644
    source-identity:
      runs-on: ubuntu-24.04
      outputs:
-@@ -80,12 +98,52 @@ jobs:
+@@ -65,7 +86,8 @@ jobs:
+             .github/actions/runner-route
+             .github/actions/local-build-cache
+             .github/actions/setup-build
+-            tools/ci
++            tools
++            tests/windows/test-shards.json
+       - uses: actions/setup-node@v4
+         with:
+           node-version: 20
+@@ -80,12 +102,53 @@ jobs:
            python3 tools/ci/test_release_workflows.py
            python3 -m unittest discover -s tools/ci -p test_cache_policy.py
            python3 -m unittest discover -s tools/ci -p test_prune_caches.py
 +          python3 -m unittest discover -s tools/ci -p test_select_pr_jobs.py
++          python3 -m unittest discover -s tools/ci -p test_preflight_plan.py
 +  # The hosted Server images can expose NLM without its cost backend. Their
 +  # contracts below prove that absence independently and check failed-start
 +  # cleanup. This client job unconditionally requires the real subscription.
@@ -81,7 +95,7 @@ index f9e65608b..9dadf2751 100644
      strategy:
        fail-fast: false
        matrix:
-@@ -102,18 +160,134 @@ jobs:
+@@ -102,18 +165,134 @@ jobs:
          with:
            distribution: temurin
            java-version: '21.0.13'
@@ -218,7 +232,7 @@ index f9e65608b..9dadf2751 100644
          shell: pwsh
          run: |
            & .\app-identity-restart.exe
-@@ -125,7 +299,7 @@ jobs:
+@@ -125,7 +304,7 @@ jobs:
        - name: Build actual dexopt child waiting and resource budgets
          if: ${{ !cancelled() }}
          shell: cmd
@@ -227,7 +241,7 @@ index f9e65608b..9dadf2751 100644
        - name: Verify real compiler cancellation, reaping, CPU and memory budgets
          if: ${{ !cancelled() }}
          shell: pwsh
-@@ -140,6 +314,65 @@ jobs:
+@@ -140,6 +319,65 @@ jobs:
          if: ${{ !cancelled() }}
          shell: pwsh
          run: tests/windows/clipboard/Publication.ps1
@@ -293,7 +307,7 @@ index f9e65608b..9dadf2751 100644
        - name: Exact native reader ownership and handle reuse controls
          if: ${{ !cancelled() }}
          shell: pwsh
-@@ -148,6 +381,91 @@ jobs:
+@@ -148,6 +386,91 @@ jobs:
          if: ${{ !cancelled() }}
          shell: pwsh
          run: python tools/test_windows_host_events.py --java-home "$env:JAVA_HOME"
@@ -385,7 +399,7 @@ index f9e65608b..9dadf2751 100644
        - name: Build native clipboard foreground actor before timed startup
          if: ${{ !cancelled() }}
          shell: cmd
-@@ -168,6 +486,72 @@ jobs:
+@@ -168,6 +491,72 @@ jobs:
          if: ${{ !cancelled() }}
          shell: bash
          run: python tools/test_storage_stats_scans.py --java-home "$JAVA_HOME"
@@ -458,7 +472,7 @@ index f9e65608b..9dadf2751 100644
        - name: Release updater and control panel contracts on Windows PowerShell 5.1
          if: ${{ !cancelled() }}
          shell: powershell
-@@ -178,23 +562,44 @@ jobs:
+@@ -178,23 +567,44 @@ jobs:
            tests/windows/shell/ControlPanelRefreshChecks.ps1
            tests/windows/shell/ControlPanelRecoveryChecks.ps1
            tests/windows/shell/ControlPanelIdleChecks.ps1
@@ -503,7 +517,7 @@ index f9e65608b..9dadf2751 100644
        - name: API 37 report gate failure and selection contracts
          if: ${{ !cancelled() }}
          shell: bash
-@@ -211,7 +616,8 @@ jobs:
+@@ -211,7 +621,8 @@ jobs:
            PYTHONIOENCODING: utf-8
          run: python tools/ci/run_api37_report_tests.py --profile windows
    api37-report-tests:
@@ -513,7 +527,7 @@ index f9e65608b..9dadf2751 100644
      runs-on: ubuntu-24.04
      timeout-minutes: 10
      env:
-@@ -236,18 +642,22 @@ jobs:
+@@ -236,18 +647,27 @@ jobs:
          shell: bash
          run: python tools/ci/run_api37_report_tests.py --profile linux
    union-tsf:
@@ -535,12 +549,17 @@ index f9e65608b..9dadf2751 100644
    # alongside the build jobs and ci-required still requires them to pass.
    artifact-preflight:
 -    needs: [source-identity]
++    name: artifact-preflight (${{ matrix.group }})
 +    needs: [plan, source-identity]
 +    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'artifact-preflight') }}
++    strategy:
++      fail-fast: false
++      matrix:
++        group: ${{ fromJSON(needs.plan.outputs.preflight_groups != '[]' && needs.plan.outputs.preflight_groups || '["metadata"]') }}
      runs-on: ubuntu-24.04
      steps:
        - uses: actions/checkout@v4
-@@ -255,8 +665,13 @@ jobs:
+@@ -255,20 +675,30 @@ jobs:
            fetch-depth: 0
        - name: Install media contract encoder and decoder tools
          run: |
@@ -555,18 +574,49 @@ index f9e65608b..9dadf2751 100644
 +          sudo apt-get "${ubuntu_sources[@]}" install -y --no-install-recommends ffmpeg
 
        - name: Windows test shard coverage, dependencies and failure controls
++        if: matrix.group == 'metadata'
          shell: pwsh
-@@ -305,6 +720,9 @@ jobs:
+         run: |
++          python3 -m pip install PyYAML==6.0.3
++          if ($LASTEXITCODE -ne 0) { throw 'Cannot install CI shard planner dependencies' }
+           tests/windows/test-test-shards.ps1
+           tests/windows/test-bitmap-shared-gate.ps1
+
+       - name: Wi-Fi specifier native evidence checker contracts
++        if: matrix.group == 'metadata'
+         shell: pwsh
+         run: tests/windows/WifiNetworkSpecifierParcelChecks.ps1
+
+       - name: Strict archive adversarial controls
++        if: matrix.group == 'metadata'
+         run: |
+           python3 tools/ci/receipt_identity.py
+           python3 -m unittest discover -s tools/ci -p test_source_identity.py
+@@ -290,6 +720,7 @@ jobs:
+           python3 tools/surface/test-verified-artifact.py
+
+       - name: Compatibility inventory parser tests
++        if: matrix.group == 'metadata'
+         run: |
+           python3 -m unittest discover -s tools/tests -p 'test_compatibility_*.py'
+           python3 -m unittest discover -s tools/tests -p 'test_*api_inventory.py'
+@@ -303,9 +734,15 @@ jobs:
+           python3 tools/fonts/test-standalone-link.py
+
        - name: Notification image staging, cache, cancellation and encoder ownership
++        if: matrix.group == 'media'
          run: python3 tools/test_notification_images.py
 
 +      - name: Google client-library test fixtures report Play services' absence (#335)
++        if: matrix.group == 'platform'
 +        run: python3 tools/test_gms_client_fixtures.py
 +
        - name: Native allocation, directory, semaphore, file-lock and socket-control contracts
++        if: matrix.group == 'native'
          run: |
            python3 tools/test_hwui_renderer_policy.py --sanitize
-@@ -316,31 +734,41 @@ jobs:
+           python3 tools/test_egl_readback_layout.py --sanitize
+@@ -316,31 +753,42 @@ jobs:
            python3 tools/test_bionic_system_contracts.py --sanitize
            python3 tools/test_environment_contracts.py --sanitize
            python3 tools/test_environment_lookup_contracts.py
@@ -603,13 +653,14 @@ index f9e65608b..9dadf2751 100644
 +          python3 tools/test_storage_tools.py
 
        - name: Native TLS, wait, DNS, clock, affinity, finalizer and media lifecycle contracts
++        if: matrix.group == 'native'
          run: |
 -          python3 tools/test_bionic_key_contracts.py --sanitize
 +          python3 tools/test_bionic_key_contracts.py --sanitize --negative-controls
            python3 tools/test_pthread_clock_contracts.py --sanitize
            python3 tools/test_pthread_clock_contracts.py --linux-reference
            python3 tools/test_pthread_attribute_contracts.py --sanitize
-@@ -361,6 +789,7 @@ jobs:
+@@ -361,54 +809,78 @@ jobs:
            python3 tools/test_elf_tls_rollback.py --sanitize
            python3 tools/test_arm64_pending_rollback.py --sanitize
            python3 tools/test_arm64_native_rollback.py --sanitize
@@ -617,7 +668,11 @@ index f9e65608b..9dadf2751 100644
            python3 tools/test_media_api_contracts.py --sanitize
            python3 tools/test_aaudio_builder_contracts.py
            python3 tools/test_aaudio_lifecycle_contracts.py --sanitize
-@@ -371,8 +800,13 @@ jobs:
+
+       - name: Timer, DNS and media lifetime contracts
++        if: matrix.group == 'native'
+         run: |
+           python3 tools/test_clock_domains.py --sanitize
            python3 tools/test_boottime_resume.py --sanitize
            python3 tools/test_timerfd_contracts.py --sanitize
            python3 tools/test_input_surface_callbacks.py --sanitize
@@ -631,22 +686,52 @@ index f9e65608b..9dadf2751 100644
            python3 tools/test_dns_admission.py --sanitize
 
        - name: Stream device identity across close and reopen
-@@ -395,8 +829,14 @@ jobs:
++        if: matrix.group == 'native'
+         run: python3 tools/test_stream_device_lifetime.py --sanitize
+
+       - name: Bionic stream state across close and reopen failures
++        if: matrix.group == 'native'
+         run: python3 tools/test_stdio_lifetime_contracts.py --sanitize
+
+       - name: Native metadata reader contention and retirement contracts
++        if: matrix.group == 'native'
+         run: |
+           python3 tools/test_native_metadata_hot_paths.py --sanitize
+           python3 tools/test_native_metadata_hot_paths.py --thread-sanitize
+
+       - name: EGL fence asynchronous creation and ownership contracts
++        if: matrix.group == 'native'
+         run: python3 tools/test_egl_fence_contracts.py --sanitize
+
+       - name: Freopen contracts against the pinned glibc reference
++        if: matrix.group == 'native'
+         run: bash tools/ci/test-freopen-reference.sh
+
        - name: Descriptor-backed stdio and stream lifetime contracts
++        if: matrix.group == 'native'
          run: |
            python3 tools/test_stdio_contracts.py --sanitize
 +          python3 tools/test_stdio_scanning.py --sanitize --negative-controls
            python3 tools/test_socket_registry_lifetime.py --sanitize
 
 +      - name: Guest snprintf bounded accumulation contracts
++        if: matrix.group == 'native'
 +        run: |
 +          python3 tools/test_snprintf_bounds.py --sanitize --negative-controls
 +          python3 tools/test_snprintf_bounds.py --observe-allocations --allocation-contracts
 +
        - name: MediaPlayer PCM priming and playback lifecycle contracts
++        if: matrix.group == 'media'
          run: python3 tools/test_media_player_priming.py --sanitize
 
-@@ -409,6 +849,7 @@ jobs:
+       - name: JNI GetEnv rejects unbridged interfaces before host allocation
++        if: matrix.group == 'native'
+         run: python3 tools/test_jni_getenv_boundary.py --sanitize
+
+       - name: JNI and mixer allocation bounds and surface image-cache lifetime
++        if: matrix.group == 'media'
+         run: |
+           python3 tools/test_symbol_lookup_allocations.py
            python3 tools/test_fnmatch_performance.py --sanitize
            python3 tools/test_virtual_path_classification.py --sanitize
            python3 tools/test_binder_reply_allocations.py --sanitize
@@ -654,7 +739,7 @@ index f9e65608b..9dadf2751 100644
            python3 tools/test_binder_receive_views.py --sanitize
            python3 tools/test_camera_capture_allocations.py --sanitize
            python3 tools/test_layered_bitmap_cache.py --sanitize
-@@ -421,7 +862,9 @@ jobs:
+@@ -421,7 +893,9 @@ jobs:
            python3 tools/test_art_jni_dispatch.py --sanitize
            python3 tools/test_audio_mixer_allocations.py --sanitize
            python3 tools/test_audio_unity_rate.py --sanitize
@@ -664,7 +749,15 @@ index f9e65608b..9dadf2751 100644
            python3 tools/test_capture_stream_selection.py --sanitize
            python3 tools/test_audio_file_source.py --sanitize
            python3 tools/test_audio_rate_history.py --sanitize
-@@ -436,6 +879,7 @@ jobs:
+@@ -429,6 +903,7 @@ jobs:
+           python3 tools/test_webview_owned_streams.py --sanitize
+
+       - name: Host event loop, audio state and surface geometry contracts
++        if: matrix.group == 'media'
+         run: |
+           python3 tools/test_host_event_loop_contracts.py --sanitize
+           python3 tools/net-tcp-priority/test-vector-policy.py
+@@ -436,11 +911,13 @@ jobs:
              tests/native/event_loop_reference.c -o "$RUNNER_TEMP/event-loop-reference"
            "$RUNNER_TEMP/event-loop-reference"
            python3 tools/test_audio_state_contracts.py --sanitize
@@ -672,20 +765,46 @@ index f9e65608b..9dadf2751 100644
            python3 tools/test_surface_geometry_contracts.py --sanitize
            python3 tools/test_video_scaling_contracts.py --sanitize
            python3 tools/test_native_window_dispatch.py --sanitize
-@@ -467,6 +911,12 @@ jobs:
+
+       - name: Physical keys, sensor flushes, directory walks and futex contracts
++        if: matrix.group == 'platform'
+         run: |
+           python3 tools/test_input_key_contracts.py --sanitize
+           python3 tools/test_mouse_capture_contracts.py --sanitize
+@@ -452,6 +929,7 @@ jobs:
+             python3 tools/test_futex_contracts.py --group guest --group concurrency
+
+       - name: Temporary directory, UNC namespace and reserved file-name contracts
++        if: matrix.group == 'native'
+         run: |
+           python3 tools/test_temp_directory.py
+           c++ -std=c++17 -Wall -Wextra -Werror tests/paths/unc_paths_test.cc -o "$RUNNER_TEMP/gesher-unc-paths"
+@@ -460,6 +938,7 @@ jobs:
+           "$RUNNER_TEMP/gesher-reserved-names"
+
+       - name: Anonymous mapping zeroing and protection contracts
++        if: matrix.group == 'native'
+         run: |
+           python3 tools/test_mman_zeroing_mappings.py --sanitize
+           python3 tools/test_mmap_noreplace_contracts.py --sanitize
+@@ -467,7 +946,16 @@ jobs:
            "$RUNNER_TEMP/gesher-noreplace-holes"
            python3 tools/test_madvise_reference.py
 
 +      - name: Actual wide conversion, pinned Android and guard-page contracts
++        if: matrix.group == 'native'
 +        run: python3 tools/test_wide_ascii_contracts.py --sanitize
 +
 +      - name: Validate wide conversion measurement evidence
++        if: matrix.group == 'native'
 +        run: python3 tools/test_wide_ascii_performance_evidence.py
 +
        - name: Filesystem metadata and media source ownership contracts
++        if: matrix.group == 'media'
          run: |
            python3 tools/test_file_timestamp_contracts.py --sanitize
-@@ -478,9 +928,13 @@ jobs:
+           python3 tools/test_directory_rename_contracts.py --sanitize
+@@ -478,9 +966,13 @@ jobs:
            python3 tools/test_media_callback_state.py --sanitize
            python3 tools/test_media_http_contracts.py --sanitize
            python3 tools/test_mf_encoder_input.py --sanitize
@@ -699,7 +818,19 @@ index f9e65608b..9dadf2751 100644
            cc -std=gnu11 -O1 -Wall -Wextra -Werror -DGESHER_FILESYSTEM_REFERENCE_MAIN \
              tests/native/filesystem_contract_guest.c -o "$RUNNER_TEMP/filesystem-metadata-reference"
            "$RUNNER_TEMP/filesystem-metadata-reference"
-@@ -501,13 +955,22 @@ jobs:
+@@ -491,79 +983,142 @@ jobs:
+           java-version: 21
+
+       - name: Package enabled-state storage limits and crash contracts
++        if: matrix.group == 'java'
+         run: |
+           python3 tools/test_package_enabled_store.py --java-home "$JAVA_HOME"
+           python3 tools/test_zygote_child_lifetime.py --sanitize
+
+       - name: Audio JNI buffer contracts with checked JNI and UBSan
++        if: matrix.group == 'media'
+         run: |
+           python3 tools/test_audio_buffer_contracts.py
            python3 tools/test_media_callback_contracts.py --java-home "$JAVA_HOME"
            python3 tools/test_media_receiver_lifetimes.py
            python3 tools/test_media_recorder_state.py --java-home "$JAVA_HOME"
@@ -707,23 +838,28 @@ index f9e65608b..9dadf2751 100644
            python3 tools/test_media_encoder_selection.py
 
        - name: Android HttpEngine requests over real HTTP sockets
++        if: matrix.group == 'java'
          run: python3 tools/test_http_engine.py --java-home "$JAVA_HOME"
 
 +      - name: DownloadManager provider, queue and transfer over real HTTP sockets
++        if: matrix.group == 'java'
 +        run: python3 tools/test_download_manager_contracts.py --java-home "$JAVA_HOME"
 +
        - name: Java DNS admission, cancellation, callback ownership and actual deadlines
 -        run: python3 tools/test_dns_resolver_admission.py --java-home "$JAVA_HOME"
++        if: matrix.group == 'java'
 +        run: |
 +          python3 tools/test_dns_resolver_admission.py --java-home "$JAVA_HOME"
 +          python3 tools/test_dns_deadline_retirement_controls.py --java-home "$JAVA_HOME"
 +
 +      - name: MediaStore provider ownership, pending items, queries and scanning over real SQLite
++        if: matrix.group == 'java'
 +        run: python3 tools/test_media_provider_contracts.py --java-home "$JAVA_HOME"
 
        - name: WebStorage origin, owned WebView responses and running-task contracts
++        if: matrix.group == 'java'
          run: |
-@@ -515,6 +978,8 @@ jobs:
+           python3 tools/test_webstorage_origin_contracts.py --java-home "$JAVA_HOME"
            python3 tools/test_webview_owned_responses.py --java-home "$JAVA_HOME"
            python3 tools/test_webview_boundary_dispatch.py --java-home "$JAVA_HOME"
            python3 tools/test_webview_geometry.py --java-home "$JAVA_HOME" --sanitize
@@ -732,7 +868,9 @@ index f9e65608b..9dadf2751 100644
            python3 tools/test_uia_snapshot_contracts.py --sanitize
            python3 tools/test_running_tasks_contracts.py
 
-@@ -523,8 +988,19 @@ jobs:
+       - name: Bluetooth cancellation, notifications and scan retention contracts
++        if: matrix.group == 'java'
+         run: |
            python3 tools/test_bluetooth_native_contracts.py --sanitize
            python3 tools/test_bluetooth_gatt_contracts.py --java-home "$JAVA_HOME"
            python3 tools/test_bluetooth_socket_contracts.py --java-home "$JAVA_HOME"
@@ -742,38 +880,57 @@ index f9e65608b..9dadf2751 100644
 +          python3 tools/test_handwriting_callbacks_host.py --java-home "$JAVA_HOME"
 +
 +      - name: Credential Manager passkey contracts (ADR 0093)
++        if: matrix.group == 'java'
 +        run: python3 tools/test_credential_manager_contracts.py --java-home "$JAVA_HOME"
 +      - name: Text-to-speech engine contracts (docs/tts.md)
++        if: matrix.group == 'java'
 +        run: python3 tools/test_tts_engine_contracts.py --java-home "$JAVA_HOME"
 +      - name: Speech recognition service contracts (docs/speech-recognition.md)
++        if: matrix.group == 'java'
 +        run: python3 tools/test_speech_recognition_engine_contracts.py --java-home "$JAVA_HOME"
 +      - name: Biometric and device-credential auth service contracts (ADR 0091)
++        if: matrix.group == 'java'
 +        run: python3 tools/test_auth_service_contracts.py --java-home "$JAVA_HOME"
 
        - name: MediaDataSource adapter contracts with checked JNI and UBSan
++        if: matrix.group == 'media'
          run: python3 tools/test_media_callback_adapter.py
-@@ -538,6 +1014,20 @@ jobs:
+
+       - name: Settings context bootstrap and deferred construction contracts
++        if: matrix.group == 'java'
+         run: python3 tools/test_settings_context_bootstrap.py --java-home "$JAVA_HOME"
+
+       - name: Control Center request publication and launcher cleanup
++        if: matrix.group == 'java'
+         run: python3 tools/test_control_center_requests.py --java-home "$JAVA_HOME"
+
        - name: APK native library filename contracts
++        if: matrix.group == 'java'
          run: python3 tools/test_native_library_paths.py --java-home "$JAVA_HOME"
 
 +      - name: Windows mailto/tel/sms/geo handler intent contracts (AOSP android-16 Intent and IntentFilter)
++        if: matrix.group == 'java'
 +        run: python3 tools/test_uri_handler_contracts.py --java-home "$JAVA_HOME"
 +      - name: Caption style contracts (AOSP android-16 Settings.Secure and CaptionStyle)
++        if: matrix.group == 'java'
 +        run: python3 tools/test_captioning_contracts.py --java-home "$JAVA_HOME"
 +
 +      - name: CountryDetector contracts (AOSP android-16 Country, CountryDetector and ICountryDetector)
++        if: matrix.group == 'java'
 +        run: python3 tools/test_country_detector_contracts.py --java-home "$JAVA_HOME"
 +
 +      - name: Portable code relocation, shell ownership and native profile selection
++        if: matrix.group == 'java'
 +        run: |
 +          python3 tools/test_portable_paths.py --java-home "$JAVA_HOME"
 +          python3 tools/test_portable_shell.py --java-home "$JAVA_HOME"
 +          python3 tools/test_portable_launcher.py
 +
        - name: Java service dispatch, durable settings, APK scans and bounded launcher logs
++        if: matrix.group == 'java'
          run: |
            python3 tools/test_java_performance_contracts.py --java-home "$JAVA_HOME"
-@@ -545,13 +1035,16 @@ jobs:
+           python3 tools/test_storage_stats_scans.py --java-home "$JAVA_HOME"
            python3 tools/test_launcher_log_contracts.py --java-home "$JAVA_HOME"
            python3 tools/test_launcher_tail_io.py --java-home "$JAVA_HOME"
            python3 tools/test_launcher_log_bounds.py --java-home "$JAVA_HOME"
@@ -790,7 +947,13 @@ index f9e65608b..9dadf2751 100644
            python3 tools/test_dexopt_work.py --java-home "$JAVA_HOME"
 
        - name: Validate user interface translations
-@@ -563,7 +1056,8 @@ jobs:
++        if: matrix.group == 'platform'
+         run: |
+           python3 tools/i18n/check.py --check
+           python3 tools/test_preferred_languages.py --sanitize
+
+       - name: App crash diagnosis and best-effort reporting contracts
++        if: matrix.group == 'platform'
          run: python3 tools/test_app_crash_diagnostics.py
 
    build-framework-assets:
@@ -800,7 +963,7 @@ index f9e65608b..9dadf2751 100644
      runs-on: ubuntu-24.04
      steps:
        - uses: actions/checkout@v4
-@@ -590,12 +1084,47 @@ jobs:
+@@ -590,12 +1145,47 @@ jobs:
 
        - name: Recorder lifecycle and complete-container size budgets
          run: |
@@ -850,7 +1013,7 @@ index f9e65608b..9dadf2751 100644
 
        - name: libcore System.nanoTime shares Android awake-time domain
          run: python3 tools/test_system_nanotime.py --source third_party/aosp/libcore/ojluni/src/main/native/System.c
-@@ -608,6 +1137,12 @@ jobs:
+@@ -608,6 +1198,12 @@ jobs:
        - name: Build test apps
          run: tests/build-test-apps.sh out/test-apps
 
@@ -863,7 +1026,7 @@ index f9e65608b..9dadf2751 100644
        - name: Build boot class path (core-oj, core-libart)
          run: tools/build-boot-jars.sh out/boot-jars
 
-@@ -617,7 +1152,13 @@ jobs:
+@@ -617,7 +1213,13 @@ jobs:
        - name: Collect framework assets
          run: |
            mkdir -p framework-assets
@@ -877,7 +1040,7 @@ index f9e65608b..9dadf2751 100644
            # ICU's data, which the runtime maps from $ANDROID_I18N_ROOT/etc/icu.
            cp third_party/aosp/external/icu/icu4c/source/stubdata/icudt*l.dat framework-assets/
            # The system fonts and fonts.xml, for $ANDROID_ROOT (docs/fonts.md).
-@@ -636,7 +1177,8 @@ jobs:
+@@ -636,7 +1238,8 @@ jobs:
    # Everything is cross-compiled on Linux with llvm-mingw, then executed on
    # real Windows runners.
    build:
@@ -887,7 +1050,7 @@ index f9e65608b..9dadf2751 100644
      runs-on: ubuntu-24.04
      env:
        GESHER_HOST_PTHREAD_SELECTION: ${{ (github.ref == 'refs/heads/wip/pthread-production-factory' || github.ref == 'refs/heads/wip/coherent-selected-tcp') && 'selected-minimum' || 'publisher-cancel' }}
-@@ -702,6 +1244,9 @@ jobs:
+@@ -702,6 +1305,9 @@ jobs:
            python3 tools/test_binder_reply_allocations.py --compile-only \
              --cxx "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang++" \
              --output out/binder_reply_allocations_test.exe
@@ -897,7 +1060,7 @@ index f9e65608b..9dadf2751 100644
            python3 tools/test_binder_lifetime.py --compile-only --aosp-dir third_party/aosp \
              --cxx "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang++" \
              --output out/binder_lifetime_test.exe
-@@ -717,6 +1262,14 @@ jobs:
+@@ -717,6 +1323,14 @@ jobs:
            python3 tools/test_arm64_tls_lifecycle.py --compile-only \
              --cxx "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang++" \
              --output out/arm64_tls_lifecycle_test.exe
@@ -912,7 +1075,7 @@ index f9e65608b..9dadf2751 100644
 
        - name: Build
          run: |
-@@ -745,9 +1298,10 @@ jobs:
+@@ -745,9 +1359,10 @@ jobs:
            ninja -C out CMakeFiles/gesher_bionic_unicode.dir/compat/bionic/unicode_width.cc.obj
            ninja -C out native3_unicode_test
            ninja -C out native3_cpu_clock_test clock_domains_windows_test boottime_resume_windows_test
@@ -924,7 +1087,7 @@ index f9e65608b..9dadf2751 100644
            ninja -C out arm64_numeric_return_host arm64_numeric_fenv_test
            ninja -C out font_environment_test
 
-@@ -801,7 +1355,10 @@ jobs:
+@@ -801,7 +1416,10 @@ jobs:
            cp out/*.exe out/dalvikvm.map out/dex2oat.map dist/
            cp tools/package/licenses/BIONIC-GDTOA-NOTICES.txt dist/
            cp out/gesher_shellext.dll dist/
@@ -935,7 +1098,7 @@ index f9e65608b..9dadf2751 100644
            cp out/libgesher_account_crypto.so dist/
            cp out/libgesher_install_pipe.so dist/
            cp out/libgesher_webview_bridge.so dist/
-@@ -903,7 +1460,8 @@ jobs:
+@@ -903,7 +1521,8 @@ jobs:
            if-no-files-found: error
 
    native3-locks-reference:
@@ -945,7 +1108,7 @@ index f9e65608b..9dadf2751 100644
      runs-on: ubuntu-24.04
      timeout-minutes: 8
      steps:
-@@ -917,7 +1475,8 @@ jobs:
+@@ -917,7 +1536,8 @@ jobs:
            if-no-files-found: error
 
    native3-locks-regression:
@@ -955,7 +1118,7 @@ index f9e65608b..9dadf2751 100644
      strategy:
        fail-fast: false
        matrix:
-@@ -969,7 +1528,8 @@ jobs:
+@@ -969,7 +1589,8 @@ jobs:
    # tools/framework/build.py): .github/workflows/framework.yml, which also
    # runs on its own (gh workflow run framework --ref <branch>).
    framework:
@@ -965,7 +1128,7 @@ index f9e65608b..9dadf2751 100644
      # A local call runs the framework.yml of the commit under test, so a
      # framework.yml change takes effect in the same PR. Hosted build runners;
      # see docs/self-hosted-ci.md before routing it to the restricted group.
-@@ -980,63 +1540,73 @@ jobs:
+@@ -980,63 +1601,73 @@ jobs:
    # Phase 6 (native libraries): the Android NDK test .so files, built on the
    # Linux runner. .github/workflows/native-libs.yml, which also runs on its own.
    native-libs:
@@ -1049,7 +1212,7 @@ index f9e65608b..9dadf2751 100644
      uses: ./.github/workflows/webview.yml
      with:
        apk: true
-@@ -1044,24 +1614,28 @@ jobs:
+@@ -1044,24 +1675,28 @@ jobs:
    # Gesher's boot image (docs/boot-image.md): dex2oat.exe from the build job
    # compiles the boot class path on Windows: .github/workflows/boot-image.yml.
    boot-image:
@@ -1082,7 +1245,7 @@ index f9e65608b..9dadf2751 100644
      runs-on: ubuntu-24.04
      steps:
        - uses: actions/checkout@v4
-@@ -1097,7 +1671,8 @@ jobs:
+@@ -1097,7 +1732,8 @@ jobs:
    # The Windows installer (tools/package/gesher.iss), installed and tried on a
    # clean runner: Hello through the installed `gesher` command, then uninstall.
    package:
@@ -1092,7 +1255,7 @@ index f9e65608b..9dadf2751 100644
      runs-on: windows-2022
      env:
        GH_TOKEN: ${{ github.token }}
-@@ -1120,6 +1695,15 @@ jobs:
+@@ -1120,6 +1756,15 @@ jobs:
              .github/workflows
              tools/fonts
              tools/binder
@@ -1108,7 +1271,7 @@ index f9e65608b..9dadf2751 100644
 
        - name: Verify PowerShell UI translations
          shell: powershell
-@@ -1130,7 +1714,11 @@ jobs:
+@@ -1130,7 +1775,11 @@ jobs:
            tests/windows/shell/ControlPanelRefreshChecks.ps1
            tests/windows/shell/ControlPanelRecoveryChecks.ps1
            tests/windows/shell/ControlPanelIdleChecks.ps1
@@ -1120,7 +1283,7 @@ index f9e65608b..9dadf2751 100644
            tests/windows/shell/UpdateChecks.ps1
            tests/windows/shell/UpdateTransportChecks.ps1
            tests/windows/shell/ControlPanelUpdateChecks.ps1
-@@ -1165,6 +1753,7 @@ jobs:
+@@ -1165,6 +1814,7 @@ jobs:
            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
        - name: Build installer
@@ -1128,7 +1291,7 @@ index f9e65608b..9dadf2751 100644
          shell: pwsh
          run: |
            $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
-@@ -1181,6 +1770,11 @@ jobs:
+@@ -1181,6 +1831,11 @@ jobs:
            "$checksum  $($installer.Name)" | Set-Content -LiteralPath 'installer\SHA256SUMS.txt' -Encoding ascii
            Get-ChildItem installer
 
@@ -1140,7 +1303,7 @@ index f9e65608b..9dadf2751 100644
        # Uploaded before the checks below: the e2e job tests this installer even when one
        # of them fails.
        - name: Upload tested installer artifact
-@@ -1189,10 +1783,110 @@ jobs:
+@@ -1189,10 +1844,110 @@ jobs:
            name: gesher-setup
            path: |
              installer/*.exe
@@ -1251,7 +1414,7 @@ index f9e65608b..9dadf2751 100644
          run: |
            $setup = (Get-ChildItem installer\gesher-setup-*.exe).FullName
            # Every run of the installed Gesher below must load the installed boot
-@@ -1205,9 +1899,11 @@ jobs:
+@@ -1205,9 +1960,11 @@ jobs:
            if ($LASTEXITCODE -ne 0) { throw 'Crash dialog host/Windows checks failed' }
            python tools/test_app_crash_runtime.py --runtime "$app" --fixture dist/crashnotice.apk --output out/crash-notice-art
            if ($LASTEXITCODE -ne 0) { throw 'Crash notice Windows/ART checks failed' }
@@ -1264,7 +1427,7 @@ index f9e65608b..9dadf2751 100644
            . (Join-Path $app 'gesher-update.ps1')
            $installedVersion = Get-GesherInstalledVersion -InstallDirectory $app
            if ($installedVersion -cne $env:GESHER_PACKAGE_VERSION) {
-@@ -1220,6 +1916,9 @@ jobs:
+@@ -1220,6 +1977,9 @@ jobs:
              throw "Installer ProductVersion mismatch: expected '$env:GESHER_PACKAGE_VERSION', normalized '$installerVersion', raw '$rawProductVersion'"
            }
            'PASS  installer: updater, runtime synchronizer and exact release version are installed' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
@@ -1274,7 +1437,7 @@ index f9e65608b..9dadf2751 100644
            $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
            if (-not ($userPath -split ';' -contains $app)) { throw "PATH lacks $app" }
            $out = & "$app\gesher.cmd" "$app\hello.dex" gesher.Hello 2>&1 | Out-String
-@@ -1231,8 +1930,8 @@ jobs:
+@@ -1231,8 +1991,8 @@ jobs:
            if ($out -notmatch 'gesher: boot image loaded: 3 spaces') { throw 'The installed gesher did not load the installed boot image' }
            # gesher-app and the framework it runs on are installed, and the
            # installed copy takes the bundled app to onResume.
@@ -1285,7 +1448,7 @@ index f9e65608b..9dadf2751 100644
              if (-not (Test-Path "$app\$f")) { throw "The installer left out $f" }
            }
            $oatdumpOutput = & "$app\oatdump.exe" "--oat-file=$app/framework/x86_64/boot-framework.oat" --header-only --no-disassemble 2>&1 | Out-String
-@@ -1245,22 +1944,12 @@ jobs:
+@@ -1245,22 +2005,12 @@ jobs:
            foreach ($f in [regex]::Matches((Get-Content -Raw "$app\fonts\fonts.xml"), '[A-Za-z0-9_-]+\.ttf') | ForEach-Object Value | Sort-Object -Unique) {
              if (-not (Test-Path "$app\fonts\$f")) { throw "The installer left out fonts\$f, which fonts.xml names" }
            }
@@ -1311,7 +1474,7 @@ index f9e65608b..9dadf2751 100644
            $device = "$env:LOCALAPPDATA\Gesher\data\system\gesher-device"
            function DevicePids {
              if (-not (Test-Path $device)) { return @() }
-@@ -1275,13 +1964,16 @@ jobs:
+@@ -1275,13 +2025,16 @@ jobs:
            $env:GESHER_APP_WINDOW = 'headless'
            # The device's processes log how they execute (checked below, ADR 0081).
            $env:GESHER_LOG_EXECUTION = '1'
@@ -1330,7 +1493,7 @@ index f9e65608b..9dadf2751 100644
              Get-Content "$env:LOCALAPPDATA\Gesher\logs\*.log" -ErrorAction SilentlyContinue | Select-Object -Last 60 | Out-Host
              throw "The installed gesher-app did not run lifecycle.apk on the Gesher device (exit $code)"
            }
-@@ -1292,6 +1984,9 @@ jobs:
+@@ -1292,6 +2045,9 @@ jobs:
              throw "gesher-app list does not show the installed lifecycle.apk"
            }
            'PASS  installer: gesher-app installs lifecycle.apk and runs it on the Gesher device (a persistent system server); list shows it' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
@@ -1340,7 +1503,7 @@ index f9e65608b..9dadf2751 100644
            # The installed device compiled it at install with the installed dex2oat (ADR 0054).
            $dexopt = Get-Content "$env:LOCALAPPDATA\Gesher\logs\system_server.log" -ErrorAction SilentlyContinue | Select-String 'dexopt: com\.gesher\.lifecycle: verify \(reason install\)' | Select-Object -First 1
            if (-not $dexopt) {
-@@ -1322,6 +2017,19 @@ jobs:
+@@ -1322,6 +2078,19 @@ jobs:
            }
            if ($out -notmatch 'Windows AppUserModelID Gesher\.App\.com\.gesher\.lifecycle') { throw 'The app process did not set its AppUserModelID' }
            'PASS  installer: the first launch of lifecycle.apk makes its Start menu shortcut; its process sets the AppUserModelID Gesher.App.com.gesher.lifecycle' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
@@ -1360,7 +1523,7 @@ index f9e65608b..9dadf2751 100644
            $out = & "$app\gesher-app.cmd" uninstall com.gesher.lifecycle 2>&1 | Out-String
            $code = $LASTEXITCODE
            Write-Host $out
-@@ -1468,13 +2176,18 @@ jobs:
+@@ -1468,13 +2237,18 @@ jobs:
            $code = $LASTEXITCODE
            Write-Host "gesher-app lifecycle.apk --system-server (exit $code):"
            Write-Host (($out -split "`n" | Select-Object -Last 12) -join "`n")
@@ -1383,7 +1546,7 @@ index f9e65608b..9dadf2751 100644
            $cls = 'HKCU:\Software\Classes'
            $progId = (Get-ItemProperty "$cls\.apk" -ErrorAction SilentlyContinue).'(default)'
            if ($progId -ne 'Gesher.Apk') { throw ".apk's default ProgID is '$progId', not Gesher.Apk" }
-@@ -1482,20 +2195,251 @@ jobs:
+@@ -1482,20 +2256,251 @@ jobs:
            $open = (Get-ItemProperty "$cls\Gesher.Apk\shell\open\command").'(default)'
            Write-Host "Gesher.Apk open command: $open"
            if ($open -notmatch '^"([^"]+)"\s*(.*)$' -or $Matches[1] -ne "$app\gesher-launch.exe") { throw "Gesher.Apk's open command does not start gesher-launch.exe: $open" }
@@ -1628,15 +1791,15 @@ index f9e65608b..9dadf2751 100644
 +          $out = Complete-ApkOpen $run 'gesher-launch with loose splits and dex metadata'
 +          if ($run.Process.ExitCode -ne 0 -or $answer.Problems.Count) {
 +            throw "confirmed loose APK install failed: $out $($answer.Problems -join '; ')"
-           }
--          'PASS  installer: .apk opens with gesher-app through the registered command' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
++          }
 +          $row = @(Get-Content -LiteralPath $registry | Where-Object { $_.StartsWith("$splitPackage`t") })
 +          if ($row.Count -ne 1) { throw 'confirmed loose APK did not publish an installed package' }
 +          $codeDir = (($row[0] -split "`t")[1] -split '[/\\]')[-1]
 +          $installedDir = "$env:LOCALAPPDATA\Gesher\data\app\$codeDir"
 +          if (Test-Path -LiteralPath (Join-Path $installedDir 'split_foreign.apk')) {
 +            throw 'confirmed loose APK unexpectedly installed another package''s split'
-+          }
+           }
+-          'PASS  installer: .apk opens with gesher-app through the registered command' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
 +          foreach ($name in @($looseInputs.Values) + 'base.dm') {
 +            if ((Get-FileHash -LiteralPath (Join-Path $installedDir $name)).Hash -ne $expectedHashes[$name]) {
 +              throw "confirmed loose APK install did not preserve $name"
@@ -1648,7 +1811,7 @@ index f9e65608b..9dadf2751 100644
            # Gesher's toast activator (ADR 0051): a local server running gesher-app toast-activated.
            $activator = (Get-ItemProperty "$cls\CLSID\{C18D9445-A7F0-472E-985F-AC354EBEB660}\LocalServer32" -ErrorAction SilentlyContinue).'(default)'
            Write-Host "toast activator: $activator"
-@@ -1540,7 +2484,7 @@ jobs:
+@@ -1540,7 +2545,7 @@ jobs:
            # The device outlives the console that started it.
            $running = DevicePids
            if ($running.Count -ne 3) { throw "The Gesher device did not outlive the .apk open command's console: $running" }
@@ -1657,7 +1820,7 @@ index f9e65608b..9dadf2751 100644
            # An app's window on the device (docs/graphics.md, ADR 0029): the
            # installed gesher-app launches uiapp.apk with a hidden window; the
            # app process the system server starts draws its UI into a Win32
-@@ -1594,6 +2538,7 @@ jobs:
+@@ -1594,6 +2599,7 @@ jobs:
            }
            'PASS  installer: gesher-app runs uiapp.apk on the Gesher device in a Win32 window of its app process (hwui''s frame read back with PrintWindow; the Activity''s label, AppUserModelID Gesher.App.com.gesher.uiapp, its icon); closing it ends the app' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
            'PASS  installer: input reaches uiapp.apk''s views on the Gesher device (a click runs the Button''s onClick, keys and a WM_CHAR type into its EditText, the wheel scrolls, the resized window redraws at 600x700)' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
@@ -1665,7 +1828,7 @@ index f9e65608b..9dadf2751 100644
            # gesher-launch's splash (compat/shell/gesher_launch.cc, docs/installer.md):
            # `gesher-launch install` shows none; `gesher-launch launch com.gesher.uiapp`
            # (the shortcut's command, the app's window shown) shows a GesherSplash
-@@ -1825,6 +2770,16 @@ jobs:
+@@ -1825,6 +2831,16 @@ jobs:
            Set-Content $sentinel 'not Gesher''s'
            # An app id as the system server registers one for an app's toasts (ADR 0038), which uninstalling must remove.
            $null = New-Item 'HKCU:\Software\Classes\AppUserModelId\Gesher.App.com.gesher.ci' -Force
@@ -1682,7 +1845,7 @@ index f9e65608b..9dadf2751 100644
            Start-Process "$app\unins000.exe" -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES' -Wait
            # The uninstaller hands over to a copy of itself and returns at once.
            for ($i = 0; $i -lt 60 -and (Test-Path "$app\unins000.exe"); $i++) { Start-Sleep 1 }
-@@ -1832,6 +2787,10 @@ jobs:
+@@ -1832,6 +2848,10 @@ jobs:
            if ($left) { throw "Uninstall left the Gesher device's processes running: $left" }
            if (Test-Path "$env:LOCALAPPDATA\Gesher") { throw "Uninstall left $env:LOCALAPPDATA\Gesher" }
            'PASS  installer: uninstall stops the Gesher device and removes its data' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
@@ -1693,7 +1856,7 @@ index f9e65608b..9dadf2751 100644
            $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
            if ($userPath -split ';' -contains $app) { throw 'Uninstall left Gesher on PATH' }
            if (Test-Path "$app\dalvikvm.exe") { throw 'Uninstall left dalvikvm.exe' }
-@@ -1839,6 +2798,13 @@ jobs:
+@@ -1839,6 +2859,13 @@ jobs:
            if ((Get-ItemProperty "$cls\.apk" -ErrorAction SilentlyContinue).'(default)' -eq 'Gesher.Apk') { throw "Uninstall left .apk's default on Gesher.Apk" }
            if ($null -ne (Get-ItemProperty "$cls\.apk\OpenWithProgids" -ErrorAction SilentlyContinue).'Gesher.Apk') { throw 'Uninstall left Gesher.Apk in OpenWithProgids' }
            'PASS  installer: uninstall removes the .apk association' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
@@ -1707,7 +1870,7 @@ index f9e65608b..9dadf2751 100644
            if (Test-Path "$cls\CLSID\{C18D9445-A7F0-472E-985F-AC354EBEB660}") { throw 'Uninstall left the toast activator' }
            $appIds = @(Get-ChildItem "$cls\AppUserModelId" -ErrorAction SilentlyContinue | Where-Object PSChildName -like 'Gesher.App.*')
            if ($appIds) { throw "Uninstall left app ids: $($appIds.PSChildName -join ', ')" }
-@@ -1851,14 +2817,24 @@ jobs:
+@@ -1851,14 +2878,24 @@ jobs:
            'PASS  installer: uninstall removes the Gesher Apps Start menu folder with the apps'' shortcuts, and nothing else of the Start menu' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
            'PASS  installer: installs, runs Hello and gesher-app, uninstalls' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
 
@@ -1734,7 +1897,7 @@ index f9e65608b..9dadf2751 100644
      strategy:
        fail-fast: false
        matrix:
-@@ -1875,6 +2851,7 @@ jobs:
+@@ -1875,6 +2912,7 @@ jobs:
              tools/ci
              tools/surface
              tests/windows/graphics
@@ -1742,7 +1905,7 @@ index f9e65608b..9dadf2751 100644
 
        - name: Verify and assemble gesher-setup artifact
          shell: pwsh
-@@ -1916,9 +2893,22 @@ jobs:
+@@ -1916,9 +2954,22 @@ jobs:
            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
            $setup = (Get-ChildItem installer\gesher-setup-*.exe).FullName
            $env:GESHER_TRACE_MISSING_BOOT_CLASSES = '1'
@@ -1765,7 +1928,7 @@ index f9e65608b..9dadf2751 100644
        - name: Validate and publish real-app coverage
          if: always()
          shell: pwsh
-@@ -1942,7 +2932,8 @@ jobs:
+@@ -1942,7 +2993,8 @@ jobs:
    # (20 API requests each) with one bundle receipt per shard (7 requests).
    # The repository's GITHUB_TOKEN quota is shared by every concurrent run.
    core-suppliers:
@@ -1775,7 +1938,7 @@ index f9e65608b..9dadf2751 100644
      runs-on: ubuntu-24.04
      # Room for a reachable wait on the shared hourly API quota.
      timeout-minutes: 90
-@@ -1968,7 +2959,8 @@ jobs:
+@@ -1968,12 +3020,13 @@ jobs:
 
    test-shards:
      name: test-${{ matrix.shard }} (${{ matrix.os }})
@@ -1785,7 +1948,13 @@ index f9e65608b..9dadf2751 100644
      strategy:
        fail-fast: false
        matrix:
-@@ -2025,6 +3017,11 @@ jobs:
+         os: [windows-2022, windows-2025]
+-        shard: [native, desktop, windowing, services, contracts, media, compilation]
++        shard: ${{ fromJSON(needs.plan.outputs.shards != '[]' && needs.plan.outputs.shards || '["native"]') }}
+     runs-on: ${{ matrix.os }}
+     # A hung app or check fails the job instead of running for six hours.
+     timeout-minutes: 120
+@@ -2025,6 +3078,11 @@ jobs:
            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
            & ./dist/binder_reply_allocations_test.exe gate
            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -1797,7 +1966,7 @@ index f9e65608b..9dadf2751 100644
            & ./dist/layered_bitmap_cache_test.exe gate
            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
            & ./dist/structured_logging_test.exe
-@@ -2042,6 +3039,14 @@ jobs:
+@@ -2042,6 +3100,14 @@ jobs:
            & ./dist/sqlite_path_test.exe
            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -1812,7 +1981,7 @@ index f9e65608b..9dadf2751 100644
        - name: Verify and assemble framework artifact
          shell: pwsh
          run: |
-@@ -2060,11 +3065,13 @@ jobs:
+@@ -2060,11 +3126,13 @@ jobs:
            python tools/surface/assemble-artifacts.py --source ci-suppliers/core/artifacts/arm64 --destination dist --ledger ci-owners.json --owner arm64
            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -1827,7 +1996,7 @@ index f9e65608b..9dadf2751 100644
            & ./dist/arm64_tls_lifecycle_test.exe gate ./dist/gesher_arm64.dll
            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-@@ -2154,6 +3161,7 @@ jobs:
+@@ -2154,6 +3222,7 @@ jobs:
 
        - name: Run tests
          env:
@@ -1835,7 +2004,7 @@ index f9e65608b..9dadf2751 100644
            GESHER_TRACE_TOAST_IDENTITY: ${{ matrix.shard == 'services' && '1' || '0' }}
            GESHER_FONT_REGRESSION_SCOPE: ${{ matrix.os == 'windows-2022' && 'functional-and-strict' || matrix.os == 'windows-2025' && 'functional' || 'unselected' }}
          shell: pwsh
-@@ -2215,6 +3223,8 @@ jobs:
+@@ -2215,6 +3284,8 @@ jobs:
            path: |
              results.txt
              ci-owners.json
@@ -1844,7 +2013,7 @@ index f9e65608b..9dadf2751 100644
              dist/realtime-signals-evidence/**/*.json
              ${{ runner.temp }}/gesher-root/devsvc-toast-*-projection.jsonl
              ${{ runner.temp }}/gesher-root/logs/system_server.log
-@@ -2224,8 +3234,8 @@ jobs:
+@@ -2224,8 +3295,8 @@ jobs:
 
    test:
      name: test (${{ matrix.os }})
@@ -1855,7 +2024,7 @@ index f9e65608b..9dadf2751 100644
      strategy:
        fail-fast: false
        matrix:
-@@ -2240,7 +3250,8 @@ jobs:
+@@ -2240,7 +3311,8 @@ jobs:
    # Extra isolated jobs execute the real regression in the SAME canonical
    # full. Only these jobs download the separately named hook artifact.
    web3-query-regression:
@@ -1865,7 +2034,7 @@ index f9e65608b..9dadf2751 100644
      strategy:
        fail-fast: false
        matrix:
-@@ -2301,11 +3312,13 @@ jobs:
+@@ -2301,11 +3373,13 @@ jobs:
    # Ordinary Binder scope is mandatory and separate from production installer
    # payload and query-hook runtime. No raw/public-prefix transport-loss gate.
    binder2-sg-fixtures:
@@ -1881,7 +2050,7 @@ index f9e65608b..9dadf2751 100644
      strategy:
        fail-fast: false
        matrix:
-@@ -2363,7 +3376,8 @@ jobs:
+@@ -2363,7 +3437,8 @@ jobs:
 
    # Current selected TCP role; historical canonical red remains separately preserved.
    compile:
@@ -1891,7 +2060,7 @@ index f9e65608b..9dadf2751 100644
      name: compile-${{ matrix.supplier }}
      strategy:
        fail-fast: false
-@@ -2508,7 +3522,8 @@ jobs:
+@@ -2508,7 +3583,8 @@ jobs:
            if-no-files-found: error
            retention-days: 14
    linux-reference:
@@ -1901,7 +2070,7 @@ index f9e65608b..9dadf2751 100644
      env:
        GH_TOKEN: ${{ github.token }}
        TCP_EVIDENCE_SCOPE: ${{ github.repository == 'gesher-runtime/gesher' && 'canonical' || 'fork-diagnostic' }}
-@@ -2533,7 +3548,8 @@ jobs:
+@@ -2533,7 +3609,8 @@ jobs:
            g++ -std=c++20 -Wall -Wextra -Werror -pthread tests/net-tcp-priority/contract.cc -o /tmp/tcp-priority-reference
            timeout 20 /tmp/tcp-priority-reference
    supplier-correlation:
@@ -1911,7 +2080,7 @@ index f9e65608b..9dadf2751 100644
      runs-on: ubuntu-24.04
      # +61 minutes: a quota-exhausted GitHub read may wait up to 61 minutes for the
      # published hourly reset instead of failing the job.
-@@ -2570,7 +3586,8 @@ jobs:
+@@ -2570,7 +3647,8 @@ jobs:
            if [[ "$TCP_EVIDENCE_SCOPE" == fork-diagnostic ]]; then args+=(--fork-diagnostic); fi
            python3 tools/toolchain/coherent_supplier_correlation.py "${args[@]}"
    windows:
@@ -1921,7 +2090,7 @@ index f9e65608b..9dadf2751 100644
      strategy:
        fail-fast: false
        matrix:
-@@ -2613,10 +3630,28 @@ jobs:
+@@ -2613,10 +3691,31 @@ jobs:
    ci-required:
      name: ci-required
      if: always()
@@ -1932,16 +2101,19 @@ index f9e65608b..9dadf2751 100644
      steps:
 -      - name: Require every production CI job
 +      - uses: actions/checkout@v4
-+        if: github.event_name == 'pull_request'
 +        with:
 +          persist-credentials: false
++          fetch-depth: 0
 +          sparse-checkout: |
 +            .github/workflows
 +            tools/ci
++            tests/windows/test-shards.json
 +      - name: Require successful selected jobs and intentional skips
-+        if: github.event_name == 'pull_request'
 +        env:
 +          SELECTED: ${{ needs.plan.outputs.selected }}
++          SHARDS: ${{ needs.plan.outputs.shards }}
++          PREFLIGHT_GROUPS: ${{ needs.plan.outputs.preflight_groups }}
++          GH_TOKEN: ${{ github.token }}
 +          JOB_RESULTS: ${{ toJSON(needs) }}
 +        run: |
 +          python3 -m pip install PyYAML==6.0.3

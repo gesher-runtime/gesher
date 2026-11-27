@@ -64,9 +64,26 @@ documentation paths can skip production jobs. Scoped changes select their
 jobs and the dependencies that produce their inputs. Changes outside the
 planner's allowlist and runs on push or manual dispatch use full coverage.
 The plan and source identity must succeed, along with the automerge contract
-tests in `ci`. `ci-required` and `arm64-required` check the result of every job.
-Selected jobs must succeed and omitted jobs must be reported as skipped. See
-[the planner](../../tools/ci/select_pr_jobs.py) for the path rules.
+tests in `ci`. Windows track edits select the shards that execute the track
+and consume its exported helpers. Other source and supplier jobs remain
+selected for these edits because their receipts can inspect the track bytes.
+Audited preflight script edits select their owning host-test domains.
+Unknown inputs and shared production changes retain full coverage.
+
+The required checks recompute the selection from the merge checkout and PR
+event. They verify aggregate job results and the exact selected Windows and
+preflight matrix cells from GitHub, including successful cells retained when
+failed jobs are rerun. A missing, failed or unexpectedly executed cell fails
+the gate. The plan summary records selected jobs, shards and preflight groups.
+See [the planner](../../tools/ci/select_pr_jobs.py) and
+[preflight domains](../../tools/ci/preflight_plan.py) for the path rules.
+
+The framework host-tool workflow can restore Linux generators from a cache
+published by main when source inputs, build recipe, compiler dependencies and
+environment match. It verifies the cached file inventory and hashes, runs the
+existing smoke checks, and publishes an artifact for the current run and
+attempt. A missing or invalid cache triggers a rebuild. Self-hosted builds
+continue through their existing build path.
 
 The deployed configuration is
 `.github/automerge-ruleset.json`: PR review and resolved discussions are required,

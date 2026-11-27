@@ -98,14 +98,14 @@ jobs:
           key="$key-run-$GITHUB_RUN_ID-attempt-$GITHUB_RUN_ATTEMPT"
           echo "key=$key" >> "$GITHUB_OUTPUT"
 
-      - name: Select fresh current-run host tools build
+      - name: Publish host tools under the current run identity
         id: reuse
         env:
           GH_TOKEN: ${{ github.token }}
           KEY: ${{ steps.key.outputs.key }}
         run: |
           echo "build=true" >> "$GITHUB_OUTPUT"
-          echo 'Build fresh host tools for this exact run and attempt'
+          echo 'Validate or build host tools, then publish for this exact run and attempt'
 
       - name: Cache AOSP sources
         if: steps.reuse.outputs.build == 'true'
@@ -137,9 +137,29 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends ninja-build bison flex ccache libc++-18-dev libc++abi-18-dev
 
+      - name: Host generator reuse contracts
+        run: python3 -m unittest discover -s tools/ci -p test_host_tools_cache.py
+
+      - name: Exact host generator cache key
+        if: runner.environment != 'self-hosted'
+        id: host-generator-key
+        run: python3 tools/ci/host_tools_cache.py key
+
+      - name: Restore main host generators
+        if: runner.environment != 'self-hosted'
+        uses: actions/cache/restore@v4
+        with:
+          path: out/host-tools-cache
+          key: ${{ steps.host-generator-key.outputs.key }}
+
+      - name: Verify reusable main host generators
+        if: runner.environment != 'self-hosted'
+        id: host-generators
+        run: python3 tools/ci/host_tools_cache.py restore --key "${{ steps.host-generator-key.outputs.key }}"
+
       # Restored and saved separately, so a failed build keeps its objects.
       - name: Restore compiler output
-        if: steps.reuse.outputs.build == 'true' && runner.environment != 'self-hosted'
+        if: steps.reuse.outputs.build == 'true' && steps.host-generators.outputs.hit != 'true' && runner.environment != 'self-hosted'
         uses: gesher-runtime/gesher/.github/actions/local-build-cache@e5eb64d95271bc83c4eb40c9a069a2a45acac11c
         with:
           phase: restore
@@ -148,7 +168,7 @@ jobs:
           restore-keys: ccache-host-tools-
 
       - name: Build
-        if: steps.reuse.outputs.build == 'true'
+        if: steps.reuse.outputs.build == 'true' && steps.host-generators.outputs.hit != 'true'
         run: |
           ccache --set-config=max_size="${CCACHE_LIMIT:-1G}"
           # clang and libc++, as Soong builds them: AOSP host sources use
@@ -172,7 +192,7 @@ jobs:
           ls -la dist-host dist-host/protobuf
 
       - name: Save compiler output
-        if: always() && steps.reuse.outputs.build == 'true' && runner.environment != 'self-hosted'
+        if: always() && steps.reuse.outputs.build == 'true' && steps.host-generators.outputs.hit != 'true' && runner.environment != 'self-hosted'
         uses: gesher-runtime/gesher/.github/actions/local-build-cache@e5eb64d95271bc83c4eb40c9a069a2a45acac11c
         with:
           phase: save
@@ -184,6 +204,17 @@ jobs:
         run: |
           ls -la dist-host dist-host/protobuf
           dist-host/protobuf/protoc --version
+
+      - name: Seal reusable main host generators
+        if: github.ref == 'refs/heads/main' && runner.environment != 'self-hosted' && steps.host-generators.outputs.hit != 'true'
+        run: python3 tools/ci/host_tools_cache.py seal --key "${{ steps.host-generator-key.outputs.key }}"
+
+      - name: Save reusable main host generators
+        if: github.ref == 'refs/heads/main' && runner.environment != 'self-hosted' && steps.host-generators.outputs.hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: out/host-tools-cache
+          key: ${{ steps.host-generator-key.outputs.key }}
 
       - name: Publish the build for other branches
         if: steps.reuse.outputs.build == 'true'
