@@ -44,9 +44,9 @@ jobs:
             # The reviewed shared track includes sensor flush, current camera grant
             # admission, explicit fixture permissions, the camera callback-admission
             # gate, the stationary accelerometer and the camera autofocus contract
-            # checks. Its geocoder implementation and the other nine source pins are
-            # unchanged.
-            'tests/windows/tracks/58-devices.ps1' = '7efd80e6d775a98775d311f433398275c15b5e98'
+            # checks. The two installed fixture grant requests now use the admitted
+            # shell identity. Its geocoder implementation and other source pins are unchanged.
+            'tests/windows/tracks/58-devices.ps1' = '5f32f1e675ddbe38cf393989c8c1736a7337b304'
           }
           foreach ($path in $expected.Keys) {
             $actual = git hash-object $path

@@ -3011,21 +3011,40 @@ index 16c4744..d487a91 100644
 ++}  // namespace
 ++#endif
 diff --git a/tools/net-tcp-priority/test-memrchr-policy.py b/tools/net-tcp-priority/test-memrchr-policy.py
-index ff74e31..522b463 100644
+index ff74e316c8ad681c4f961e688eb653d062443ed1..73045effb2bdeadcc8e23c6e34b6c5fe3ed52fea 100644
 --- a/tools/net-tcp-priority/test-memrchr-policy.py
 +++ b/tools/net-tcp-priority/test-memrchr-policy.py
-@@ -23,9 +23,7 @@ FOLDER = 'tools/net-tcp-priority/qualified/'
+@@ -23,12 +23,15 @@ FOLDER = 'tools/net-tcp-priority/qualified/'
  MANIFEST = FOLDER + 'memrchr-source.json'
  PATCH = FOLDER + 'memrchr-source.patch'
  raw_read_bytes = Path.read_bytes
 -# The outer transition is checked against the real current file first. Keep
 -# every existing Memrchr negative control on that exact reconstructed input;
 -# the separate scandir suite mutates the complete composed chain itself.
+-preceding = policy.preceding_scandir_source(raw_read_bytes(ROOT / policy.SCANDIR_SOURCE))
 +# Validate the outer stage, then exercise each original Memrchr control on its exact predecessor.
- preceding = policy.preceding_scandir_source(raw_read_bytes(ROOT / policy.SCANDIR_SOURCE))
++projected, *_ = policy.native2_projection()
++projected.update(policy.preceding_appcontainer_integration_sources(policy.APPCONTAINER_INTEGRATION_QUALIFICATION_SHA256))
++preceding = policy.preceding_scandir_source(projected[policy.SCANDIR_SOURCE])
  def read_bytes(path):
-     return preceding if path == ROOT / policy.SCANDIR_SOURCE else raw_read_bytes(path)
-@@ -85,8 +83,8 @@ rejected('a repinned undeclared endpoint', {name: changed}, 'memrchr reverse end
+-    return preceding if path == ROOT / policy.SCANDIR_SOURCE else raw_read_bytes(path)
++    name = path.relative_to(ROOT).as_posix() if path.is_relative_to(ROOT) else None
++    if name == policy.SCANDIR_SOURCE:
++        return preceding
++    return projected[name] if name in projected else raw_read_bytes(path)
+ manifest = json.loads((ROOT / MANIFEST).read_bytes())
+ transition_patch = (ROOT / PATCH).read_bytes()
+ checks = 0
+@@ -70,7 +73,7 @@ def rejected(label, changes, expected, repinned=None):
+
+
+ with contextlib.redirect_stdout(io.StringIO()):
+-    policy.check()
++    policy.check(lambda path: projected[path] if path in projected else raw_read_bytes(ROOT / path))
+
+ name = policy.MEMRCHR_SOURCE
+ original = read_bytes(ROOT / name)
+@@ -85,8 +88,8 @@ rejected('a repinned undeclared endpoint', {name: changed}, 'memrchr reverse end
  for label, before, after, expected in [
      ('fortify bound', b'if (n > buf_size) FortifyFailure("memrchr");',
       b'if (n > buf_size + 1) FortifyFailure("memrchr");', 'memrchr reverse endpoint'),
@@ -3036,16 +3055,45 @@ index ff74e31..522b463 100644
      ('word read range', b'while (n >= sizeof(uint64_t)) {',
       b'while (n > 0) {', 'exact patch application'),
  ]:
-@@ -145,3 +143,4 @@ for name, expected in [
+@@ -145,3 +148,4 @@ for name, expected in [
      rejected('unrelated protected bytes in ' + name,
               {name: (ROOT / name).read_bytes() + b'\n'}, expected)
  print('MEMRCHR_SOURCE_POLICY_PASS exact_main_round_trip=1 original_protected_digests=71 negative_controls=' + str(checks))
 +
 diff --git a/tools/net-tcp-priority/test-scandir-policy.py b/tools/net-tcp-priority/test-scandir-policy.py
-index fcd68fd..2904c39 100644
+index fcd68fdfa506f4aaaa42170fc08acf5413e60012..4bb09c04d443ec9273f367bc75013655abc359ec 100644
 --- a/tools/net-tcp-priority/test-scandir-policy.py
 +++ b/tools/net-tcp-priority/test-scandir-policy.py
-@@ -81,8 +81,8 @@ for label, before, after, expected in [
+@@ -18,7 +18,14 @@ spec.loader.exec_module(policy)
+ FOLDER = 'tools/net-tcp-priority/qualified/'
+ MANIFEST = FOLDER + 'scandir-source.json'
+ PATCH = FOLDER + 'scandir-source.patch'
+-read_bytes = Path.read_bytes
++raw_read_bytes = Path.read_bytes
++projected, *_ = policy.native2_projection()
++projected.update(policy.preceding_appcontainer_integration_sources(policy.APPCONTAINER_INTEGRATION_QUALIFICATION_SHA256))
++
++def read_bytes(path):
++    name = path.relative_to(ROOT).as_posix() if path.is_relative_to(ROOT) else None
++    return projected[name] if name in projected else raw_read_bytes(path)
++
+ manifest = json.loads((ROOT / MANIFEST).read_bytes())
+ transition_patch = (ROOT / PATCH).read_bytes()
+ checks = 0
+@@ -58,10 +65,10 @@ def rejected(label, changes, expected, repinned=None):
+
+
+ with contextlib.redirect_stdout(io.StringIO()):
+-    policy.check()
++    policy.check(lambda path: read_bytes(ROOT / path))
+
+ name = policy.SCANDIR_SOURCE
+-original = (ROOT / name).read_bytes()
++original = read_bytes(ROOT / name)
+ previous = policy.preceding_scandir_source(original)
+ assert sha(previous) == manifest['before_sha256'][name]
+ assert previous == subprocess.check_output(['git', '-C', str(ROOT), 'show', policy.SCANDIR_BASE + ':' + name])
+@@ -81,8 +88,8 @@ for label, before, after, expected in [
      ('adaptive work limit', b'size_t remaining_swaps = count * 8;',
       b'size_t remaining_swaps = count * 9;', 'exact patch application'),
      ('scratch ownership', b'std::free(scratch);', b'(void)scratch;', 'exact patch application'),
@@ -4732,7 +4780,7 @@ index 5f0fff8..cf6fc5d 100644
 + previous=check_live()
 + if '--selftest' in sys.argv:selftest(previous)
 diff --git a/tools/test_memrchr_report.py b/tools/test_memrchr_report.py
-index bbbec33..c0850be 100644
+index bbbec330d7ff0b02bf8c27970245de2f2e6d2a4a..0d5d15a890cf32cd4debbbeb02ea6e32461149aa 100644
 --- a/tools/test_memrchr_report.py
 +++ b/tools/test_memrchr_report.py
 @@ -10,6 +10,7 @@ import json
@@ -4743,7 +4791,7 @@ index bbbec33..c0850be 100644
  import tarfile
  import test_memrchr_contracts as contracts
 
-@@ -65,16 +66,21 @@ def campaign(raw: dict, summary: dict) -> None:
+@@ -65,16 +66,23 @@ def campaign(raw: dict, summary: dict) -> None:
  def main() -> None:
      report = json.loads((ROOT / "docs/research/memrchr-word-search-2026-11-23.json").read_text())
      current = (ROOT / contracts.SOURCE).read_bytes()
@@ -4756,7 +4804,9 @@ index bbbec33..c0850be 100644
      spec.loader.exec_module(policy)
 -    source = policy.preceding_scandir_source(current)
 -    check(contracts.production(current.decode()) == contracts.production(source.decode()),
-+    predecessor = policy.preceding_scandir_source(current)
++    projected, _, live, _, _, _ = policy.native2_projection()
++    check(live[contracts.SOURCE] == current, "reviewed live Native2 source")
++    predecessor = policy.preceding_scandir_source(projected[contracts.SOURCE])
 +    check(contracts.production(current.decode()) == contracts.production(predecessor.decode()),
            "measured Memrchr component unchanged by exact directory transition")
 +    # Whole-translation-unit receipts remain attached to their immutable original
@@ -4770,7 +4820,7 @@ index bbbec33..c0850be 100644
      check(sha(source) == report["production_source_sha256"], "reviewed production source")
      archive = report["evidence_archive"]
      packed = base64.b64decode(archive["data"], validate=True)
-@@ -131,3 +137,4 @@ def main() -> None:
+@@ -131,3 +139,4 @@ def main() -> None:
 
  if __name__ == "__main__":
      main()

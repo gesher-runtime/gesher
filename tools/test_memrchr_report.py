@@ -70,7 +70,9 @@ def main() -> None:
         ROOT / "tools/net-tcp-priority/test-selected-policy.py")
     policy = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(policy)
-    predecessor = policy.preceding_scandir_source(current)
+    projected, _, live, _, _, _ = policy.native2_projection()
+    check(live[contracts.SOURCE] == current, "reviewed live Native2 source")
+    predecessor = policy.preceding_scandir_source(projected[contracts.SOURCE])
     check(contracts.production(current.decode()) == contracts.production(predecessor.decode()),
           "measured Memrchr component unchanged by exact directory transition")
     # Whole-translation-unit receipts remain attached to their immutable original

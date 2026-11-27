@@ -57,6 +57,12 @@ def main() -> int:
     if source.count(policy_include) > 1:
         raise ValueError("storage policy include is ambiguous")
     source = source.replace(policy_include, "")
+    # The Linux host maps the NT held-directory reopen boundary to a fresh
+    # open of the same Linux descriptor. Historic controls predate the helper.
+    reopen_include = '#include <gesher/directory_reopen.h>\n'
+    if source.count(reopen_include) != int("gesher::directory_reopen::Open(" in source):
+        raise ValueError("directory reopen boundary changed")
+    source = source.replace(reopen_include, "")
     host = (ROOT / "tests/native/inotify_write_routing_host.cc.in").read_text()
     pieces = {
         "INOTIFY_SOURCE": source,

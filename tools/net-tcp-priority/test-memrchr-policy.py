@@ -24,9 +24,14 @@ MANIFEST = FOLDER + 'memrchr-source.json'
 PATCH = FOLDER + 'memrchr-source.patch'
 raw_read_bytes = Path.read_bytes
 # Validate the outer stage, then exercise each original Memrchr control on its exact predecessor.
-preceding = policy.preceding_scandir_source(raw_read_bytes(ROOT / policy.SCANDIR_SOURCE))
+projected, *_ = policy.native2_projection()
+projected.update(policy.preceding_appcontainer_integration_sources(policy.APPCONTAINER_INTEGRATION_QUALIFICATION_SHA256))
+preceding = policy.preceding_scandir_source(projected[policy.SCANDIR_SOURCE])
 def read_bytes(path):
-    return preceding if path == ROOT / policy.SCANDIR_SOURCE else raw_read_bytes(path)
+    name = path.relative_to(ROOT).as_posix() if path.is_relative_to(ROOT) else None
+    if name == policy.SCANDIR_SOURCE:
+        return preceding
+    return projected[name] if name in projected else raw_read_bytes(path)
 manifest = json.loads((ROOT / MANIFEST).read_bytes())
 transition_patch = (ROOT / PATCH).read_bytes()
 checks = 0
@@ -68,7 +73,7 @@ def rejected(label, changes, expected, repinned=None):
 
 
 with contextlib.redirect_stdout(io.StringIO()):
-    policy.check()
+    policy.check(lambda path: projected[path] if path in projected else raw_read_bytes(ROOT / path))
 
 name = policy.MEMRCHR_SOURCE
 original = read_bytes(ROOT / name)
