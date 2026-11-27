@@ -8,12 +8,13 @@ constexpr DWORD kMagic = 0x474f4443, kVersion = 2;
 constexpr DWORD kStationAccess = STANDARD_RIGHTS_REQUIRED | 0x037f;
 constexpr DWORD kDesktopAccess = STANDARD_RIGHTS_REQUIRED | 0x01ff;
 constexpr DWORD kStationMinimum = 0x0327, kDesktopMinimum = 0x00c7;
+constexpr DWORD kPreparedStationAccess = kStationMinimum | READ_CONTROL;
 struct Variant { const wchar_t* leaf; const char* name; bool current_station; DWORD station, desktop; };
 constexpr Variant kVariants[]{
   {kReportName, "original", false, kStationAccess, kDesktopAccess},
-  {L"owned-matrix-current-min.bin", "current-station/minimum-desktop", true, kStationMinimum, kDesktopMinimum},
-  {L"owned-matrix-current-read.bin", "current-station/read-control-desktop", true, kStationMinimum, kDesktopMinimum | READ_CONTROL},
-  {L"owned-matrix-current-full.bin", "current-station/full-desktop", true, kStationMinimum, kDesktopAccess},
+  {L"owned-matrix-current-min.bin", "current-station/minimum-desktop", true, kPreparedStationAccess, kDesktopMinimum},
+  {L"owned-matrix-current-read.bin", "current-station/read-control-desktop", true, kPreparedStationAccess, kDesktopMinimum | READ_CONTROL},
+  {L"owned-matrix-current-full.bin", "current-station/full-desktop", true, kPreparedStationAccess, kDesktopAccess},
   {L"owned-matrix-fresh-min.bin", "owned-minimum-station/minimum-desktop", false, kStationMinimum, kDesktopMinimum},
   {L"owned-matrix-fresh-station.bin", "owned-read-control-station/minimum-desktop", false, kStationMinimum | READ_CONTROL, kDesktopMinimum},
   {L"owned-matrix-fresh-desktop.bin", "owned-minimum-station/read-control-desktop", false, kStationMinimum, kDesktopMinimum | READ_CONTROL},

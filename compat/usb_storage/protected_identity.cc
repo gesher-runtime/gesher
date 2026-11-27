@@ -582,8 +582,10 @@ DWORD PrepareRuntimeDesktop(const wchar_t* runtime_sid, const wchar_t* capabilit
   const LocalMemory own_user(user);
   if (!ConvertStringSidToSidW(capability_sid, &capability)) return ERROR_INVALID_SID;
   const LocalMemory own_capability(capability);
+  // GDI initialization for the private AppContainer requires READ_CONTROL on
+  // the station. The desktop keeps its existing object rights.
   constexpr ACCESS_MASK station = WINSTA_ACCESSCLIPBOARD | WINSTA_ACCESSGLOBALATOMS |
-      WINSTA_ENUMDESKTOPS | WINSTA_ENUMERATE | WINSTA_READATTRIBUTES | WINSTA_READSCREEN;
+      WINSTA_ENUMDESKTOPS | WINSTA_ENUMERATE | WINSTA_READATTRIBUTES | WINSTA_READSCREEN | READ_CONTROL;
   constexpr ACCESS_MASK desktop = DESKTOP_CREATEMENU | DESKTOP_CREATEWINDOW |
       DESKTOP_ENUMERATE | DESKTOP_READOBJECTS | DESKTOP_WRITEOBJECTS;
   for (PSID sid : {user, capability}) {

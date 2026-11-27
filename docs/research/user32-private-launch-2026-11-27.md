@@ -223,4 +223,29 @@ and successful object cleanup. The real SYSTEM helper rejects this ordinary
 identity with access denied before accepting any handle. Named station
 creation is unavailable under this non-admin local token; an unnamed
 `CREATE_ONLY` attempt also refused an existing object without changing it.
-Actual SYSTEM-helper, private-token and lowbox rows remain pending hosted CI.
+Actual SYSTEM-helper, private-token and lowbox rows were pending at that point.
+
+## Window-station descriptor read access
+
+The hosted run on `d0684d64a3aa1c86675416c60210e1362e3559a6` produced the
+same access and loader results on Windows Server 2022 and 2025. On newly owned
+objects with the original effective station mask `0x327` and desktop mask
+`0xc7`, both identities returned `ERROR_DLL_INIT_FAILED`. Adding only
+`READ_CONTROL` to the owned station changed its mask to `0x20327`. The actual
+private AppContainer then loaded USER32 and exited zero with the desktop mask
+still `0xc7`. The private non-AppContainer comparison still returned
+`ERROR_DLL_INIT_FAILED`. Adding descriptor read access to the desktop alone,
+or using a full-access new desktop under the unchanged interactive station,
+did not initialize USER32 for either identity. The full-access owned pair
+continued to initialize USER32 for both identities.
+
+`PrepareRuntimeDesktop` now requests `READ_CONTROL` on the existing interactive
+window station for the same private user SID and Gesher runtime capability
+SID. The desktop access mask and mandatory labels remain unchanged, and the new
+grant does not carry descriptor or ownership modification rights. The fixture
+reads back the new expected mask when its diagnostic samples the prepared
+interactive station. Its newly owned minimum-mask and descriptor-read
+comparisons retain their original masks and observations. The original
+protected launch and observer-free gates still require full successful
+execution against the actual `WinSta0\Default`. That production verification
+is pending a hosted run with the station change.
