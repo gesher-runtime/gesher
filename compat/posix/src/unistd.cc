@@ -16,6 +16,7 @@
 #include <gesher/font_environment.h>
 #include <gesher/environment.h>
 #include <gesher/file_description.h>
+#include <gesher/canonical_file_name.h>
 
 #include <atomic>
 #include <mutex>
@@ -73,7 +74,7 @@ std::atomic<unsigned long long> rand_state{0x853c49e6748fea9bULL};
 
 // The file open on a handle, as a Linux path (LinuxPath). False with errno
 // set if it has no file name (a pipe, a console, NUL).
-bool FinalPath(HANDLE h, std::string* out) {
+bool FinalPath(HANDLE h, std::string* out, const std::wstring* original = nullptr) {
   if (const auto scoped = gesher::storage_root::DescriptorPath(h); !scoped.empty()) {
     *out = gesher::LinuxPath(scoped.c_str());
     return true;
@@ -81,6 +82,14 @@ bool FinalPath(HANDLE h, std::string* out) {
   wchar_t buf[32768];
   DWORD n = GetFinalPathNameByHandleW(h, buf, 32768, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
   if (n == 0) {
+    const DWORD error = GetLastError();
+    std::wstring canonical;
+    if (error == ERROR_ACCESS_DENIED && original &&
+        gesher::canonical_file_name::RevalidatedDosName(h, *original, &canonical)) {
+      *out = gesher::LinuxPath(canonical.c_str());
+      return true;
+    }
+    SetLastError(error);
     gesher::FailWithLastError();
     return false;
   }
@@ -936,7 +945,7 @@ char* realpath(const char* path, char* resolved_path) {
       out = gesher::system_linker::kPath;
       ok = true;
     } else {
-      ok = FinalPath(h, &out);
+      ok = FinalPath(h, &out, &wpath);
     }
     CloseHandle(h);
     if (!ok) return nullptr;
