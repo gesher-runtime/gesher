@@ -266,7 +266,7 @@ public final class AccountSecurityTest {
 
         Class<?> servicesType = Class.forName("com.gesher.server.Services");
         Class<?> atmType = Class.forName("com.gesher.server.ActivityTaskManagerService");
-        Object atm = atmType.getConstructor(pm).newInstance(packageManager);
+        Object atm = construct(atmType, new Class<?>[] {pm}, packageManager);
         Object created = construct(Class.forName("com.gesher.server.Services$Created"),
                 new Class<?>[] {pm, atmType, am, Class.forName("com.gesher.server.ClipboardService"), Map.class},
                 packageManager, atm, null, null, new java.util.HashMap<>());
