@@ -52,7 +52,14 @@ inline DWORD OpenChild(HANDLE directory, const std::wstring& leaf, HANDLE* resul
       FILE_OPEN, FILE_NON_DIRECTORY_FILE | FILE_OPEN_REPARSE_POINT | FILE_SYNCHRONOUS_IO_NONALERT, nullptr, 0);
   if (status < 0) { *result = INVALID_HANDLE_VALUE; return translate(status); }
   BY_HANDLE_FILE_INFORMATION info{};
-  if (!GetFileInformationByHandle(*result, &info) || (info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
+  bool described = GetFileInformationByHandle(*result, &info) != FALSE;
+  if (!described) {
+    FILE_ATTRIBUTE_TAG_INFO child_attributes{};
+    described = GetFileInformationByHandleEx(*result, FileAttributeTagInfo,
+        &child_attributes, sizeof(child_attributes)) != FALSE;
+    if (described) info.dwFileAttributes = child_attributes.FileAttributes;
+  }
+  if (!described || (info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
     CloseHandle(*result); *result = INVALID_HANDLE_VALUE; return ERROR_ACCESS_DENIED;
   }
   return ERROR_SUCCESS;

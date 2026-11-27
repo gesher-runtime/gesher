@@ -69,6 +69,8 @@ if ($Worker) {
         }
         if (-not $state.ContainsKey('device')) { throw 'No synthetic device namespace' }
         $env:GESHER_BINDER = $state['device']
+        $deviceOperator = @()
+        if ($state['protected_binder'] -eq 'true') { $deviceOperator = @('--device-operator') }
         if ($Mode -eq 'empty-bridge') {
             $bridgeArgs = $base + @('-cp',$app,'com.gesher.app.Launcher','launch',
                 'com.gesher.windowpromotion.target','--activity','.BridgeActivity','--window')
@@ -83,8 +85,8 @@ if ($Worker) {
             $bridgePid = $match.Groups[1].Value
             [IO.File]::WriteAllText((Join-Path $OutputRoot 'state.txt'), "CHECK $bridgePid", [Text.Encoding]::ASCII)
             $null = WaitMarker (Join-Path $OutputRoot 'controller-pass.txt') 'PASS'
-            $null = Vm 'reveal-bridge-content' @('-cp',$app,'com.gesher.server.RuntimeCommands','am','broadcast','-n',
-                'com.gesher.windowpromotion.target/com.gesher.windowpromotion.target.ControlReceiver')
+            $null = Vm 'reveal-bridge-content' (@('-cp',$app,'com.gesher.server.RuntimeCommands') + $deviceOperator +
+                @('am','broadcast','-n','com.gesher.windowpromotion.target/com.gesher.windowpromotion.target.ControlReceiver'))
             $null = WaitMarker $targetLog "bridge: content-added pid=$bridgePid"
             [IO.File]::WriteAllText((Join-Path $OutputRoot 'state.txt'), "CONTENT $bridgePid", [Text.Encoding]::ASCII)
             $null = WaitMarker (Join-Path $OutputRoot 'controller-pass.txt') 'CONTENT_PASS'
@@ -120,8 +122,8 @@ if ($Worker) {
             Start-Sleep -Milliseconds 25
         } while ($true)
         if ($Mode -eq 'positive') {
-            $null = Vm 'begin-background-phase' @('-cp',$app,'com.gesher.server.RuntimeCommands','am','broadcast','-n',
-                'com.gesher.windowpromotion.target/com.gesher.windowpromotion.target.ControlReceiver')
+            $null = Vm 'begin-background-phase' (@('-cp',$app,'com.gesher.server.RuntimeCommands') + $deviceOperator +
+                @('am','broadcast','-n','com.gesher.windowpromotion.target/com.gesher.windowpromotion.target.ControlReceiver'))
             $null = WaitMarker $targetLog "promotion: first-activity-destroyed pid=$originalPid"
             $null = WaitMarker $targetLog "promotion: unapproved-created pid=$originalPid service=true"
             $text = WaitMarker $targetLog "promotion: unapproved-frame-pass pid=$originalPid service=true"

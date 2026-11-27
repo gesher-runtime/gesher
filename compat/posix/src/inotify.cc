@@ -841,8 +841,17 @@ void InotifyNoteWrite(HANDLE h) {
       native_name = name;
     }
     if (opened == INVALID_HANDLE_VALUE) return false;
-    const bool identified = GetFileInformationByHandle(opened, &parent_info) &&
-        (parent_info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) &&
+    bool described = GetFileInformationByHandle(opened, &parent_info) != FALSE;
+    if (!described) {
+      // The legacy coarse-id query is only an index optimization. A volume
+      // can still provide attributes and the full identities verified below.
+      parent_info = {};
+      FILE_ATTRIBUTE_TAG_INFO attributes{};
+      described = GetFileInformationByHandleEx(opened, FileAttributeTagInfo,
+          &attributes, sizeof(attributes)) != FALSE;
+      if (described) parent_info.dwFileAttributes = attributes.FileAttributes;
+    }
+    const bool identified = described && (parent_info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) &&
         !(parent_info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT);
     HANDLE child = INVALID_HANDLE_VALUE;
     FILE_ID_INFO child_id{};

@@ -189,3 +189,41 @@ objects retained cancellation without a grant. Source, JAR/DEX, runtime and log
 identities are in `out/qa314/saf-hosted/final-inputs.json`. Temporary SUBST
 experiments were removed and are not the before/after proof. Actual UNC-share
 execution remains unavailable and the hosted rerun remains required.
+
+## Protected graphics fixture follow-up
+
+The nested service-first graphics run reproduced `0xc0000142` before Android
+attachment: its disposable private desktop lacked the runtime capability grant
+used by ordinary launchers. The fixture now adds only the five production
+desktop rights to its newly generated GUID desktop. It changes no existing
+desktop, window station or integrity label. Protected control commands use the
+real verified operator, retaining the separate legacy path.
+
+The original three modes pass in both protected and legacy executions. Native
+frame ownership, service/PID/job lifetime, hidden unapproved frames, background
+visibility and explicit-headless assertions remain intact. The configured
+CMake executable and all 83 final receipt artifacts were independently verified
+in `out/qa314/window-promotion-qa/guid-inputs.json`. This tests same-user
+AppContainer graphics, not the separate private SYSTEM runtime. The shared
+runtime capability is not an assertion of foreign-app isolation on that fixture
+desktop; the next hosted matrix remains required.
+
+## Inotify legacy-query fallback
+
+The first complete Linux host-model run in `45995014400` passed its original
+ten record checks and 62 Linux reference checks, but failed one of 306
+production-model checks: denial of the legacy coarse identity query also
+prevented directory metadata validation. The repair treats that query as an
+index optimization. A separate attributes query may establish directory and
+no-reparse metadata while the full writer, child and held-parent identities
+remain mandatory. Failure of both metadata queries remains fail-closed.
+
+The original routing assertion is unchanged. New current-source controls
+separately deny parent and child attributes; they do not impose new semantics
+on historical source controls. A strict MSVC Windows probe reproduces the old
+child-open failure and passes with the repaired header, verifying the same
+actual full file identity, denied metadata, traversal/directory/stream selectors
+and exact cleanup. Sources, original header, binaries and logs are in
+`out/qa314/inotify-attributes/final-inputs.json`. The full Linux model and
+sanitizer rerun remain pending. Simultaneous DOS-name and coarse-identity
+failure, physical ReFS and a real reparse-file probe are outside this evidence.
