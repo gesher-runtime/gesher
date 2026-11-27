@@ -1,8 +1,8 @@
 {
   "after_sha256": {
-    ".github/workflows/ci.yml": "41d94d3ba97b7aca5720a28acce65da235e4db8cd26e212f2b49e78ed8e30133",
+    ".github/workflows/ci.yml": "ff2fc6becd917b220da8ecaec666192d353bedf66aca5caf22b6f8e4d9593e25",
     "compat/bionic/posix_bionic.cc": "9ba77321ff4a4fedd64b9dfc433a5c93349daf6eef90552bda95763b0ef3a531",
-    "compat/bionic/shim_internal.h": "409e4cecd58a5bda0593d55f62788b53963f8cf9b10540f1e212cafea2c9504d",
+    "compat/bionic/shim_internal.h": "d589c64826a3cde8522c58cf5aa18ab6c7a4ef51ae96e00f1d467d5a90831275",
     "tests/native/directory_contract_host_test.cc.in": "6cd6730ccfc054cfef011fb2e5210d1db06d2686a86a3ce464d6cbd6f8d06dfc",
     "tests/native/libc_test.c": "c4272d210f7a264774b1d72e358ded5095d6fbcde50d3c42397687ef1698f2a6",
     "tests/native/scandir_sort_bench.cc.in": "5cce5037399fc6e63edb12f17b91557d16c15e89f668257cba096cfcaaac3ed1",
@@ -18,7 +18,7 @@
     "tools/net-tcp-priority/qualified/shared-stdio-source.patch": "ea01987859d3f53e6168db8a40c1e3ed726bdfe3d3e2209eaf00e0d9ab0a4ff0",
     "tools/net-tcp-priority/test-memrchr-policy.py": "f05739ff79cc4c6ea6ddda9703819773ba5407bcd60022bd906080ec6700206b",
     "tools/net-tcp-priority/test-scandir-policy.py": "8a0bc5f04ce128f85c5a9cd439fd4d21bcfc3e8d96f743220813e9373d43c174",
-    "tools/net-tcp-priority/test-selected-policy.py": "1848233d75fff68ec75c16da1261a3092d729b2f52d3caf370b04afb7badc5dd",
+    "tools/net-tcp-priority/test-selected-policy.py": "6644357913cf2aaad4271c162c6761aaae0528dbfc6d49ca26263cc93e6ee104",
     "tools/test_memrchr_report.py": "9556ec1b47ac82094a55324f512bbda938e687b0578d42a26f52f3048aadaedf",
     "tools/test_scandir_sort.py": "1803419db9667a88427a33735310eb555cec71250cf8d895c2194b67f66ed07a"
   },
@@ -47,7 +47,7 @@
     "tools/test_scandir_sort.py": "1803419db9667a88427a33735310eb555cec71250cf8d895c2194b67f66ed07a"
   },
   "native_runtime_approval": false,
-  "patch_sha256": "4aba7a314b232bbcf15254110a3a36caac175b55bb5874404f26366ef5801176",
+  "patch_sha256": "bb55fed2a40f22c4cc0a11ee2bbcd59c336e250fc269f0b9ebc1f10622e25bfd",
   "paths": [
     ".github/workflows/ci.yml",
     "compat/bionic/posix_bionic.cc",

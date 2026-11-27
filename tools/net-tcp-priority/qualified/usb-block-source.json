@@ -2,7 +2,7 @@
   "after_sha256": {
     "compat/art/dalvikvm_main.cc": "acc7cda395361af1029e83077ce552448263c107c5b82644d8c76ce8f7d5133d",
     "compat/binder/binderd.cc": "00424115aed56de032939839ce574fa08b3f58df43b3dda8da214da1540d65ff",
-    "compat/bionic/process_bionic.cc": "554e261770ecb93299390bdf7feb90908a016e4d23a37f76ad789231a663a45e",
+    "compat/bionic/process_bionic.cc": "0338fa535a2c7389675a842b8450ec4928a9142be90f02b8c7697914414a4442",
     "compat/elf/exec/exec_spawn.cc": "926231d7ce0055d3ed51221dcd1faa3225b5760d762e8df9df0f02bc0bfab7f2",
     "compat/elf/exec/exec_spawn.h": "3282aa6a8b10cb19d9bb16ca0a174fe3f16881161483228aed8a3859fdf559c6",
     "compat/elf/exec/gesher_exec.cc": "61abe68a8c3878129a7174868f72ac6dc875f54fa6cfbec4c9c368fad8ae175e",
@@ -110,7 +110,7 @@
     "compat/usb_storage/protected_usb_observation.h": "068ae1a67e1343352a1f61d4507269aa1983af72e59172329477bb9751445adf",
     "compat/usb_storage/usb_authority_service.cc": "ac3e0e536f9fdc6ee5a6b9bccd7631f0d9cd894a66117c1ec65a440a93a155fc"
   },
-  "patch_sha256": "79d2cfc324a5064d3a1c3d67ab161712db294a0c539c78e96e6f3ca1c37587cf",
+  "patch_sha256": "399339a522780ba204fca387d2067f78b42decd98533ee98ab0fddf12e55262d",
   "path_bases": {
     "compat/art/dalvikvm_main.cc": "43edc832893d4cd21843c7c6d56424556b625016",
     "compat/binder/binderd.cc": "a025ba60e321a0238c0da90808e2ec9cc69f64ca",

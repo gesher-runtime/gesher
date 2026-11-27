@@ -281,19 +281,19 @@ index 889533e89..9516fa91c 100644
 +#endif
 +  }
 diff --git a/compat/bionic/process_bionic.cc b/compat/bionic/process_bionic.cc
-index 576e95da806..dfd5f2bbb83 100644
+index fd8ce4168..33e275d38 100644
 --- a/compat/bionic/process_bionic.cc
 +++ b/compat/bionic/process_bionic.cc
 @@ -21,0 +22 @@
 +#include "program_break.h"
-@@ -264,0 +266,6 @@ int BIONIC_SYSV ForkUnsupported() { return errno = ENOSYS, -1; }
+@@ -274,0 +276,6 @@ int BIONIC_SYSV ForkUnsupported() { return errno = ENOSYS, -1; }
 +int BIONIC_SYSV DaemonUnsupported(int, int) { return errno = ENOSYS, -1; }
 +
 +ProgramBreak& ProcessBreak() { static ProgramBreak value; return value; }
 +void* BIONIC_SYSV Sbrk(intptr_t increment) { return ProcessBreak().Increment(increment); }
 +int BIONIC_SYSV Brk(void* address) { return ProcessBreak().Set(address); }
 +
-@@ -1146,0 +1154,3 @@ void RegisterProcess(SymbolTable& t) {
+@@ -1150,0 +1158,3 @@ void RegisterProcess(SymbolTable& t) {
 +  E("daemon", DaemonUnsupported);
 +  E("sbrk", Sbrk);
 +  E("brk", Brk);

@@ -841,7 +841,7 @@ def qualified_usb_main513_endpoints():
  return after
 
 
-USB_BLOCK_TRANSITION_SHA256 = 'c2d21ff03f9a6a1d9cb8a095450ff7fa72a20860d6b60398ef0aaf5b49068676'
+USB_BLOCK_TRANSITION_SHA256 = 'c87a4daeece1c25a29af3e87ddd1f42e48b0655f4c4df083474fa7668ae5f994'
 USB_NETLINK_MAIN = '279966e6bcb842ae8a44fef87d740baed6818208'
 USB_NETLINK_PATHS = {
  'compat/posix/posix.cmake',
@@ -915,6 +915,7 @@ def preceding_usb_block_sources(folder):
   for path in paths:
    preceding[path] = (work/path).read_bytes()
    base = USB_NETLINK_MAIN if path in USB_NETLINK_PATHS else USB_BLOCK_PATH_BASES.get(path, USB_BLOCK_BASE)
+   if path==CHILD_WAIT_PATH:base=CHILD_WAIT_MAIN
    historical = main513[path] if path in main513 else subprocess.check_output(
        ['git','-C',str(ROOT),'show',base+':'+path])
    assert preceding[path] == historical, path
@@ -1025,6 +1026,33 @@ def preceding_storage_policy_sources(before_features):
   subprocess.run(['git','apply','-'],input=patch,cwd=work,check=True,capture_output=True)
   for path in STORAGE_POLICY_PATHS:
    assert (work/path).read_bytes()==current[path],('storage policy forward endpoint',path)
+ return baseline
+
+# Reverse the one process collector transition to the unchanged OFD digest.
+# This source check does not qualify Windows execution.
+CHILD_WAIT_PATH='compat/bionic/process_bionic.cc'
+CHILD_WAIT_MAIN='d5c8e60673cd99e388cdf4ec1e895039c5d9fe66'
+CHILD_WAIT_PATCH='tools/net-tcp-priority/qualified/child-wait-source.patch'
+CHILD_WAIT_PATCH_SHA256='a2c8cecd2c71a63adee65f5c6339cb876ac288d0895bdad530035817e0fbb62e'
+CHILD_WAIT_SOURCE_SHA256='70222a932a0ea37339d8d5b320e838ae44ee5fc5ebf2d741baf39ae679ded59a'
+
+def preceding_child_wait_source(current):
+ patch=(ROOT/CHILD_WAIT_PATCH).read_bytes()
+ assert hashlib.sha256(current).hexdigest()==CHILD_WAIT_SOURCE_SHA256,CHILD_WAIT_PATH
+ assert hashlib.sha256(patch).hexdigest()==CHILD_WAIT_PATCH_SHA256,CHILD_WAIT_PATCH
+ assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==[CHILD_WAIT_PATH]
+ with tempfile.TemporaryDirectory(prefix='gesher-child-wait-qualification-') as temporary:
+  work=Path(temporary)
+  source=work/CHILD_WAIT_PATH
+  source.parent.mkdir(parents=True)
+  source.write_bytes(current)
+  subprocess.run(['git','apply','--reverse','--unidiff-zero','-'],input=patch,cwd=work,check=True,capture_output=True)
+  baseline=source.read_bytes()
+  usb_base=USB_BLOCK_PATH_BASES[CHILD_WAIT_PATH]
+  assert baseline==subprocess.check_output(
+      ['git','-C',str(ROOT),'show',usb_base+':'+CHILD_WAIT_PATH]),'child wait reverse and original USB endpoints disagree'
+  subprocess.run(['git','apply','--unidiff-zero','-'],input=patch,cwd=work,check=True,capture_output=True)
+  assert source.read_bytes()==current,CHILD_WAIT_PATH
  return baseline
 
 # Reverse only the reviewed adaptive stable-directory sort before the exact
@@ -1144,6 +1172,7 @@ def preceding_ofd_sources():
  preceding={**before_features,**memfd_lease,**stdio_main,**shared_stdio,**storage_policy}
  for path,digest in qualification['source_sha256'].items():
   actual=preceding[path] if path in preceding else (ROOT/path).read_bytes()
+  if path==CHILD_WAIT_PATH:actual=preceding_child_wait_source(actual)
   if path=='compat/binder/binderd.cc':actual=preceding_composed_binder_output_source(actual)
   if path=='compat/posix/src/system_properties.cc':actual=preceding_logging_property_source(actual)
   if path=='compat/bionic/shim.cc':actual=preceding_memmem_source(actual)
@@ -1548,7 +1577,18 @@ def transition_negative_controls():
  from unittest.mock import patch
  original=Path.read_bytes
  usb_preceding=preceding_usb_block_sources(ROOT/'tools/net-tcp-priority/qualified')
+ # The outer USB pin also rejects this live mutation. Test the Child Wait
+ # leaf independently at the normalized input, including a repinned source.
+ child_wait=usb_preceding[CHILD_WAIT_PATH]
+ bad_wait=child_wait.replace(b'needs_poll |= !child.watched;',b'needs_poll = false;',1)
+ assert bad_wait!=child_wait,CHILD_WAIT_PATH
+ with patch.dict(globals(),CHILD_WAIT_SOURCE_SHA256=hashlib.sha256(bad_wait).hexdigest()):
+  try:preceding_child_wait_source(bad_wait)
+  except (AssertionError,subprocess.CalledProcessError):pass
+  else:raise AssertionError('repinned child-wait mutation accepted')
  cases=[
+  (CHILD_WAIT_PATH,b'needs_poll |= !child.watched;',b'needs_poll = false;'),
+  (CHILD_WAIT_PATCH,b'@@',b'@x'),
   ('compat/posix/src/fd.cc',b'--state->description->descriptor_refs == 0',b'--state->description->descriptor_refs == 1'),
   ('compat/posix/src/fd.cc',b'return TransferPipe(snapshot, bytes, count, false);',b'return 0;'),
   ('compat/posix/src/system.cc',b'gesher::ws::RecvOwned(state.socket,',b'gesher::ws::SendOwned(state.socket,'),

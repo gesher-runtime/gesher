@@ -16,10 +16,12 @@ import tempfile
 import scandir_ci_integration as original
 
 BASELINE = '3a309b747fc604f84fa20a42bbd875d706116d6d'
+ARCHIVE_VERIFIER_BASE = 'd5c8e60673cd99e388cdf4ec1e895039c5d9fe66'
+ARCHIVE_VERIFIER_SHA256 = '8e62fae9c0b12f9cfa14665b4baab386270e95d69456f6e8b086ed6771cb7e01'
 MANIFEST = 'tools/net-tcp-priority/qualified/scandir-consolidation-source.json'
 PATCH = 'tools/net-tcp-priority/qualified/scandir-consolidation-source.patch'
 ADAPTER = 'tools/scandir_consolidation.py'
-MANIFEST_SHA256 = 'f21b6614f39c6eb5cdbb6de1667d5eefa6ee988dfdf374c8391eb3e225f744a3'
+MANIFEST_SHA256 = '1b4b1b0c58980a08e6b4c09a0efd055f911d9f22001399fdf6aaff5e583ee24a'
 ORIGINAL_ADAPTER_SHA256 = 'f6bfd6c916300cbf95b31a6de4ad394b3c6da13cdd189339c0fc823a167481cd'
 
 
@@ -38,14 +40,24 @@ def declaration(helper_digest, manifest_digest):
             'native_runtime_approval': False}
 
 
-def integrated_verifier(baseline, helper_digest):
-    """Exactly two routing edits; all original verifier assertions stay intact."""
-    old_import = b'    from scandir_ci_integration import historical_sources\n'
-    old_digest = ORIGINAL_ADAPTER_SHA256.encode()
-    require(baseline.count(old_import) == 1 and baseline.count(old_digest) == 1,
-            'unique original verifier routing')
-    return baseline.replace(old_import, b'    from scandir_consolidation import historical_sources\n').replace(
-        old_digest, helper_digest.encode())
+def integrated_verifier(archival_verifier, helper_digest):
+    """Retain main's standalone archive verifier and add the branch source proof at CLI entry."""
+    require(sha(archival_verifier) == ARCHIVE_VERIFIER_SHA256, 'immutable archive verifier')
+    definition = b'def main():\n'
+    anchor = (b"    for path, expected in report['sources'].items():\n"
+              b"        require(digest(members['repo/' + path]) == expected, 'archived source: ' + path)\n")
+    entry = b"if __name__ == '__main__':\n    main()\n"
+    for marker in (definition, anchor, entry):
+        require(archival_verifier.count(marker) == 1, 'unique archive verifier routing')
+    source_check = (
+        b"    if check_current_sources:\n"
+        b"        from scandir_consolidation import historical_sources\n"
+        b"        source_bytes = historical_sources(ROOT, report, members, '" + helper_digest.encode() + b"')\n"
+        b"        for path, expected in report['sources'].items():\n"
+        b"            require(digest(source_bytes[path]) == expected, 'current source: ' + path)\n"
+    )
+    return archival_verifier.replace(definition, b'def main(*, check_current_sources=False):\n').replace(
+        anchor, source_check + anchor).replace(entry, b"if __name__ == '__main__':\n    main(check_current_sources=True)\n")
 
 
 def directory_section(source):
@@ -56,7 +68,7 @@ def directory_section(source):
 
 
 def normalize(report, current, baseline, archived, helper, expected_helper,
-              manifest_raw, patch, old_helper, manifest_pin=MANIFEST_SHA256):
+              manifest_raw, patch, old_helper, archival_verifier, manifest_pin=MANIFEST_SHA256):
     require(sha(helper) == expected_helper, 'pinned consolidation adapter')
     require(sha(old_helper) == ORIGINAL_ADAPTER_SHA256, 'unchanged original adapter')
     require(sha(manifest_raw) == manifest_pin, 'pinned consolidation manifest')
@@ -80,7 +92,7 @@ def normalize(report, current, baseline, archived, helper, expected_helper,
     for path in paths:
         require(sha(current[path]) == transition['after_sha256'][path], 'current source ' + path)
         require(sha(baseline[path]) == transition['before_sha256'][path], 'immutable baseline ' + path)
-    require(current[original.VERIFIER] == integrated_verifier(baseline[original.VERIFIER], expected_helper),
+    require(current[original.VERIFIER] == integrated_verifier(archival_verifier, expected_helper),
             'complete current verifier reconstruction')
     for command in original.COMMANDS:
         require(current[original.CI].count(command) == 1, 'unique retained feature command')
@@ -116,12 +128,12 @@ def normalize(report, current, baseline, archived, helper, expected_helper,
 
 
 def negative_controls(report, current, baseline, archived, helper, expected_helper,
-                      manifest_raw, patch, old_helper):
+                      manifest_raw, patch, old_helper, archival_verifier):
     cases = 0
 
     def rejects(label, *, modified_report=None, modified_current=None, modified_baseline=None,
                 modified_manifest=None, modified_patch=None, modified_helper=None,
-                modified_old_helper=None, manifest_pin=MANIFEST_SHA256):
+                modified_old_helper=None, modified_archive_verifier=None, manifest_pin=MANIFEST_SHA256):
         nonlocal cases
         try:
             normalize(report if modified_report is None else modified_report,
@@ -130,7 +142,8 @@ def negative_controls(report, current, baseline, archived, helper, expected_help
                       archived, helper if modified_helper is None else modified_helper, expected_helper,
                       manifest_raw if modified_manifest is None else modified_manifest,
                       patch if modified_patch is None else modified_patch,
-                      old_helper if modified_old_helper is None else modified_old_helper, manifest_pin)
+                      old_helper if modified_old_helper is None else modified_old_helper,
+                      archival_verifier if modified_archive_verifier is None else modified_archive_verifier, manifest_pin)
         except (AssertionError, subprocess.CalledProcessError):
             cases += 1
         else:
@@ -162,6 +175,7 @@ def negative_controls(report, current, baseline, archived, helper, expected_help
     rejects('changed immutable endpoint', modified_baseline={**baseline, path: baseline[path] + b'\n'})
     rejects('changed new adapter', modified_helper=helper + b'\n')
     rejects('changed old adapter', modified_old_helper=old_helper + b'\n')
+    rejects('changed archive verifier', modified_archive_verifier=archival_verifier + b'\n')
     for field in declaration(expected_helper, MANIFEST_SHA256):
         modified = copy.deepcopy(report)
         del modified['draft_consolidation'][field]
@@ -182,7 +196,9 @@ def historical_sources(root, report, members, expected_helper):
     helper = (root / ADAPTER).read_bytes()
     old_helper = (root / original.ADAPTER).read_bytes()
     manifest_raw, patch = (root / MANIFEST).read_bytes(), (root / PATCH).read_bytes()
-    args = (report, current, baseline, archived, helper, expected_helper, manifest_raw, patch, old_helper)
+    archival_verifier = subprocess.check_output(
+        ['git', '-C', str(root), 'show', ARCHIVE_VERIFIER_BASE + ':' + original.VERIFIER])
+    args = (report, current, baseline, archived, helper, expected_helper, manifest_raw, patch, old_helper, archival_verifier)
     result = normalize(*args)
     controls, old_controls = negative_controls(*args)
     print(f'SCANDIR_DRAFT_CONSOLIDATION_PASS source_paths={len(current)} negative_controls={controls} '
