@@ -27,6 +27,9 @@ void WINAPI GuestLoaderProbeEntry(void) {
       if (GetTickCount64() >= deadline) ExitProcess(ERROR_TIMEOUT);
       Sleep(10);
     }
+    // Arm diagnostic hardware breakpoints after the real entry context.
+    // Only the disposable traced copy emits this marker.
+    OutputDebugStringA("GESHER_LOADER_ENTRY");
   }
   const HMODULE library = LoadLibraryExW(L"user32.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
   if (!library) ExitProcess(WindowsError());
