@@ -57,7 +57,7 @@ def main() -> int:
             "-I", str(ROOT / "compat/bionic"),
             "-I", str(ROOT / "compat/arm64/include"),
             "-I", str(ROOT / "tests/native"), str(generated),
-            "-Wl,--wrap=malloc,--wrap=realloc,--wrap=free,--wrap=readdir,--wrap=closedir",
+            "-Wl,--wrap=malloc,--wrap=realloc,--wrap=free,--wrap=readdir,--wrap=closedir,--wrap=fdopendir",
             "-o", str(executable),
         ]
         if args.sanitize:
@@ -68,7 +68,7 @@ def main() -> int:
             env["ASAN_OPTIONS"] = "allocator_may_return_null=1:" + env.get("ASAN_OPTIONS", "")
             env["UBSAN_OPTIONS"] = "halt_on_error=1:" + env.get("UBSAN_OPTIONS", "")
         failed = []
-        for case in ("public", "allocations", "reader", "fdopen"):
+        for case in ("public", "allocations", "reader", "fdopen", "opaque-cookie"):
             result = subprocess.run([str(executable), case], env=env, cwd=folder, text=True,
                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
             print(result.stdout, end="", flush=True)

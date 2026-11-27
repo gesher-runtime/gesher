@@ -16,7 +16,7 @@ PATH = 'compat/bionic/posix_bionic.cc'
 BASELINE_SHA256 = '9ba77321ff4a4fedd64b9dfc433a5c93349daf6eef90552bda95763b0ef3a531'
 MANIFEST = 'tools/net-tcp-priority/qualified/scandir-native2-source.json'
 PATCH = 'tools/net-tcp-priority/qualified/scandir-native2-source.patch'
-MANIFEST_SHA256 = 'd959479a44b77d381db6585df5a812fe55c271a7ca07c655c62302d302d52ce7'
+MANIFEST_SHA256 = '40ea1456c33611e66c174f92a2f3c9fe47d9cc5a40ad06f2783976694d4aaa8b'
 
 
 def sha(data):

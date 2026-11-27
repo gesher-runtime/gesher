@@ -27,6 +27,7 @@
 // drive, "/mnt/d/x" on drive D:, /dev/null is NUL.
 
 #include "gesher_shell.h"
+#include <gesher/fork.h>
 #include "../../usb_storage/protected_runtime_client.h"
 
 #include <gesher/reserved_names.h>
@@ -266,6 +267,8 @@ struct Io {
 struct Shell {
   std::map<std::string, Var> vars;
   std::string cwd;
+  // Until cd changes shell state, children inherit the real process cwd handle.
+  bool cwd_inherited = true;
   Io io;
   std::vector<std::string> pos;  // $0, $1...
   std::map<std::string, NodeP> funcs;

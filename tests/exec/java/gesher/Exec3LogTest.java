@@ -53,7 +53,9 @@ public final class Exec3LogTest {
         Method loggable = log.getMethod("isLoggable", String.class, int.class);
         Method set = Class.forName("android.os.SystemProperties").getMethod("set", String.class, String.class);
         String child = new File(args[0], "libexec2child.so").getPath();
-        String tag = "Exec3Log" + Long.toString(System.nanoTime(), 36).replace('-', 'x');
+        boolean operator = args.length == 4 && args[1].equals("--app-operator");
+        File phase = operator ? new File(args[2]) : null;
+        String tag = operator ? Exec3AppPropertiesTest.tag(args[3]) : "Exec3Log" + Long.toString(System.nanoTime(), 36).replace('-', 'x');
         command("logcat", "-c");
         println.invoke(null, 4, tag, "java-one");
         println.invoke(null, 5, tag, "java-two\njava-three");
@@ -69,7 +71,8 @@ public final class Exec3LogTest {
         contains(command("logcat", "-d", "-s", tag, "-v", "threadtime"), " I " + tag + ": java-one");
         contains(command("logcat", "-d", "-s", tag, "-v", "epoch"), " I " + tag + ": java-one");
         contains(command("logcat", "-d", "-s", tag, "-v", "long"), " I/" + tag + " ]\njava-one");
-        set.invoke(null, "log.tag." + tag, "E");
+        if (operator) Exec3AppPropertiesTest.request(phase, "log-error");
+        else set.invoke(null, "log.tag." + tag, "E");
         if ((Boolean)loggable.invoke(null, tag, 4) || !(Boolean)loggable.invoke(null, tag, 6)) throw new AssertionError("Java ignores the live tag property");
         println.invoke(null, 4, tag, "java-hidden");
         command(child, "log-write", tag, "3", "native-hidden");
@@ -77,7 +80,13 @@ public final class Exec3LogTest {
         String filtered = command("logcat", "-d", "-v", "raw", "-s", tag);
         if (filtered.contains("hidden")) throw new AssertionError("suppressed Java/native messages were recorded");
         contains(filtered, "native-visible\n");
-        contains(command(child, "log-abi", tag + "Abi"), "log-abi:PASS");
+        if (!operator) contains(command(child, "log-abi", tag + "Abi"), "log-abi:PASS");
+        // The full native mutating ABI corpus runs under the standalone
+        // operator above. The app validates the real externally set filter.
+        if (operator) {
+            Exec3AppPropertiesTest.request(phase, "log-info");
+            if (!(Boolean)loggable.invoke(null, tag, 4)) throw new AssertionError("Java missed operator filter reset");
+        }
         System.out.println("Exec3LogTest PASS actual Java/NDK records, tags, priority filters, nine formats and live loggability properties");
         // Credentials never reach the persisted logcat file or the stderr log (docs/logging.md).
         // The values are synthetic; 45-exec3.ps1 also searches the log files for them.
@@ -91,7 +100,7 @@ public final class Exec3LogTest {
         equal("GmsAuthenticator getAuthToken: <redacted>\nLoginRequest{user=7, auth_token=<redacted>}\n"
                 + "\u05e9\u05dc\u05d5\u05dd Bearer <redacted>\nauth_token=<redacted> ya29.<redacted>\n",
                 command("logcat", "-d", "-v", "raw", "-s", secretTag));
-        if (args.length == 1) {
+        if (args.length == 1 || operator) {
             // In an app process (ExecActivity): stdout/stderr are the package's .log file.
             System.out.print("Exec3 stdout getAuthToken: ya2");
             System.out.print("9.a0Exec3SYNTHETICstdout");
@@ -102,7 +111,8 @@ public final class Exec3LogTest {
         System.out.println("Exec3LogTest PASS credentials are redacted in the logcat file and stderr for Java, split native arguments, multi-line and non-ASCII text");
         command("logcat", "-c");
         equal("", command("logcat", "-d", "-v", "raw", "-s", tag));
-        set.invoke(null, "log.tag." + tag, "V");
+        if (operator) Exec3AppPropertiesTest.request(phase, "log-verbose");
+        else set.invoke(null, "log.tag." + tag, "V");
         Process follow = new ProcessBuilder("logcat", "-v", "raw", "-s", tag).redirectErrorStream(true).start();
         try {
             follow.getOutputStream().close();

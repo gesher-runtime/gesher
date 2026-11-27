@@ -139,7 +139,12 @@ int Start(const Shell& sh, const std::vector<std::string>& args, const Io& io,
     ShErr(sh, io, args[0] + ": " + ErrorText(EILSEQ));
     return 126;
   }
-  DWORD failed = SpawnWithFds(launch, environment.c_str(), WindowsPath(sh.cwd),
+  // Reopening an inherited host cwd can fail under an AppContainer. Preserve
+  // inheritance until cd changes the shell's logical cwd. A fork broker needs
+  // an explicit path because its process directory belongs to the broker.
+  std::wstring directory = sh.cwd_inherited && !gesher::InForkedChild()
+                               ? std::wstring{} : WindowsPath(sh.cwd);
+  DWORD failed = SpawnWithFds(launch, environment.c_str(), directory,
                               fds, process);
   if (failed != 0) {
     ShErr(sh, io, args[0] + ": " + ErrorText(ErrnoFromWin32(failed)));

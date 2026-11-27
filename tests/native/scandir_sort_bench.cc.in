@@ -61,12 +61,14 @@ int BIONIC_SYSV Filter(const BionicDirent* e) { return active->order != FilterNo
 void Require(bool value) { if (!value) { std::fputs("SCANDIR_BENCH_IDENTITY_FAILURE\n", stderr); std::exit(1); } }
 uint64_t Clock(clockid_t id) { timespec t{}; Require(clock_gettime(id, &t) == 0); return uint64_t(t.tv_sec) * 1000000000ULL + t.tv_nsec; }
 std::vector<BionicDirent> Reference(const std::string& path) {
+  constexpr bool native_cookie = @SCANDIR_REFERENCE_USES_NATIVE_COOKIE@;
   std::vector<BionicDirent> result; DIR* d = ::opendir(path.c_str()); Require(d != nullptr);
   int64_t position = 0;
   while (auto* e = ::readdir(d)) {
     ++position; if (e->d_name[0] == '.' || active->order == FilterNone) continue;
     BionicDirent v{}; v.d_ino = e->d_ino ? e->d_ino : static_cast<uint64_t>(e->d_off);
-    v.d_off = position; v.d_type = e->d_type; v.d_reclen = sizeof(v); std::strcpy(v.d_name, e->d_name); result.push_back(v);
+    v.d_off = native_cookie ? e->d_off : position;
+    v.d_type = e->d_type; v.d_reclen = sizeof(v); std::strcpy(v.d_name, e->d_name); result.push_back(v);
   }
   Require(::closedir(d) == 0);
   if (active->order != NoSort) std::stable_sort(result.begin(), result.end(), [](const auto& a, const auto& b) { return Value(a, b, active->order) < 0; });

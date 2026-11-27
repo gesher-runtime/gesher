@@ -77,9 +77,18 @@ public class RecordActivity extends Activity {
     static native String aaudioInputOverruns();
     static native String openslRecorder();
 
+    private boolean mScheduled;
+
     @Override
-    protected void onCreate(Bundle savedInstanceState) {
-        super.onCreate(savedInstanceState);
+    protected void onResume() {
+        super.onResume();
+        if (!mScheduled) {
+            mScheduled = true;
+            getMainExecutor().execute(this::runSteps);
+        }
+    }
+
+    private void runSteps() {
         if ("1".equals(System.getenv("GESHER_TEST_CODEC_CONTROLS"))) {
             try {
                 CodecControlsTest.run();
@@ -90,8 +99,8 @@ public class RecordActivity extends Activity {
             }
             return;
         }
-        // The steps run here, in onCreate (callbacks come on threads of their own); then the
-        // activity finishes, which ends the run in both modes (single process, the device).
+        // Run after the foreground lifecycle is reported so the actual
+        // while-in-use camera policy is in effect. Callbacks use their own threads.
         {
             String[] steps = {"session", "devices", "audiorecord", "ndk", "codeclist", "aac", "opus", "h264",
                 "h264surface", "muxboth", "recorder", "recorderlimits", "recordersurface", "recordercamera",

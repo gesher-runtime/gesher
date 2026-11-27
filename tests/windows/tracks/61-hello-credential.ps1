@@ -46,12 +46,16 @@ DevCheck 'hello credential: createConfirmDeviceCredentialIntent is null on a dev
 # is not the top app; a runner's desktop does not always give the test window the
 # foreground. Otherwise: no sensor is HW_NOT_PRESENT (12), no credential is
 # NO_DEVICE_CREDENTIAL (14). Never a success.
-$hcStrong = if ($hcOut -match 'hellocred: prompt: strong: error (\d+)') { $Matches[1] } else { '?' }
-$hcCredential = if ($hcOut -match 'hellocred: prompt: credential: error (\d+)') { $Matches[1] } else { '?' }
-if (($hcStrong -eq '12' -and $hcCredential -eq '14') -or ($hcStrong -eq '5' -and $hcCredential -eq '5')) {
-  Write-Host "PASS  hello credential: BiometricPrompt ends with Android's unavailable errors (biometric-only $hcStrong, credential $hcCredential), no success"
+$hcStrong = [regex]::Match($hcOut, 'hellocred: prompt: strong: error (\d+), window focus (true|false)')
+$hcCredential = [regex]::Match($hcOut, 'hellocred: prompt: credential: error (\d+), window focus (true|false)')
+$strongOk = $hcStrong.Success -and ($hcStrong.Groups[1].Value -eq '12' -or
+  ($hcStrong.Groups[1].Value -eq '5' -and $hcStrong.Groups[2].Value -eq 'false'))
+$credentialOk = $hcCredential.Success -and ($hcCredential.Groups[1].Value -eq '14' -or
+  ($hcCredential.Groups[1].Value -eq '5' -and $hcCredential.Groups[2].Value -eq 'false'))
+if ($strongOk -and $credentialOk) {
+  Write-Host "PASS  hello credential: BiometricPrompt reports Android's unavailable errors according to each prompt's focus"
 } else {
-  Write-Host "FAIL  hello credential: BiometricPrompt errors: biometric-only $hcStrong (12, or 5 in the background), credential $hcCredential (14, or 5 in the background)"
+  Write-Host "FAIL  hello credential: unexpected BiometricPrompt errors or foreground state: $($hcStrong.Value), $($hcCredential.Value)"
   $script:failed++
 }
 if ($hcOut.Contains("${hc}prompt: strong: succeeded") -or $hcOut.Contains("${hc}prompt: credential: succeeded") -or

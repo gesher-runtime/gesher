@@ -1261,15 +1261,17 @@ def check_appcontainer_donor_receipts():
 # ends of each changed file are exact, and no runtime pass is granted here.
 APPCONTAINER_INTEGRATION_BASE = 'ff2c1870053c9d0332e6abef07a25fc282d384b5'
 # Independent historical endpoint pin remains fixed when the live side is refreshed.
-APPCONTAINER_INTEGRATION_PREVIOUS_SHA256 = '685804f7733ddf9a0f51ee9b2c0fbea026a802532141e08c3f9cbdb1bf41150c'
+APPCONTAINER_INTEGRATION_PREVIOUS_SHA256 = '754be6b93d9a81d2d3e04541af036bedde7b45ef3b6e86d3eeb48514fceda2f9'
 APPCONTAINER_INTEGRATION_PATCH = 'tools/net-tcp-priority/qualified/appcontainer-integration-source.patch'
 APPCONTAINER_INTEGRATION_QUALIFICATION = 'tools/net-tcp-priority/qualified/appcontainer-integration-source.json'
-APPCONTAINER_INTEGRATION_QUALIFICATION_SHA256 = '3edcbb7867be4e41e77d9b65c5302d387d8942f1ad3cbfce311d39928e7b8473'
+APPCONTAINER_INTEGRATION_QUALIFICATION_SHA256 = '9c25e2e013a292a0647fd26b3540752c807736f6fd35c35236fa60eb723dba5b'
 # In addition to the donor identity surface, the merged startup/fork path
 # intersects the exact USB and child-wait source qualification.
 APPCONTAINER_INTEGRATION_PATHS = sorted(APPCONTAINER_IDENTITY_SOURCE_SHA256.keys() | {
  'compat/bionic/process_bionic.cc', 'compat/credentials/account_crypto.c',
  'compat/elf/exec/exec.cmake', 'compat/elf/exec/gesher_tools.cc',
+ # Preserve the exact USB shell inputs before replaying their historical proof.
+ 'compat/elf/exec/gesher_shell.cc', 'compat/elf/exec/shell_execute.inc',
  'compat/posix/src/binder_transport.cc', 'compat/posix/src/process.cc', 'compat/posix/src/storage_policy.cc',
  'compat/posix/src/storage_policy.h',
  # Host-only legacy-key archiving extends the contained runtime. Reconstruct
@@ -2044,7 +2046,7 @@ def transition_negative_controls():
   assert rejected,'repinned composed Binder mutation accepted: '+before.decode()
  print('TCP_SELECTED_TRANSITION_NEGATIVE_CONTROLS_PASS cases='+str(len(cases))+' repinned_property_controls=5 repinned_memfd_lease_controls='+str(repinned_memfd_lease)+' repinned_binder_output_controls=6 repinned_composed_binder_controls='+str(len(composed_cases)))
 NATIVE2_PROJECTION_ADAPTER = 'tools/scandir_native2_projection.py'
-NATIVE2_PROJECTION_ADAPTER_SHA256 = '00fdced959bf7b4783b1dcd0aa6384ed9e4d9bdf48cf54a984415243a756161b'
+NATIVE2_PROJECTION_ADAPTER_SHA256 = '92315526cfd0331ee455f892c2cff66f6b25ae91f585b3f31c190e5bb137969c'
 
 def native2_projection():
  # Keep the qualified historical Bionic endpoint exact while independently
@@ -2097,9 +2099,11 @@ def selftest(previous):
   transition_negative_controls()
   import runpy
   runpy.run_path(str(ROOT/'tools/net-tcp-priority/test-shared-stdio-policy.py'),run_name='__main__')
-  runpy.run_path(str(ROOT/'tools/net-tcp-priority/test-memrchr-policy.py'),run_name='__main__')
   runpy.run_path(str(ROOT/'tools/net-tcp-priority/test-tsf-metadata-policy.py'),run_name='__main__')
-  runpy.run_path(str(ROOT/'tools/net-tcp-priority/test-scandir-policy.py'),run_name='__main__')
+ # These standalone controls validate the live projection themselves before
+ # supplying historical bytes to their own inner mutation checks.
+ runpy.run_path(str(ROOT/'tools/net-tcp-priority/test-memrchr-policy.py'),run_name='__main__')
+ runpy.run_path(str(ROOT/'tools/net-tcp-priority/test-scandir-policy.py'),run_name='__main__')
 
 if __name__=='__main__':
  import sys

@@ -29,9 +29,21 @@ public final class ExecActivity extends Activity {
             System.out.println("Exec3DeviceTest PASS native exec, spawn, popen, system, signals and waitpid in an app");
             Exec3Test.main(new String[0]);
             Exec3ProcessTest.main(new String[]{directory});
-            Exec3PropertiesTest.main(new String[]{directory});
-            Exec3LogTest.main(new String[]{directory});
-            if (getIntent().getBooleanExtra("exec3.commands", false)) Exec3CommandsTest.main(new String[0]);
+            if (!getIntent().getBooleanExtra("exec3.operator", false)) {
+                Exec3PropertiesTest.main(new String[]{directory});
+                Exec3LogTest.main(new String[]{directory});
+            } else {
+                File phase = new File(getFilesDir(), "exec3-operator");
+                String operatorRun = new String(java.nio.file.Files.readAllBytes(new File(phase.getPath() + ".run").toPath()), java.nio.charset.StandardCharsets.US_ASCII);
+                Exec3AppPropertiesTest.run(directory, phase, operatorRun);
+                Exec3LogTest.main(new String[]{directory, "--app-operator", phase.getPath(), operatorRun});
+                if (getIntent().getBooleanExtra("exec3.commands", false)) {
+                    Exec3AppPropertiesTest.appCommands();
+                    Exec3AppPropertiesTest.request(phase, "commands");
+                }
+                Exec3AppPropertiesTest.request(phase, "done");
+            }
+            if (!getIntent().getBooleanExtra("exec3.operator", false) && getIntent().getBooleanExtra("exec3.commands", false)) Exec3CommandsTest.main(new String[0]);
             view.setText("Exec3 process checks passed");
             System.out.println("Exec3DeviceTest PASS shell, Java process signals, tools and shared properties on the device");
         } catch (Throwable failure) {

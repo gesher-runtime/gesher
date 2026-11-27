@@ -78,3 +78,31 @@ guest on this machine; the existing resolver for that operation was preserved.
 The private USB runtime USER32 initialization failure, installed CardWake and
 archive RPC, clean installation/upgrade, full hosted shards, final default
 launch routes and real Windows Hello consent/cancellation remain merge gates.
+
+## Additional repairs after CI run 45966509354
+
+These are local, separately bounded execution results. They do not establish
+an integrated shipping-default or installer qualification.
+
+| Check | Observed result and limit |
+| --- | --- |
+| Inherited working directory and Exec3 | The installed protected fixture failed its first native spawn when only the launcher's working directory was outside the readable runtime; changing only that directory made the old runtime pass. The repaired ordinary spawn inherits the existing process directory handle. Explicit shell `cd` and fork-broker routes retain the caller's actual directory. The tracked installed-device segment then passed from the original host directory with isolation both enabled and disabled. A real Android ELF/fork witness read the expected relative marker and preserved the parent's directory. |
+| Protected fixture authority | Actual admitted Shell operator writes are visible to Java, ELF and native app readers. The app's attempted property writes, UID environment override and foreign force-stop are denied. These controls exercise the production policy; they do not grant test packages additional authority. |
+| Directory API consistency | The unchanged public directory and Scandir contract includes were compiled as actual Android x86 and ARM64 libraries. Matched original executables each reproduced the three inconsistent-field failures. Rebuilt executables each completed with zero failures. `opendir` now adopts the same descriptor enumeration as `fdopendir` and `scandirat`, keeping actual inode/cookie values consistent. The obsolete arithmetic guard on an opaque `INT64_MAX` cookie was removed. Linux host fault/maximum-cookie controls still require CI execution. |
+| Binding attachment fixture | Actual ART execution reproduced the missing attachment stamp. Supplying the fixture's exact installed APK object as its process code generation made all six cleanup/attachment scenarios pass. Production generation checks are unchanged. The local metadata APK was cached separately, rather than the exact CI APK. |
+| Camera and media | A protected app completed legacy preview-to-JPEG reopen, Camera2 preview/still capture and the built-in capture Activity's thumbnail and provider-written 640x480 JPEG. The explicit host Media Foundation fixture was used; this PC reports no physical camera. No-permission, guest-only fixture selection, foreground revocation and provider write failure controls retained their failures. Recording passed all 17 checks, with 35 completed captures and one buffer-lost callback; independent decode contained more than 30 ordered frames. Both actual muxer APK ABIs passed independent container, metadata and Ogg verification. |
+| Camera lifecycle | A stale configured session is closed instead of starting preview after cancellation, pause or permission loss. Minimizing the owned camera window caused an actual Android pause, cancellation and routing of result zero to the original caller. Its callback while minimized was not observed. The exact normal capture APK still delivered both successful callbacks. The extracted production permission/lifecycle fixture passed 73 host assertions; those are distinct from the actual Android runs. |
+| Hello assertions | Each unavailable/cancelled callback is checked against its own observed focus state. This does not test an enrolled Windows Hello approval or cancellation. |
+
+The directory before/after logs and source/executable hashes are in
+`out/qa314/native-ci-repair/directory-apis/`. The installed Exec3 logs and 13
+source/runtime/artifact hashes are in `out/qa314/native-ci-repair/cwd-final/`.
+ART binding logs and hashes are in `out/qa314/system-binding-repair/`; camera,
+recording, muxer and interruption evidence is in `out/qa314/media-second/`.
+
+Both E2E shards, both windowing shards and both compilation shards passed in
+run `45966509354`. Its unchanged Java preflight stopped before running tests
+because Maven returned HTTP 429 while fetching SQLite JDBC. This was a download
+failure, not evidence about the unexecuted Java tests. The full matrix remains
+required after these source changes, and all earlier outstanding merge gates
+remain in force.

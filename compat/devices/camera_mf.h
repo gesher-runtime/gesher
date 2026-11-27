@@ -19,6 +19,8 @@
 
 namespace gesher::devices::camera {
 
+inline constexpr char kTestDeviceId[] = "gesher-test";
+
 struct Device {
   std::string id;    // the symbolic link, or "gesher-test"
   std::string name;  // the friendly name
@@ -69,8 +71,10 @@ class Capture {
 // Opens `id` at the offered size nearest to width x height.
 std::unique_ptr<Capture> Open(const std::string& id, int width, int height, HRESULT* hr);
 #ifdef GESHER_CAMERA_BROKER_HOST
-std::vector<Device> EnumerateRealDevices(std::string* status);
-// A real device only. Gives the broker a bounded wait while a driver owes a sample.
+// Fixture selection comes from the trusted broker's own process environment.
+bool BrokerTestCameraEnabled();
+std::vector<Device> EnumerateBrokerDevices(std::string* status);
+// Give the broker a bounded wait while a driver owes a sample.
 std::unique_ptr<Capture> OpenRevocable(const std::string& id, int width, int height,
                                        HRESULT* hr, std::function<bool()> admitted);
 #endif

@@ -3,7 +3,6 @@
 #include "brokered_camera.h"
 
 #include <algorithm>
-#include "../posix/include/gesher/binder_bootstrap.h"
 #ifndef GESHER_CAMERA_BROKER_HOST
 #include <gesher/binder_endpoint.h>
 #endif
@@ -12,6 +11,7 @@ namespace gesher::devices::camera {
 namespace {
 
 constexpr ULONGLONG kExchangeMs = 5000;
+constexpr ULONGLONG kReleaseMs = 1500;
 constexpr DWORD kMaxText = 8192;
 constexpr uint32_t kMaxDevices = 64;
 constexpr uint32_t kMaxModes = 512;
@@ -19,6 +19,7 @@ constexpr DWORD kMaxFrameBytes = 128 * 1024 * 1024;
 constexpr uint8_t kRead = 1;
 constexpr uint8_t kAck = 2;
 constexpr uint8_t kFocus = 3;
+constexpr uint8_t kClose = 4;
 
 struct Geometry {
   int32_t width;
@@ -43,9 +44,44 @@ DWORD Nv12Bytes(Geometry size) {
   return bytes <= kMaxFrameBytes ? static_cast<DWORD>(bytes) : 0;
 }
 
+void WaitForPipeProgress(DWORD milliseconds) {
+  struct Timer {
+    HANDLE handle = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+                                          TIMER_MODIFY_STATE | SYNCHRONIZE);
+    ~Timer() { if (handle) CloseHandle(handle); }
+  };
+  thread_local Timer timer;
+  LARGE_INTEGER due{};
+  due.QuadPart = -static_cast<LONGLONG>(milliseconds) * 10000;
+  if (!timer.handle || !SetWaitableTimer(timer.handle, &due, 0, nullptr, nullptr, FALSE) ||
+      WaitForSingleObject(timer.handle, INFINITE) != WAIT_OBJECT_0) {
+    Sleep(milliseconds);
+  }
+}
+
+// The camera reader and writer are both nonblocking. A coarse clock tick for
+// each empty pipe buffer adds several ticks to a single video frame.
+bool TransferBytes(HANDLE pipe, void* data, DWORD size, bool write, ULONGLONG deadline) {
+  auto* bytes = static_cast<BYTE*>(data);
+  while (size) {
+    if (GetTickCount64() >= deadline) return false;
+    DWORD moved = 0;
+    const BOOL ok = write ? WriteFile(pipe, bytes, size, &moved, nullptr)
+                          : ReadFile(pipe, bytes, size, &moved, nullptr);
+    if (!ok && GetLastError() != ERROR_NO_DATA) return false;
+    if (!moved) {
+      WaitForPipeProgress(1);
+      continue;
+    }
+    bytes += moved;
+    size -= moved;
+  }
+  return true;
+}
+
 template <typename T>
 bool Transfer(HANDLE pipe, T& value, bool write, ULONGLONG deadline) {
-  return binder_bootstrap::Transfer(pipe, &value, sizeof(value), write, deadline);
+  return TransferBytes(pipe, &value, sizeof(value), write, deadline);
 }
 
 bool ExchangeText(HANDLE pipe, std::string& text, bool write, ULONGLONG deadline) {
@@ -53,7 +89,7 @@ bool ExchangeText(HANDLE pipe, std::string& text, bool write, ULONGLONG deadline
   DWORD size = write ? static_cast<DWORD>(text.size()) : 0;
   if (!Transfer(pipe, size, write, deadline) || size > kMaxText) return false;
   if (!write) text.resize(size);
-  return binder_bootstrap::Transfer(pipe, text.data(), size, write, deadline);
+  return TransferBytes(pipe, text.data(), size, write, deadline);
 }
 
 bool Acknowledge(HANDLE pipe, bool write, ULONGLONG deadline) {
@@ -86,6 +122,18 @@ class BrokerCapture final : public Capture {
     via = "Media Foundation on the protected camera broker";
   }
 
+  ~BrokerCapture() override {
+    if (failed_) return;
+    // A subsequent open in this app can follow immediately. Wait for the
+    // broker to retire the old capture, AppOps delivery, and session slot.
+    const auto deadline = GetTickCount64() + kReleaseMs;
+    uint8_t command = kClose;
+    if (Transfer(pipe_.get(), command, true, deadline) &&
+        Acknowledge(pipe_.get(), false, deadline)) {
+      Acknowledge(pipe_.get(), true, deadline);
+    }
+  }
+
   HRESULT Read(uint8_t* frame) override {
     std::lock_guard lock(exchange_);
     if (failed_) return E_ABORT;
@@ -94,7 +142,7 @@ class BrokerCapture final : public Capture {
     HRESULT result = E_ABORT;
     if (Transfer(pipe_.get(), command, true, deadline) &&
         Transfer(pipe_.get(), result, false, deadline)) {
-      if (SUCCEEDED(result) && binder_bootstrap::Transfer(
+      if (SUCCEEDED(result) && TransferBytes(
               pipe_.get(), frame, bytes_, false, deadline)) return result;
       if (FAILED(result)) {
         failed_ = true;
@@ -134,21 +182,24 @@ class BrokerCapture final : public Capture {
   bool failed_ = false;
 };
 #else
+constexpr ULONGLONG kAuthorizationProbeMs = 50;
+constexpr DWORD kCommandPollMs = 5;
+
 bool ServeList(HANDLE pipe, const std::function<bool()>& live) {
   std::string status;
-  const auto devices = EnumerateRealDevices(&status);
-  std::vector<const Device*> real;
+  const auto devices = EnumerateBrokerDevices(&status);
+  std::vector<const Device*> listed;
   for (const auto& device : devices) {
-    if (!device.test && device.id.size() <= kMaxText && device.name.size() <= kMaxText &&
-        real.size() < kMaxDevices) {
-      real.push_back(&device);
+    if (device.id.size() <= kMaxText && device.name.size() <= kMaxText &&
+        listed.size() < kMaxDevices) {
+      listed.push_back(&device);
     }
   }
   const auto deadline = GetTickCount64() + kExchangeMs;
-  auto count = static_cast<uint32_t>(real.size());
+  auto count = static_cast<uint32_t>(listed.size());
   if (!live() || !ExchangeText(pipe, status, true, deadline) ||
       !Transfer(pipe, count, true, deadline)) return false;
-  for (const Device* device : real) {
+  for (const Device* device : listed) {
     std::string id = device->id;
     std::string name = device->name;
     std::vector<Geometry> sizes;
@@ -159,7 +210,7 @@ bool ServeList(HANDLE pipe, const std::function<bool()>& live) {
     uint8_t autofocus = device->autofocus;
     if (!ExchangeText(pipe, id, true, deadline) || !ExchangeText(pipe, name, true, deadline) ||
         !Transfer(pipe, autofocus, true, deadline) ||
-        !Transfer(pipe, modes, true, deadline) || !binder_bootstrap::Transfer(
+        !Transfer(pipe, modes, true, deadline) || !TransferBytes(
             pipe, sizes.data(), modes * sizeof(Geometry), true, deadline)) return false;
   }
   // DisconnectNamedPipe would discard bytes still buffered by the pipe.
@@ -168,15 +219,22 @@ bool ServeList(HANDLE pipe, const std::function<bool()>& live) {
 
 bool AwaitCommand(HANDLE pipe, uint8_t* command, const std::function<bool()>& keep_capturing,
                   ULONGLONG deadline = 0) {
-  while ((!deadline || GetTickCount64() < deadline) && keep_capturing()) {
+  ULONGLONG next_check = 0;
+  for (;;) {
+    const auto now = GetTickCount64();
+    if (deadline && now >= deadline) return false;
+    if (now >= next_check) {
+      if (!keep_capturing()) return false;
+      next_check = now + kAuthorizationProbeMs;
+    }
     DWORD ready = 0;
     if (!PeekNamedPipe(pipe, nullptr, 0, nullptr, &ready, nullptr)) return false;
     if (ready) {
-      return Transfer(pipe, *command, false, GetTickCount64() + kExchangeMs);
+      return keep_capturing() &&
+             Transfer(pipe, *command, false, now + kExchangeMs);
     }
-    Sleep(50);
+    WaitForPipeProgress(kCommandPollMs);
   }
-  return false;
 }
 
 bool DeliverFrame(HANDLE pipe, uint8_t* frame, DWORD bytes, ULONGLONG deadline,
@@ -187,13 +245,13 @@ bool DeliverFrame(HANDLE pipe, uint8_t* frame, DWORD bytes, ULONGLONG deadline,
     if (now >= deadline) return false;
     if (now >= next_check) {
       if (!keep_capturing()) return false;
-      next_check = GetTickCount64() + 50;
+      next_check = GetTickCount64() + kAuthorizationProbeMs;
     }
     DWORD moved = 0;
     if (!WriteFile(pipe, frame, std::min<DWORD>(bytes, 65536), &moved, nullptr) &&
         GetLastError() != ERROR_NO_DATA) return false;
     if (!moved) {
-      Sleep(1);
+      WaitForPipeProgress(1);
       continue;
     }
     frame += moved;
@@ -225,6 +283,7 @@ static std::vector<Device> GetBrokeredDevices(std::string* status) {
         !Transfer(pipe.get(), autofocus, false, deadline) || autofocus > 1 ||
         !Transfer(pipe.get(), modes, false, deadline) || modes > kMaxModes) return {};
     device.autofocus = autofocus != 0;
+    device.test = device.id == kTestDeviceId;
     for (uint32_t j = 0; j < modes; ++j) {
       Geometry size{};
       if (!Transfer(pipe.get(), size, false, deadline) || !Nv12Bytes(size)) return {};
@@ -270,7 +329,8 @@ std::unique_ptr<Capture> OpenBrokered(const std::string& id, int width, int heig
 #else
 void ServeBrokeredCamera(HANDLE pipe, bool info_only, const std::function<bool()>& live,
                          const std::function<bool(const capture_policy::Attribution&)>& start,
-                         const std::function<bool()>& authorized, bool slot) {
+                         const std::function<bool()>& authorized,
+                         const std::function<bool()>& finish, bool slot) {
   DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
   if (!SetNamedPipeHandleState(pipe, &mode, nullptr, nullptr) || !live()) return;
   if (info_only) {
@@ -295,7 +355,7 @@ void ServeBrokeredCamera(HANDLE pipe, bool info_only, const std::function<bool()
     reply.result = E_INVALIDARG;
     if (requested.width > 0 && requested.height > 0 &&
         requested.width <= 32768 && requested.height <= 32768 && !id.empty() &&
-        id.find('\0') == std::string::npos && id != "gesher-test") {
+        id.find('\0') == std::string::npos && (id != kTestDeviceId || BrokerTestCameraEnabled())) {
       reply.result = E_ACCESSDENIED;
       if (start(attribution) && admitted()) {
         capture = OpenRevocable(id, requested.width, requested.height, &reply.result, admitted);
@@ -310,6 +370,7 @@ void ServeBrokeredCamera(HANDLE pipe, bool info_only, const std::function<bool()
     else if (!admitted()) reply.result = E_ACCESSDENIED;
   }
   if (FAILED(reply.result)) capture.reset();
+  if (!capture) finish();
   const auto handshake_deadline = GetTickCount64() + kExchangeMs;
   if (!Transfer(pipe, reply, true, handshake_deadline)) return;
   if (!capture) {
@@ -320,6 +381,14 @@ void ServeBrokeredCamera(HANDLE pipe, bool info_only, const std::function<bool()
   if (!AwaitCommand(pipe, &command, admitted, handshake_deadline) || command != kAck) return;
   std::vector<uint8_t> frame(bytes);
   while (AwaitCommand(pipe, &command, admitted)) {
+    if (command == kClose) {
+      const auto release_deadline = GetTickCount64() + kReleaseMs;
+      capture.reset();
+      if (finish() && live() && Acknowledge(pipe, true, release_deadline)) {
+        Acknowledge(pipe, false, release_deadline);
+      }
+      return;
+    }
     if (command == kFocus) {
       const auto focus_deadline = GetTickCount64() + kExchangeMs;
       int32_t operation = -1;
@@ -334,7 +403,10 @@ void ServeBrokeredCamera(HANDLE pipe, bool info_only, const std::function<bool()
     if (command != kRead) return;
     HRESULT result = capture->Read(frame.data());
     if (!admitted()) result = E_ACCESSDENIED;
-    if (FAILED(result)) capture.reset();
+    if (FAILED(result)) {
+      capture.reset();
+      finish();
+    }
     const auto frame_deadline = GetTickCount64() + kExchangeMs;
     if (!Transfer(pipe, result, true, frame_deadline)) return;
     if (FAILED(result)) {

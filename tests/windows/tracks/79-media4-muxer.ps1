@@ -151,6 +151,16 @@ foreach ($abi in @(@{ Name = 'x86_64'; Label = 'x86_64' }, @{ Name = 'arm64-v8a'
       $result = InvokeMuxer "$Dir/dalvikvm.exe" ($mxApp + @('com.gesher.app.Main',
         (NoDrive "$Dir/mediamuxerapp-$($abi.Label).apk"))) $environment
     } else {
+      # Use the same encoded packets through the app's readonly runtime
+      # grant. Its native muxer writes only inside its own CE directory.
+      $deviceFixtures = Join-Path $root 'system/etc/gesher-muxer-fixtures'
+      if (-not (Test-Path -LiteralPath $deviceFixtures)) {
+        Copy-Item -LiteralPath "$mxDir/fixtures" -Destination $deviceFixtures -Recurse
+      }
+      $output = "$caseRoot/data/data/com.gesher.mediamuxer/fixture-output"
+      New-Item -ItemType Directory -Force $output | Out-Null
+      $environment['GESHER_MUXER_FIXTURES'] = NoDrive $deviceFixtures
+      $environment['GESHER_MUXER_OUT'] = NoDrive $output
       $environment['ANDROID_DATA'] = NoDrive "$caseRoot/data"
       $environment['GESHER_LOGS'] = NoDrive "$caseRoot/logs"
       try {

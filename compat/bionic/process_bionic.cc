@@ -195,7 +195,11 @@ bool CurrentEnv(std::vector<std::string>* out) {
   }, out);
 }
 
-std::string CurrentDir() {
+// NULL preserves the process's existing cwd handle even when the restricted
+// child cannot reopen its host path. A fork broker has its own cwd, so that
+// route must receive the forked caller's actual directory explicitly.
+std::string SpawnDirectory() {
+  if (!gesher::InForkedChild()) return {};
   DWORD n = GetCurrentDirectoryW(0, nullptr);
   std::wstring d(n, L'\0');
   n = GetCurrentDirectoryW(n, d.data());
@@ -306,7 +310,7 @@ void ExecReplace(const std::string& program, const std::vector<std::string>& arg
       return;
     }
   }
-  int pid = SpawnProgram(program, argv, env, CurrentDir(), search, fds, job);
+  int pid = SpawnProgram(program, argv, env, SpawnDirectory(), search, fds, job);
   fds.clear();  // snapshots must not keep child pipe endpoints open while waiting
   if (pid < 0) {
     if (job != nullptr) {
@@ -564,7 +568,7 @@ int BIONIC_SYSV System(const char* command) {
   if (!InheritedFds(&fds)) return -1;
   std::vector<std::string> env;
   if (!CurrentEnv(&env)) return -1;
-  int pid = SpawnProgram("/system/bin/sh", argv, env, CurrentDir(), false, fds);
+  int pid = SpawnProgram("/system/bin/sh", argv, env, SpawnDirectory(), false, fds);
   fds.clear();
   if (pid < 0) return -1;
   int status = 0;
@@ -625,7 +629,7 @@ void* BIONIC_SYSV Popen(const char* command, const char* mode) {
   if (!found) fds.push_back({target, child_description->handle, child_description});
   std::vector<std::string> argv{"/system/bin/sh", "-c", command};
   std::vector<std::string> env;
-  int pid = CurrentEnv(&env) ? SpawnProgram("/system/bin/sh", argv, env, CurrentDir(), false, fds) : -1;
+  int pid = CurrentEnv(&env) ? SpawnProgram("/system/bin/sh", argv, env, SpawnDirectory(), false, fds) : -1;
   fds.clear();
   CloseHandle(child_end);
   child_description.reset();
@@ -835,7 +839,7 @@ int DoPosixSpawn(int* pid_out, const char* path, const BionicFileActions* const*
   std::vector<std::string> env;
   if (envp) env = FromList(envp);
   else if (!CurrentEnv(&env)) return errno;
-  int pid = SpawnPrepared(launch, env, CurrentDir(), fds);
+  int pid = SpawnPrepared(launch, env, SpawnDirectory(), fds);
   if (pid < 0) return errno;  // posix_spawn returns the error number
   if (pid_out != nullptr) *pid_out = pid;
   return 0;
