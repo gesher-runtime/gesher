@@ -95,6 +95,10 @@ def namespace_fixture() -> str:
     internal = (ROOT / "compat/posix/src/internal.h").read_text()
     kinds = internal[internal.index("enum class PathKind {"):]
     kinds = kinds[:kinds.index("};") + 2]
+    disk_path_declarations = [line for line in internal.splitlines()
+                              if line.startswith("bool DiskPath(") and line.endswith(";")]
+    if len(disk_path_declarations) != 1:
+        raise ValueError("production DiskPath declaration boundary changed")
     prologue = r'''
 #pragma once
 #include <algorithm>
@@ -167,7 +171,8 @@ static Selection Lookup(const std::wstring&) { return {}; }
     prologue = prologue.replace("@USB_BLOCK_HELPERS@", usb_helpers)
     signatures = ["bool IsDriveLetter(", "std::string_view NextPart(", "std::wstring VirtualDirectoryPath(", "PathKind VirtualKind(",
                   "bool DrivePath(", "void Lengthen(", "bool ExternalStoragePath(", "PathKind MapPath(", "bool DiskPath("]
-    return prologue + kinds + "\n" + "\n".join(function(source, name) for name in signatures) + "\n}\n"
+    return "\n".join([prologue, kinds, disk_path_declarations[0],
+                      *(function(source, name) for name in signatures), "}\n"])
 
 
 def run(command: list[str], **kwargs) -> subprocess.CompletedProcess:

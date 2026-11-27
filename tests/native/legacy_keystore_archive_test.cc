@@ -13,6 +13,7 @@
 #include <fstream>
 #include <iterator>
 #include <stdexcept>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -164,8 +165,9 @@ void Junction(const fs::path& link, const fs::path& target) {
   header.length = static_cast<WORD>(bytes - 8);
   Bytes buffer(bytes);
   std::memcpy(buffer.data(), &header, sizeof(header));
-  std::memcpy(buffer.data() + sizeof(header), native.c_str(), header.substitute_length);
-  std::memcpy(buffer.data() + sizeof(header) + header.print_offset, print.c_str(), header.print_length);
+  auto names = std::span(buffer).subspan(sizeof(header));
+  std::memcpy(names.data(), native.c_str(), header.substitute_length);
+  std::memcpy(names.subspan(header.print_offset).data(), print.c_str(), header.print_length);
   DWORD returned = 0;
   Check(DeviceIoControl(file.value, FSCTL_SET_REPARSE_POINT, buffer.data(),
       static_cast<DWORD>(buffer.size()), nullptr, 0, &returned, nullptr), "create actual junction");
