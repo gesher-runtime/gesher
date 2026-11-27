@@ -73,7 +73,7 @@
     "compat/posix/src/usb_block_internal.h": "0a4440f408073ee26e4e2a8018dc2fb4b87318ced965b05eebe61d07d4f0908c",
     "compat/posix/src/users.cc": "1c4d09142869eb0d04ae80c990092419ca1e2000fdd75088c8001035a6a51a99",
     "compat/usb_storage/CMakeLists.txt": "a91566c9cf6c8b9c4b43cfd22bacc37091b4e46c83ed59f960c97ee683439f02",
-    "compat/usb_storage/authority_launch.cc": "d56073f76bba1a952e055e3ef36afd6cadd0dd816c00976735853de2c232ba51",
+    "compat/usb_storage/authority_launch.cc": "536a4ea01132233a36bec223c184624efebd3b4a506264d9fc8f592e5c8fa6de",
     "compat/usb_storage/authority_launch.h": "48e58053f6c4601fe926051c744c6c54696a6db8960c4d5b6ba082b5ac6187c4",
     "compat/usb_storage/authority_peer.cc": "1dba74db4895e86ff6e96ed5c91938e38a36901b60d04479791bdb4dba746ad7",
     "compat/usb_storage/authority_peer.h": "f55e4106f973a7602c7ef062be53823892d9478dcf050e02d86a5622acc7716b",

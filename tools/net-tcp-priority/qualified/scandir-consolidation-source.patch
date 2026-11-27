@@ -2754,7 +2754,7 @@ index fcd68fdfa..2904c3999 100644
       b'while (n > 0) {', 'scandir reverse endpoint'),
      ('public export', b'E("scandir", Scandir);', b'E("scandir", ScandirWrong);', 'scandir reverse endpoint'),
 diff --git a/tools/net-tcp-priority/test-selected-policy.py b/tools/net-tcp-priority/test-selected-policy.py
-index 5f0fff857..48e69244f 100644
+index 5f0fff857..9133f7a72 100644
 --- a/tools/net-tcp-priority/test-selected-policy.py
 +++ b/tools/net-tcp-priority/test-selected-policy.py
 @@ -265,7 +265,144 @@ RECEIPT_SOURCE_BLOCK=b'''  if ($null -ne $SourceIdentity) {
@@ -3274,7 +3274,7 @@ index 5f0fff857..48e69244f 100644
 + return after
 +
 +
-+USB_BLOCK_TRANSITION_SHA256 = 'a284f7eff3ca5546d8164071711b86f27a2a8942e8364a89806bf508b35d1517'
++USB_BLOCK_TRANSITION_SHA256 = 'c2d21ff03f9a6a1d9cb8a095450ff7fa72a20860d6b60398ef0aaf5b49068676'
 +USB_NETLINK_MAIN = '279966e6bcb842ae8a44fef87d740baed6818208'
 +USB_NETLINK_PATHS = {
 + 'compat/posix/posix.cmake',
