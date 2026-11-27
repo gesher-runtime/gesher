@@ -577,7 +577,7 @@ public final class PackageVisibilityContractTest {
         ApkPackage a = record(original, 68_001), b = record(parsed(B), 68_002);
         Map<String, ApkPackage> records = new LinkedHashMap<>(); records.put(A, a); records.put(B, b);
         for (int i = 0; i < 30; i++) {
-            ApkPackage filler = record(parsed("fixture.visibility.blocked." + i), 68_010 + i);
+            ApkPackage filler = record(parsed("fixture.visibility.blocked.p" + i), 68_010 + i);
             records.put(filler.packageName, filler);
         }
         PackageManagerService pm = service(records.values().toArray(new ApkPackage[0]));
@@ -618,11 +618,12 @@ public final class PackageVisibilityContractTest {
     }
 
     private static final String UID_PREFIX = "fixture.visibility.uid.";
+    private static final String UID_APP_PREFIX = UID_PREFIX + "p";
     private static final String UID_GROUP = "fixture.visibility.uid.group";
     private static Map<String, ApkPackage> uidRecords() throws Exception {
         Map<String, ApkPackage> result = new LinkedHashMap<>();
         for (int i = 0; i < 32; i++) {
-            PackageImpl value = parsed(UID_PREFIX + i);
+            PackageImpl value = parsed(UID_APP_PREFIX + i);
             if (i < 2) value.setSharedUserId(UID_GROUP);
             permission(value, Manifest.permission.CAMERA);
             int uid = i < 2 ? 30_000 : i == 2 ? 130_000 : i == 3 ? 30_001 : 30_000 + i;
@@ -638,13 +639,13 @@ public final class PackageVisibilityContractTest {
         if (uid == android.os.Process.SYSTEM_UID) return bulk ? "shared:android.uid.system" : "android.uid.system:1000";
         if (uid == android.os.Process.SHELL_UID) return bulk ? "shared:android.uid.shell" : "android.uid.shell:2000";
         if (uid == 30_000) return bulk ? "shared:" + UID_GROUP : UID_GROUP + ":30000";
-        if (uid == 130_000) return UID_PREFIX + 2;
-        if (uid == 30_001) return UID_PREFIX + 3;
-        return uid >= 30_004 && uid < 30_032 ? UID_PREFIX + (uid - 30_000) : null;
+        if (uid == 130_000) return UID_APP_PREFIX + 2;
+        if (uid == 30_001) return UID_APP_PREFIX + 3;
+        return uid >= 30_004 && uid < 30_032 ? UID_APP_PREFIX + (uid - 30_000) : null;
     }
 
     private static String[] uidPackages(int uid) {
-        if (uid == 30_000) return new String[]{UID_PREFIX + 0, UID_PREFIX + 1};
+        if (uid == 30_000) return new String[]{UID_APP_PREFIX + 0, UID_APP_PREFIX + 1};
         if (uid == android.os.Process.SYSTEM_UID) return new String[]{"android"};
         if (uid == android.os.Process.SHELL_UID) return new String[]{"com.android.shell"};
         String name = uidName(uid, false);
@@ -658,8 +659,8 @@ public final class PackageVisibilityContractTest {
         for (int warm = 0; warm < 4; warm++) {
             Map<String, ApkPackage> records = uidRecords();
             PackageManagerService pm = service(records.values().toArray(new ApkPackage[0]));
-            if ((warm & 1) != 0) check(query(pm, UID_PREFIX + 0, UID_PREFIX + 0), "UID public warm-up failed");
-            if ((warm & 2) != 0) check(serviceQuery(pm, UID_PREFIX + 0, UID_PREFIX + 0), "UID installed warm-up failed");
+            if ((warm & 1) != 0) check(query(pm, UID_APP_PREFIX + 0, UID_APP_PREFIX + 0), "UID public warm-up failed");
+            if ((warm & 2) != 0) check(serviceQuery(pm, UID_APP_PREFIX + 0, UID_APP_PREFIX + 0), "UID installed warm-up failed");
             Object snapshot = get(pm, "mVisibilitySnapshot");
             Object publicView = snapshot == null ? null : get(snapshot, "publicPackages");
             Object installedView = snapshot == null ? null : get(snapshot, "installedPackages");
@@ -699,24 +700,24 @@ public final class PackageVisibilityContractTest {
                         "UID calls built an unused visibility view");
             }
 
-            ApkPackage first = records.get(UID_PREFIX + 0);
+            ApkPackage first = records.get(UID_APP_PREFIX + 0);
             Method begin = method(PackageManagerService.class, "beginPackageRemoval", ApkPackage.class);
             Method end = method(PackageManagerService.class, "endPackageRemoval", ApkPackage.class);
             invoke(begin, pm, first);
-            check(query(pm, UID_PREFIX + 1, UID_PREFIX + 1), "Pending-removal view could not be constructed");
+            check(query(pm, UID_APP_PREFIX + 1, UID_APP_PREFIX + 1), "Pending-removal view could not be constructed");
             check(Arrays.equals(pm.getPackagesForUid(30_000), uidPackages(30_000)),
                     "Pending removal prematurely removed an admitted UID owner");
             check(uidName(30_000, false).equals(pm.getNameForUid(30_000)), "Pending removal changed first UID name");
             invoke(end, pm, first);
-            check(query(pm, UID_PREFIX + 0, UID_PREFIX + 0), "UID removal rollback failed");
+            check(query(pm, UID_APP_PREFIX + 0, UID_APP_PREFIX + 0), "UID removal rollback failed");
             invoke(begin, pm, first);
             invoke(method(PackageManagerService.class, "recoveredPackageRemovals"), pm);
             check(Arrays.equals(pm.getPackagesForUid(30_000), uidPackages(30_000)), "Recovered removal lost UID ownership");
-            check(query(pm, UID_PREFIX + 0, UID_PREFIX + 0), "Recovered UID view warm-up failed");
+            check(query(pm, UID_APP_PREFIX + 0, UID_APP_PREFIX + 0), "Recovered UID view warm-up failed");
             Object retired = get(pm, "mVisibilitySnapshot");
 
             Map<String, ApkPackage> replacement = new LinkedHashMap<>(records);
-            replacement.remove(UID_PREFIX + 0); replacement.remove(UID_PREFIX + 1);
+            replacement.remove(UID_APP_PREFIX + 0); replacement.remove(UID_APP_PREFIX + 1);
             publish(pm, replacement);
             // Deterministically model a reader that acquired the old cache before
             // publication; the getter must validate its captured generation.
@@ -731,7 +732,7 @@ public final class PackageVisibilityContractTest {
             check(reused.packageName.equals(pm.getNameForUid(30_000))
                             && Arrays.equals(pm.getPackagesForUid(30_000), new String[]{reused.packageName}),
                     "Reused UID inherited an old owner or shared name");
-            check((UID_PREFIX + 2).equals(pm.getNameForUid(130_000)), "Reused app-ID changed another exact UID");
+            check((UID_APP_PREFIX + 2).equals(pm.getNameForUid(130_000)), "Reused app-ID changed another exact UID");
         }
 
         // Metadata fixtures explicitly cover insertion order even when a real APK
@@ -739,24 +740,24 @@ public final class PackageVisibilityContractTest {
         Map<String, ApkPackage> withAndroid = uidRecords();
         withAndroid.put("android", record(parsed("android"), 30_000));
         PackageManagerService reserved = service(withAndroid.values().toArray(new ApkPackage[0]));
-        check(query(reserved, UID_PREFIX + 0, UID_PREFIX + 0), "Reserved-name metadata warm-up failed");
+        check(query(reserved, UID_APP_PREFIX + 0, UID_APP_PREFIX + 0), "Reserved-name metadata warm-up failed");
         check(uidName(30_000, false).equals(reserved.getNameForUid(30_000)),
                 "Visibility definition order changed the registry's first UID owner");
         check(Arrays.equals(reserved.getPackagesForUid(30_000),
-                new String[]{UID_PREFIX + 0, UID_PREFIX + 1, "android"}), "Reserved-name UID order changed");
+                new String[]{UID_APP_PREFIX + 0, UID_APP_PREFIX + 1, "android"}), "Reserved-name UID order changed");
 
         Map<String, ApkPackage> legacy = new LinkedHashMap<>();
-        for (int i = 0; i < 32; i++) legacy.put(UID_PREFIX + i, record(parsed(UID_PREFIX + i), 40_000));
+        for (int i = 0; i < 32; i++) legacy.put(UID_APP_PREFIX + i, record(parsed(UID_APP_PREFIX + i), 40_000));
         PackageManagerService shared = service(legacy.values().toArray(new ApkPackage[0]));
         int[] repeated = new int[64]; String[] repeatedNames = new String[64];
         for (int i = 0; i < repeated.length; i++) {
             repeated[i] = i % 7 == 0 ? android.os.Process.SYSTEM_UID : 40_000;
-            repeatedNames[i] = i % 7 == 0 ? "shared:android.uid.system" : UID_PREFIX + 0;
+            repeatedNames[i] = i % 7 == 0 ? "shared:android.uid.system" : UID_APP_PREFIX + 0;
         }
         check(Arrays.equals(shared.getNamesForUids(repeated), repeatedNames),
                 "Cold repeated UID batch lost the first owner or core names");
-        check(query(shared, UID_PREFIX + 0, UID_PREFIX + 0), "Legacy UID warm-up failed");
-        check((UID_PREFIX + 0).equals(shared.getNameForUid(40_000)), "Legacy UID lost first-name semantics");
+        check(query(shared, UID_APP_PREFIX + 0, UID_APP_PREFIX + 0), "Legacy UID warm-up failed");
+        check((UID_APP_PREFIX + 0).equals(shared.getNameForUid(40_000)), "Legacy UID lost first-name semantics");
         check(Arrays.equals(shared.getPackagesForUid(40_000), legacy.keySet().toArray(new String[0])),
                 "Legacy UID lost admitted package iteration order");
     }
@@ -765,7 +766,7 @@ public final class PackageVisibilityContractTest {
         Map<String, ApkPackage> records = new LinkedHashMap<>();
         for (int i = 0; i < 1024; i++) {
             int uid = 10_000 + (i * 7919) % 80_000;
-            String name = UID_PREFIX + "scatter." + i;
+            String name = UID_PREFIX + "scatter.p" + i;
             records.put(name, record(parsed(name), uid));
             if (i % 31 == 0) records.put(name + ".user", record(parsed(name + ".user"), uid + 100_000));
         }
@@ -791,20 +792,20 @@ public final class PackageVisibilityContractTest {
             ((Map<String, PermissionInfo>)get(get(pm.permissions(), "mCatalog"), "mFramework"))
                     .put(camera.name, camera);
         }
-        check(query(pm, UID_PREFIX + 0, UID_PREFIX + 0), "Permission metadata warm-up failed");
+        check(query(pm, UID_APP_PREFIX + 0, UID_APP_PREFIX + 0), "Permission metadata warm-up failed");
         Object snapshot = get(pm, "mVisibilitySnapshot");
         as(android.os.Process.SYSTEM_UID, () -> {
-            pm.permissions().revokeRuntimePermission(UID_PREFIX + 0, Manifest.permission.CAMERA,
+            pm.permissions().revokeRuntimePermission(UID_APP_PREFIX + 0, Manifest.permission.CAMERA,
                     "default:0", 0, "fixture reset");
             check(pm.checkUidPermission(Manifest.permission.CAMERA, 30_000) == PackageManager.PERMISSION_DENIED,
                     "Cached identity manufactured a runtime grant");
-            pm.permissions().grantRuntime(UID_PREFIX + 0, Manifest.permission.CAMERA, 0);
+            pm.permissions().grantRuntime(UID_APP_PREFIX + 0, Manifest.permission.CAMERA, 0);
             check(pm.checkUidPermission(Manifest.permission.CAMERA, 30_000) == PackageManager.PERMISSION_GRANTED,
                     "Cached identity hid a live runtime grant");
             check(pm.checkUidPermission(Manifest.permission.CAMERA, 130_000) == PackageManager.PERMISSION_DENIED
                             && pm.checkUidPermission(Manifest.permission.CAMERA, 230_000) == PackageManager.PERMISSION_DENIED,
                     "App-ID grouping granted another exact UID's permission");
-            pm.permissions().revokeRuntimePermission(UID_PREFIX + 0, Manifest.permission.CAMERA,
+            pm.permissions().revokeRuntimePermission(UID_APP_PREFIX + 0, Manifest.permission.CAMERA,
                     "default:0", 0, "fixture revoke");
             check(pm.checkUidPermission(Manifest.permission.CAMERA, 30_000) == PackageManager.PERMISSION_DENIED,
                     "Cached identity retained a revoked runtime grant");
@@ -816,7 +817,7 @@ public final class PackageVisibilityContractTest {
         for (boolean warm : new boolean[]{false, true}) {
             Map<String, ApkPackage> records = uidRecords();
             PackageManagerService pm = service(records.values().toArray(new ApkPackage[0]));
-            if (warm) check(query(pm, UID_PREFIX + 0, UID_PREFIX + 0), "UID monitor warm-up failed");
+            if (warm) check(query(pm, UID_APP_PREFIX + 0, UID_APP_PREFIX + 0), "UID monitor warm-up failed");
             CountDownLatch locked = new CountDownLatch(1), release = new CountDownLatch(1), read = new CountDownLatch(1);
             AtomicReference<Throwable> failure = new AtomicReference<>();
             Thread holder = new Thread(() -> {
@@ -853,8 +854,8 @@ public final class PackageVisibilityContractTest {
         int[] uids = new int[32];
         for (int i = 0; i < uids.length; i++) {
             uids[i] = 56_000 + i;
-            first.put(UID_PREFIX + "old." + i, record(parsed(UID_PREFIX + "old." + i), uids[i]));
-            second.put(UID_PREFIX + "new." + i, record(parsed(UID_PREFIX + "new." + i), uids[i]));
+            first.put(UID_PREFIX + "old.p" + i, record(parsed(UID_PREFIX + "old.p" + i), uids[i]));
+            second.put(UID_PREFIX + "new.p" + i, record(parsed(UID_PREFIX + "new.p" + i), uids[i]));
         }
         PackageManagerService pm = service(first.values().toArray(new ApkPackage[0]));
         AtomicReference<Throwable> failure = new AtomicReference<>();
@@ -876,9 +877,9 @@ public final class PackageVisibilityContractTest {
         try {
             for (int i = 0; i < 1000; i++) {
                 String[] names = pm.getNamesForUids(uids);
-                boolean old = names[0].equals(UID_PREFIX + "old.0");
+                boolean old = names[0].equals(UID_PREFIX + "old.p0");
                 for (int j = 0; j < uids.length; j++) {
-                    check(names[j].equals(UID_PREFIX + (old ? "old." : "new.") + j),
+                    check(names[j].equals(UID_PREFIX + (old ? "old.p" : "new.p") + j),
                             "One UID batch mixed published generations");
                 }
             }
@@ -918,7 +919,7 @@ public final class PackageVisibilityContractTest {
         check(registry.visits <= records.size(), "Cold UID batch revisited registry records: " + registry.visits);
         check(get(pm, "mVisibilitySnapshot") == null, "Cold UID work fixture caused retained visibility metadata");
         System.out.println("UID_WORK cold_batch=128 packages=" + records.size() + " registry_visits=" + registry.visits);
-        check(query(pm, UID_PREFIX + 0, UID_PREFIX + 0), "UID work metadata warm-up failed");
+        check(query(pm, UID_APP_PREFIX + 0, UID_APP_PREFIX + 0), "UID work metadata warm-up failed");
         check(pm.checkUidPermission("fixture.permission.NOT_REQUESTED", 30_031) == PackageManager.PERMISSION_DENIED,
                 "UID permission warm-up manufactured a grant");
         registry.visits = 0;
@@ -962,7 +963,7 @@ public final class PackageVisibilityContractTest {
             boolean group = operation.equals("group");
             Map<String, ApkPackage> installed = new LinkedHashMap<>();
             for (int i = 0; i < count; i++) {
-                String name = UID_PREFIX + "work." + i;
+                String name = UID_PREFIX + "work.p" + i;
                 PackageImpl value = parsed(name); permission(value, Manifest.permission.ACCESS_NETWORK_STATE);
                 installed.put(name, record(value, group ? 50_000 : 50_000 + i));
             }
@@ -973,7 +974,7 @@ public final class PackageVisibilityContractTest {
                     (Map<String, PermissionInfo>)get(get(pm.permissions(), "mCatalog"), "mFramework");
             definitions.put(definition.name, definition);
             uid = group ? 50_000 : 50_000 + count - 1;
-            expectedName = UID_PREFIX + "work." + (group ? 0 : count - 1);
+            expectedName = UID_PREFIX + "work.p" + (group ? 0 : count - 1);
             expectedOwners = group ? installed.keySet().toArray(new String[0]) : new String[]{expectedName};
             batch = new int[batchSize]; expectedBulk = new String[batchSize];
             for (int i = 0; i < batchSize; i++) {
@@ -981,12 +982,12 @@ public final class PackageVisibilityContractTest {
                     batch[i] = (i & 1) == 0 ? android.os.Process.SYSTEM_UID : android.os.Process.SHELL_UID;
                     expectedBulk[i] = (i & 1) == 0 ? "shared:android.uid.system" : "shared:android.uid.shell";
                 } else if (operation.equals("repeated")) {
-                    batch[i] = 50_000; expectedBulk[i] = UID_PREFIX + "work.0";
+                    batch[i] = 50_000; expectedBulk[i] = UID_PREFIX + "work.p0";
                 } else {
                     int index = count - 1 - i % count;
                     boolean unknown = i % 7 == 0;
                     batch[i] = unknown ? 900_000 + i : 50_000 + index;
-                    expectedBulk[i] = unknown ? null : UID_PREFIX + "work." + index;
+                    expectedBulk[i] = unknown ? null : UID_PREFIX + "work.p" + index;
                 }
             }
             if (pieces[1].equals("warm")) {
@@ -1029,7 +1030,7 @@ public final class PackageVisibilityContractTest {
         final PackageManager manager;
         final Map<String, ApkPackage> installed = new LinkedHashMap<>();
         final Method publish = method(PackageManagerService.class, "publishPackages", Map.class);
-        final String source = "fixture.visibility.work.0";
+        final String source = "fixture.visibility.work.p0";
         final String[] targets;
         public final int expectedVisible;
         final boolean cold;
@@ -1039,18 +1040,18 @@ public final class PackageVisibilityContractTest {
             boolean bulk = kind.equals("bulk"), hidden = kind.equals("hidden") || kind.equals("groups");
             targets = new String[bulk ? count - 1 : 1];
             for (int i = 0; i < count; i++) {
-                String name = "fixture.visibility.work." + i;
+                String name = "fixture.visibility.work.p" + i;
                 PackageImpl parsed = counted ? new CountedPackage(name) : parsed(name);
                 parsed.setTargetSdkVersion(36); parsed.setEnabled(true);
                 if (i == 0 && !hidden) {
                     if (bulk) permission(parsed, Manifest.permission.QUERY_ALL_PACKAGES);
-                    else parsed.addQueriesPackage("fixture.visibility.work." + (count - 1));
+                    else parsed.addQueriesPackage("fixture.visibility.work.p" + (count - 1));
                 }
                 int uid = kind.equals("groups") ? 20_000 + (i < count / 2 ? 0 : 1) : 20_000 + i;
                 installed.put(name, record(parsed, uid));
                 if (bulk && i != 0) targets[i - 1] = name;
             }
-            if (!bulk) targets[0] = "fixture.visibility.work." + (count - 1);
+            if (!bulk) targets[0] = "fixture.visibility.work.p" + (count - 1);
             expectedVisible = hidden ? 0 : targets.length;
             pm = service(installed.values().toArray(new ApkPackage[0]));
             manager = client(pm);

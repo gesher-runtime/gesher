@@ -782,11 +782,103 @@ begin
         RegDeleteKeyIncludingSubkeys(HKEY_CURRENT_USER, 'Software\Classes\' + Names[I]);
 end;
 
+// Whether the raw value of a Java properties file (Properties.store: '\' escapes,
+// \uXXXX for characters outside ASCII) names the path S; ASCII letters in any case.
+function PropertyNames(const Raw, S: String): Boolean;
+var
+  I, J, Code, Want: Integer;
+begin
+  Result := False;
+  I := 1;
+  J := 1;
+  while I <= Length(Raw) do
+  begin
+    if J > Length(S) then Exit;
+    Code := Ord(Raw[I]);
+    if (Raw[I] = '\') and (I < Length(Raw)) then
+    begin
+      I := I + 1;
+      Code := Ord(Raw[I]);
+      if (Raw[I] = 'u') and (I + 4 <= Length(Raw)) then
+      begin
+        Code := StrToIntDef('$' + Copy(Raw, I + 1, 4), -1);
+        I := I + 4;
+      end
+      else if Raw[I] = 't' then Code := 9
+      else if Raw[I] = 'n' then Code := 10
+      else if Raw[I] = 'r' then Code := 13
+      else if Raw[I] = 'f' then Code := 12;
+    end;
+    Want := Ord(S[J]);
+    if (Code >= 97) and (Code <= 122) then Code := Code - 32;
+    if (Want >= 97) and (Want <= 122) then Want := Want - 32;
+    if Code <> Want then Exit;
+    I := I + 1;
+    J := J + 1;
+  end;
+  Result := J > Length(S);
+end;
+
+// The desktop shortcuts the user asked for when installing apps (gesher-app install
+// --desktop-shortcut, com.gesher.app.shell.AppShell) go with Gesher: a .lnk directly
+// in the user's Desktop folder that a package's gesher-shell\shortcut.properties
+// records as its desktop_link, and no other file. Run before [UninstallDelete]
+// removes {localappdata}\Gesher.
+procedure RemoveDesktopLinks();
+var
+  Data, Desktop: String;
+  Lines, Links: TArrayOfString;
+  Find: TFindRec;
+  I, Count: Integer;
+begin
+  Data := ExpandConstant('{localappdata}\Gesher\data\data');
+  Count := 0;
+  if FindFirst(Data + '\*', Find) then
+  begin
+    try
+      repeat
+        if ((Find.Attributes and FILE_ATTRIBUTE_DIRECTORY) <> 0) and
+           (Find.Name <> '.') and (Find.Name <> '..') and
+           LoadStringsFromFile(Data + '\' + Find.Name + '\gesher-shell\shortcut.properties', Lines) then
+          for I := 0 to GetArrayLength(Lines) - 1 do
+            if Copy(Lines[I], 1, 13) = 'desktop_link=' then
+            begin
+              SetArrayLength(Links, Count + 1);
+              Links[Count] := Copy(Lines[I], 14, Length(Lines[I]));
+              Count := Count + 1;
+            end;
+      until not FindNext(Find);
+    finally
+      FindClose(Find);
+    end;
+  end;
+  if Count = 0 then Exit;
+  Desktop := ExpandConstant('{userdesktop}');
+  if (Desktop = '') or not FindFirst(AddBackslash(Desktop) + '*.lnk', Find) then Exit;
+  try
+    repeat
+      if ((Find.Attributes and FILE_ATTRIBUTE_DIRECTORY) = 0) and
+         (CompareText(ExtractFileExt(Find.Name), '.lnk') = 0) then
+        for I := 0 to Count - 1 do
+          if PropertyNames(Links[I], AddBackslash(Desktop) + Find.Name) then
+          begin
+            if not DeleteFile(AddBackslash(Desktop) + Find.Name) then
+              Log('Could not remove the desktop shortcut ' + Find.Name);
+            Break;
+          end;
+    until not FindNext(Find);
+  finally
+    FindClose(Find);
+  end;
+end;
+
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   Path, Dir: String;
   P: Integer;
 begin
+  if CurUninstallStep = usUninstall then
+    RemoveDesktopLinks();
   if CurUninstallStep = usPostUninstall then
   begin
     RemoveAppIds();

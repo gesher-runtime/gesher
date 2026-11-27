@@ -59,6 +59,8 @@ def generate(output, ref=None, observe=True, mutation=None):
     constants.discard('NATIVE_WINDOW_TIMESTAMP_AUTO')
     boundary = sources['tests/media/surface_geometry_host.cc.in'].split('@PRODUCTION@')[0]
     boundary = boundary.replace('@CONSTANTS@', 'enum { ' + ', '.join(sorted(constants)) + ' };')
+    # The current host adapter uses PixelRect even when building the older runtime.
+    boundary = boundary.replace('@DAMAGE_TYPES@', '#include "compat/hwui/window/surface_damage.h"')
     boundary = boundary.replace('int64_t systemTime(int)', 'inline int64_t systemTime(int)')
     boundary = '#pragma once\n#include "compat/media/video/video_decoder.h"\n' + boundary
     boundary += '\nnamespace android { constexpr int OK = 0, BAD_VALUE = -EINVAL, NO_INIT = -ENODEV; }\n'

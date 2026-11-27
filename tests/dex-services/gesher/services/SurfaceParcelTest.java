@@ -482,8 +482,15 @@ public final class SurfaceParcelTest {
                             && held.getTimestamp() == heldTimestamp,
                     "releasing the newer image changed the held snapshot");
         }
-        require(producerMemfds(producer) == baseline + 1 && memfds() == own,
-                "holding and releasing two snapshots leaked frame descriptors");
+        require(producerMemfds(producer) == baseline + 1,
+                "holding two snapshots changed the producer transport descriptor count");
+        // Two simultaneous images can leave a second reusable buffer in the reader.
+        int snapshotPoolGrowth = memfds() - own;
+        require(snapshotPoolGrowth >= 0 && snapshotPoolGrowth <= 1,
+                "holding two snapshots added " + snapshotPoolGrowth + " consumer descriptors");
+        reader.discardFreeBuffers();
+        require(memfds() == own - ownPool,
+                "released snapshots kept descriptors after discarding free buffers");
         say("acquired RGBA snapshots survive remote producer reuse and independent release");
 
         attached = attach(producer, 1, readerSurface);
@@ -510,7 +517,7 @@ public final class SurfaceParcelTest {
         require(drawn.is(64, 32), "the producer draws " + drawn + " into the SurfaceTexture");
         require(frames.tryAcquire(5, TimeUnit.SECONDS), "no onFrameAvailable for the producer's frame");
         reader.close();
-        // Closing the reader frees its pooled frame buffer: back to the count before it.
+        // The reader stays at the original descriptor count after discarding its pool.
         require(memfds() == own - ownPool, "closing the reader left " + (memfds() - (own - ownPool))
                 + " of its descriptors open: its pooled buffer was not freed");
         say("closing the reader frees its pooled buffer's descriptor");
