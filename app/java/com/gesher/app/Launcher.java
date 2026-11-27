@@ -463,8 +463,8 @@ public final class Launcher {
      * TAB name}) or removes one on explicit host request.
      */
     private static int accounts(List<String> args) throws Exception {
-        boolean list = args.isEmpty() || (args.size() == 1 && "list".equals(args.get(0)));
-        boolean remove = args.size() == 3 && "remove".equals(args.get(0));
+        boolean list = args.isEmpty() || (args.size() == 1 && ("list".equals(args.get(0)) || "list-encoded".equals(args.get(0))));
+        boolean remove = args.size() == 3 && ("remove".equals(args.get(0)) || "remove-encoded".equals(args.get(0)));
         if (!list && !remove) return usage();
         ensureDevice(true);
         return accounts(gesher(), args, System.out);
@@ -473,16 +473,27 @@ public final class Launcher {
     static int accounts(GesherService.Client gesher, List<String> args,
             java.io.PrintStream out) throws Exception {
         try {
-            if (args.size() == 3 && "remove".equals(args.get(0))) {
-                if (!gesher.removeAccount(args.get(1), args.get(2))) {
-                    log(text("account_not_found", args.get(2)));
+            if (args.size() == 3 && ("remove".equals(args.get(0)) || "remove-encoded".equals(args.get(0)))) {
+                boolean encoded = "remove-encoded".equals(args.get(0));
+                String type = encoded ? decodeAccountField(args.get(1)) : args.get(1);
+                String name = encoded ? decodeAccountField(args.get(2)) : args.get(2);
+                if (!gesher.removeAccount(type, name)) {
+                    log(text("account_not_found", name));
                     return 1;
                 }
-                out.println("account-removed\t" + args.get(1) + "\t" + args.get(2));
+                out.println("account-removed");
                 out.flush();
                 return 0;
             }
-            for (String row : gesher.listAccounts()) out.println("account\t" + row);
+            boolean encoded = args.size() == 1 && "list-encoded".equals(args.get(0));
+            for (String row : gesher.listAccounts()) {
+                if (encoded) out.println("account64\t" + row);
+                else {
+                    String[] fields = row.split("\\t", -1);
+                    if (fields.length != 2) throw new IllegalStateException("Invalid account row");
+                    out.println("account\t" + decodeAccountField(fields[0]) + "\t" + decodeAccountField(fields[1]));
+                }
+            }
             out.flush();
             return 0;
         } catch (UnsupportedOperationException e) {
@@ -491,6 +502,18 @@ public final class Launcher {
         } catch (IllegalArgumentException | IllegalStateException | SecurityException e) {
             log(e.getMessage());
             return 1;
+        }
+    }
+
+    /** Internal panel transport is ASCII so Windows console code pages cannot change identity. */
+    private static String decodeAccountField(String value) {
+        try {
+            return java.nio.charset.StandardCharsets.UTF_8.newDecoder()
+                    .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+                    .decode(java.nio.ByteBuffer.wrap(java.util.Base64.getDecoder().decode(value))).toString();
+        } catch (java.nio.charset.CharacterCodingException e) {
+            throw new IllegalArgumentException("Invalid account encoding", e);
         }
     }
 

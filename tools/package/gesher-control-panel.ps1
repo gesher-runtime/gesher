@@ -2102,9 +2102,17 @@ $btnMicrogSettings.Add_Click({
 
 function ConvertFrom-AccountsOutput([string[]] $lines) {
     $accounts = [Collections.Generic.List[object]]::new()
+    $utf8 = [Text.UTF8Encoding]::new($false, $true)
     foreach ($line in $lines) {
-        if ($line -cmatch '^account\t([^\t\r\n]+)\t([^\t\r\n]+)\s*$') {
-            $accounts.Add([PSCustomObject]@{ Type = $Matches[1]; Name = $Matches[2] })
+        if ($line.StartsWith("account64`t", [StringComparison]::Ordinal)) {
+            # Account names and types may contain tabs, newlines, quotes and Unicode.
+            # Keep the process protocol ASCII and decode only after framing it.
+            $fields = $line.Split([char]9)
+            if ($fields.Count -ne 3) { throw 'Invalid account response' }
+            $type = $utf8.GetString([Convert]::FromBase64String($fields[1]))
+            $name = $utf8.GetString([Convert]::FromBase64String($fields[2]))
+            if (-not $type.Length -or -not $name.Length) { throw 'Invalid account response' }
+            $accounts.Add([PSCustomObject]@{ Type = $type; Name = $name })
         }
     }
     return $accounts.ToArray()
@@ -2143,13 +2151,13 @@ function Invoke-PanelAccounts([string[]] $arguments) {
     } finally { $process.Dispose() }
 }
 
-function Start-PanelAccounts([string[]] $arguments) {
+function Start-PanelAccounts([string[]] $arguments, [int] $timeoutMs = 60000) {
     $powerShell = [PowerShell]::Create()
     try {
         $body = "param(`$here, `$timeout, `$arguments)`n`$script:AccountsTimeoutMs = `$timeout`n" +
             "function Invoke-PanelAccounts {`n$((Get-Command Invoke-PanelAccounts).Definition)`n}`n" +
             "Invoke-PanelAccounts `$arguments"
-        $null = $powerShell.AddScript($body).AddArgument($here).AddArgument(60000).AddArgument([string[]]$arguments)
+        $null = $powerShell.AddScript($body).AddArgument($here).AddArgument($timeoutMs).AddArgument([string[]]$arguments)
         return [PSCustomObject]@{ PowerShell = $powerShell; Handle = $powerShell.BeginInvoke() }
     } catch {
         $powerShell.Dispose()
@@ -2227,7 +2235,7 @@ function Show-AccountsDialog {
         $statusText.Text = Get-GesherText 'cp_accounts_loading'
         $statusText.Visibility = 'Visible'
         try {
-            $state.Query = Start-PanelAccounts @('list')
+            $state.Query = Start-PanelAccounts -arguments @('list-encoded')
         } catch {
             $statusText.Visibility = 'Collapsed'
             $errorText.Text = Get-GesherText 'cp_accounts_error'
@@ -2305,7 +2313,12 @@ function Show-AccountsDialog {
                                 $errorText.Visibility = 'Collapsed'
                                 try {
                                     $state.RemovingName = $target.Name
-                                    $state.Removing = Start-PanelAccounts @('remove', $target.Type, $target.Name)
+                                    $encodedType = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($target.Type))
+                                    $encodedName = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($target.Name))
+                                    # An authenticator may display its own confirmation UI and
+                                    # has a 15-minute session lifetime. Keep the worker alive
+                                    # through that lifecycle, with a margin for IPC cleanup.
+                                    $state.Removing = Start-PanelAccounts -arguments @('remove-encoded', $encodedType, $encodedName) -timeoutMs 960000
                                 } catch {
                                     $sender.IsEnabled = $true
                                     $errorText.Text = Get-GesherText 'cp_remove_account_failed' @($target.Name)

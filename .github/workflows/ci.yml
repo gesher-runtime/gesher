@@ -424,6 +424,7 @@ jobs:
           tests/windows/shell/CameraImagePickerChecks.ps1
           tests/windows/shell/ControlPanelRequestChecks.ps1
           tests/windows/shell/ControlPanelSpecialAccessChecks.ps1
+          tests/windows/shell/ControlPanelAccountsChecks.ps1
           tests/windows/shell/UpdateChecks.ps1
           tests/windows/shell/UpdateTransportChecks.ps1
           tests/windows/shell/ControlPanelUpdateChecks.ps1
@@ -1612,6 +1613,7 @@ jobs:
           tests/windows/shell/ControlPanelPresentationChecks.ps1
           tests/windows/shell/ControlPanelRequestChecks.ps1
           tests/windows/shell/ControlPanelSpecialAccessChecks.ps1
+          tests/windows/shell/ControlPanelAccountsChecks.ps1
           tests/windows/shell/UpdateChecks.ps1
           tests/windows/shell/UpdateTransportChecks.ps1
           tests/windows/shell/ControlPanelUpdateChecks.ps1

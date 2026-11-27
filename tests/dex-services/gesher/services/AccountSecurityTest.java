@@ -237,7 +237,9 @@ public final class AccountSecurityTest {
         System.out.println("AccountSecurityTest: unauthorized sync adapter cannot queue or receive an account");
 
         String[] listed = (String[]) method(service, "listAccountsForHost").invoke(manager);
-        require(listed.length == 1 && "test.type\tfixture@example.test".equals(listed[0]),
+        String encodedRow = java.util.Base64.getEncoder().encodeToString("test.type".getBytes(java.nio.charset.StandardCharsets.UTF_8))
+                + "\t" + java.util.Base64.getEncoder().encodeToString("fixture@example.test".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        require(listed.length == 1 && encodedRow.equals(listed[0]),
                 "Host account listing did not return the persisted account");
         Object hostManager = construct(service, new Class<?>[] {am, pm, boolean.class}, null, packageManager, false);
         @SuppressWarnings("unchecked") Map<Account, Object> hostAccounts =
@@ -255,11 +257,12 @@ public final class AccountSecurityTest {
         require(rejectedBlank, "Host account removal accepted an empty name");
         require(!(Boolean) hostRemove.invoke(hostManager, "test.type", "missing@example.test"),
                 "Host account removal returned true for a missing account");
-        require((Boolean) hostRemove.invoke(hostManager, "test.type", "fixture@example.test"),
-                "Host account removal returned false for an existing account");
-        require(retiredAccounts.contains(account) && ((String[]) hostList.invoke(hostManager)).length == 0,
-                "Host account removal did not clear the account or retire its sync settings");
-        hostAccounts.put(account, record);
+        boolean unavailable = false;
+        try { hostRemove.invoke(hostManager, "test.type", "fixture@example.test"); }
+        catch (InvocationTargetException expected) { unavailable = expected.getCause() instanceof IllegalStateException; }
+        require(unavailable, "Host removal bypassed an unavailable authenticator");
+        require(retiredAccounts.isEmpty() && hostAccounts.containsKey(account),
+                "Denied host removal changed persisted account or sync state");
 
         Class<?> servicesType = Class.forName("com.gesher.server.Services");
         Class<?> atmType = Class.forName("com.gesher.server.ActivityTaskManagerService");
@@ -272,12 +275,15 @@ public final class AccountSecurityTest {
         Object previousCreated = sLast.get(null);
         sLast.set(null, created);
         try {
+            java.util.concurrent.atomic.AtomicReference<String[]> removalArguments = new java.util.concurrent.atomic.AtomicReference<>();
             Class<?> deviceType = Class.forName("com.gesher.server.GesherService$Device");
             Object device = Proxy.newProxyInstance(deviceType.getClassLoader(), new Class<?>[] {deviceType},
                     (proxy, op, opArgs) -> {
                         switch (op.getName()) {
                             case "listAccounts": return hostList.invoke(hostManager);
-                            case "removeAccount": return hostRemove.invoke(hostManager, opArgs[0], opArgs[1]);
+                            case "removeAccount":
+                                removalArguments.set(new String[]{(String) opArgs[0], (String) opArgs[1]});
+                                return hostRemove.invoke(hostManager, opArgs[0], opArgs[1]);
                             case "touch": return null;
                             default: throw new AssertionError("Unexpected device call " + op.getName());
                         }
@@ -296,7 +302,7 @@ public final class AccountSecurityTest {
                 android.os.Binder.restoreCallingIdentity(
                         ((long) android.os.Process.SYSTEM_UID << 32) | android.os.Process.myPid());
                 String[] ipcRows = (String[]) method(clientType, "listAccounts").invoke(ipcClient);
-                require(ipcRows.length == 1 && "test.type\tfixture@example.test".equals(ipcRows[0]),
+                require(ipcRows.length == 1 && encodedRow.equals(ipcRows[0]),
                         "GesherService listAccounts did not return the account");
                 Method launcherAccounts = Class.forName("com.gesher.app.Launcher").getDeclaredMethod("accounts",
                         clientType, List.class, java.io.PrintStream.class);
@@ -307,13 +313,29 @@ public final class AccountSecurityTest {
                         && printed.toString("UTF-8").trim().equals("account\ttest.type\tfixture@example.test"),
                         "Launcher accounts list output mismatch");
                 printed.reset();
+                require((Integer) launcherAccounts.invoke(null, ipcClient, List.of("list-encoded"), out) == 0
+                        && printed.toString("UTF-8").trim().equals("account64\t" + encodedRow),
+                        "Launcher encoded account listing mismatch");
+                printed.reset();
                 require((Integer) launcherAccounts.invoke(null, ipcClient,
-                        List.of("remove", "test.type", "fixture@example.test"), out) == 0
-                        && ((String[]) hostList.invoke(hostManager)).length == 0,
-                        "Launcher accounts remove did not remove the account");
-                require((Integer) launcherAccounts.invoke(null, ipcClient,
-                        List.of("remove", "test.type", "fixture@example.test"), out) == 1,
+                        List.of("remove", "test.type", "missing@example.test"), out) == 1,
                         "Launcher accounts remove should exit 1 when account is absent");
+                String unusualType = "type\twith\nlines";
+                String unusualName = "  \"שלום\"\taccount\r\n--option  ";
+                String type64 = java.util.Base64.getEncoder().encodeToString(unusualType.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                String name64 = java.util.Base64.getEncoder().encodeToString(unusualName.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                Account unusual = new Account(unusualName, unusualType);
+                hostAccounts.put(unusual, record);
+                printed.reset();
+                require((Integer) launcherAccounts.invoke(null, ipcClient, List.of("list-encoded"), out) == 0
+                        && printed.toString("UTF-8").contains("account64\t" + type64 + "\t" + name64),
+                        "Encoded listing corrupted Unicode, whitespace, quotes or line breaks");
+                hostAccounts.remove(unusual);
+                require((Integer) launcherAccounts.invoke(null, ipcClient,
+                        List.of("remove-encoded", type64, name64), out) == 1,
+                        "Encoded removal did not report absent account");
+                require(java.util.Arrays.equals(removalArguments.get(), new String[]{unusualType, unusualName}),
+                        "Encoded removal corrupted the selected account identity");
                 Object older = construct(clientType, new Class<?>[] {android.os.IBinder.class},
                         new android.os.Binder());
                 boolean unsupported = false;
@@ -328,7 +350,7 @@ public final class AccountSecurityTest {
         } finally {
             sLast.set(null, previousCreated);
         }
-        System.out.println("AccountSecurityTest: host account listing and removal enforce system identity and clear account");
+        System.out.println("AccountSecurityTest: host account IPC enforces system identity and authenticator removal policy");
         Files.delete(temporary.toPath());
     }
 

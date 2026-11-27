@@ -47,7 +47,7 @@ public final class GesherService extends Binder {
     static final int SETTINGS_VISIT_CLOSED = IBinder.FIRST_CALL_TRANSACTION + 14;
     static final int SET_SPECIAL_ACCESS_VISIT = IBinder.FIRST_CALL_TRANSACTION + 15;
     static final int INSTALL_CONFIRMED = IBinder.FIRST_CALL_TRANSACTION + 16;
-    /** Saved accounts as "type\tname" rows, and removing one on explicit user request. */
+    /** Saved accounts as "Base64(UTF-8 type) TAB Base64(UTF-8 name)" rows, and removing one on explicit user request. */
     static final int LIST_ACCOUNTS = IBinder.FIRST_CALL_TRANSACTION + 17;
     static final int REMOVE_ACCOUNT = IBinder.FIRST_CALL_TRANSACTION + 18;
 
@@ -136,7 +136,7 @@ public final class GesherService extends Binder {
         default int settingsScreensClosed(int pid, long startedAt, String[] tokens) {
             return settingsScreensClosed(tokens);
         }
-        /** Saved accounts on the device, each as "type\tname". */
+        /** Saved accounts on the device, each as Base64 UTF-8 type TAB Base64 UTF-8 name. */
         default String[] listAccounts() {
             throw new UnsupportedOperationException("Account management unavailable");
         }
@@ -669,7 +669,7 @@ public final class GesherService extends Binder {
             }
         }
 
-        /** Saved accounts on the device, each formatted as "type\tname". */
+        /** Saved accounts on the device, each formatted as Base64 UTF-8 type TAB Base64 UTF-8 name. */
         public String[] listAccounts() throws RemoteException {
             Parcel data = Parcel.obtain();
             Parcel reply = Parcel.obtain();
