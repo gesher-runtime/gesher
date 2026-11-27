@@ -14,6 +14,9 @@ LONG lock_flags;
 uint64_t creation;
 HWND foreground, second_foreground;
 DWORD second_owner, second_thread;
+bool lock_submit_ok;
+int lock_calls, sleep_calls, confirm_after_sleeps;
+ULONGLONG ticks;
 void check(bool condition, const char* what) {
   if (!condition) { std::fprintf(stderr, "FAIL: %s\n", what); std::exit(1); }
   ++checks;
@@ -26,6 +29,8 @@ void reset() {
   foreground = second_foreground = reinterpret_cast<HWND>(0x100);
   foreground_calls = owner_calls = 0;
   session_id = reply_session = 3; bytes = sizeof(WTSINFOEXW); level = 1; lock_flags = WTS_SESSIONSTATE_UNLOCK;
+  lock_submit_ok = true; lock_calls = sleep_calls = 0;
+  confirm_after_sleeps = -1; ticks = 0;
 }
 void focus(bool expected, const char* what) {
   uint32_t pid = 99; uint64_t born = 99;
@@ -56,12 +61,21 @@ BOOL WTSQuerySessionInformationW(HANDLE server, DWORD session, int kind, LPWSTR*
   check(server == WTS_CURRENT_SERVER_HANDLE && session == session_id && kind == WTSSessionInfoEx, "Actual local session information class");
   if (allocate_buffer) {
     auto* info = static_cast<WTSINFOEXW*>(std::calloc(1, sizeof(WTSINFOEXW))); ++allocations;
-    info->Level = level; info->Data.WTSInfoExLevel1.SessionId = reply_session; info->Data.WTSInfoExLevel1.SessionFlags = lock_flags;
+    const LONG observed_flags = lock_calls > 0 && confirm_after_sleeps >= 0
+        && sleep_calls >= confirm_after_sleeps ? WTS_SESSIONSTATE_LOCK : lock_flags;
+    info->Level = level; info->Data.WTSInfoExLevel1.SessionId = reply_session; info->Data.WTSInfoExLevel1.SessionFlags = observed_flags;
     *data = reinterpret_cast<LPWSTR>(info);
   } else *data = nullptr;
   *size = bytes; return query_ok;
 }
 void WTSFreeMemory(void* data) { --allocations; std::free(data); }
+BOOL LockWorkStation() { ++lock_calls; return lock_submit_ok; }
+ULONGLONG GetTickCount64() { return ticks; }
+void Sleep(DWORD milliseconds) {
+  check(milliseconds == 20, "Session confirmation uses bounded polling intervals");
+  ++sleep_calls; ticks += milliseconds;
+  check(sleep_calls <= 150, "Session confirmation never waits beyond its deadline");
+}
 int main() {
   reset(); focus(true, "Stable Windows foreground process");
   reset(); foreground = nullptr; focus(false, "No foreground window");
@@ -85,5 +99,24 @@ int main() {
   reset(); bytes--; check(gesher::devsvc::SessionLockState() == -1, "Truncated information");
   reset(); level = 2; check(gesher::devsvc::SessionLockState() == -1, "Unsupported information level");
   reset(); reply_session++; check(gesher::devsvc::SessionLockState() == -1, "Session identity changed");
+  reset(); lock_flags = WTS_SESSIONSTATE_LOCK;
+  check(gesher::devsvc::LockWorkstation(), "Already locked session satisfies lock request");
+  check(lock_calls == 0 && sleep_calls == 0, "Already locked session is not submitted again");
+  reset(); lock_submit_ok = false;
+  check(!gesher::devsvc::LockWorkstation(), "Rejected Windows lock submission is not success");
+  check(lock_calls == 1 && sleep_calls == 0, "Rejected submission does not poll");
+  reset();
+  check(!gesher::devsvc::LockWorkstation(), "Submitted request without locked state is not success");
+  check(lock_calls == 1 && sleep_calls == 150 && ticks == 3000,
+        "Unconfirmed submission stops at the three-second deadline");
+  reset(); query_ok = false;
+  check(!gesher::devsvc::LockWorkstation(), "Unknown session state cannot confirm a submitted lock");
+  check(sleep_calls == 150 && ticks == 3000, "Unknown state polling is bounded");
+  reset(); confirm_after_sleeps = 2;
+  check(gesher::devsvc::LockWorkstation(), "Asynchronous lock succeeds after real locked observation");
+  check(lock_calls == 1 && sleep_calls == 2 && ticks == 40, "Confirmed lock returns without the full timeout");
+  reset(); confirm_after_sleeps = 0;
+  check(gesher::devsvc::LockWorkstation(), "Immediately observed lock succeeds");
+  check(lock_calls == 1 && sleep_calls == 0, "Immediate confirmation needs no sleep");
   reset(); std::printf("Clipboard native boundary all passed: %d checks\n", checks);
 }
