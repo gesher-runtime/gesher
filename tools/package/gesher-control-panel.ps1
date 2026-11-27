@@ -2361,6 +2361,15 @@ function Open-PanelLogsFolder([string] $logs) {
     Start-Process -FilePath (Join-Path $env:WINDIR 'explorer.exe') -ArgumentList ('"' + $logs + '"')
 }
 
+$btnSponsor = $window.FindName('BtnSponsor')
+$btnSponsor.ToolTip = 'https://github.com/sponsors/palmoni5'
+$btnSponsor.Add_Click({
+    try { Start-Process -FilePath 'https://github.com/sponsors/palmoni5' }
+    catch {
+        Show-ModernMessageDialog -Title (Get-GesherText 'cp_title') -Message (Get-GesherText 'cp_sponsor_open_failed' @($_.Exception.Message)) -IsError $true
+    }
+})
+
 $btnOpenLogs = $window.FindName('BtnOpenLogs')
 $btnOpenLogs.ToolTip = Join-Path $root 'logs'
 $btnOpenLogs.Add_Click({
