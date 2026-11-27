@@ -38,6 +38,7 @@
 
 #include <gesher/fork.h>
 #include <gesher/ptrace_state.h>
+#include <gesher/windows_process_identity.h>
 
 #include "internal.h"
 #include "../../usb_storage/protected_runtime_client.h"
@@ -311,23 +312,8 @@ int gesher_kill_other(pid_t pid, int sig) {
 // The process that started this one, while it runs and is older than this
 // one (Windows reuses pids); 1 otherwise, as Linux reparents an orphan to init.
 pid_t getppid(void) {
-  // NtQueryInformationProcess's ProcessBasicInformation (0).
-  struct BasicInformation {
-    LONG exit_status;
-    void* peb;
-    ULONG_PTR affinity;
-    LONG base_priority;
-    ULONG_PTR pid;
-    ULONG_PTR parent_pid;
-  };
-  using QueryFn = LONG(NTAPI*)(HANDLE, int, PVOID, ULONG, PULONG);
-  static auto query = reinterpret_cast<QueryFn>(reinterpret_cast<void*>(
-      GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQueryInformationProcess")));
-  BasicInformation info = {};
-  if (query == nullptr || query(GetCurrentProcess(), 0, &info, sizeof(info), nullptr) < 0) {
-    return 1;
-  }
-  DWORD parent = static_cast<DWORD>(info.parent_pid);
+  const DWORD parent = gesher::process_identity::ReadParentProcessId(GetCurrentProcess(), GetCurrentProcessId());
+  if (parent == 0) return 1;
   HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, parent);
   if (h == nullptr) return 1;
   FILETIME parent_created, own_created, exited, kernel, user;

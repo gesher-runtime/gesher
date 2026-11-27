@@ -58,8 +58,7 @@ ShowLanguageDialog=no
 UsePreviousLanguage=no
 
 [Languages]
-; InfoBeforeFile: the security notice (docs/sandbox.md), shown before installing:
-; Android apps run with the user's Windows permissions, not in a sandbox.
+; InfoBeforeFile: the security notice (docs/sandbox.md), shown before installing.
 Name: "en"; MessagesFile: "compiler:Default.isl"; InfoBeforeFile: "security-notice.txt"
 Name: "he"; MessagesFile: "compiler:Languages\Hebrew.isl"; InfoBeforeFile: "security-notice.he.txt"
 
@@ -97,6 +96,7 @@ Source: "etc\permissions\android.test.runner.xml"; DestDir: "{app}\etc\permissio
 Source: "licenses\JUNIT-CPL-NOTICES.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
 Source: "etc\permissions\privapp-permissions-microg.xml"; DestDir: "{app}\etc\permissions"; Flags: ignoreversion
 Source: "{#BuildDir}\binderd.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#BuildDir}\gesher-drop-worker.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\servicemanager.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; gesher-exec (docs/exec.md): runs an app's ELF executables (ProcessBuilder) next to dalvikvm.
 Source: "{#BuildDir}\gesher-exec.exe"; DestDir: "{app}"; Flags: ignoreversion

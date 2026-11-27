@@ -113,15 +113,22 @@ public final class ClipboardFixture implements AutoCloseable {
         final CopyOnWriteArrayList<WindowsHost.Listener> listeners = new CopyOnWriteArrayList<>();
         Object boundary() throws Exception {
             Class<?> host = type("ClipboardService$Host");
+            Class<?> snapshotType = type("ClipboardService$Snapshot");
+            var contents = snapshotType.getDeclaredConstructor(
+                    int.class, String.class, String.class, byte[].class);
+            contents.setAccessible(true);
+            var sample = type("ClipboardService$Sample").getDeclaredConstructor(int.class, snapshotType);
+            sample.setAccessible(true);
             return Proxy.newProxyInstance(host.getClassLoader(), new Class<?>[]{host}, (proxy, method, args) -> {
                 switch (method.getName()) {
                     case "available": return true;
                     case "foregroundProcess": return foreground == null ? null : foreground.clone();
                     case "sessionLockState": return lockState;
-                    case "sequence": return sequence;
-                    case "text": return text;
-                    case "html": return html;
-                    case "image": return image;
+                    case "sample":
+                        int generation = sequence;
+                        if (generation == 0 || generation == (int)args[0]) return null;
+                        Object result = contents.newInstance(generation, text, html, image);
+                        return generation == sequence ? sample.newInstance(generation, result) : null;
                     case "write":
                         if (rejectWrite) { writes++; return 0; }
                         text = (String)args[0]; html = (String)args[1]; image = (byte[])args[2]; sequence++; writes++;

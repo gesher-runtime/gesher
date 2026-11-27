@@ -25,6 +25,7 @@ set(_sqlite_dist "${_sqlite}/dist/sqlite-autoconf-3500400")
 add_library(sqlite STATIC
   ${_sqlite_dist}/sqlite3.c
   ${CMAKE_SOURCE_DIR}/compat/posix/src/sqlite_path.cc
+  ${CMAKE_SOURCE_DIR}/compat/posix/src/sqlite_rooted_storage.cc
   # libsqlite3_android
   ${_sqlite}/android/PhoneNumberUtils.cpp
   ${_sqlite}/android/OldPhoneNumberUtils.cpp

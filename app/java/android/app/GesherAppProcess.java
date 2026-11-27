@@ -209,9 +209,9 @@ public final class GesherAppProcess {
         com.gesher.net.WindowsProxy.installInProcess();
 
         withoutSystemFonts();
-        // Standalone launches don't go through the system server's process
-        // starter. They still need Choreographer's message-queue frame timer.
-        if (startSeq == 0) {
+        // The system server publishes this setting for read-only AppContainer
+        // clients. An ordinary standalone process initializes it locally.
+        if (startSeq == 0 && android.os.SystemProperties.get("debug.choreographer.vsync").isEmpty()) {
             android.os.SystemProperties.set("debug.choreographer.vsync", "false");
         }
         if (!com.gesher.app.window.WindowMode.HEADLESS.equals(windowMode)) {

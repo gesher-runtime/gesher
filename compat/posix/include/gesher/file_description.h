@@ -4,6 +4,7 @@
 #include <windows.h>
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -36,6 +37,7 @@ struct DescriptorSnapshot {
 using DescriptorSnapshotPtr = std::shared_ptr<DescriptorSnapshot>;
 DescriptorSnapshotPtr CaptureDescriptor(int fd);
 DescriptorSnapshotPtr CaptureFileHandle(HANDLE file);
+std::wstring DropDescriptorPath(const DescriptorSnapshotPtr& descriptor);
 // A new descriptor alias with independent descriptor flags. The snapshot
 // retains its reference; the new slot owns an explicit native duplicate.
 int AttachFileDescription(const DescriptorSnapshotPtr& snapshot, bool close_on_exec);

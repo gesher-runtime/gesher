@@ -21,6 +21,8 @@
 #include <vector>
 
 #include "camera_mf.h"
+#include "brokered_camera.h"
+#include <gesher/binder_endpoint.h>
 #include "core_jni_helpers.h"
 #include "location_win.h"
 
@@ -103,7 +105,8 @@ namespace cam = gesher::devices::camera;
 // list of what the device really has: "af" when its focus runs automatically and
 // can be locked (camera_mf.h's Device::autofocus), else empty.
 jobjectArray WindowsCamera_list(JNIEnv* env, jclass) {
-  const std::vector<cam::Device>& devices = cam::List(nullptr);
+  const auto& devices = gesher::binder_endpoint::Current().IsGuest()
+      ? cam::ListBrokered(nullptr) : cam::List(nullptr);
   jclass string = env->FindClass("java/lang/String");
   jobjectArray result = env->NewObjectArray(static_cast<jsize>(devices.size()), string, nullptr);
   for (size_t i = 0; i < devices.size(); ++i) {
@@ -123,17 +126,30 @@ jobjectArray WindowsCamera_list(JNIEnv* env, jclass) {
 
 jstring WindowsCamera_status(JNIEnv* env, jclass) {
   std::string status;
-  cam::List(&status);
+  if (gesher::binder_endpoint::Current().IsGuest()) cam::ListBrokered(&status);
+  else cam::List(&status);
   return env->NewStringUTF(status.c_str());
 }
 
 // Opens a device: a handle, or 0 with out[2] = the HRESULT; out[0..1] = the frame size.
 jlong WindowsCamera_open(JNIEnv* env, jclass, jstring id, jint width, jint height,
-                         jintArray out) {
+                         jstring tag, jintArray out) {
   ScopedUtfChars chars(env, id);
   if (chars.c_str() == nullptr) return 0;
+  gesher::capture_policy::Attribution attribution;
+  if (tag != nullptr) {
+    const jsize size = env->GetStringLength(tag);
+    if (static_cast<size_t>(size) <= attribution.tag.size()) {
+      attribution.length = static_cast<uint16_t>(size);
+      if (size != 0) env->GetStringRegion(tag, 0, size,
+          reinterpret_cast<jchar*>(attribution.tag.data()));
+      if (env->ExceptionCheck()) return 0;
+    }
+  }
   HRESULT hr = S_OK;
-  std::unique_ptr<cam::Capture> capture = cam::Open(chars.c_str(), width, height, &hr);
+  std::unique_ptr<cam::Capture> capture = gesher::binder_endpoint::Current().IsGuest()
+      ? cam::OpenBrokered(chars.c_str(), width, height, attribution, &hr)
+      : cam::Open(chars.c_str(), width, height, &hr);
   if (capture) {
     ALOGI("camera: opened %s at %dx%d through %s", chars.c_str(), capture->width,
           capture->height, capture->via);
@@ -195,7 +211,7 @@ jint WindowsCamera_focus(JNIEnv* env, jclass, jlong handle, jint op, jintArray o
 const JNINativeMethod gWindowsCameraMethods[] = {
     {"nativeList", "()[Ljava/lang/String;", GESHER_JNI(WindowsCamera_list)},
     {"nativeStatus", "()Ljava/lang/String;", GESHER_JNI(WindowsCamera_status)},
-    {"nativeOpen", "(Ljava/lang/String;II[I)J", GESHER_JNI(WindowsCamera_open)},
+    {"nativeOpen", "(Ljava/lang/String;IILjava/lang/String;[I)J", GESHER_JNI(WindowsCamera_open)},
     {"nativeRead", "(J[B)I", GESHER_JNI(WindowsCamera_read)},
     {"nativeFocus", "(JI[I)I", GESHER_JNI(WindowsCamera_focus)},
     {"nativeClose", "(J)V", GESHER_JNI(WindowsCamera_close)},

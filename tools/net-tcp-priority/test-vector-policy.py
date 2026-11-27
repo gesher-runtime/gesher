@@ -13,8 +13,36 @@ spec = importlib.util.spec_from_file_location('selected_policy', Path(__file__).
 policy = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(policy)
 source_path = ROOT / 'compat/posix/src/system.cc'
-original = source_path.read_bytes()
-read_bytes = Path.read_bytes
+with contextlib.redirect_stdout(io.StringIO()):
+    predecessor = policy.check_live()
+historical_sources = {ROOT / name: data for name, data in predecessor.items()}
+live_read_bytes = Path.read_bytes
+
+
+def read_bytes(path):
+    return historical_sources[path] if path in historical_sources else live_read_bytes(path)
+
+
+def check_live_vector_functions(source, baseline):
+    for marker in (b'int fcntl(', b'bool SocketIo(', b'ssize_t readv(', b'ssize_t writev(',
+                   b'ssize_t preadv(', b'ssize_t pwritev('):
+        expected = policy.source_function(baseline, marker)
+        assert policy.source_function(source, marker) == expected, marker
+
+
+original = read_bytes(source_path)
+live_system = live_read_bytes(source_path)
+check_live_vector_functions(live_system, original)
+writev = policy.source_function(live_system, b'ssize_t writev(')
+altered = live_system.replace(writev, writev.replace(b'{', b'{\n  // unqualified writev edit', 1), 1)
+assert altered != live_system
+try:
+    check_live_vector_functions(altered, original)
+except AssertionError as error:
+    assert error.args == (b'ssize_t writev(',), error
+else:
+    raise AssertionError('live vector rule accepted changed writev after transition verification')
+print('live vector/fcntl function bodies and independent writev negative control passed')
 
 
 def rejected(label, replacement, repin=False, target=source_path, pin_name='SYSTEM_SHA256'):
@@ -39,7 +67,8 @@ def rejected(label, replacement, repin=False, target=source_path, pin_name='SYST
                 # A mutation inside the pinned transition may be rejected by
                 # reverse application before the baseline hash comparison. This
                 # counts only when that exact check rejects the mutated path.
-                assert error.cmd == ['git', 'apply', '--reverse', '--unidiff-zero', '--check', '-'], error
+                assert error.cmd == ['git', '-c', 'core.autocrlf=false',
+                                     'apply', '--reverse', '--unidiff-zero', '--check', '-'], error
                 assert error.returncode == 1, error
                 assert target.relative_to(ROOT).as_posix().encode() in error.stderr, error.stderr
                 print_result = label
@@ -50,8 +79,6 @@ def rejected(label, replacement, repin=False, target=source_path, pin_name='SYST
     print('PASS source policy rejects ' + print_result)
 
 
-with contextlib.redirect_stdout(io.StringIO()):
-    policy.check()
 rejected('unrelated readv edit even with a new full-file hash',
          original.replace(b'ssize_t readv(', b'// unrelated readv change\nssize_t readv(', 1), True)
 rejected('socket gather edit even with a new full-file hash',
@@ -77,7 +104,7 @@ rejected('duplicate reviewed fcntl preamble even with a new full-file hash',
 print('vector/fcntl source policy: positive source and nine negative controls passed')
 
 fd_path = ROOT / 'compat/posix/src/fd.cc'
-fd_source = fd_path.read_bytes()
+fd_source = read_bytes(fd_path)
 stream_retirement = policy.FD_STREAM_DEVICE_RETIREMENT
 fd_controls = (
     ('unrelated descriptor bytes',
@@ -108,7 +135,7 @@ for label, replacement in fd_controls:
 print('stream-device source policy: positive source and seven negative controls passed')
 
 winsock_path = ROOT / 'compat/posix/src/winsock.cc'
-winsock_source = winsock_path.read_bytes()
+winsock_source = read_bytes(winsock_path)
 priority_wake = policy.TCP_PRIORITY_WAKE_AFTER
 priority_controls = (
     ('waited TCP priority wake confirmation removed',
@@ -130,7 +157,7 @@ for label, replacement in priority_controls:
 print('TCP priority wake source policy: positive source and five negative controls passed')
 
 fixture_path = ROOT / 'tests/net-tcp-priority/contract.cc'
-fixture = fixture_path.read_bytes()
+fixture = read_bytes(fixture_path)
 rejected('unrelated TCP fixture bytes',
          fixture + b'\n// unrelated fixture change\n', target=fixture_path)
 rejected('TCP fixture assertion relaxation',
@@ -170,7 +197,7 @@ rejected('owned socket description retirement unchecked',
          fixture.replace(b'retired_operation.expired() && retired_description.expired()',
                          b'retired_operation.expired() && true', 1), target=fixture_path)
 thread_diagnostic = ROOT / policy.OWNER_THREAD_DIAGNOSTIC_PATH
-thread_source = thread_diagnostic.read_bytes()
+thread_source = read_bytes(thread_diagnostic)
 rejected('ordinary thread classified as a system pool worker',
          thread_source.replace(b'if (start == pool_start) {', b'if (start != nullptr) {', 1),
          target=thread_diagnostic)
@@ -186,7 +213,7 @@ rejected('thread observer leaking its diagnostic handles',
 print('thread diagnostic source policy: ten negative controls passed')
 
 receipt_path = ROOT / 'tools/ci/receipt-diagnostics.ps1'
-receipt = receipt_path.read_bytes()
+receipt = read_bytes(receipt_path)
 receipt_controls = (
     ('unrelated receipt diagnostic bytes', receipt + b'\n# unrelated change\n'),
     ('receipt source changed to checkout',
@@ -203,5 +230,7 @@ for label, replacement in receipt_controls:
 print('receipt diagnostic source policy: four negative controls passed')
 
 # The ordinary CI entry point also exercises the exact property/OFD transition,
-# including mutations that refresh only the new property-file hash.
-policy.transition_negative_controls()
+# including mutations that refresh only the new property-file hash. These probes
+# use the historical inputs reconstructed by the live transition above.
+with patch.object(Path, 'read_bytes', read_bytes):
+    policy.transition_negative_controls()

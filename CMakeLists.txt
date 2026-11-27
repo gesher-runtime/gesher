@@ -72,6 +72,10 @@ add_executable(gesher_usb_block_physical_test EXCLUDE_FROM_ALL
 target_compile_options(gesher_usb_block_physical_test PRIVATE -Wall -Wextra -Werror)
 target_link_options(gesher_usb_block_physical_test PRIVATE -municode)
 target_link_libraries(gesher_usb_block_physical_test PRIVATE gesher_posix cfgmgr32)
+add_executable(rooted_storage_probe tests/sandbox/rooted-storage-probe.cc)
+target_compile_options(rooted_storage_probe PRIVATE -Wall -Wextra -Werror)
+target_link_options(rooted_storage_probe PRIVATE -municode)
+target_link_libraries(rooted_storage_probe PRIVATE gesher_posix)
 
 # gesher: the ELF loader for x86-64 Android .so files (Phase 6).
 include(compat/elf/elf.cmake)

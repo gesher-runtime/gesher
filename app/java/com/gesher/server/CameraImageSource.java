@@ -161,10 +161,15 @@ public final class CameraImageSource {
      */
     static WindowsCamera.Capture open(String id, int width, int height, Choice choice)
             throws WindowsCamera.OpenException {
+        return open(id, width, height, choice, null);
+    }
+
+    static WindowsCamera.Capture open(String id, int width, int height, Choice choice,
+            String attributionTag) throws WindowsCamera.OpenException {
         Selection selection = decide(id, choice);
         switch (selection.kind) {
             case Selection.CAMERA:
-                return WindowsCamera.open(id, width, height);
+                return WindowsCamera.open(id, width, height, attributionTag);
             case Selection.IMAGE: {
                 int w = Math.max(2, width & ~1);
                 int h = Math.max(2, height & ~1);

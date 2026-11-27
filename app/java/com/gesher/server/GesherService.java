@@ -47,6 +47,7 @@ public final class GesherService extends Binder {
     static final int SETTINGS_VISIT_CLOSED = IBinder.FIRST_CALL_TRANSACTION + 14;
     static final int SET_SPECIAL_ACCESS_VISIT = IBinder.FIRST_CALL_TRANSACTION + 15;
     static final int INSTALL_CONFIRMED = IBinder.FIRST_CALL_TRANSACTION + 16;
+    static final int APP_ISOLATION = IBinder.FIRST_CALL_TRANSACTION + 17;
 
     static final String EXIT_DESCRIPTOR = "com.gesher.ILaunchExit";
     static final int EXIT_STATUS = IBinder.FIRST_CALL_TRANSACTION;
@@ -96,6 +97,9 @@ public final class GesherService extends Binder {
         default String[] installConfirmed(String apk, String pkg, long version, String digest)
                 throws Exception {
             throw new UnsupportedOperationException("Confirmed host installation unavailable");
+        }
+        default String appIsolation(String packageName, String operation) throws Exception {
+            throw new UnsupportedOperationException("App isolation settings unavailable");
         }
         boolean uninstall(String packageName) throws Exception;
         String status();
@@ -152,7 +156,7 @@ public final class GesherService extends Binder {
     @Override
     protected boolean onTransact(int code, Parcel data, Parcel reply, int flags)
             throws RemoteException {
-        if (code < INSTALL || code > INSTALL_CONFIRMED) {
+        if (code < INSTALL || code > APP_ISOLATION) {
             return super.onTransact(code, data, reply, flags);
         }
         data.enforceInterface(DESCRIPTOR);
@@ -197,6 +201,15 @@ public final class GesherService extends Binder {
                     String[] result = mDevice.installConfirmed(apk, pkg, version, digest);
                     reply.writeNoException();
                     reply.writeStringArray(result);
+                    return true;
+                }
+                case APP_ISOLATION: {
+                    String pkg = data.readString();
+                    String operation = data.readString();
+                    data.enforceNoDataAvail();
+                    String result = mDevice.appIsolation(pkg, operation);
+                    reply.writeNoException();
+                    reply.writeString(result);
                     return true;
                 }
                 case UNINSTALL: {
@@ -418,6 +431,24 @@ public final class GesherService extends Binder {
             try {
                 return reply.readBoolean();
             } finally {
+                reply.recycle();
+            }
+        }
+
+        public String appIsolation(String packageName, String operation) throws RemoteException {
+            Parcel data = Parcel.obtain();
+            Parcel reply = Parcel.obtain();
+            try {
+                data.writeInterfaceToken(DESCRIPTOR);
+                data.writeString(packageName);
+                data.writeString(operation);
+                if (!mBinder.transact(APP_ISOLATION, data, reply, 0)) {
+                    throw new UnsupportedOperationException("App isolation settings unavailable");
+                }
+                reply.readException();
+                return reply.readString();
+            } finally {
+                data.recycle();
                 reply.recycle();
             }
         }

@@ -253,7 +253,17 @@ public final class Launcher {
         Main.bootstrap(TAG, buildProp, frameworkRes);
 
         switch (command) {
-            case "launch": return launch(rest);
+            case "launch": return launch(rest, false, buildProp, frameworkRes);
+            case "launch-scoped": return launch(rest, true, buildProp, frameworkRes);
+            case "cohost-owner": {
+                if (!protectedRequested() || !rest.isEmpty()) return usage();
+                ensureCohostOwner();
+                return 0;
+            }
+            case "launch-cohost": {
+                if (!protectedRequested() || rest.isEmpty()) return usage();
+                return launchCohost(rest);
+            }
             case "protected-launch": {
                 if (rest.size() != 1) return usage();
                 com.gesher.server.ProtectedRuntime.launch(rest.get(0));
@@ -303,6 +313,15 @@ public final class Launcher {
                 ensureDevice(true);
                 return MobileDataCommands.run(rest);
             case "windows": return windows(rest);
+            case "app-isolation": {
+                if (rest.isEmpty() || rest.size() > 2) return usage();
+                String operation = rest.size() == 1 ? "status" : rest.get(1);
+                if (!List.of("status", "isolated", "unisolated").contains(operation)) return usage();
+                ensureDevice(true);
+                String state = gesher().appIsolation(rest.get(0), operation);
+                System.out.println("app-isolation\t" + rest.get(0) + "\t" + state);
+                return "cancelled".equals(state) ? 1223 : 0;
+            }
             case "special-access": return specialAccess(rest);
             case "settings-closed": return settingsClosed(rest, false);
             case "settings-shown": return settingsClosed(rest, true);
@@ -342,6 +361,39 @@ public final class Launcher {
             }
             default: return usage();
         }
+    }
+
+    private static int launchCohost(List<String> arguments) throws Exception {
+        File apk = new File(arguments.get(0)).getAbsoluteFile();
+        if (!apk.isFile()) throw new IllegalArgumentException(text("no_file", apk));
+        String data = null;
+        List<String> options = new ArrayList<>();
+        for (int i = 1; i < arguments.size(); ++i) {
+            String option = arguments.get(i);
+            if ("--system-server".equals(option)) return usage();
+            if ("--data-dir".equals(option)) {
+                if (++i >= arguments.size()) return usage();
+                String path = arguments.get(i);
+                if (path.startsWith("\\\\") || path.startsWith("//")
+                        || path.length() > 2 && path.charAt(1) == ':') {
+                    path = Zygote.fromWindowsPath(path);
+                }
+                data = new File(path).getAbsolutePath();
+            } else {
+                options.add(option);
+                int values = switch (option) {
+                    case "--activity", "--build-prop", "--framework-res", "--display" -> 1;
+                    case "--ez" -> 2;
+                    default -> 0;
+                };
+                while (values-- > 0) {
+                    if (++i >= arguments.size()) return usage();
+                    options.add(arguments.get(i));
+                }
+            }
+        }
+        ensureCohostOwner();
+        return com.gesher.server.CohostOwnerService.launch(apk.getPath(), data, options);
     }
 
     /**
@@ -510,6 +562,7 @@ public final class Launcher {
                 + " | proxy [[PACKAGE] host:port|socks5://host:port|direct|windows] | windows PACKAGE separate|shared"
                 + " | special-access PACKAGE [OP allow|deny] | install APK [--desktop-shortcut] | uninstall PACKAGE | view PACKAGE URL | list | status | start"
                 + " | protected-launch APK | shutdown | apk-icon APK | apk-info APK OUT [SNAPSHOT_DIR]"
+                + " | app-isolation PACKAGE [isolated|unisolated]"
                 + " | spell-checker list|use COMPONENT|automatic|enable|disable|language ID"
                 + " | " + MobileDataCommands.USAGE);
         return 2;
@@ -530,6 +583,7 @@ public final class Launcher {
             if (state != null) {
                 String name = state.getProperty(Device.STATE_DEVICE);
                 if (Device.alive(state, Device.SYSTEM_SERVER) && waitReady(state)) {
+                    if (start && protectedRequested()) requireProtectedDevice(state);
                     use(state);
                     log(text("connected", name, Device.pid(state, Device.SYSTEM_SERVER)));
                     return state;
@@ -541,7 +595,53 @@ public final class Launcher {
                 Device.readyFile().delete();
             }
             if (!start) return null;
-            state = startDevice();
+            state = readyCohostOwner();
+            if (state != null) {
+                use(state);
+                com.gesher.server.CohostOwnerService.promote();
+                if (!waitReady(state)) {
+                    throw new IllegalStateException("The protected policy owner could not publish the device");
+                }
+                Device.write(Device.stateFile(), state);
+                Device.cohostOwnerFile().delete();
+                Device.cohostOwnerReadyFile().delete();
+                return state;
+            }
+            state = startDevice(false);
+            use(state);
+            return state;
+        } finally {
+            Zygote.unlock(lock);
+        }
+    }
+
+    private static Properties readyCohostOwner() throws IOException {
+        Properties state = Device.read(Device.cohostOwnerFile());
+        if (state == null) return null;
+        if (protectedDevice(state) && Device.alive(state, Device.SYSTEM_SERVER)
+                && waitReady(state, Device.cohostOwnerReadyFile())) return state;
+        Device.killLeftovers(state);
+        Device.cohostOwnerFile().delete();
+        Device.cohostOwnerReadyFile().delete();
+        return null;
+    }
+
+    private static Properties ensureCohostOwner() throws Exception {
+        long lock = Zygote.lock(Device.lockName(), (int) (2 * READY_TIMEOUT_MS));
+        if (lock == 0) throw new IllegalStateException(text("cannot_lock", Device.lockName()));
+        try {
+            Properties state = Device.read(Device.stateFile());
+            if (state != null && Device.alive(state, Device.SYSTEM_SERVER) && waitReady(state)) {
+                requireProtectedDevice(state);
+            } else {
+                if (state != null) {
+                    Device.killLeftovers(state);
+                    Device.stateFile().delete();
+                    Device.readyFile().delete();
+                }
+                state = readyCohostOwner();
+                if (state == null) state = startDevice(true);
+            }
             use(state);
             return state;
         } finally {
@@ -551,10 +651,13 @@ public final class Launcher {
 
     /** Waits until the system server of {@code state} has registered its services. */
     private static boolean waitReady(Properties state) throws IOException {
+        return waitReady(state, Device.readyFile());
+    }
+
+    private static boolean waitReady(Properties state, File ready) throws IOException {
         String pid = String.valueOf(Device.pid(state, Device.SYSTEM_SERVER));
         long deadline = SystemClock.uptimeMillis() + READY_TIMEOUT_MS;
         while (SystemClock.uptimeMillis() < deadline) {
-            File ready = Device.readyFile();
             if (ready.isFile() && pid.equals(new String(Files.readAllBytes(ready.toPath()),
                     StandardCharsets.UTF_8).trim())) {
                 return true;
@@ -567,12 +670,37 @@ public final class Launcher {
 
     /** Binder calls of this process go to the device's binderd. */
     private static void use(Properties state) throws Exception {
+        if (protectedDevice(state) && !Zygote.nativePrepareProtectedOperator(
+                Device.pid(state, Device.BINDERD), Device.startTime(state, Device.BINDERD))) {
+            throw new IllegalStateException("Could not verify the protected Binder device");
+        }
         android.system.Os.setenv("GESHER_BINDER", state.getProperty(Device.STATE_DEVICE), true);
     }
 
-    private static Properties startDevice() throws Exception {
-        String name = "gesher-" + Long.toString(System.currentTimeMillis(), 36);
+    private static boolean protectedRequested() {
+        return "appcontainer-trusted".equals(System.getenv("GESHER_SANDBOX"));
+    }
+
+    private static boolean protectedDevice(Properties state) {
+        return "true".equals(state.getProperty(Device.STATE_PROTECTED));
+    }
+
+    private static void requireProtectedDevice(Properties state) {
+        if (!protectedDevice(state)) {
+            // Older servers have no atomic idle-only retirement request. Their
+            // shutdown event can terminate apps, so leave the live device alone.
+            throw new IllegalStateException("A legacy Gesher device is still running. Finish its apps"
+                    + " and let it stop, or run gesher-app shutdown before trying again.");
+        }
+    }
+
+    private static Properties startDevice(boolean cohostOwner) throws Exception {
+        String name = cohostOwner ? "gesher-cohost-" + java.util.UUID.randomUUID()
+                : "gesher-" + Long.toString(System.currentTimeMillis(), 36);
         File logs = Device.logsDir();
+        if (cohostOwner) logs = new File(logs, "cohost-owner");
+        File stateFile = cohostOwner ? Device.cohostOwnerFile() : Device.stateFile();
+        File readyFile = cohostOwner ? Device.cohostOwnerReadyFile() : Device.readyFile();
         logs.mkdirs();
         String exe = Zygote.exePath();
         String dir = exe.substring(0, exe.lastIndexOf('\\') + 1);
@@ -590,36 +718,56 @@ public final class Launcher {
         state.setProperty(Device.STATE_DEVICE, name);
         state.setProperty(Device.STATE_SHUTDOWN_EVENT, Device.shutdownEventName());
         state.setProperty("started", String.valueOf(System.currentTimeMillis()));
-        int binderd = Zygote.spawn(Zygote.quote(dir + "binderd.exe") + " " + name, env,
-                new File(logs, "binderd.log").getPath(), true);
-        record(state, Device.BINDERD, binderd);
-        if (!Zygote.waitForBinder(name, binderd, 30_000)) {
-            int code = Zygote.exitCode(binderd);
-            Zygote.kill(binderd);
-            printTail(new File(logs, "binderd.log"), 40);
-            throw new IllegalStateException(text("binder_handshake", name, code));
-        }
-        log(text("binder_ready", name, binderd));
-        int servicemanager = Zygote.spawn(Zygote.quote(dir + "servicemanager.exe"), env,
-                new File(logs, "servicemanager.log").getPath(), true);
-        record(state, Device.SERVICEMANAGER, servicemanager);
-        Device.write(Device.stateFile(), state);
-
+        File binderLog = new File(logs, "binderd.log");
+        File managerLog = new File(logs, "servicemanager.log");
+        File serverLog = new File(logs, "system_server.log");
+        String binderCommand = Zygote.quote(dir + "binderd.exe") + " " + name;
+        String managerCommand = Zygote.quote(dir + "servicemanager.exe");
+        String vm = Zygote.vmCommandLine(Launcher.class.getName());
         String idle = System.getenv("GESHER_IDLE_TIMEOUT");
-        List<String> args = new ArrayList<>(List.of("--persistent", "--adopt",
-                binderd + "," + servicemanager));
+        List<String> args = new ArrayList<>(List.of("--persistent"));
         if (idle != null && !idle.isEmpty()) {
             args.add("--idle-timeout");
             args.add(idle);
         }
-        int server = Zygote.spawn(Zygote.commandLine(
-                Zygote.vmCommandLine(Launcher.class.getName()), SystemServer.class.getName(),
-                args), env, new File(logs, "system_server.log").getPath(), true);
+        int binderd;
+        int servicemanager;
+        int server;
+        if (cohostOwner || protectedRequested()) {
+            args.add("--protected-launch");
+            if (cohostOwner) args.add("--cohost-owner");
+            int[] children = Zygote.startProtectedDevice(name, List.of(binderCommand,
+                    managerCommand, Zygote.commandLine(vm, SystemServer.class.getName(), args)),
+                    List.of(binderLog, managerLog, serverLog), env);
+            binderd = children[0];
+            servicemanager = children[1];
+            server = children[2];
+            state.setProperty(Device.STATE_PROTECTED, "true");
+            record(state, Device.BINDERD, binderd);
+            record(state, Device.SERVICEMANAGER, servicemanager);
+        } else {
+            binderd = Zygote.spawn(binderCommand, env, binderLog.getPath(), true);
+            record(state, Device.BINDERD, binderd);
+            if (!Zygote.waitForBinder(name, binderd, 30_000)) {
+                int code = Zygote.exitCode(binderd);
+                Zygote.kill(binderd);
+                printTail(binderLog, 40);
+                throw new IllegalStateException(text("binder_handshake", name, code));
+            }
+            log(text("binder_ready", name, binderd));
+            servicemanager = Zygote.spawn(managerCommand, env, managerLog.getPath(), true);
+            record(state, Device.SERVICEMANAGER, servicemanager);
+            Device.write(stateFile, state);
+            args.add("--adopt");
+            args.add(binderd + "," + servicemanager);
+            server = Zygote.spawn(Zygote.commandLine(vm, SystemServer.class.getName(), args),
+                    env, serverLog.getPath(), true);
+        }
         record(state, Device.SYSTEM_SERVER, server);
-        Device.write(Device.stateFile(), state);
-        if (!waitReady(state)) {
+        Device.write(stateFile, state);
+        if (!waitReady(state, readyFile)) {
             Device.killLeftovers(state);
-            Device.stateFile().delete();
+            stateFile.delete();
             printTail(new File(logs, "system_server.log"), 40);
             throw new IllegalStateException(text("server_not_ready", name, new File(logs, "system_server.log")));
         }
@@ -657,6 +805,14 @@ public final class Launcher {
                 long deadline = SystemClock.uptimeMillis() + 30_000;
                 while (Device.alive(state, Device.SYSTEM_SERVER)
                         && SystemClock.uptimeMillis() < deadline) {
+                    Properties owner = Device.read(Device.cohostOwnerFile());
+                    if (owner != null && !Device.stateFile().exists()
+                            && Device.pid(owner, Device.SYSTEM_SERVER) == Device.pid(state, Device.SYSTEM_SERVER)
+                            && Device.startTime(owner, Device.SYSTEM_SERVER)
+                                    == Device.startTime(state, Device.SYSTEM_SERVER)) {
+                        log(text("device_stopped", name));
+                        return 0;
+                    }
                     SystemClock.sleep(200);
                 }
             }
@@ -801,14 +957,87 @@ public final class Launcher {
         return 1;
     }
 
-    private static int launch(List<String> args) throws Exception {
+    private record ScopedDevice(Properties state) implements AutoCloseable {
+        @Override public void close() {
+            try {
+                GesherService.Client client = GesherService.Client.find();
+                if (client != null) {
+                    client.shutdown("temporary launcher completed");
+                    long deadline = SystemClock.uptimeMillis() + 10_000;
+                    while (Device.alive(state, Device.SYSTEM_SERVER)
+                            && SystemClock.uptimeMillis() < deadline) SystemClock.sleep(100);
+                }
+            } catch (Exception ignored) {
+                // The native job also ends with the exact launcher.
+            } finally {
+                Device.killLeftovers(state);
+                Zygote.finishScopedStandardStreams();
+            }
+        }
+    }
+
+    private static ScopedDevice startScopedDevice(String apk, String buildProp,
+            String frameworkRes, String display, boolean strict) throws Exception {
+        File parent = Device.logsDir();
+        parent.mkdirs();
+        File logs = Files.createTempDirectory(parent.toPath(), "scoped-device-").toFile();
+        String name = logs.getName();
+        String exe = Zygote.exePath();
+        String dir = exe.substring(0, exe.lastIndexOf('\\') + 1);
+        List<String> env = new ArrayList<>(List.of("GESHER_BINDER=" + name,
+                "GESHER_LOGS=" + logs.getPath()));
+        if (display != null) env.add("GESHER_DISPLAY=" + display);
+        List<String> args = new ArrayList<>(List.of("--protected-launch", "--build-prop",
+                buildProp, "--framework-res", frameworkRes, apk));
+        if (strict) {
+            args.add("--strict-services");
+            env.add("GESHER_APP_STRICT_SERVICES=1");
+        }
+        String vm = Zygote.vmCommandLine(Launcher.class.getName());
+        int[] children;
+        try {
+            children = Zygote.startProtectedDevice(name, List.of(
+                    Zygote.quote(dir + "binderd.exe") + " " + name,
+                    Zygote.quote(dir + "servicemanager.exe"),
+                    Zygote.commandLine(vm, SystemServer.class.getName(), args)),
+                    List.of(new File(logs, "binderd.log"), new File(logs, "servicemanager.log"),
+                            new File(logs, "system_server.log")), env, true);
+        } catch (Exception failure) {
+            Zygote.finishScopedStandardStreams();
+            throw failure;
+        }
+        Properties state = new Properties();
+        state.setProperty(Device.STATE_DEVICE, name);
+        state.setProperty(Device.STATE_PROTECTED, "true");
+        record(state, Device.BINDERD, children[0]);
+        record(state, Device.SERVICEMANAGER, children[1]);
+        record(state, Device.SYSTEM_SERVER, children[2]);
+        try {
+            if (!waitReady(state, new File(logs, "ready"))) {
+                File serverLog = new File(logs, "system_server.log");
+                printTail(serverLog, 40);
+                throw new IllegalStateException(text("server_not_ready", name, serverLog));
+            }
+            use(state);
+            return new ScopedDevice(state);
+        } catch (Exception failure) {
+            Device.killLeftovers(state);
+            Zygote.finishScopedStandardStreams();
+            throw failure;
+        }
+    }
+
+    private static int launch(List<String> args, boolean scoped, String buildProp,
+            String frameworkRes) throws Exception {
         String apk = null;
         String activity = null;
         String shortcutId = null;
         boolean keepTask = false;
-        boolean detach = sDetachRequested;
+        boolean detach = !scoped && sDetachRequested;
         String proxy = null;
-        String windowMode = WindowMode.fromEnvironment(WindowMode.WINDOW);
+        String display = null;
+        boolean strict = false;
+        String windowMode = scoped ? WindowMode.HEADLESS : WindowMode.fromEnvironment(WindowMode.WINDOW);
         Map<String, Boolean> extras = new LinkedHashMap<>();
         for (int i = 0; i < args.size(); i++) {
             String a = args.get(i);
@@ -829,6 +1058,33 @@ public final class Launcher {
                 case "--window": windowMode = WindowMode.WINDOW; break;
                 case "--hidden-window": windowMode = WindowMode.HIDDEN; break;
                 case "--headless": windowMode = WindowMode.HEADLESS; break;
+                case "--display": {
+                    if (!scoped) return usage();
+                    DeviceProfile.parseAndSet(args.get(++i));
+                    display = DeviceProfile.describe();
+                    break;
+                }
+                case "--strict-services": {
+                    if (!scoped) return usage();
+                    strict = true;
+                    break;
+                }
+                case "--build-prop": {
+                    if (!scoped) return usage();
+                    buildProp = args.get(++i);
+                    break;
+                }
+                case "--framework-res": {
+                    if (!scoped) return usage();
+                    frameworkRes = args.get(++i);
+                    break;
+                }
+                case "--data-dir": {
+                    if (!scoped) return usage();
+                    if (++i >= args.size()) return usage();
+                    log("--data-dir ignored: the system server's package manager sets the data directory");
+                    break;
+                }
                 case "--ez": {
                     String key = args.get(++i);
                     extras.put(key, Boolean.parseBoolean(args.get(++i)));
@@ -841,12 +1097,35 @@ public final class Launcher {
         }
         if (apk == null) return usage();
         if (shortcutId != null && (activity != null || !extras.isEmpty())) return usage();
-        Properties state = ensureDevice(true);
+        if (scoped && (detach || shortcutId != null || !new File(apk).isFile())) return usage();
+        if (scoped) apk = new File(apk).getAbsolutePath();
+        try (ScopedDevice temporary = scoped
+                ? startScopedDevice(apk, buildProp, frameworkRes, display, strict) : null) {
+            return launchActivity(temporary, apk, activity, shortcutId, keepTask, detach,
+                    proxy, windowMode, extras);
+        }
+    }
+
+    private static int launchActivity(ScopedDevice temporary, String apk, String activity,
+            String shortcutId, boolean keepTask, boolean detach, String proxy, String windowMode,
+            Map<String, Boolean> extras) throws Exception {
+        Properties state = temporary == null ? ensureDevice(true) : temporary.state();
         GesherService.Client gesher = gesher();
         // An APK is installed or updated first; a package name (a Start menu shortcut's
         // `launch <package>`) must be installed.
         String pkg;
-        if (new File(apk).isFile()) {
+        if (temporary != null) {
+            IPackageManager pm = IPackageManager.Stub.asInterface(ServiceManager.getService("package"));
+            pkg = null;
+            for (Object entry : pm.getInstalledPackages(0L, 0).getList()) {
+                PackageInfo info = (PackageInfo) entry;
+                if (info.applicationInfo != null && apk.equals(info.applicationInfo.sourceDir)) {
+                    pkg = info.packageName;
+                    break;
+                }
+            }
+            if (pkg == null) throw new IllegalStateException("Temporary device did not admit " + apk);
+        } else if (new File(apk).isFile()) {
             pkg = install(gesher, apk);
         } else {
             pkg = apk;
@@ -905,8 +1184,8 @@ public final class Launcher {
 
         // The app's output: its process appends to the package's log (not copied when
         // nobody reads it: detached).
-        Tail tail = new Tail(Device.packageLog(pkg));
-        if (!detach) tail.start();
+        Tail tail = temporary == null && !detach ? new Tail(Device.packageLog(pkg)) : null;
+        if (tail != null) tail.start();
         try {
             if (shortcutId == null) log(text("start_intent", intent.toShortString(false, true, true, false)));
             IActivityTaskManager atm = ActivityTaskManager.getService();
@@ -974,7 +1253,7 @@ public final class Launcher {
                 }
                 SystemClock.sleep(300);
             }
-            tail.finish();
+            if (tail != null) tail.finish();
             if (terminal == null) {
                 if (state != null && !Device.alive(state, Device.SYSTEM_SERVER)) {
                     log(text("server_unexpected"));
@@ -992,7 +1271,7 @@ public final class Launcher {
             log(text("done"));
             return 0;
         } finally {
-            tail.finish();
+            if (tail != null) tail.finish();
         }
     }
 

@@ -240,6 +240,27 @@ public final class ClipboardSecurityContractTest {
         check(((Collection<?>)get(h.pm, "mPackageChanges")).size() == 1,
                 "Closed clipboard releases its package-change subscription, leaving AppOps");
     }
+    private static void scopedAttribution(ClipboardFixture h) throws Exception {
+        // Only the lease admission/liveness is synthetic. The actual scoped
+        // AppOps policy, normalization and recorded history run unchanged.
+        Class<?> sourceType = type("Zygote$StandaloneInput");
+        Object source = UNSAFE.allocateInstance(sourceType);
+        set(source, "pin", 1L);
+        Class<?> ownerType = type("PermissionPolicy$ScopedOwner");
+        Object scoped = make(ownerType, new Class<?>[]{type("PermissionPolicy"), sourceType,
+                ApkPackage.class, ApkPackage.class, java.util.function.BooleanSupplier.class},
+                h.pm.permissions(), source, h.owner, h.owner, (java.util.function.BooleanSupplier)() -> true);
+        Class<?>[] signature = {ownerType, int.class, boolean.class, String.class};
+        check((boolean)call(h.ops, "noteScopedClipboard", signature,
+                scoped, OP_WRITE_CLIPBOARD, true, "clipboard"), "Scoped note accepts the declared attribution");
+        check((boolean)call(h.ops, "noteScopedClipboard", signature,
+                scoped, OP_WRITE_CLIPBOARD, true, "undeclared"), "Undeclared tag falls back to no attribution");
+        var entries = h.ops.getOpsForPackage(h.owner.uid(), OWNER, new int[]{OP_WRITE_CLIPBOARD})
+                .get(0).getOps().get(0).getAttributedOpEntries();
+        check(entries.containsKey("clipboard") && entries.containsKey(null) && !entries.containsKey("undeclared"),
+                "Scoped AppOps history uses the retained manifest and discards unrecognized tags");
+    }
+
     public static int run(boolean binder) throws Exception {
         checks = 0;
         try (ClipboardFixture h = new ClipboardFixture(binder)) {
@@ -247,6 +268,7 @@ public final class ClipboardSecurityContractTest {
             h.asOwner(() -> check("wrapped sequence".contentEquals(h.api.getPrimaryClip(OWNER, null, 0, 0).getItemAt(0).getText()),
                     "All nonzero unsigned Windows sequence values are valid"));
             h.nativeState.sequence = 1;
+            scopedAttribution(h);
             focusAndIdentity(h); imeAndPermissions(h); appOps(h); sourceAndStorage(h); callbackPolicyAndRetirement(h);
         }
         return checks;

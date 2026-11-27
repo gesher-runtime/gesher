@@ -9,7 +9,7 @@
 # The app is started in its 'answers' mode, which never shows a prompt on a secure
 # device: on a machine with Windows Hello this track then fails at the "not secure"
 # check instead of waiting for a person. The secure paths are verified by hand
-# (HUMAN_TEST.md of the change).
+# (tests/windows/manual/HelloCredential.md).
 
 Copy-Item "$Dir/framework-res.apk" (Join-Path $root 'system/framework') -Force
 Copy-Item "$Dir/build.prop" (Join-Path $root 'system') -Force

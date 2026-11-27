@@ -16,7 +16,7 @@ import shlex
 import subprocess
 import tempfile
 
-from codec_contract_source import member, shared
+from codec_contract_source import member, shared, method
 
 ROOT = Path(__file__).resolve().parents[1]
 PINNED = {
@@ -62,8 +62,9 @@ def main() -> int:
         for path in ("patches/art/0572-native3-runtime-cpu-clocks.patch",
                      "patches/art/0573-native3-runtime-monotonic-clocks.patch",
                      "patches/system/core/0006-libutils-monotonic-clocks-on-gesher.patch"):
+            # Pass LF patch bytes unchanged: text pipes translate to CRLF on Windows.
             subprocess.run(["git", "apply", "--whitespace=error-all", "-"], cwd=work,
-                           input=read(path), text=True, check=True, timeout=15)
+                           input=read(path).encode(), check=True, timeout=15)
         system_clock = (work / "libutils/SystemClock.cpp").read_text()
         art = (work / "libartbase/base/time_utils.cc").read_text()
         utils = (work / "libutils/Timers.cpp").read_text()
@@ -93,6 +94,7 @@ def main() -> int:
             raise ValueError("player clock anchor changed")
         parts = {
             "@CODEC_RENDER@": render,
+            "@CODEC_FRAME_LISTENER@": method(codec, "  void EnableFrameRendered(") if is_shared else "",
             "@CODEC_INPUT@": codec_input,
             "@PLAYER_CLOCK@": section(player, "  int64_t WallClockLocked()", "  // The timestamp exposes"),
             "@PLAYER_ANCHOR@": anchors[0],

@@ -264,7 +264,7 @@ public final class Main {
                 log("permission review canceled or unavailable; startup stopped");
                 return 1;
             }
-            pkg.prepareDataDirectories();
+            application.prepareStorage();
             ApplicationInfo appInfo = pkg.applicationInfo(PackageManager.GET_META_DATA
                     | PackageManager.GET_SHARED_LIBRARY_FILES);
             ActivityInfo launch = pkg.launcherActivity(activity);

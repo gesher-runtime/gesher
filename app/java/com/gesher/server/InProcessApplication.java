@@ -104,6 +104,8 @@ public final class InProcessApplication implements AutoCloseable {
             if (mServices == null || mProcess != null || needsRestart()) {
                 throw new IllegalStateException("Standalone review requires prepared, unbound startup");
             }
+            // The same-user broker reviews the pinned code before it admits this guest.
+            if (mPm.isCohost()) return Zygote.nativeHasCohostPermissionScope();
             if (mReview == null && !mPm.permissions().isReviewRequired(mOwner)) return true;
             start = mReview == null;
             if (start) mReview = new CompletableFuture<>();
@@ -132,6 +134,19 @@ public final class InProcessApplication implements AutoCloseable {
             throw interrupted;
         } catch (ExecutionException failure) {
             throw new IllegalStateException("Standalone permission review failed", failure.getCause());
+        }
+    }
+
+    public synchronized void prepareStorage() throws java.io.IOException {
+        requireCurrent();
+        if (!mPm.isCohost()) {
+            mOwner.prepareDataDirectories();
+            return;
+        }
+        if (!Zygote.nativeCohostOwnsData(
+                Zygote.windowsPath(mOwner.credentialProtectedDataDir()),
+                Zygote.windowsPath(mOwner.deviceProtectedDataDir()))) {
+            throw new SecurityException("The standalone data paths do not match their host admission");
         }
     }
 

@@ -23,6 +23,8 @@
 #include <utility>
 #include <vector>
 
+#include <gesher/binder_bootstrap.h>
+
 #include "internal.h"
 #include "ofd_internal.h"
 #include "usb_block_internal.h"
@@ -35,6 +37,7 @@
 #include "pipe_io.h"
 #include "system_linker.h"
 #include "storage_policy.h"
+#include "rooted_storage_client.h"
 
 namespace {
 
@@ -43,6 +46,8 @@ namespace {
 // process's uid does not change).
 uid_t AppUid() {
   static const uid_t uid = [] {
+    const uint32_t protected_uid = gesher::binder_bootstrap::GuestUid();
+    if (protected_uid != 0) return static_cast<uid_t>(protected_uid);
     const char* env = getenv("GESHER_UID");
     char* end = nullptr;
     unsigned long value = env != nullptr ? strtoul(env, &end, 10) : 0;
@@ -69,6 +74,10 @@ std::atomic<unsigned long long> rand_state{0x853c49e6748fea9bULL};
 // The file open on a handle, as a Linux path (LinuxPath). False with errno
 // set if it has no file name (a pipe, a console, NUL).
 bool FinalPath(HANDLE h, std::string* out) {
+  if (const auto scoped = gesher::storage_root::DescriptorPath(h); !scoped.empty()) {
+    *out = gesher::LinuxPath(scoped.c_str());
+    return true;
+  }
   wchar_t buf[32768];
   DWORD n = GetFinalPathNameByHandleW(h, buf, 32768, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
   if (n == 0) {
@@ -900,20 +909,35 @@ char* realpath(const char* path, char* resolved_path) {
   }
   if (kind == gesher::PathKind::kFile) {
     if (!gesher::CheckExternalStorageAccess(wpath, gesher::AccessKind::kStat)) return nullptr;
-    HANDLE h = gesher::CreateFileFollowingFifo(wpath.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE |
-                                               FILE_SHARE_DELETE, FILE_FLAG_BACKUP_SEMANTICS);
+    const auto rooted = gesher::storage_root::Lookup(wpath);
+    HANDLE h;
+    if (rooted) {
+      const int error = gesher::storage_root::Open(rooted, gesher::rooted_storage_wire::kMetadata, &h);
+      if (error != 0) return errno = error, nullptr;
+    } else {
+      h = gesher::CreateFileFollowingFifo(wpath.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                       FILE_FLAG_BACKUP_SEMANTICS);
+    }
     if (h == INVALID_HANDLE_VALUE) {
       gesher::FailWithLastError();
       return nullptr;
     }
-    if (!gesher::CheckExternalStorageHandle(h, gesher::AccessKind::kStat)) {
+    if (!rooted.IsInstalledMedia() && !gesher::CheckExternalStorageHandle(h, gesher::AccessKind::kStat)) {
       CloseHandle(h);
       errno = EACCES;
       return nullptr;
     }
     // Gesher's ELF loader by its name, however it was reached (system_linker.h).
-    bool ok = gesher::system_linker::IsFileHandle(h) ? (out = gesher::system_linker::kPath, true)
-                                                      : FinalPath(h, &out);
+    bool ok;
+    if (rooted.drop_alias || rooted.IsInstalledMedia()) {
+      out = gesher::LinuxPath(wpath.c_str());
+      ok = true;
+    } else if (gesher::system_linker::IsFileHandle(h)) {
+      out = gesher::system_linker::kPath;
+      ok = true;
+    } else {
+      ok = FinalPath(h, &out);
+    }
     CloseHandle(h);
     if (!ok) return nullptr;
   } else if (kind != gesher::PathKind::kVirtual) {

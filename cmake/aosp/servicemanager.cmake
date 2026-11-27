@@ -8,6 +8,9 @@ set(_uapi "${AOSP_DIR}/bionic/libc/kernel/uapi")
 # binderd: Win32 only, with the driver's ABI from bionic's uapi header,
 # searched after gesher-base's <linux/*.h>.
 add_executable(binderd ${CMAKE_SOURCE_DIR}/compat/binder/binderd.cc
+  ${CMAKE_SOURCE_DIR}/compat/posix/src/rooted_storage.cc
+  ${CMAKE_SOURCE_DIR}/compat/posix/src/internal.cc
+  ${CMAKE_SOURCE_DIR}/compat/posix/src/binder_endpoint.cc
   ${CMAKE_SOURCE_DIR}/compat/binder/protected_bootstrap.cc
   ${CMAKE_SOURCE_DIR}/compat/binder/protected_peers.cc
   ${CMAKE_SOURCE_DIR}/compat/binder/protected_shared_memory.cc
@@ -18,10 +21,11 @@ set_source_files_properties(
   ${CMAKE_SOURCE_DIR}/compat/binder/protected_peers.cc
   ${CMAKE_SOURCE_DIR}/compat/binder/protected_shared_memory.cc
   PROPERTIES COMPILE_OPTIONS "-fexceptions")
+target_compile_definitions(binderd PRIVATE GESHER_RECORD_LOCK_BROKER=1)
 target_compile_options(binderd PRIVATE -Wall -Wextra -Werror "SHELL:-idirafter ${_uapi}")
 # The descriptor broker's tokens (ADR 0088) come from BCryptGenRandom; the
 # sandboxed pipe's security descriptor (ADR 0090) from app_container.cc.
-target_link_libraries(binderd PRIVATE bcrypt advapi32 ole32 shell32 uuid)
+target_link_libraries(binderd PRIVATE bcrypt advapi32 ole32 shell32 uuid mincore)
 
 add_executable(binder_protected_admission_test EXCLUDE_FROM_ALL
   ${CMAKE_SOURCE_DIR}/tests/native/binder_protected_admission_test.cc

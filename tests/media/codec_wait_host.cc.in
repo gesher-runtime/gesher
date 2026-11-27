@@ -71,7 +71,7 @@ class ControlledCondition {
 };
 
 constexpr int kSlots = 2, kInfoTryAgainLater = -1, kInfoOutputFormatChanged = -2;
-constexpr int kCbInputAvailable = 1, kCbError = 3;
+constexpr int kCbError = 3;
 namespace android {
 constexpr int OK = 0, INVALID_OPERATION = -38, UNKNOWN_ERROR = INT32_MIN;
 }

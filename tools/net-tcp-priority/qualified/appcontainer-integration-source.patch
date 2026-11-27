@@ -1,0 +1,3206 @@
+diff --git a/compat/binder/binderd.cc b/compat/binder/binderd.cc
+index 9516fa91c..021198d97 100644
+--- a/compat/binder/binderd.cc
++++ b/compat/binder/binderd.cc
+@@ -56,0 +57,2 @@
++#include "../posix/include/gesher/windows_process_identity.h"
++#include "../posix/include/gesher/audio_device_state.h"
+@@ -59,0 +62,14 @@
++#include "launch_channel.h"
++#include "shared_storage_broker.h"
++#include "../posix/include/gesher/capture_policy.h"
++#include <gesher/directory_reopen.h>
++#ifdef GESHER_AUDIO_RENDER_BROKER
++#include "brokered_audio.h"
++#include "shared_state.h"
++#endif
++#ifdef GESHER_CAMERA_BROKER_HOST
++#include "brokered_camera.h"
++#endif
++#ifdef GESHER_RECORD_LOCK_BROKER
++#include "../posix/src/record_lock_descriptors.h"
++#endif
+@@ -75,0 +92,2 @@ gesher::binder::ProtectedSharedMemory g_application_memory;
++namespace launch = gesher::binder_launch;
++namespace peer = gesher::binder_peer;
+@@ -77,0 +96,2 @@ bool g_trace = false;
++bool g_record_only = false;
++gesher::process_identity::Sid g_record_container;
+@@ -219,0 +240 @@ struct Proc {
++  gesher::binder_peer::Registry::Lease identity;
+@@ -252,0 +274 @@ bool g_sandbox = false;
++std::unique_ptr<gesher::binder_peer::Registry> g_peer_registry;
+@@ -503 +525,11 @@ constexpr size_t kFlatObjectSize = sizeof(flat_binder_object);
+-uint64_t DuplicateRemoteHandle(int from_pid, int to_pid, uint64_t handle) {
++HANDLE ProcessForTransfer(const Proc* proc, peer::OwnedHandle* legacy_owner) {
++#ifdef GESHER_PROTECTED_BINDER
++  if (proc->protected_peer) return proc->protected_peer->process();
++#endif
++  if (proc->identity) return proc->identity->process.get();
++  if (g_peer_registry) return nullptr;
++  legacy_owner->reset(OpenProcess(PROCESS_DUP_HANDLE, FALSE, static_cast<DWORD>(proc->pid)));
++  return legacy_owner->get();
++}
++
++uint64_t DuplicateRemoteHandle(const Proc* from_proc, const Proc* to_proc, uint64_t handle) {
+@@ -505,2 +537,6 @@ uint64_t DuplicateRemoteHandle(int from_pid, int to_pid, uint64_t handle) {
+-  HANDLE from = OpenProcess(PROCESS_DUP_HANDLE, FALSE, static_cast<DWORD>(from_pid));
+-  HANDLE to = OpenProcess(PROCESS_DUP_HANDLE, FALSE, static_cast<DWORD>(to_pid));
++  if (g_peer_registry && (!g_peer_registry->Live(from_proc->identity) ||
++                          !g_peer_registry->Live(to_proc->identity))) return 0;
++  peer::OwnedHandle legacy_from;
++  peer::OwnedHandle legacy_to;
++  HANDLE from = ProcessForTransfer(from_proc, &legacy_from);
++  HANDLE to = ProcessForTransfer(to_proc, &legacy_to);
+@@ -511,3 +547,2 @@ uint64_t DuplicateRemoteHandle(int from_pid, int to_pid, uint64_t handle) {
+-  if (!ok) Log("DuplicateHandle from pid %d to pid %d failed: %lu", from_pid, to_pid, GetLastError());
+-  if (from != nullptr) CloseHandle(from);
+-  if (to != nullptr) CloseHandle(to);
++  if (!ok) Log("DuplicateHandle from pid %d to pid %d failed: %lu",
++               from_proc->pid, to_proc->pid, GetLastError());
+@@ -517 +552 @@ uint64_t DuplicateRemoteHandle(int from_pid, int to_pid, uint64_t handle) {
+-void CloseRemoteHandle(Proc* proc, uint64_t handle) {
++void CloseRemoteHandle(const Proc* proc, uint64_t handle) {
+@@ -519,11 +554,2 @@ void CloseRemoteHandle(Proc* proc, uint64_t handle) {
+-#ifdef GESHER_PROTECTED_BINDER
+-  if (proc->protected_peer) {
+-    // A revoked peer still retains the original process object for cleanup;
+-    // never reopen a possibly recycled PID when retiring staging handles.
+-    DuplicateHandle(proc->protected_peer->process(),
+-        reinterpret_cast<HANDLE>(static_cast<uintptr_t>(handle)), nullptr, nullptr,
+-        0, FALSE, DUPLICATE_CLOSE_SOURCE);
+-    return;
+-  }
+-#endif
+-  HANDLE p = OpenProcess(PROCESS_DUP_HANDLE, FALSE, static_cast<DWORD>(proc->pid));
++  peer::OwnedHandle legacy;
++  HANDLE p = ProcessForTransfer(proc, &legacy);
+@@ -533 +558,0 @@ void CloseRemoteHandle(Proc* proc, uint64_t handle) {
+-  CloseHandle(p);
+@@ -764 +789 @@ uint32_t TranslateObjectsAll(Proc* proc, Thread* thread, Proc* target_proc, Buff
+-      uint64_t dup = DuplicateRemoteHandle(proc->pid, target_proc->pid, fp.binder);
++      uint64_t dup = DuplicateRemoteHandle(proc, target_proc, fp.binder);
+@@ -767 +792 @@ uint32_t TranslateObjectsAll(Proc* proc, Thread* thread, Proc* target_proc, Buff
+-          ? DuplicateRemoteHandle(proc->pid, target_proc->pid, description->shared_handle) : 0;
++          ? DuplicateRemoteHandle(proc, target_proc, description->shared_handle) : 0;
+@@ -1654,17 +1679,53 @@ bool ClientIsRestricted(HANDLE pipe) {
+-  if (!ImpersonateNamedPipeClient(pipe)) return true;
+-  HANDLE token = nullptr;
+-  BOOL opened = OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &token);
+-  RevertToSelf();
+-  if (!opened) return true;
+-  DWORD contained = 1, size = 0;
+-  bool restricted =
+-      !GetTokenInformation(token, TokenIsAppContainer, &contained, sizeof(contained), &size) ||
+-      contained != 0;
+-  if (!restricted) {
+-    alignas(TOKEN_MANDATORY_LABEL) BYTE label[sizeof(TOKEN_MANDATORY_LABEL) + SECURITY_MAX_SID_SIZE];
+-    if (!GetTokenInformation(token, TokenIntegrityLevel, label, sizeof(label), &size)) {
+-      restricted = true;
+-    } else {
+-      PSID sid = reinterpret_cast<TOKEN_MANDATORY_LABEL*>(label)->Label.Sid;
+-      UCHAR count = *GetSidSubAuthorityCount(sid);
+-      restricted = count == 0 || *GetSidSubAuthority(sid, count - 1) < SECURITY_MANDATORY_MEDIUM_RID;
++  gesher::process_identity::Principal principal;
++  return !gesher::process_identity::ReadPipePrincipal(pipe, &principal) ||
++         principal.container.size != 0 || principal.restricted ||
++         principal.integrity < SECURITY_MANDATORY_MEDIUM_RID;
++}
++
++void ReapRevokedPeers() {
++  std::vector<std::shared_ptr<Proc>> revoked;
++  {
++    std::lock_guard<std::mutex> lock(g_lock);
++    for (const auto& entry : g_procs) {
++      if (!g_peer_registry->Live(entry.second->identity)) revoked.push_back(entry.second);
++    }
++  }
++  for (const auto& proc : revoked) ProcRelease(proc.get());
++}
++
++std::mutex g_capture_policy_lock;
++peer::OwnedHandle g_capture_policy;
++
++[[maybe_unused]] bool CaptureAuthorized(const peer::Registry::Lease& process,
++                                        gesher::capture_policy::Kind kind,
++                                        uint64_t session = 0,
++                                        gesher::capture_policy::Attribution attribution = {}) {
++  const bool finish = kind == gesher::capture_policy::Kind::kCameraFinish;
++  if (!process || process->role != peer::Role::kApplication ||
++      (!finish && !g_peer_registry->Live(process))) return false;
++  std::lock_guard<std::mutex> lock(g_capture_policy_lock);
++  if (!g_capture_policy) return false;
++  gesher::capture_policy::Request request{process->uid, kind, process->installation, session,
++                                          attribution};
++  uint32_t allowed = 0;
++  const ULONGLONG deadline = GetTickCount64() + 500;
++  if (!launch::Transfer(g_capture_policy.get(), &request, sizeof(request), true, deadline) ||
++      !launch::Transfer(g_capture_policy.get(), &allowed, sizeof(allowed), false, deadline)) {
++    g_capture_policy.reset();
++    return false;
++  }
++  return allowed == 1 && (finish || g_peer_registry->Live(process));
++}
++
++void ServeLaunchAuthority(HANDLE endpoint, ULONG launcher_pid,
++                          gesher::process_identity::Principal authority) {
++  peer::OwnedHandle endpoint_owner(endpoint);
++  peer::Registry::Lease system;
++  bool admitted_standalone = false;
++  launch::Request request;
++  while (launch::Transfer(endpoint, &request, sizeof(request), false)) {
++    gesher::process_identity::Principal sender;
++    if (request.magic != 0x474c4152 || request.version != 1 ||
++        !gesher::process_identity::ReadPipePrincipal(endpoint, &sender) || !(sender == authority) ||
++        (system && !g_peer_registry->Live(system))) {
++      break;
+@@ -1671,0 +1733,71 @@ bool ClientIsRestricted(HANDLE pipe) {
++    bool accepted = false;
++    switch (request.action) {
++      case launch::Action::kEnroll: {
++        peer::OwnedHandle process(launch::DecodeHandle(request.process));
++        const bool isolated_app = request.role == peer::Role::kApplication;
++        const bool unisolated_app = request.role == peer::Role::kUnisolatedApplication;
++        const bool role_allowed = g_record_only ? isolated_app && !admitted_standalone
++                                                : (isolated_app || unisolated_app) == static_cast<bool>(system);
++        auto* container = request.container.bytes.data();
++        const bool sid_matches = isolated_app
++            ? request.container.size != 0 && request.container.size <= request.container.bytes.size() &&
++                IsValidSid(container) && GetLengthSid(container) == request.container.size &&
++                (!g_record_only || g_record_container.Matches(container))
++            : request.container.size == 0;
++        const auto package_end = std::find(request.package.begin(), request.package.end(), '\0');
++        const std::string package(request.package.begin(), package_end);
++        const bool package_allowed = package_end != request.package.end() &&
++            (package.empty() || (system && (isolated_app || unisolated_app) &&
++              gesher::shared_storage_broker::ValidPackage(package)));
++        if (role_allowed && sid_matches && package_allowed &&
++            (request.role != peer::Role::kLauncher || request.pid == launcher_pid)) {
++          accepted = g_peer_registry->Enroll(std::move(process), request.pid, request.birth,
++              request.role, request.uid, request.installation,
++              isolated_app ? container : nullptr, package);
++          if (g_record_only && accepted) admitted_standalone = true;
++        }
++        break;
++      }
++      case launch::Action::kHandoff:
++        if (!g_record_only && !system) {
++          system = g_peer_registry->FindGeneration(request.pid, request.birth, peer::Role::kSystemServer);
++          accepted = static_cast<bool>(system);
++        }
++        break;
++      case launch::Action::kRetire:
++        if (!g_record_only && (!system || g_peer_registry->FindGeneration(request.pid, request.birth,
++                                                                          peer::Role::kApplication))) {
++          accepted = g_peer_registry->Retire(request.pid, request.birth);
++        }
++        if (accepted) ReapRevokedPeers();
++        break;
++      case launch::Action::kRevokeInstallation:
++        if (system && request.installation != std::array<uint8_t, 16>{}) {
++          accepted = g_peer_registry->RevokeInstallation(request.installation);
++          if (accepted) ReapRevokedPeers();
++        }
++        break;
++      case launch::Action::kRestoreInstallation:
++        if (system && request.installation != std::array<uint8_t, 16>{}) {
++          accepted = g_peer_registry->RestoreInstallation(request.installation);
++        }
++        break;
++      case launch::Action::kAttachJob: {
++        peer::OwnedHandle job(launch::DecodeHandle(request.process));
++        if (system || g_record_only) accepted = g_peer_registry->AttachJob(std::move(job));
++        break;
++      }
++      case launch::Action::kAttachCaptureSessions: {
++        peer::OwnedHandle pipe(launch::DecodeHandle(request.process));
++        if ((system || g_record_only) && pipe && GetFileType(pipe.get()) == FILE_TYPE_PIPE) {
++          std::lock_guard<std::mutex> lock(g_capture_policy_lock);
++          if (!g_capture_policy) {
++            g_capture_policy = std::move(pipe);
++            accepted = true;
++          }
++        }
++        break;
++      }
++    }
++    uint32_t status = accepted ? ERROR_SUCCESS : ERROR_ACCESS_DENIED;
++    if (!launch::Transfer(endpoint, &status, sizeof(status), true)) break;
+@@ -1673,2 +1805,3 @@ bool ClientIsRestricted(HANDLE pipe) {
+-  CloseHandle(token);
+-  return restricted;
++  g_peer_registry->CloseAuthority();
++  ReapRevokedPeers();
++  ExitProcess(ERROR_BROKEN_PIPE);
+@@ -1677 +1810,2 @@ bool ClientIsRestricted(HANDLE pipe) {
+-void ServeProc(HANDLE pipe, In in, const ProtectedIdentity& protected_peer) {
++void ServeProc(HANDLE pipe, In in, bool operator_hello,
++               const ProtectedIdentity& protected_peer = {}) {
+@@ -1684 +1818,15 @@ void ServeProc(HANDLE pipe, In in, const ProtectedIdentity& protected_peer) {
+-  if (!protected_peer && g_sandbox && ClientIsRestricted(pipe)) {
++  peer::Registry::Lease identity;
++  if (g_peer_registry) {
++    identity = operator_hello ? g_peer_registry->AdmitOperator(pipe)
++                              : g_peer_registry->Authenticate(pipe);
++    if (!identity || identity->generation.pid > INT32_MAX) {
++      WireReply reply;
++      reply.Put<int32_t>(-EPERM);
++      if (WriteMessage(pipe, reply)) FlushFileBuffers(pipe);
++      return;
++    }
++    pid = identity->generation.pid;
++    uid = identity->uid;
++  } else if (operator_hello) {
++    return;
++  } else if (!protected_peer && g_sandbox && ClientIsRestricted(pipe)) {
+@@ -1703,0 +1852 @@ void ServeProc(HANDLE pipe, In in, const ProtectedIdentity& protected_peer) {
++    if (g_peer_registry && !g_peer_registry->Live(identity)) return;
+@@ -1708,0 +1858 @@ void ServeProc(HANDLE pipe, In in, const ProtectedIdentity& protected_peer) {
++    proc->identity = std::move(identity);
+@@ -1725,0 +1876,503 @@ void ServeProc(HANDLE pipe, In in, const ProtectedIdentity& protected_peer) {
++#ifdef GESHER_RECORD_LOCK_BROKER
++bool WaitRecordClient(HANDLE pipe, bool accept_ack);
++#endif
++
++void ServeEnrollChild(HANDLE pipe, In in) {
++  uint32_t version = 0;
++  uint64_t source = 0;
++  if (!g_peer_registry || !in.Get(&version) || version != wire::kVersion ||
++      !in.Get(&source) || in.p != in.end) return;
++  const auto parent = g_peer_registry->Authenticate(pipe);
++  HANDLE child = nullptr;
++  const bool duplicated = parent && parent->role == peer::Role::kApplication &&
++      DuplicateHandle(parent->process.get(), launch::DecodeHandle(source), GetCurrentProcess(),
++          &child, SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_DUP_HANDLE, FALSE, 0);
++  const bool accepted = duplicated && g_peer_registry->EnrollDescendant(parent, peer::OwnedHandle(child));
++  WireReply reply;
++  reply.Put<int32_t>(accepted ? 0 : -EPERM);
++  if (!WriteMessage(pipe, reply)) return;
++#ifdef GESHER_RECORD_LOCK_BROKER
++  if (g_record_only) {
++    WaitRecordClient(pipe, false);
++    return;
++  }
++#endif
++  FlushFileBuffers(pipe);
++}
++
++#ifdef GESHER_RECORD_LOCK_BROKER
++namespace locks = gesher::record_locks;
++
++std::mutex g_record_lanes_lock;
++std::set<std::pair<DWORD, uint64_t>> g_record_lanes;
++
++struct RecordLane {
++  explicit RecordLane(const gesher::process_identity::Process& generation)
++      : id{generation.pid, generation.birth} {
++    std::lock_guard<std::mutex> lock(g_record_lanes_lock);
++    active = g_record_lanes.insert(id).second;
++  }
++  ~RecordLane() { Release(); }
++  void Release() {
++    if (!active) return;
++    std::lock_guard<std::mutex> lock(g_record_lanes_lock);
++    g_record_lanes.erase(id);
++    active = false;
++  }
++  std::pair<DWORD, uint64_t> id;
++  bool active = false;
++};
++
++bool ReplyRecordLock(HANDLE pipe, int error, const locks::LinuxFlock* result = nullptr) {
++  WireReply reply;
++  reply.Put<int32_t>(-error);
++  if (result && !error) {
++    reply.Put<int16_t>(result->type);
++    reply.Put<int16_t>(result->whence);
++    reply.Put<int64_t>(result->start);
++    reply.Put<int64_t>(result->length);
++    reply.Put<int32_t>(result->pid);
++  }
++  return WriteMessage(pipe, reply);
++}
++
++bool WaitRecordClient(HANDLE pipe, bool expect_acknowledgment) {
++  // A guest cannot keep a broker thread or a temporary file pin indefinitely.
++  const ULONGLONG deadline = GetTickCount64() + 5000;
++  while (GetTickCount64() < deadline) {
++    DWORD bytes = 0;
++    if (!PeekNamedPipe(pipe, nullptr, 0, nullptr, &bytes, nullptr)) return false;
++    if (expect_acknowledgment && bytes >= 2 * sizeof(uint32_t)) {
++      uint32_t acknowledgment[2];
++      return ReadExact(pipe, acknowledgment, sizeof(acknowledgment)) &&
++          acknowledgment[0] == sizeof(uint32_t) && acknowledgment[1] == 1;
++    }
++    Sleep(1);
++  }
++  return false;
++}
++
++void FinishRecordReply(HANDLE pipe, int error, const locks::LinuxFlock* result = nullptr) {
++  // The client closes after reading its reply. A bounded wait avoids both
++  // discarding unread bytes on DisconnectNamedPipe and blocking in FlushFileBuffers.
++  if (ReplyRecordLock(pipe, error, result)) WaitRecordClient(pipe, false);
++}
++
++void ServeAndroidDataCapacity(HANDLE pipe, In in) {
++  uint32_t version = 0;
++  if (!g_peer_registry || !in.Get(&version) || version != wire::kVersion || in.p != in.end) return;
++  const auto guest = g_peer_registry->Authenticate(pipe);
++  if (!guest || guest->role != peer::Role::kApplication ||
++      guest->generation.principal.container.size == 0) return;
++
++  // The trusted launcher converts the active profile's Android data directory
++  // before device startup. No guest input selects a directory or gets a handle.
++  const wchar_t* path = _wgetenv(L"GESHER_ANDROID_DATA_HOST_PATH");
++  ULARGE_INTEGER available{}, total{}, free{};
++  int32_t status = 0;
++  if (path == nullptr || *path == L'\0') {
++    status = -ENOENT;
++  } else if (!GetDiskFreeSpaceExW(path, &available, &total, &free)) {
++    status = -EIO;
++  }
++  if (!g_peer_registry->Live(guest)) return;
++  WireReply reply;
++  reply.Put<int32_t>(status);
++  if (status == 0) {
++    reply.Put<uint64_t>(available.QuadPart);
++    reply.Put<uint64_t>(total.QuadPart);
++    reply.Put<uint64_t>(free.QuadPart);
++  }
++  if (WriteMessage(pipe, reply)) WaitRecordClient(pipe, false);
++}
++
++// Directory and media deliveries are independent of POSIX record-lock transactions.
++// Bound pending deliveries without serializing unrelated directories behind
++// a blocking fcntl or retaining a slot while a completed reply is consumed.
++std::mutex g_directory_lanes_lock;
++std::map<std::pair<DWORD, uint64_t>, unsigned> g_directory_lanes;
++unsigned g_directory_total = 0;
++struct HandleDeliveryBudget {
++  explicit HandleDeliveryBudget(const gesher::process_identity::Process& generation)
++      : id{generation.pid, generation.birth} {
++    std::lock_guard lock(g_directory_lanes_lock);
++    const auto found = g_directory_lanes.find(id);
++    if (g_directory_total >= 128 || (found != g_directory_lanes.end() && found->second >= 16)) return;
++    ++g_directory_lanes[id];
++    ++g_directory_total;
++    active = true;
++  }
++  ~HandleDeliveryBudget() { Release(); }
++  void Release() {
++    if (!active) return;
++    std::lock_guard lock(g_directory_lanes_lock);
++    auto found = g_directory_lanes.find(id);
++    if (--found->second == 0) g_directory_lanes.erase(found);
++    --g_directory_total;
++    active = false;
++  }
++  std::pair<DWORD, uint64_t> id;
++  bool active = false;
++};
++
++void ServeInstalledMedia(HANDLE pipe, In in) {
++  namespace media = gesher::shared_storage_broker;
++  namespace storage = gesher::rooted_storage_wire;
++  storage::Request request;
++  uint32_t version = 0;
++  if (!in.Get(&version) || version != wire::kVersion || !in.Get(&request) || !media::Valid(request)) {
++    return FinishRecordReply(pipe, EINVAL);
++  }
++  const auto guest = g_peer_registry ? g_peer_registry->Authenticate(pipe) : nullptr;
++  if (!guest || guest->role != peer::Role::kApplication || guest->generation.principal.container.size == 0) {
++    return FinishRecordReply(pipe, EACCES);
++  }
++  peer::OwnedHandle opened;
++  HandleDeliveryBudget budget(guest->generation);
++  if (!budget.active) return FinishRecordReply(pipe, EAGAIN);
++  const auto complete = [&](int error) {
++    opened.reset();
++    budget.Release();
++    FinishRecordReply(pipe, error);
++  };
++  std::wstring path(request.path_units, L'\0'), target(request.target_units, L'\0');
++  if (!in.Read(path.data(), path.size() * sizeof(wchar_t)) ||
++      !in.Read(target.data(), target.size() * sizeof(wchar_t)) || in.p != in.end) {
++    return complete(EINVAL);
++  }
++  bool created = false;
++  if (!g_peer_registry->Live(guest)) return complete(EACCES);
++  const int error = media::Dispatch(_wgetenv(L"GESHER_ANDROID_DATA_HOST_PATH"),
++      *guest, request, path, target, &opened, &created);
++  if (error || !opened) return complete(error);
++
++  HANDLE remote = nullptr;
++  if (!g_peer_registry->Live(guest)) return complete(EACCES);
++  if (!DuplicateHandle(GetCurrentProcess(), opened.get(), guest->process.get(), &remote,
++      0, FALSE, DUPLICATE_SAME_ACCESS)) return complete(EIO);
++  opened.reset();  // Only the pending guest-owned offer remains.
++  struct Pending {
++    HANDLE process, value;
++    ~Pending() {
++      HANDLE recovered = nullptr;
++      if (value && DuplicateHandle(process, value, GetCurrentProcess(), &recovered,
++          0, FALSE, DUPLICATE_CLOSE_SOURCE | DUPLICATE_SAME_ACCESS)) CloseHandle(recovered);
++    }
++  } pending{guest->process.get(), remote};
++  WireReply reply;
++  reply.Put<int32_t>(0);
++  reply.Put<uint32_t>(created ? storage::kCreated : 0);
++  reply.Put<uint64_t>(launch::EncodeHandle(remote));
++  if (!WriteMessage(pipe, reply) || !WaitRecordClient(pipe, true) ||
++      g_peer_registry->Authenticate(pipe) != guest) return;
++  if (!ReplyRecordLock(pipe, 0)) return;
++  pending.value = nullptr;
++  budget.Release();
++  WaitRecordClient(pipe, false);
++}
++
++namespace playback = gesher::audio_state;
++
++struct AudioRegion {
++  peer::OwnedHandle section;
++  playback::Activity* state = nullptr;
++  ~AudioRegion() { if (state) UnmapViewOfFile(state); }
++};
++
++using WeakPeer = std::weak_ptr<const peer::Peer>;
++std::map<WeakPeer, AudioRegion, std::owner_less<WeakPeer>> g_audio_activity;
++std::mutex g_audio_lock;
++uint32_t g_next_audio_session = 1;  // guarded by g_audio_lock
++peer::OwnedHandle g_audio_device_controls;
++#ifdef GESHER_AUDIO_RENDER_BROKER
++playback::DeviceState* g_audio_controls_view = nullptr;
++#endif
++
++bool PrepareAudioDeviceControls() {
++  if (!g_audio_device_controls) {
++    peer::OwnedHandle section(CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0,
++                                                 sizeof(playback::DeviceState), nullptr));
++    if (!section) return false;
++    auto* state = static_cast<playback::DeviceState*>(
++        MapViewOfFile(section.get(), FILE_MAP_WRITE, 0, 0, sizeof(playback::DeviceState)));
++    if (!state) return false;
++    playback::InitDeviceState(state);
++    g_audio_device_controls = std::move(section);
++#ifdef GESHER_AUDIO_RENDER_BROKER
++    g_audio_controls_view = state;
++#else
++    UnmapViewOfFile(state);
++#endif
++  }
++  return true;
++}
++
++HANDLE DuplicateAudioDeviceControls(const peer::Registry::Lease& process, bool writable) {
++  if (!PrepareAudioDeviceControls()) return nullptr;
++  HANDLE child = nullptr;
++  return DuplicateHandle(GetCurrentProcess(), g_audio_device_controls.get(), process->process.get(),
++                         &child, writable ? FILE_MAP_WRITE : FILE_MAP_READ, FALSE, 0) ? child : nullptr;
++}
++
++bool AudioPeer(const peer::Registry::Lease& process) {
++  return process && (process->role == peer::Role::kApplication ||
++                     process->role == peer::Role::kSystemServer);
++}
++
++void ServeAudioPlayback(HANDLE pipe, In in, uint32_t op) {
++  uint32_t version = 0, stream = 0, in_past_ms = 0;
++  if (!g_peer_registry || !in.Get(&version) || version != wire::kVersion ||
++      !in.Get(&stream) || !in.Get(&in_past_ms) || in.p != in.end) return;
++  const auto process = g_peer_registry->Authenticate(pipe);
++  int32_t status = -EACCES;
++  uint64_t result = 0;
++  if (AudioPeer(process)) {
++    std::lock_guard<std::mutex> lock(g_audio_lock);
++    // A revoked or exited producer cannot leave activity or a mapped view
++    // behind. A retained identity refers to this exact process generation.
++    for (auto at = g_audio_activity.begin(); at != g_audio_activity.end();) {
++      auto owner = at->first.lock();
++      if (!owner || !g_peer_registry->Live(owner)) at = g_audio_activity.erase(at);
++      else ++at;
++    }
++    if (g_peer_registry->Live(process)) {
++      status = 0;
++      if (op == wire::kAudioPlaybackPublish) {
++        auto& region = g_audio_activity[process];
++        if (!region.section) {
++          region.section.reset(CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0,
++                                                  sizeof(playback::Activity), nullptr));
++          if (region.section) {
++            region.state = static_cast<playback::Activity*>(
++                MapViewOfFile(region.section.get(), FILE_MAP_WRITE, 0, 0, sizeof(playback::Activity)));
++          }
++        }
++        HANDLE child = nullptr;
++        if (region.state && DuplicateHandle(GetCurrentProcess(), region.section.get(),
++                                            process->process.get(), &child, FILE_MAP_WRITE, FALSE, 0)) {
++          result = launch::EncodeHandle(child);
++        } else {
++          if (!region.state) g_audio_activity.erase(process);
++          status = -EIO;
++        }
++      } else if (op == wire::kAudioPlaybackQuery && stream < playback::kStreamCount) {
++        const auto now = GetTickCount64();
++        for (const auto& entry : g_audio_activity) {
++          // The bounded timestamp comes from an untrusted producer. Discard
++          // future values outside one mixer interval, rather than extending
++          // them every time the service queries the stream.
++          const auto until = static_cast<ULONGLONG>(
++              InterlockedCompareExchange64(&entry.second.state->active_until_ms[stream], 0, 0));
++          if (until && until <= now + playback::kActiveMs && until + in_past_ms >= now) {
++            result = 1;
++            break;
++          }
++        }
++      } else if (op == wire::kAudioPlaybackSession && g_next_audio_session < INT_MAX / 8u) {
++        result = (g_next_audio_session++ << 3) | 1u;
++      } else if (op == wire::kAudioDeviceControls && stream <= 1) {
++        const bool writable = stream == 1;
++        // A record-only broker belongs to one standalone app's process tree.
++        // Only the real SystemServer sets shared controls for a normal device.
++        if (writable && !g_record_only && process->role != peer::Role::kSystemServer) {
++          status = -EACCES;
++        } else {
++          const HANDLE section = DuplicateAudioDeviceControls(process, writable);
++          if (section) result = launch::EncodeHandle(section);
++          else status = -EIO;
++        }
++      } else {
++        status = -EINVAL;
++      }
++    }
++  }
++  WireReply reply;
++  reply.Put<int32_t>(status);
++  reply.Put<uint64_t>(result);
++  if (WriteMessage(pipe, reply)) WaitRecordClient(pipe, false);
++}
++
++#ifdef GESHER_AUDIO_RENDER_BROKER
++std::set<std::pair<DWORD, uint64_t>> g_audio_renderers;
++std::set<std::pair<DWORD, uint64_t>> g_audio_capturers;
++
++void ServeAudioCapture(HANDLE pipe, In in) {
++  uint32_t version = 0, info_only = 0;
++  if (!g_peer_registry || !in.Get(&version) || version != wire::kVersion ||
++      !in.Get(&info_only) || info_only > 1 || in.p != in.end) return;
++  const auto process = g_peer_registry->Authenticate(pipe);
++  if (!process || process->role != peer::Role::kApplication) return;
++  const auto id = std::pair{process->generation.pid, process->generation.birth};
++  if (!info_only) {
++    std::lock_guard<std::mutex> lock(g_audio_lock);
++    if (!g_audio_capturers.insert(id).second) return;
++  }
++  gesher::media::ServeBrokeredCapture(pipe, info_only != 0,
++      [&] { return g_peer_registry->Live(process); },
++      [&] { return CaptureAuthorized(process, gesher::capture_policy::Kind::kMicrophone); });
++  if (!info_only) {
++    std::lock_guard<std::mutex> lock(g_audio_lock);
++    g_audio_capturers.erase(id);
++  }
++}
++
++void ServeAudioRender(HANDLE pipe, In in) {
++  uint32_t version = 0, length = 0;
++  if (!g_peer_registry || !in.Get(&version) || version != wire::kVersion ||
++      !in.Get(&length) || length > gesher::media::kAudioRenderLabelChars ||
++      static_cast<size_t>(in.end - in.p) != length * sizeof(char16_t)) return;
++  const auto process = g_peer_registry->Authenticate(pipe);
++  if (!process || process->role != peer::Role::kApplication) return;
++  std::u16string label(length, u'\0');
++  if (!in.Read(label.data(), length * sizeof(char16_t))) return;
++  for (char16_t& ch : label) {
++    if (ch < u' ') ch = u' ';
++  }
++  const auto id = std::pair{process->generation.pid, process->generation.birth};
++  {
++    std::lock_guard<std::mutex> lock(g_audio_lock);
++    if (!PrepareAudioDeviceControls() || !g_audio_renderers.insert(id).second) return;
++    gesher::media::UseBrokerAudioControls(g_audio_controls_view);
++  }
++  gesher::media::ServeBrokeredAudio(pipe, label, process->generation.pid, [&] {
++    return g_peer_registry->Live(process);
++  });
++  {
++    std::lock_guard<std::mutex> lock(g_audio_lock);
++    g_audio_renderers.erase(id);
++  }
++}
++#endif
++
++#ifdef GESHER_CAMERA_BROKER_HOST
++std::mutex g_camera_lock;
++std::set<std::pair<DWORD, uint64_t>> g_camera_sessions;
++uint64_t g_camera_next_session = 1;
++
++void ServeCamera(HANDLE pipe, In in) {
++  uint32_t version = 0, info_only = 0;
++  if (!g_peer_registry || !in.Get(&version) || version != wire::kVersion ||
++      !in.Get(&info_only) || info_only > 1 || in.p != in.end) return;
++  const auto process = g_peer_registry->Authenticate(pipe);
++  if (!process || process->role != peer::Role::kApplication) return;
++  const auto identity = std::pair{process->generation.pid, process->generation.birth};
++  uint64_t session = 0;
++  if (!info_only) {
++    std::lock_guard lock(g_camera_lock);
++    // CameraService advertises no concurrent camera sessions. Keep a bounded
++    // number of readers and buffers even if a guest makes raw requests.
++    if (g_camera_sessions.size() < 16 && g_camera_next_session &&
++        g_camera_sessions.insert(identity).second) session = g_camera_next_session++;
++  }
++  using Kind = gesher::capture_policy::Kind;
++  gesher::devices::camera::ServeBrokeredCamera(pipe, info_only != 0,
++      [&] { return g_peer_registry->Live(process); },
++      [&](const auto& attribution) {
++        return CaptureAuthorized(process, Kind::kCameraStart, session, attribution);
++      },
++      [&] { return CaptureAuthorized(process, Kind::kCameraCheck, session); }, session != 0);
++  if (session) {
++    CaptureAuthorized(process, Kind::kCameraFinish, session);
++    std::lock_guard lock(g_camera_lock);
++    g_camera_sessions.erase(identity);
++  }
++}
++#endif
++
++void ServeReopenDirectory(HANDLE pipe, In in) {
++  uint32_t version = 0;
++  uint64_t source = 0;
++  if (!in.Get(&version) || version != wire::kVersion || !in.Get(&source) ||
++      !source || source > UINTPTR_MAX || in.p != in.end) return FinishRecordReply(pipe, EINVAL);
++  const auto caller = g_peer_registry ? g_peer_registry->Authenticate(pipe) : nullptr;
++  if (!caller || caller->role != peer::Role::kApplication) return FinishRecordReply(pipe, EACCES);
++  peer::OwnedHandle original, file;
++  HandleDeliveryBudget lane(caller->generation);
++  if (!lane.active) return FinishRecordReply(pipe, EAGAIN);
++  const auto complete = [&](int error) {
++    original.reset();
++    file.reset();
++    lane.Release();
++    FinishRecordReply(pipe, error);
++  };
++  HANDLE copied = nullptr;
++  if (!DuplicateHandle(caller->process.get(), launch::DecodeHandle(source), GetCurrentProcess(),
++      &copied, 0, FALSE, DUPLICATE_SAME_ACCESS)) return complete(EBADF);
++  original.reset(copied);
++  HANDLE opened = INVALID_HANDLE_VALUE;
++  const DWORD status = gesher::directory_reopen::Open(original.get(), &opened);
++  original.reset();
++  if (status != ERROR_SUCCESS) {
++    const int error = status == ERROR_ACCESS_DENIED ? EACCES :
++        status == ERROR_DIRECTORY ? ENOTDIR : status == ERROR_INVALID_HANDLE ? EBADF : EIO;
++    return complete(error);
++  }
++  file.reset(opened);
++  if (!g_peer_registry->Live(caller)) return complete(EACCES);
++  HANDLE remote = nullptr;
++  if (!DuplicateHandle(GetCurrentProcess(), file.get(), caller->process.get(), &remote,
++      0, FALSE, DUPLICATE_SAME_ACCESS)) return complete(EIO);
++  file.reset();  // Only the pending guest-owned offer remains.
++  struct Pending {
++    HANDLE process, value;
++    ~Pending() {
++      HANDLE recovered = nullptr;
++      if (value && DuplicateHandle(process, value, GetCurrentProcess(), &recovered,
++          0, FALSE, DUPLICATE_CLOSE_SOURCE | DUPLICATE_SAME_ACCESS)) CloseHandle(recovered);
++    }
++  } pending{caller->process.get(), remote};
++  WireReply reply;
++  reply.Put<int32_t>(0);
++  reply.Put<uint64_t>(launch::EncodeHandle(remote));
++  if (!WriteMessage(pipe, reply) || !WaitRecordClient(pipe, true) ||
++      g_peer_registry->Authenticate(pipe) != caller) return;
++  if (!ReplyRecordLock(pipe, 0)) return;
++  pending.value = nullptr;
++  lane.Release();
++  WaitRecordClient(pipe, false);
++}
++
++void ServeFileRecordLock(HANDLE pipe, In in, bool close) {
++  uint32_t version = 0;
++  uint64_t source = 0;
++  int32_t command = 0;
++  locks::LinuxFlock input{};
++  if (!in.Get(&version) || version != wire::kVersion || !in.Get(&source) ||
++      !source || source > UINTPTR_MAX) return FinishRecordReply(pipe, EINVAL);
++  if ((!close && (!in.Get(&command) || !in.Get(&input.type) || !in.Get(&input.whence) ||
++          !in.Get(&input.start) || !in.Get(&input.length) || !in.Get(&input.pid))) || in.p != in.end) {
++    return FinishRecordReply(pipe, EINVAL);
++  }
++  const auto caller_peer = g_peer_registry ? g_peer_registry->Authenticate(pipe) : nullptr;
++  if (!caller_peer || caller_peer->role != peer::Role::kApplication) return FinishRecordReply(pipe, EACCES);
++  RecordLane lane(caller_peer->generation);
++  if (!lane.active) return FinishRecordReply(pipe, EBUSY);
++  auto complete = [&](int error, const locks::LinuxFlock* result = nullptr) {
++    lane.Release();
++    FinishRecordReply(pipe, error, result);
++  };
++  HANDLE duplicate = nullptr;
++  if (!DuplicateHandle(caller_peer->process.get(), launch::DecodeHandle(source), GetCurrentProcess(),
++                       &duplicate, 0, FALSE, DUPLICATE_SAME_ACCESS)) {
++    return complete(EBADF);
++  }
++  peer::OwnedHandle file(duplicate);
++  if (!g_peer_registry->Live(caller_peer)) return complete(EACCES);
++  const locks::ProcessIdentity caller{caller_peer->generation.pid, 0, caller_peer->generation.birth};
++  if (!close) {
++    locks::LinuxFlock result{};
++    int error = locks::BrokerDescriptorFcntl(file.get(), caller, command, input, &result);
++    file.reset();
++    return complete(error, command == 5 || command == 36 ? &result : nullptr);
++  }
++
++  locks::File identity{};
++  int error = locks::FileIdentity(file.get(), &identity);
++  if (error) return complete(error);
++  if (!ReplyRecordLock(pipe, 0) || !WaitRecordClient(pipe, true)) return;
++  file.reset();  // Neither temporary pin should be counted as an OFD user alias.
++  if (g_peer_registry->Authenticate(pipe) != caller_peer) return complete(EACCES);
++  complete(locks::BrokerDescriptorClosed(identity, caller));
++}
++#endif
++
+@@ -1808,0 +2462,2 @@ void ServeRights(HANDLE pipe, In in) {
++  peer::Registry::Lease identity;
++  peer::OwnedHandle legacy_client;
+@@ -1810,3 +2465,11 @@ void ServeRights(HANDLE pipe, In in) {
+-  if (in.Get(&version) && version == wire::kRightsVersion &&
+-      GetNamedPipeClientProcessId(pipe, &client_pid)) {
+-    client = OpenProcess(PROCESS_DUP_HANDLE, FALSE, client_pid);
++  if (in.Get(&version) && version == wire::kRightsVersion) {
++    if (g_peer_registry) {
++      identity = g_peer_registry->Authenticate(pipe);
++      if (identity) {
++        client_pid = identity->generation.pid;
++        client = identity->process.get();
++      }
++    } else if (GetNamedPipeClientProcessId(pipe, &client_pid)) {
++      legacy_client.reset(OpenProcess(PROCESS_DUP_HANDLE, FALSE, client_pid));
++      client = legacy_client.get();
++    }
+@@ -1817 +2479,0 @@ void ServeRights(HANDLE pipe, In in) {
+-    if (client != nullptr) CloseHandle(client);
+@@ -1821,0 +2484 @@ void ServeRights(HANDLE pipe, In in) {
++    if (g_peer_registry && g_peer_registry->Authenticate(pipe) != identity) break;
+@@ -1957 +2619,0 @@ void ServeRights(HANDLE pipe, In in) {
+-  CloseHandle(client);
+@@ -1973,0 +2636,2 @@ int DoIoctl(Proc* proc, Thread* thread, uint32_t request, In in, Out* out) {
++      if (g_peer_registry && (!proc->identity ||
++                              proc->identity->role != peer::Role::kServiceManager)) return -EPERM;
+@@ -2017,0 +2682,2 @@ void ServeThread(HANDLE pipe, In in, const ProtectedIdentity& protected_peer = {
++  const auto identity = g_peer_registry ? g_peer_registry->Authenticate(pipe)
++                                        : peer::Registry::Lease{};
+@@ -2024 +2690,3 @@ void ServeThread(HANDLE pipe, In in, const ProtectedIdentity& protected_peer = {
+-        it->second->protected_peer == protected_peer && ProcLive(it->second.get())) {
++        it->second->protected_peer == protected_peer && ProcLive(it->second.get()) &&
++        (!g_peer_registry || (identity && it->second->identity == identity &&
++                              g_peer_registry->Live(identity)))) {
+@@ -2045,0 +2714 @@ void ServeThread(HANDLE pipe, In in, const ProtectedIdentity& protected_peer = {
++    if (g_peer_registry && g_peer_registry->Authenticate(pipe) != identity) break;
+@@ -2107 +2776,138 @@ void ServeThread(HANDLE pipe, In in, const ProtectedIdentity& protected_peer = {
+-void ServeConnection(HANDLE pipe, ProtectedIdentity protected_peer = {}) {
++bool ReadStandaloneRequest(HANDLE pipe, std::vector<uint8_t>* request) {
++  DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
++  const ULONGLONG deadline = GetTickCount64() + 5000;
++  uint32_t length = 0;
++  if (!SetNamedPipeHandleState(pipe, &mode, nullptr, nullptr) ||
++      !launch::Transfer(pipe, &length, sizeof(length), false, deadline) ||
++      length < 2 * sizeof(uint32_t) || length > 256) return false;
++  request->resize(length);
++  return launch::Transfer(pipe, request->data(), length, false, deadline);
++}
++
++
++void ServeDropWorker(HANDLE pipe, In in) {
++  uint32_t version = 0;
++  if (!g_peer_registry || !in.Get(&version) || version != wire::kVersion || in.p != in.end) return;
++  const auto guest = g_peer_registry->Authenticate(pipe);
++  if (!guest || guest->role != peer::Role::kApplication ||
++      guest->generation.principal.container.size == 0) return;
++
++  // A native window needs one disposable STA worker. Bound both the per-guest
++  // and total process count even when an application never closes its pipes.
++  static std::mutex lock;
++  static std::map<std::pair<DWORD, uint64_t>, size_t> workers;
++  static size_t total = 0;
++  const auto id = std::pair{guest->generation.pid, guest->generation.birth};
++  {
++    std::lock_guard<std::mutex> guard(lock);
++    const auto found = workers.find(id);
++    if (total >= 64 || (found != workers.end() && found->second >= 16)) return;
++    ++workers[id];
++    ++total;
++  }
++  const auto settle = [&] {
++    std::lock_guard<std::mutex> guard(lock);
++    if (--workers[id] == 0) workers.erase(id);
++    --total;
++  };
++
++  wchar_t self[32768];
++  const DWORD length = GetModuleFileNameW(nullptr, self, std::size(self));
++  if (length == 0 || length >= std::size(self)) { settle(); return; }
++  std::wstring executable(self, length);
++  const auto separator = executable.find_last_of(L"\\/");
++  if (separator == std::wstring::npos) { settle(); return; }
++  executable.resize(separator + 1);
++  executable += L"gesher-drop-worker.exe";
++
++  const HANDLE current = GetCurrentProcess();
++  HANDLE worker_pipe = nullptr, worker_guest = nullptr;
++  const bool duplicated = DuplicateHandle(current, pipe, current, &worker_pipe, 0,
++      TRUE, DUPLICATE_SAME_ACCESS) && DuplicateHandle(current, guest->process.get(), current,
++      &worker_guest, PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_DUP_HANDLE | SYNCHRONIZE, TRUE, 0);
++  const peer::OwnedHandle pipe_copy(worker_pipe), guest_copy(worker_guest);
++  if (!duplicated) { settle(); return; }
++
++  HANDLE inherited[] = {worker_pipe, worker_guest};
++  SIZE_T attributes_size = 0;
++  InitializeProcThreadAttributeList(nullptr, 1, 0, &attributes_size);
++  std::vector<BYTE> storage(attributes_size);
++  auto* attributes = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(storage.data());
++  if (!InitializeProcThreadAttributeList(attributes, 1, 0, &attributes_size)) { settle(); return; }
++  const bool configured = UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
++      inherited, sizeof(inherited), nullptr, nullptr);
++  STARTUPINFOEXW startup{};
++  startup.StartupInfo.cb = sizeof(startup);
++  startup.lpAttributeList = attributes;
++  PROCESS_INFORMATION child{};
++  wchar_t encoded[48];
++  swprintf(encoded, std::size(encoded), L" %llx %llx",
++      static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(worker_pipe)),
++      static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(worker_guest)));
++  std::wstring command = L"\"" + executable + L"\"" + encoded;
++  const bool started = configured && CreateProcessW(executable.c_str(), command.data(), nullptr, nullptr, TRUE,
++      CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT, nullptr, nullptr, &startup.StartupInfo, &child);
++  DeleteProcThreadAttributeList(attributes);
++  if (started) {
++    CloseHandle(child.hThread);
++    const peer::OwnedHandle process(child.hProcess);
++    while (WaitForSingleObject(process.get(), 100) == WAIT_TIMEOUT) {
++      if (!g_peer_registry->Live(guest)) {
++        TerminateProcess(process.get(), ERROR_CANCELLED);
++        WaitForSingleObject(process.get(), INFINITE);
++        break;
++      }
++    }
++  }
++  settle();
++}
++
++void Serve(HANDLE pipe) {
++  std::vector<uint8_t> msg;
++  if (g_record_only ? ReadStandaloneRequest(pipe, &msg) : ReadMessage(pipe, &msg)) {
++    In in{msg.data(), msg.data() + msg.size()};
++    uint32_t op, magic;
++    if (in.Get(&op) && in.Get(&magic) && magic == wire::kMagic) {
++      if (op == wire::kEnrollChild) {
++        ServeEnrollChild(pipe, in);
++      } else if (op == wire::kDropWorker) {
++        ServeDropWorker(pipe, in);
++#ifdef GESHER_RECORD_LOCK_BROKER
++      } else if (op == wire::kReopenDirectory) {
++        ServeReopenDirectory(pipe, in);
++      } else if (op == wire::kFileRecordLock || op == wire::kFileRecordClose) {
++        ServeFileRecordLock(pipe, in, op == wire::kFileRecordClose);
++      } else if (!g_record_only && op == wire::kAndroidDataCapacity) {
++        ServeAndroidDataCapacity(pipe, in);
++      } else if (!g_record_only && op == wire::kInstalledMedia) {
++        ServeInstalledMedia(pipe, in);
++      } else if (op == wire::kAudioPlaybackPublish || op == wire::kAudioPlaybackQuery ||
++                 op == wire::kAudioPlaybackSession || op == wire::kAudioDeviceControls) {
++        ServeAudioPlayback(pipe, in, op);
++#ifdef GESHER_AUDIO_RENDER_BROKER
++      } else if (op == wire::kAudioRender) {
++        ServeAudioRender(pipe, in);
++      } else if (op == wire::kAudioCapture) {
++        ServeAudioCapture(pipe, in);
++#endif
++#ifdef GESHER_CAMERA_BROKER_HOST
++      } else if (op == wire::kCamera) {
++        ServeCamera(pipe, in);
++#endif
++#endif
++      } else if (!g_record_only) {
++        if (op == wire::kHelloProc || op == wire::kHelloOperator) {
++          ServeProc(pipe, in, op == wire::kHelloOperator);
++        } else if (op == wire::kHelloThread) {
++          ServeThread(pipe, in);
++        } else if (op == wire::kHelloRights) {
++          ServeRights(pipe, in);
++        }
++      }
++    }
++  }
++  DisconnectNamedPipe(pipe);
++  CloseHandle(pipe);
++}
++
++void ServeUsbProtectedConnection(HANDLE pipe, ProtectedIdentity protected_peer) {
+@@ -2117 +2923 @@ void ServeConnection(HANDLE pipe, ProtectedIdentity protected_peer = {}) {
+-        ServeProc(pipe, in, protected_peer);
++        ServeProc(pipe, in, false, protected_peer);
+@@ -2120,2 +2925,0 @@ void ServeConnection(HANDLE pipe, ProtectedIdentity protected_peer = {}) {
+-      } else if (op == wire::kHelloRights && !protected_peer) {
+-        ServeRights(pipe, in);
+@@ -2142,2 +2945,0 @@ void ServeConnection(HANDLE pipe, ProtectedIdentity protected_peer = {}) {
+-void Serve(HANDLE pipe) { ServeConnection(pipe); }
+-
+@@ -2197 +2999 @@ int RunProtected(int argc, char** argv) {
+-    if (identity) std::thread(ServeConnection, pipe, std::move(identity)).detach();
++    if (identity) std::thread(ServeUsbProtectedConnection, pipe, std::move(identity)).detach();
+@@ -2213,0 +3016,10 @@ int main(int argc, char** argv) {
++  launch::Startup bootstrap;
++  g_record_only = gesher::binder_bootstrap::ReadStartupRecord(&bootstrap) &&
++      bootstrap.endpoint == launch::Endpoint::kRecordBroker;
++  if (g_record_only && !launch::ReadStartup(launch::Endpoint::kRecordBroker, &bootstrap)) {
++    return EXIT_FAILURE;
++  }
++#ifndef GESHER_RECORD_LOCK_BROKER
++  if (g_record_only) return EXIT_FAILURE;
++#endif
++  const bool protected_launch = g_record_only || launch::ReadStartup(launch::Endpoint::kBroker, &bootstrap);
+@@ -2215 +3027,3 @@ int main(int argc, char** argv) {
+-  if (argc > 1) {
++  if (g_record_only) {
++    device = "standalone record locks";
++  } else if (argc > 1) {
+@@ -2222,24 +3036,29 @@ int main(int argc, char** argv) {
+-  std::wstring name = wire::kPipePrefix;
+-  for (char c : device) name += static_cast<wchar_t>(static_cast<unsigned char>(c));
+-
+-  // The descriptor broker's doorbell and the stream positions (binder_wire.h),
+-  // which live as long as the broker does. The positions are the processes'
+-  // own; the broker only keeps the section.
+-  std::wstring doorbell = wire::kRightsDoorbellPrefix;
+-  std::wstring positions = wire::kStreamPositionsPrefix;
+-  for (char c : device) {
+-    doorbell += static_cast<wchar_t>(static_cast<unsigned char>(c));
+-    positions += static_cast<wchar_t>(static_cast<unsigned char>(c));
+-  }
+-  constexpr DWORD kDoorbellBytes = wire::kRightsDoorbellSlots * sizeof(LONG64);
+-  HANDLE section = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0,
+-                                      kDoorbellBytes, doorbell.c_str());
+-  if (section != nullptr) {
+-    g_rights_doorbell = static_cast<volatile LONG64*>(
+-        MapViewOfFile(section, FILE_MAP_WRITE, 0, 0, kDoorbellBytes));
+-  }
+-  HANDLE positions_section = CreateFileMappingW(
+-      INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0,
+-      wire::kRightsDoorbellSlots * sizeof(wire::StreamPositions), positions.c_str());
+-  if (g_rights_doorbell == nullptr || positions_section == nullptr) {
+-    Log("descriptor broker doorbell or stream positions unavailable: %lu", GetLastError());
++  std::wstring name;
++  if (g_record_only) {
++    name = wire::kStandaloneRecordPipe + std::to_wstring(GetCurrentProcessId());
++  } else {
++    name = wire::kPipePrefix;
++    for (char c : device) name += static_cast<wchar_t>(static_cast<unsigned char>(c));
++
++    // The descriptor broker's doorbell and the stream positions (binder_wire.h),
++    // which live as long as the broker does. The positions are the processes'
++    // own; the broker only keeps the section.
++    std::wstring doorbell = wire::kRightsDoorbellPrefix;
++    std::wstring positions = wire::kStreamPositionsPrefix;
++    for (char c : device) {
++      doorbell += static_cast<wchar_t>(static_cast<unsigned char>(c));
++      positions += static_cast<wchar_t>(static_cast<unsigned char>(c));
++    }
++    constexpr DWORD kDoorbellBytes = wire::kRightsDoorbellSlots * sizeof(LONG64);
++    HANDLE section = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0,
++                                        kDoorbellBytes, doorbell.c_str());
++    if (section != nullptr) {
++      g_rights_doorbell = static_cast<volatile LONG64*>(
++          MapViewOfFile(section, FILE_MAP_WRITE, 0, 0, kDoorbellBytes));
++    }
++    HANDLE positions_section = CreateFileMappingW(
++        INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0,
++        wire::kRightsDoorbellSlots * sizeof(wire::StreamPositions), positions.c_str());
++    if (g_rights_doorbell == nullptr || positions_section == nullptr) {
++      Log("descriptor broker doorbell or stream positions unavailable: %lu", GetLastError());
++    }
+@@ -2252,2 +3071,28 @@ int main(int argc, char** argv) {
+-  g_sandbox = gesher::appcontainer::Enabled();
+-  if (g_sandbox) {
++  if (g_record_only) {
++    PSID sid = nullptr;
++    if (argc != 2 || !ConvertStringSidToSidA(argv[1], &sid)) return EXIT_FAILURE;
++    const bool copied = g_record_container.CopyFrom(sid);
++    const DWORD error = gesher::appcontainer::AppContainerPipeSecurity(&pipe_security.lpSecurityDescriptor, sid);
++    LocalFree(sid);
++    if (!copied || error != ERROR_SUCCESS) {
++      Log("standalone record lock pipe security unavailable: %lu", error);
++      return EXIT_FAILURE;
++    }
++  }
++  if (protected_launch) {
++    gesher::process_identity::Process process;
++    const HANDLE endpoint = launch::DecodeHandle(bootstrap.channel);
++    ULONG launcher_pid = 0;
++    if (!gesher::process_identity::ReadLiveProcess(GetCurrentProcess(), &process) ||
++        process.principal.container.size != 0 || process.principal.restricted ||
++        process.principal.integrity < SECURITY_MANDATORY_MEDIUM_RID ||
++        !GetNamedPipeClientProcessId(endpoint, &launcher_pid) ||
++        !SetHandleInformation(endpoint, HANDLE_FLAG_INHERIT, 0)) {
++      Log("invalid protected launch authority");
++      return EXIT_FAILURE;
++    }
++    g_peer_registry = std::make_unique<peer::Registry>(process.principal);
++    std::thread(ServeLaunchAuthority, endpoint, launcher_pid, process.principal).detach();
++  }
++  g_sandbox = g_peer_registry || gesher::appcontainer::Enabled();
++  if (g_sandbox && !g_record_only) {
+diff --git a/compat/bionic/process_bionic.cc b/compat/bionic/process_bionic.cc
+index 33e275d38..77b0f40af 100644
+--- a/compat/bionic/process_bionic.cc
++++ b/compat/bionic/process_bionic.cc
+@@ -24,0 +25 @@
++#include <gesher/binder_endpoint.h>
+@@ -958,0 +960 @@ int BIONIC_SYSV GuestFork(int exit_signal, int run_atfork, const ForkHooks* hook
++  const bool protected_guest = binder_endpoint::Current().IsGuest();
+@@ -981,0 +984 @@ int BIONIC_SYSV GuestFork(int exit_signal, int run_atfork, const ForkHooks* hook
++  HANDLE admission_go = protected_guest ? CreateEventW(nullptr, TRUE, FALSE, nullptr) : nullptr;
+@@ -983 +986 @@ int BIONIC_SYSV GuestFork(int exit_signal, int run_atfork, const ForkHooks* hook
+-  if (leases) {
++  if (leases || protected_guest) {
+@@ -990,2 +993,4 @@ int BIONIC_SYSV GuestFork(int exit_signal, int run_atfork, const ForkHooks* hook
+-  if (child_ready == nullptr || (leases && (leases_renewed == nullptr || leases_go == nullptr || parent_self == nullptr))) {
+-    for (HANDLE h : {child_ready, leases_renewed, leases_go, parent_self}) {
++  if (child_ready == nullptr || ((leases || protected_guest) && parent_self == nullptr) ||
++      (leases && (leases_renewed == nullptr || leases_go == nullptr)) ||
++      (protected_guest && admission_go == nullptr)) {
++    for (HANDLE h : {child_ready, leases_renewed, leases_go, admission_go, parent_self}) {
+@@ -1021 +1026 @@ int BIONIC_SYSV GuestFork(int exit_signal, int run_atfork, const ForkHooks* hook
+-      for (HANDLE h : {leases_renewed, leases_go, parent_self}) CloseHandle(h);
++      for (HANDLE h : {leases_renewed, leases_go}) CloseHandle(h);
+@@ -1024,0 +1030,10 @@ int BIONIC_SYSV GuestFork(int exit_signal, int run_atfork, const ForkHooks* hook
++    if (protected_guest) {
++      // Wait before starting the signal mailbox or calling guest atfork
++      // handlers. Parent death cannot release an unregistered child.
++      HANDLE waits[2] = {admission_go, parent_self};
++      if (WaitForMultipleObjects(2, waits, FALSE, INFINITE) != WAIT_OBJECT_0) {
++        TerminateProcess(GetCurrentProcess(), 0x7f);
++      }
++      CloseHandle(admission_go);
++    }
++    if (parent_self != nullptr) CloseHandle(parent_self);
+@@ -1047 +1062 @@ int BIONIC_SYSV GuestFork(int exit_signal, int run_atfork, const ForkHooks* hook
+-    for (HANDLE h : {leases_renewed, leases_go, parent_self}) CloseHandle(h);
++    for (HANDLE h : {leases_renewed, leases_go}) CloseHandle(h);
+@@ -1048,0 +1064 @@ int BIONIC_SYSV GuestFork(int exit_signal, int run_atfork, const ForkHooks* hook
++  if (parent_self != nullptr) CloseHandle(parent_self);
+@@ -1066,0 +1083 @@ int BIONIC_SYSV GuestFork(int exit_signal, int run_atfork, const ForkHooks* hook
++  bool admission_failed = false;
+@@ -1068,3 +1085,10 @@ int BIONIC_SYSV GuestFork(int exit_signal, int run_atfork, const ForkHooks* hook
+-    HANDLE waits[2] = {child_ready, process};
+-    ready_wait = WaitForMultipleObjects(2, waits, FALSE, kChildReadyMs);
+-    if (ready_wait != WAIT_OBJECT_0) {
++    // This IPC runs outside the fork set; its Binder and environment locks
++    // may now be taken normally.
++    if (protected_guest) {
++      admission_failed = !binder_endpoint::EnrollChild(process) || !SetEvent(admission_go);
++    }
++    if (!admission_failed) {
++      HANDLE waits[2] = {child_ready, process};
++      ready_wait = WaitForMultipleObjects(2, waits, FALSE, kChildReadyMs);
++    }
++    if (ready_wait != WAIT_OBJECT_0 || admission_failed) {
+@@ -1077 +1101,2 @@ int BIONIC_SYSV GuestFork(int exit_signal, int run_atfork, const ForkHooks* hook
+-  if (cloned > 0 && !leases_failed && ready_wait != WAIT_OBJECT_0) {
++  if (admission_go != nullptr) CloseHandle(admission_go);
++  if (cloned > 0 && !leases_failed && (ready_wait != WAIT_OBJECT_0 || admission_failed)) {
+@@ -1080 +1105,3 @@ int BIONIC_SYSV GuestFork(int exit_signal, int run_atfork, const ForkHooks* hook
+-                            "fork: the child could not start its signal and ptrace threads; EAGAIN");
++                            admission_failed
++                                ? "fork: the protected broker could not admit the child; EAGAIN"
++                                : "fork: the child could not start its signal and ptrace threads; EAGAIN");
+diff --git a/compat/credentials/account_crypto.c b/compat/credentials/account_crypto.c
+index f437e1743..bfe5075bc 100644
+--- a/compat/credentials/account_crypto.c
++++ b/compat/credentials/account_crypto.c
+@@ -302,0 +303,23 @@ Java_com_gesher_server_AccountManagerService_nativeConfirmToken(JNIEnv* env, jcl
++JNIEXPORT jboolean GESHER_NATIVE
++Java_com_gesher_server_SandboxOptOut_nativeConfirm(JNIEnv* env, jclass cls, jstring package_name) {
++  (void)cls;
++  if (!RequireServer(env) || package_name == NULL) return JNI_FALSE;
++  jsize name_length = (*env)->GetStringLength(env, package_name);
++  if (name_length <= 0 || name_length > 255) return JNI_FALSE;
++  WCHAR text[1024] = {0};
++  text[0] = 0x2068;
++  (*env)->GetStringRegion(env, package_name, 0, name_length, (jchar*)(text + 1));
++  if ((*env)->ExceptionCheck(env)) return JNI_FALSE;
++  text[name_length + 1] = 0x2069;
++  text[name_length + 2] = L'\n';
++  text[name_length + 3] = L'\n';
++  enum GesherUiLanguage lang = GesherUiCurrentLanguage();
++  const WCHAR* warning = GesherUiText(lang, "sandbox_override_warning");
++  size_t warning_length = wcslen(warning);
++  if (warning_length + name_length + 5 > sizeof(text) / sizeof(text[0])) return JNI_FALSE;
++  memcpy(text + name_length + 4, warning, (warning_length + 1) * sizeof(WCHAR));
++  return GesherHostPrompt(GesherUiText(lang, "sandbox_override_title"), text,
++      GesherUiText(lang, "sandbox_override_accept"), GesherUiText(lang, "chooser_cancel"),
++      GesherUiRtl(lang), NULL, MB_ICONWARNING) ? JNI_TRUE : JNI_FALSE;
++}
++
+diff --git a/compat/elf/exec/exec.cmake b/compat/elf/exec/exec.cmake
+index 92424e9a4..655de2a90 100644
+--- a/compat/elf/exec/exec.cmake
++++ b/compat/elf/exec/exec.cmake
+@@ -77,0 +78,28 @@ target_link_libraries(appcontainer_probe PRIVATE advapi32 ole32)
++add_executable(appcontainer_property_probe
++  ${CMAKE_SOURCE_DIR}/tests/sandbox/property-area-probe.cc
++  ${CMAKE_SOURCE_DIR}/compat/framework/services_zygote.cc
++  ${CMAKE_SOURCE_DIR}/compat/framework/app_container.cc)
++target_include_directories(appcontainer_property_probe PRIVATE ${CMAKE_SOURCE_DIR}/compat/framework)
++target_compile_options(appcontainer_property_probe PRIVATE -Wall -Wextra -Werror)
++target_link_options(appcontainer_property_probe PRIVATE -municode)
++target_link_libraries(appcontainer_property_probe PRIVATE advapi32 ole32)
++
++add_executable(appcontainer_record_lock_probe
++  ${CMAKE_SOURCE_DIR}/tests/sandbox/record-lock-probe.cc
++  ${CMAKE_SOURCE_DIR}/compat/framework/rooted_storage_server.cc
++  ${CMAKE_SOURCE_DIR}/compat/framework/services_zygote.cc
++  ${CMAKE_SOURCE_DIR}/compat/framework/app_container.cc)
++target_include_directories(appcontainer_record_lock_probe PRIVATE ${CMAKE_SOURCE_DIR}/compat/framework)
++target_compile_options(appcontainer_record_lock_probe PRIVATE -Wall -Wextra -Werror)
++target_link_options(appcontainer_record_lock_probe PRIVATE -municode)
++target_link_libraries(appcontainer_record_lock_probe PRIVATE gesher_bionic gesher_exec_spawn advapi32 ole32)
++
++add_executable(appcontainer_installed_media_probe
++  ${CMAKE_SOURCE_DIR}/tests/sandbox/installed-media-probe.cc
++  ${CMAKE_SOURCE_DIR}/compat/framework/services_zygote.cc
++  ${CMAKE_SOURCE_DIR}/compat/framework/app_container.cc)
++target_include_directories(appcontainer_installed_media_probe PRIVATE ${CMAKE_SOURCE_DIR}/compat/framework)
++target_compile_options(appcontainer_installed_media_probe PRIVATE -Wall -Wextra -Werror)
++target_link_options(appcontainer_installed_media_probe PRIVATE -municode)
++target_link_libraries(appcontainer_installed_media_probe PRIVATE gesher_bionic gesher_exec_spawn advapi32 ole32)
++
+diff --git a/compat/elf/exec/exec_spawn.cc b/compat/elf/exec/exec_spawn.cc
+index a3851ce39..c35a8c666 100644
+--- a/compat/elf/exec/exec_spawn.cc
++++ b/compat/elf/exec/exec_spawn.cc
+@@ -6,0 +7 @@
++#include "../../posix/src/startup_null.h"
+@@ -7,0 +9,2 @@
++#include <gesher/binder_endpoint.h>
++#include <gesher/cohost_bootstrap.h>
+@@ -863,4 +866 @@ DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::
+-    SECURITY_ATTRIBUTES attributes{sizeof(attributes), nullptr, TRUE};
+-    HANDLE nul = CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE,
+-                             FILE_SHARE_READ | FILE_SHARE_WRITE, &attributes,
+-                             OPEN_EXISTING, 0, nullptr);
++    HANDLE nul = gesher::OpenDescriptorPlaceholder(true);
+@@ -876 +876,6 @@ DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::
+-  std::vector<unsigned char> block(crt_size + (transport ? sizeof(gesher::ofd_transfer::Startup) : 0), 0);
++  auto& binder = binder_endpoint::Current();
++  const bool protected_guest = binder.IsGuest();
++  if (protected_guest && (extra_flags & CREATE_BREAKAWAY_FROM_JOB) != 0) return ERROR_ACCESS_DENIED;
++  const size_t descriptor_bytes = crt_size + (transport ? sizeof(gesher::ofd_transfer::Startup) : 0);
++  std::vector<unsigned char> block(descriptor_bytes +
++      (protected_guest ? sizeof(binder_bootstrap::Startup) : 0), 0);
+@@ -910,0 +916,27 @@ DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::
++  if (protected_guest) {
++    binder_bootstrap::Startup admission;
++    admission.endpoint = binder.IsStandalone() ? binder_bootstrap::Endpoint::kStandalone
++                                               : binder_bootstrap::Endpoint::kApplication;
++    admission.uid = binder_bootstrap::GuestUid();
++    if (admission.uid == 0) return ERROR_ACCESS_DENIED;
++    HANDLE broker = nullptr;
++    if (!binder.DuplicateToGuestChild(&broker)) return ERROR_ACCESS_DENIED;
++    owned.values.push_back(broker);
++    HANDLE nul = gesher::OpenNullDevice(GENERIC_READ | GENERIC_WRITE, true);
++    if (nul == INVALID_HANDLE_VALUE) return GetLastError();
++    owned.values.push_back(nul);
++    admission.broker = binder_bootstrap::EncodeHandle(broker);
++    admission.null_device = binder_bootstrap::EncodeHandle(nul);
++    if (binder.IsStandalone()) {
++      const auto& scope = cohost_bootstrap::Current();
++      if (scope) {
++        HANDLE mapping = nullptr, host = nullptr;
++        if (!scope.DuplicateForChild(&mapping, &host)) return ERROR_ACCESS_DENIED;
++        owned.values.push_back(mapping);
++        owned.values.push_back(host);
++        admission.cohost_section = binder_bootstrap::EncodeHandle(mapping);
++        admission.cohost_host = binder_bootstrap::EncodeHandle(host);
++      }
++    }
++    std::memcpy(block.data() + descriptor_bytes, &admission, sizeof(admission));
++  }
+@@ -941,0 +974 @@ DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::
++  if (protected_guest) flags |= CREATE_SUSPENDED;
+@@ -963,0 +997,17 @@ DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::
++  if (started && protected_guest) {
++    struct PendingChild {
++      PROCESS_INFORMATION* info;
++      ~PendingChild() {
++        if (info == nullptr) return;
++        TerminateProcess(info->hProcess, ERROR_ACCESS_DENIED);
++        CloseHandle(info->hThread);
++        CloseHandle(info->hProcess);
++        *info = {};
++      }
++    } pending{info};
++    if (!binder_endpoint::EnrollChild(info->hProcess)) return ERROR_ACCESS_DENIED;
++    if ((extra_flags & CREATE_SUSPENDED) == 0 && ResumeThread(info->hThread) != 1) {
++      return ERROR_ACCESS_DENIED;
++    }
++    pending.info = nullptr;
++  }
+diff --git a/compat/elf/exec/gesher_tools.cc b/compat/elf/exec/gesher_tools.cc
+index 8e1e42421..b03ea38d3 100644
+--- a/compat/elf/exec/gesher_tools.cc
++++ b/compat/elf/exec/gesher_tools.cc
+@@ -9,0 +10 @@
++#include <gesher/binder_bootstrap.h>
+@@ -900 +901,6 @@ int DeviceCommand(const std::string& tool, const std::vector<std::string>& args)
+-      boot_class_path, "-Ximage:" + vm_path(image), "-Xusejit:false", "com.gesher.server.RuntimeCommands", tool};
++      boot_class_path, "-Ximage:" + vm_path(image), "-Xusejit:false", "com.gesher.server.RuntimeCommands"};
++  if (binder_bootstrap::GuestUid() == 0 &&
++      EnvOr("GESHER_SANDBOX", "") == "appcontainer-trusted") {
++    command.emplace_back("--device-operator");
++  }
++  command.push_back(tool);
+diff --git a/compat/posix/include/gesher/file_description.h b/compat/posix/include/gesher/file_description.h
+index b14282837..3a8deeef8 100644
+--- a/compat/posix/include/gesher/file_description.h
++++ b/compat/posix/include/gesher/file_description.h
+@@ -6,0 +7 @@
++#include <string>
+@@ -38,0 +40 @@ DescriptorSnapshotPtr CaptureFileHandle(HANDLE file);
++std::wstring DropDescriptorPath(const DescriptorSnapshotPtr& descriptor);
+diff --git a/compat/posix/include/gesher/system_properties.h b/compat/posix/include/gesher/system_properties.h
+index 3516cd627..78b746609 100644
+--- a/compat/posix/include/gesher/system_properties.h
++++ b/compat/posix/include/gesher/system_properties.h
+@@ -21,0 +22,3 @@ bool Initialize();
++// Initialize the broker's current area and return the exact file to grant
++// the guest read access to. A contained process cannot prepare a grant.
++std::wstring ReadOnlyAreaPath();
+diff --git a/compat/posix/posix.cmake b/compat/posix/posix.cmake
+index ef1df5da9..384c7da34 100644
+--- a/compat/posix/posix.cmake
++++ b/compat/posix/posix.cmake
+@@ -8,0 +9 @@ add_library(gesher_posix STATIC
++  ${CMAKE_CURRENT_LIST_DIR}/src/binder_endpoint.cc
+@@ -17,0 +19 @@ add_library(gesher_posix STATIC
++  ${CMAKE_CURRENT_LIST_DIR}/src/filesystem_capacity.cc
+@@ -53,0 +56,3 @@ add_library(gesher_posix STATIC
++  ${CMAKE_CURRENT_LIST_DIR}/src/rooted_storage.cc
++  ${CMAKE_CURRENT_LIST_DIR}/src/rooted_storage_client.cc
++  ${CMAKE_CURRENT_LIST_DIR}/src/drop_mount.cc
+@@ -112,0 +118 @@ target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_binder_transport_anchor
++target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_binder_endpoint_anchor_v1)
+diff --git a/compat/posix/src/binder.cc b/compat/posix/src/binder.cc
+index 7c19a8175..ea7641179 100644
+--- a/compat/posix/src/binder.cc
++++ b/compat/posix/src/binder.cc
+@@ -29,0 +30 @@
++#include <gesher/binder_endpoint.h>
+@@ -35,0 +37 @@
++#include <gesher/rooted_storage_wire.h>
+@@ -41,0 +44 @@
++#include "record_lock_operation.h"
+@@ -118,0 +122 @@ std::wstring PipeName() {
++  if (binder_endpoint::Current().IsStandalone()) return {};
+@@ -123,0 +128,6 @@ std::wstring PipeName() {
++std::wstring RecordPipeName() {
++  if (!binder_endpoint::Current().IsStandalone()) return PipeName();
++  const DWORD pid = binder_endpoint::Current().StandaloneRecordBrokerPid();
++  return pid != 0 ? wire::kStandaloneRecordPipe + std::to_wstring(pid) : std::wstring{};
++}
++
+@@ -128,2 +138,7 @@ HANDLE ConnectPipe(const std::wstring& name) {
+-                           0, nullptr);
+-    if (h != INVALID_HANDLE_VALUE) return h;
++                           SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, nullptr);
++    if (h != INVALID_HANDLE_VALUE) {
++      if (binder_endpoint::Current().VerifyPipe(h)) return h;
++      CloseHandle(h);
++      SetLastError(ERROR_ACCESS_DENIED);
++      return INVALID_HANDLE_VALUE;
++    }
+@@ -850,0 +866,326 @@ int DuplicateApplicationSharedMemoryReadOnly(int fd) {
++bool binder_endpoint::EnrollChild(HANDLE process) {
++  const ULONGLONG deadline = GetTickCount64() + 5000;
++  const std::wstring name = RecordPipeName();
++  if (name.empty()) return false;
++  HANDLE pipe = ConnectPipe(name);
++  if (pipe == INVALID_HANDLE_VALUE) return false;
++  struct OwnedPipe {
++    HANDLE handle;
++    ~OwnedPipe() { CloseHandle(handle); }
++  } close_on_return{pipe};
++  DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
++  if (!SetNamedPipeHandleState(pipe, &mode, nullptr, nullptr)) return false;
++  struct Request {
++    uint32_t length, op, magic, version;
++    uint64_t child;
++  } request{20, wire::kEnrollChild, wire::kMagic, wire::kVersion,
++            binder_bootstrap::EncodeHandle(process)};
++  static_assert(sizeof(Request) == 24);
++  uint32_t reply[2] = {};
++  return binder_bootstrap::Transfer(pipe, &request, sizeof(request), true, deadline) &&
++         binder_bootstrap::Transfer(pipe, reply, sizeof(reply), false, deadline) &&
++         reply[0] == sizeof(reply[1]) && reply[1] == 0;
++}
++
++namespace {
++struct RecordPipe {
++  HANDLE handle = INVALID_HANDLE_VALUE;
++  ~RecordPipe() { if (handle != INVALID_HANDLE_VALUE) CloseHandle(handle); }
++};
++
++bool AudioPlaybackRequest(wire::Op op, uint32_t stream, uint32_t in_past_ms, uint64_t* result) {
++  if (!binder_endpoint::Current().UsesProtectedAudio()) return false;
++  const std::wstring name = RecordPipeName();
++  if (name.empty()) return false;
++  RecordPipe pipe{ConnectPipe(name)};
++  if (pipe.handle == INVALID_HANDLE_VALUE) return false;
++  DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
++  if (!SetNamedPipeHandleState(pipe.handle, &mode, nullptr, nullptr)) return false;
++  uint32_t request[] = {5 * sizeof(uint32_t), op, wire::kMagic, wire::kVersion, stream, in_past_ms};
++  uint32_t reply[4]{};
++  const ULONGLONG deadline = GetTickCount64() + 5000;
++  if (!binder_bootstrap::Transfer(pipe.handle, request, sizeof(request), true, deadline) ||
++      !binder_bootstrap::Transfer(pipe.handle, reply, sizeof(reply), false, deadline) ||
++      reply[0] != 3 * sizeof(uint32_t) || reply[1] != 0) return false;
++  *result = static_cast<uint64_t>(reply[2]) | static_cast<uint64_t>(reply[3]) << 32;
++  return true;
++}
++
++int ReceiveRecordStatus(HANDLE pipe, std::vector<uint8_t>* reply) {
++  if (!Receive(pipe, reply) || reply->size() < sizeof(int32_t)) return EIO;
++  int32_t status;
++  std::memcpy(&status, reply->data(), sizeof(status));
++  if (status > 0 || status < -4095 || (status != 0 && reply->size() != sizeof(status))) return EPROTO;
++  return -status;
++}
++}  // namespace
++
++audio_state::Activity* binder_endpoint::OpenAudioPlaybackActivity() {
++  uint64_t handle = 0;
++  if (!AudioPlaybackRequest(wire::kAudioPlaybackPublish, 0, 0, &handle) ||
++      !handle || handle > UINTPTR_MAX) return nullptr;
++  auto section = binder_bootstrap::DecodeHandle(handle);
++  auto* state = static_cast<audio_state::Activity*>(
++      MapViewOfFile(section, FILE_MAP_WRITE, 0, 0, sizeof(audio_state::Activity)));
++  CloseHandle(section);
++  return state;
++}
++
++bool binder_endpoint::IsAudioPlaybackActive(int stream, int in_past_ms) {
++  uint64_t active = 0;
++  return AudioPlaybackRequest(wire::kAudioPlaybackQuery, stream, std::max(0, in_past_ms), &active) &&
++      active == 1;
++}
++
++int binder_endpoint::NewProtectedAudioSession() {
++  uint64_t session = 0;
++  return AudioPlaybackRequest(wire::kAudioPlaybackSession, 0, 0, &session) && session <= INT_MAX
++      ? static_cast<int>(session) : 0;
++}
++
++audio_state::DeviceState* binder_endpoint::OpenAudioDeviceControls(bool writable) {
++  uint64_t handle = 0;
++  if (!AudioPlaybackRequest(wire::kAudioDeviceControls, writable ? 1 : 0, 0, &handle) ||
++      !handle || handle > UINTPTR_MAX) return nullptr;
++  auto section = binder_bootstrap::DecodeHandle(handle);
++  auto* state = static_cast<audio_state::DeviceState*>(MapViewOfFile(
++      section, writable ? FILE_MAP_WRITE : FILE_MAP_READ, 0, 0, sizeof(audio_state::DeviceState)));
++  CloseHandle(section);
++  return state;
++}
++
++HANDLE binder_endpoint::OpenAudioRender(const std::u16string& label) {
++  if (!binder_endpoint::Current().IsGuest()) return INVALID_HANDLE_VALUE;
++  const std::wstring name = RecordPipeName();
++  if (name.empty()) return INVALID_HANDLE_VALUE;
++  RecordPipe pipe{ConnectPipe(name)};
++  DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
++  if (pipe.handle == INVALID_HANDLE_VALUE ||
++      !SetNamedPipeHandleState(pipe.handle, &mode, nullptr, nullptr)) return INVALID_HANDLE_VALUE;
++  const auto size = static_cast<uint32_t>(std::min<size_t>(label.size(), 120));
++  Message request;
++  request.Put<uint32_t>(wire::kAudioRender);
++  request.Put<uint32_t>(wire::kMagic);
++  request.Put<uint32_t>(wire::kVersion);
++  request.Put<uint32_t>(size);
++  request.Write(label.data(), size * sizeof(char16_t));
++  if (!Send(pipe.handle, request)) return INVALID_HANDLE_VALUE;
++  const HANDLE connected = pipe.handle;
++  pipe.handle = INVALID_HANDLE_VALUE;
++  return connected;
++}
++
++static HANDLE OpenRecordDevice(uint32_t op, bool info_only) {
++  if (!binder_endpoint::Current().IsGuest()) return INVALID_HANDLE_VALUE;
++  const std::wstring name = RecordPipeName();
++  if (name.empty()) return INVALID_HANDLE_VALUE;
++  RecordPipe pipe{ConnectPipe(name)};
++  DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
++  if (pipe.handle == INVALID_HANDLE_VALUE ||
++      !SetNamedPipeHandleState(pipe.handle, &mode, nullptr, nullptr)) return INVALID_HANDLE_VALUE;
++  uint32_t request[] = {4 * sizeof(uint32_t), op, wire::kMagic, wire::kVersion,
++                        static_cast<uint32_t>(info_only)};
++  if (!binder_bootstrap::Transfer(pipe.handle, request, sizeof(request), true,
++                                  GetTickCount64() + 5000)) return INVALID_HANDLE_VALUE;
++  const HANDLE connected = pipe.handle;
++  pipe.handle = INVALID_HANDLE_VALUE;
++  return connected;
++}
++
++HANDLE binder_endpoint::OpenAudioCapture(bool info_only) {
++  return OpenRecordDevice(wire::kAudioCapture, info_only);
++}
++
++HANDLE binder_endpoint::OpenCamera(bool info_only) {
++  return OpenRecordDevice(wire::kCamera, info_only);
++}
++
++HANDLE binder_endpoint::OpenDropWorker() {
++  if (!binder_endpoint::Current().IsGuest()) return INVALID_HANDLE_VALUE;
++  const std::wstring name = RecordPipeName();
++  if (name.empty()) return INVALID_HANDLE_VALUE;
++  RecordPipe pipe{ConnectPipe(name)};
++  DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
++  if (pipe.handle == INVALID_HANDLE_VALUE ||
++      !SetNamedPipeHandleState(pipe.handle, &mode, nullptr, nullptr)) return INVALID_HANDLE_VALUE;
++  uint32_t request[] = {3 * sizeof(uint32_t), wire::kDropWorker, wire::kMagic, wire::kVersion};
++  if (!binder_bootstrap::Transfer(pipe.handle, request, sizeof(request), true, GetTickCount64() + 2500)) {
++    return INVALID_HANDLE_VALUE;
++  }
++  const HANDLE connected = pipe.handle;
++  pipe.handle = INVALID_HANDLE_VALUE;
++  return connected;
++}
++
++int binder_endpoint::QueryAndroidDataCapacity(rooted_storage_wire::Filesystem* capacity) {
++  if (capacity == nullptr) return EFAULT;
++  auto& binding = binder_endpoint::Current();
++  if (!binding.IsGuest() || binding.IsStandalone()) return EACCES;
++  const std::wstring name = RecordPipeName();
++  if (name.empty()) return EACCES;
++  RecordPipe pipe{ConnectPipe(name)};
++  if (pipe.handle == INVALID_HANDLE_VALUE) return ErrnoFromWin32(GetLastError());
++  DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
++  if (!SetNamedPipeHandleState(pipe.handle, &mode, nullptr, nullptr)) return EIO;
++  uint32_t request[] = {3 * sizeof(uint32_t), wire::kAndroidDataCapacity, wire::kMagic, wire::kVersion};
++  struct {
++    uint32_t length;
++    int32_t status;
++  } header{};
++  const ULONGLONG deadline = GetTickCount64() + 5000;
++  if (!binder_bootstrap::Transfer(pipe.handle, request, sizeof(request), true, deadline) ||
++      !binder_bootstrap::Transfer(pipe.handle, &header, sizeof(header), false, deadline)) return EIO;
++  if (header.status != 0) {
++    return header.length == sizeof(header.status) && header.status < 0 && header.status >= -4095
++        ? -header.status : EPROTO;
++  }
++  rooted_storage_wire::Filesystem result{};
++  if (header.length != sizeof(header.status) + sizeof(result)) return EPROTO;
++  if (!binder_bootstrap::Transfer(pipe.handle, &result, sizeof(result), false, deadline)) return EIO;
++  if (!binding.VerifyPipe(pipe.handle)) return EACCES;
++  *capacity = result;
++  return 0;
++}
++
++int binder_endpoint::ReopenDirectory(HANDLE source, HANDLE* result) {
++  if (!result || !source || source == INVALID_HANDLE_VALUE) return EBADF;
++  *result = INVALID_HANDLE_VALUE;
++  if (!Current().IsGuest()) return EACCES;
++  const std::wstring name = RecordPipeName();
++  if (name.empty()) return EACCES;
++  RecordPipe pipe{ConnectPipe(name)};
++  if (pipe.handle == INVALID_HANDLE_VALUE) return EACCES;
++  DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
++  if (!SetNamedPipeHandleState(pipe.handle, &mode, nullptr, nullptr)) return EIO;
++  const ULONGLONG deadline = GetTickCount64() + 5000;
++  struct Request {
++    uint32_t length, op, magic, version;
++    uint64_t source;
++  } request{20, wire::kReopenDirectory, wire::kMagic, wire::kVersion,
++            binder_bootstrap::EncodeHandle(source)};
++  static_assert(sizeof(Request) == 24);
++  struct Header { uint32_t length; int32_t status; } offer{};
++  if (!binder_bootstrap::Transfer(pipe.handle, &request, sizeof(request), true, deadline) ||
++      !binder_bootstrap::Transfer(pipe.handle, &offer, sizeof(offer), false, deadline)) return EIO;
++  if (offer.status > 0 || offer.status < -4095) return EPROTO;
++  if (offer.status) return offer.length == sizeof(offer.status) ? -offer.status : EPROTO;
++  uint64_t offered = 0;
++  if (offer.length != sizeof(offer.status) + sizeof(offered) ||
++      !binder_bootstrap::Transfer(pipe.handle, &offered, sizeof(offered), false, deadline)) return EPROTO;
++  if (!offered || offered == UINT64_MAX || offered > UINTPTR_MAX || !Current().VerifyPipe(pipe.handle))
++    return EPROTO;
++  uint32_t acknowledge[] = {sizeof(uint32_t), 1};
++  Header commit{};
++  if (!binder_bootstrap::Transfer(pipe.handle, acknowledge, sizeof(acknowledge), true, deadline) ||
++      !binder_bootstrap::Transfer(pipe.handle, &commit, sizeof(commit), false, deadline)) return EIO;
++  if (commit.length != sizeof(commit.status) || commit.status != 0) return EPROTO;
++  HANDLE file = binder_bootstrap::DecodeHandle(offered);
++  if (!Current().VerifyPipe(pipe.handle)) {
++    CloseHandle(file);
++    return EACCES;
++  }
++  *result = file;
++  return 0;
++}
++
++int binder_endpoint::InstalledMedia(const rooted_storage_wire::Request& operation,
++                                    const std::wstring& path, const std::wstring& target,
++                                    rooted_storage_wire::Reply* result) {
++  namespace storage = rooted_storage_wire;
++  if (!result || !Current().IsGuest() || Current().IsStandalone()) return EACCES;
++  if (path.size() > 4096 || target.size() > 4096) return ENAMETOOLONG;
++  const std::wstring name = PipeName();
++  if (name.empty()) return EACCES;
++  RecordPipe pipe{ConnectPipe(name)};
++  if (pipe.handle == INVALID_HANDLE_VALUE) return ErrnoFromWin32(GetLastError());
++  DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
++  if (!SetNamedPipeHandleState(pipe.handle, &mode, nullptr, nullptr)) return EIO;
++  Message message;
++  message.Put<uint32_t>(wire::kInstalledMedia);
++  message.Put<uint32_t>(wire::kMagic);
++  message.Put<uint32_t>(wire::kVersion);
++  message.Put(operation);
++  message.Write(path.data(), path.size() * sizeof(wchar_t));
++  message.Write(target.data(), target.size() * sizeof(wchar_t));
++  const uint32_t length = static_cast<uint32_t>(message.bytes.size() - sizeof(uint32_t));
++  std::memcpy(message.bytes.data(), &length, sizeof(length));
++  const ULONGLONG deadline = GetTickCount64() + 5000;
++  struct Response { uint32_t size; int32_t status; } reply{};
++  if (!binder_bootstrap::Transfer(pipe.handle, message.bytes.data(), message.bytes.size(), true, deadline) ||
++      !binder_bootstrap::Transfer(pipe.handle, &reply, sizeof(reply), false, deadline)) return EIO;
++  if (reply.status != 0 || !storage::OpensHandle(operation.operation)) {
++    return reply.size == sizeof(reply.status) && reply.status <= 0 && reply.status >= -4095
++        ? -reply.status : EPROTO;
++  }
++  uint32_t flags = 0;
++  uint64_t offered = 0;
++  if (reply.size != sizeof(reply.status) + sizeof(flags) + sizeof(offered) ||
++      !binder_bootstrap::Transfer(pipe.handle, &flags, sizeof(flags), false, deadline) ||
++      !binder_bootstrap::Transfer(pipe.handle, &offered, sizeof(offered), false, deadline)) return EPROTO;
++  if (offered == 0 || offered == UINT64_MAX || offered > UINTPTR_MAX || (flags & ~storage::kCreated) ||
++      !Current().VerifyPipe(pipe.handle)) return EPROTO;
++  uint32_t acknowledge[] = {sizeof(uint32_t), 1};
++  if (!binder_bootstrap::Transfer(pipe.handle, acknowledge, sizeof(acknowledge), true, deadline) ||
++      !binder_bootstrap::Transfer(pipe.handle, &reply, sizeof(reply), false, deadline) ||
++      reply.size != sizeof(reply.status) || reply.status != 0) return EIO;
++  if (!Current().VerifyPipe(pipe.handle)) {
++    CloseHandle(binder_bootstrap::DecodeHandle(offered));
++    return EACCES;
++  }
++  result->flags = flags;
++  result->handle = offered;
++  return 0;
++}
++
++int binder_endpoint::FileRecordLock(HANDLE file, int command, record_locks::LinuxFlock* flock) {
++  if (!binder_endpoint::Current().IsGuest() || !flock) return EACCES;
++  const std::wstring name = RecordPipeName();
++  if (name.empty()) return EACCES;
++  RecordPipe pipe{ConnectPipe(name)};
++  if (pipe.handle == INVALID_HANDLE_VALUE) return gesher::ErrnoFromWin32(GetLastError());
++  Message request;
++  request.Put<uint32_t>(wire::kFileRecordLock);
++  request.Put<uint32_t>(wire::kMagic);
++  request.Put<uint32_t>(wire::kVersion);
++  request.Put<uint64_t>(binder_bootstrap::EncodeHandle(file));
++  request.Put<int32_t>(command);
++  request.Put<int16_t>(flock->type);
++  request.Put<int16_t>(flock->whence);
++  request.Put<int64_t>(flock->start);
++  request.Put<int64_t>(flock->length);
++  request.Put<int32_t>(flock->pid);
++  std::vector<uint8_t> reply;
++  if (!Send(pipe.handle, request)) return EIO;
++  int error = ReceiveRecordStatus(pipe.handle, &reply);
++  if (error) return error;
++  if (command != 5 && command != 36) return reply.size() == sizeof(int32_t) ? 0 : EPROTO;
++  Reader in{reply.data() + sizeof(int32_t), reply.data() + reply.size()};
++  return in.Get(&flock->type) && in.Get(&flock->whence) && in.Get(&flock->start) &&
++      in.Get(&flock->length) && in.Get(&flock->pid) && in.p == in.end ? 0 : EPROTO;
++}
++
++int binder_endpoint::FileRecordClosed(HANDLE* pin) {
++  if (!binder_endpoint::Current().IsGuest() || !pin || !*pin) return EACCES;
++  const std::wstring name = RecordPipeName();
++  if (name.empty()) return EACCES;
++  RecordPipe pipe{ConnectPipe(name)};
++  if (pipe.handle == INVALID_HANDLE_VALUE) return gesher::ErrnoFromWin32(GetLastError());
++  Message request;
++  request.Put<uint32_t>(wire::kFileRecordClose);
++  request.Put<uint32_t>(wire::kMagic);
++  request.Put<uint32_t>(wire::kVersion);
++  request.Put<uint64_t>(binder_bootstrap::EncodeHandle(*pin));
++  std::vector<uint8_t> reply;
++  if (!Send(pipe.handle, request)) return EIO;
++  int error = ReceiveRecordStatus(pipe.handle, &reply);
++  if (error) return error;
++  if (reply.size() != sizeof(int32_t)) return EPROTO;
++  if (!CloseHandle(*pin)) return gesher::ErrnoFromWin32(GetLastError());
++  *pin = nullptr;
++  Message acknowledge;
++  acknowledge.Put<uint32_t>(1);
++  if (!Send(pipe.handle, acknowledge)) return EIO;
++  error = ReceiveRecordStatus(pipe.handle, &reply);
++  return !error && reply.size() != sizeof(int32_t) ? EPROTO : error;
++}
++
+@@ -877 +1218 @@ int OpenBinder(int flags) {
+-  hello.Put<uint32_t>(wire::kHelloProc);
++  hello.Put<uint32_t>(binder_endpoint::Current().IsOperator() ? wire::kHelloOperator : wire::kHelloProc);
+diff --git a/compat/posix/src/binder_transport.cc b/compat/posix/src/binder_transport.cc
+index 6e91b7280..bb78a5d31 100644
+--- a/compat/posix/src/binder_transport.cc
++++ b/compat/posix/src/binder_transport.cc
+@@ -6,0 +7,3 @@
++#ifdef GESHER
++#include <gesher/fork.h>
++#endif
+@@ -24,0 +28 @@ struct RoutingState {
++constinit RoutingState g_routing;
+@@ -30 +34 @@ RoutingState* Owner() {
+-  static const auto factory = reinterpret_cast<Factory>(reinterpret_cast<void*>(
++  const auto factory = reinterpret_cast<Factory>(reinterpret_cast<void*>(
+@@ -45,2 +49 @@ extern "C" __declspec(dllexport) RoutingState* gesher_binder_transport_owner_v1(
+-  static RoutingState state;
+-  return &state;
++  return &g_routing;
+@@ -103,0 +107,4 @@ HANDLE OpenProtectedBinder(const binder::ProtectedDataEndpoint& routing) {
++
++#ifdef GESHER_FORK_LOCK
++GESHER_FORK_LOCK(gesher::kForkOrderSubsystem, std::mutex, gesher::g_routing.mutex);
++#endif
+diff --git a/compat/posix/src/binder_wire.h b/compat/posix/src/binder_wire.h
+index 049f1e455..c0c03462f 100644
+--- a/compat/posix/src/binder_wire.h
++++ b/compat/posix/src/binder_wire.h
+@@ -120 +120,38 @@ enum Op : uint32_t {
+-  kPublishApplicationSharedMemory = 12,
++  kPublishApplicationSharedMemory = 26,
++  // Same framing as kHelloProc. The protected broker authenticates the
++  // Windows device operator and assigns Android shell; the fields grant no role.
++  kHelloOperator = 12,
++  // One protected child admission over an authenticated pipe. Source is
++  // a Windows process handle in the admitted parent's handle table.
++  // -> {magic, version, source (u64)}; <- {status}
++  kEnrollChild = 13,
++  // Protected regular-file record locks. Requests refer only to a handle in
++  // the pipe sender's table. The broker derives process and file identities.
++  // -> {magic, version, file_handle:u64, command:i32, flock fields}; <- {-errno or 0[, flock fields]}
++  kFileRecordLock = 14,
++  // -> {magic, version, file_handle:u64}; <- {-errno or 0}. After the client
++  // closes its temporary pin, it sends {1:u32} and receives the commit status.
++  kFileRecordClose = 15,
++  // Protected playback. Each request carries {magic, version, stream, interval}.
++  // Each reply carries {status, payload:u64}. The payload is a section handle
++  // in the sender's process, an activity bit, or a device-unique session ID.
++  kAudioPlaybackPublish = 17,
++  kAudioPlaybackQuery = 18,
++  kAudioPlaybackSession = 19,
++  // Audio request framing, with the writable flag in the stream field.
++  kAudioDeviceControls = 20,
++  // Open a bounded protected WASAPI render connection. The payload is a
++  // version and a UTF-16 label, followed by the audio_render protocol.
++  kAudioRender = 21,
++  // Starts a host capture lane or asks for real input endpoint availability.
++  kAudioCapture = 22,
++  // Private metadata or capture connection backed by the Windows camera.
++  kCamera = 23,
++  // Authenticated worker for Windows file drops.
++  kDropWorker = 24,
++  // -> {magic, version}; <- {status[, available, total, free (u64 bytes)]}.
++  // The host chooses the Android data volume; the sender supplies no path.
++  kAndroidDataCapacity = 25,
++  // Reopen an already held directory-list capability; no guest path input.
++  kReopenDirectory = 27,
++  kInstalledMedia = 28,
+@@ -156,0 +194 @@ constexpr const wchar_t kPipePrefix[] = L"\\\\.\\pipe\\gesher-binder-";
++constexpr const wchar_t kStandaloneRecordPipe[] = L"\\\\.\\pipe\\gesher-binder-standalone-record-";
+diff --git a/compat/posix/src/dirent.cc b/compat/posix/src/dirent.cc
+index 5441ebedc..41a6fd167 100644
+--- a/compat/posix/src/dirent.cc
++++ b/compat/posix/src/dirent.cc
+@@ -15,0 +16,3 @@
++#include <cstddef>
++#include <cstdint>
++#include <memory>
+@@ -24,0 +28,2 @@
++#include "rooted_storage_client.h"
++#include <gesher/file_description.h>
+@@ -25,0 +31 @@
++#include <gesher/binder_endpoint.h>
+@@ -30,0 +37,5 @@ struct gesher_DIR {
++  struct RootedScan {
++    unsigned char bytes[16384]{};
++    size_t used = 0;
++    size_t offset = 0;
++  };
+@@ -37,0 +49 @@ struct gesher_DIR {
++  std::unique_ptr<RootedScan> rooted;
+@@ -47,0 +60,4 @@ bool Start(DIR* dir) {
++  if (dir->rooted) {
++    dir->rooted->used = dir->rooted->offset = 0;
++    return lseek(dir->fd, 0, SEEK_SET) >= 0;
++  }
+@@ -68,0 +85,30 @@ void Fill(struct dirent* e, const std::string& name, unsigned char type, long lo
++struct dirent* ReadRooted(DIR* dir) {
++  auto& scan = *dir->rooted;
++  if (scan.offset == scan.used) {
++    const ssize_t size = getdents64(dir->fd, scan.bytes, sizeof(scan.bytes));
++    if (size <= 0) return nullptr;
++    scan.used = static_cast<size_t>(size);
++    scan.offset = 0;
++  }
++  constexpr size_t name_offset = 19;
++  const size_t available = scan.used - scan.offset;
++  if (available < name_offset + 1) return errno = EIO, nullptr;
++  const auto* record = scan.bytes + scan.offset;
++  unsigned long long inode = 0;
++  long long next = 0;
++  unsigned short length = 0;
++  memcpy(&inode, record, sizeof(inode));
++  memcpy(&next, record + 8, sizeof(next));
++  memcpy(&length, record + 16, sizeof(length));
++  if (length < name_offset + 1 || length > available || length % 8 != 0)
++    return errno = EIO, nullptr;
++  const char* name = reinterpret_cast<const char*>(record + name_offset);
++  const auto* end = static_cast<const char*>(memchr(name, 0, length - name_offset));
++  if (!end) return errno = EIO, nullptr;
++  Fill(&dir->entry, std::string(name, end), record[18], next);
++  dir->entry.d_ino = inode;
++  dir->position = next;
++  scan.offset += length;
++  return &dir->entry;
++}
++
+@@ -86,0 +133,15 @@ DIR* Open(const char* name, int fd) {
++    const auto rooted = gesher::storage_root::Lookup(dir->path);
++    if (rooted) {
++      if (rooted.error != 0) {
++        errno = rooted.error;
++        delete dir;
++        return nullptr;
++      }
++      dir->fd = fd >= 0 ? fd : open(name, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
++      if (dir->fd < 0) {
++        delete dir;
++        return nullptr;
++      }
++      dir->rooted = std::make_unique<gesher_DIR::RootedScan>();
++      return dir;
++    }
+@@ -128,0 +190,8 @@ bool DirectoryOfHandle(HANDLE h, std::string* path, bool* on_disk) {
++    // A contained descriptor needs no path to enumerate. Keep an immutable
++    // identity key solely for the process-local stream cache; reopen through
++    // its authenticated broker using the actual descriptor, never this key.
++    if (gesher::binder_endpoint::Current().IsGuest()) {
++      *path = "gesher-directory:" + std::to_string(info.dwVolumeSerialNumber) + ":" +
++          std::to_string(info.nFileIndexHigh) + ":" + std::to_string(info.nFileIndexLow);
++      return true;
++    }
+@@ -331,0 +401,7 @@ bool OpenDirectory(HANDLE fd_handle, std::atomic<HANDLE>* slot, bool* gone) {
++  if (gesher::binder_endpoint::Current().IsGuest()) {
++    HANDLE reopened = INVALID_HANDLE_VALUE;
++    const int error = gesher::binder_endpoint::ReopenDirectory(fd_handle, &reopened);
++    if (error != 0) return errno = error, false;
++    slot->store(reopened);
++    return true;
++  }
+@@ -532,0 +609 @@ DIR* fdopendir(int fd) {
++  if (gesher::FileDescriptionFlags(snapshot) & O_PATH) return errno = EBADF, nullptr;
+@@ -536,0 +614,12 @@ DIR* fdopendir(int fd) {
++  if (gesher::binder_endpoint::Current().IsGuest()) {
++    BY_HANDLE_FILE_INFORMATION info{};
++    if (!GetFileInformationByHandle(snapshot->handle, &info) ||
++        !(info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) return errno = ENOTDIR, nullptr;
++    auto dir = std::make_unique<gesher_DIR>();
++    dir->rooted = std::make_unique<gesher_DIR::RootedScan>();
++    dir->fd = fd;
++    return dir.release();
++  }
++  auto scoped = gesher::DropDescriptorPath(snapshot);
++  if (scoped.empty()) scoped = gesher::storage_root::DescriptorPath(snapshot->handle);
++  if (!scoped.empty()) return Open(gesher::LinuxPath(scoped.c_str()).c_str(), fd);
+@@ -546,0 +636 @@ ssize_t getdents64(int fd, void* buffer, size_t size) {
++  if (gesher::FileDescriptionFlags(snapshot) & O_PATH) return errno = EBADF, -1;
+@@ -659,0 +750 @@ struct dirent* readdir(DIR* dir) {
++  if (dir->rooted) return ReadRooted(dir);
+diff --git a/compat/posix/src/errno.cc b/compat/posix/src/errno.cc
+index 8b90d580b..c2d782802 100644
+--- a/compat/posix/src/errno.cc
++++ b/compat/posix/src/errno.cc
+@@ -72 +72 @@ extern "C" int gesher_rmdir(const char* path) {
+-  if (!gesher::DiskPath(path, &windows, ENOTDIR)) return -1;  // ENOTDIR: a device or /proc file
++  if (!gesher::DiskPath(path, &windows, ENOTDIR, true)) return -1;  // ENOTDIR: a device or /proc file
+diff --git a/compat/posix/src/fd.cc b/compat/posix/src/fd.cc
+index 04c8ed665..720352851 100644
+--- a/compat/posix/src/fd.cc
++++ b/compat/posix/src/fd.cc
+@@ -41,0 +42,2 @@
++#include "startup_null.h"
++#include <gesher/binder_bootstrap.h>
+@@ -131,2 +133,76 @@ int ReadDevice(Device device, void* buf, unsigned int count) {
+-HANDLE OpenFdPlaceholder(bool* pipe) {
+-  if (pipe) *pipe = false;
++namespace {
++
++class AppContainerNull {
++ public:
++  AppContainerNull() {
++    HANDLE token = nullptr;
++    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return;
++    DWORD contained = 0;
++    DWORD size = 0;
++    const bool queried = GetTokenInformation(token, TokenIsAppContainer, &contained,
++                                             sizeof(contained), &size) != FALSE;
++    CloseHandle(token);
++    if (!queried || contained == 0) return;
++    contained_ = true;
++    STARTUPINFOW startup{};
++    startup.cb = sizeof(startup);
++    GetStartupInfoW(&startup);
++    binder_bootstrap::Startup launch;
++    if (binder_bootstrap::ReadStartup(binder_bootstrap::Endpoint::kApplication, &launch) ||
++        binder_bootstrap::ReadStartup(binder_bootstrap::Endpoint::kStandalone, &launch)) {
++      HANDLE inherited = binder_bootstrap::DecodeHandle(launch.null_device);
++      handle_ = DuplicateVerifiedNull(inherited);
++      // Every linked POSIX copy reads this same process startup record.
++      // Keep its original handle alive for process lifetime so a later DLL
++      // cannot close an unrelated handle that reused its numeric value.
++      // Each module owns only its verified duplicate; rejected raw startup
++      // values are never closed here either.
++      verified_writable_ = handle_ != nullptr;
++      if (handle_ != nullptr) return;
++    }
++    if ((startup.dwFlags & STARTF_USESTDHANDLES) != 0 && startup.hStdInput != nullptr &&
++        startup.hStdInput != INVALID_HANDLE_VALUE) {
++      handle_ = DuplicateVerifiedNull(startup.hStdInput);
++    }
++  }
++
++  ~AppContainerNull() {
++    if (handle_ != nullptr) CloseHandle(handle_);
++  }
++
++  HANDLE NewPlaceholder(bool inheritable) const {
++    if (!contained_) return INVALID_HANDLE_VALUE;
++    HANDLE duplicate;
++    if (handle_ != nullptr && DuplicateHandle(GetCurrentProcess(), handle_, GetCurrentProcess(),
++                                              &duplicate, 0, inheritable, DUPLICATE_SAME_ACCESS)) {
++      return duplicate;
++    }
++    // Child stdio can be redirected across exec. A closed private pipe
++    // supplies a CRT slot while the descriptor's owner handles all I/O.
++    HANDLE read_end;
++    HANDLE write_end;
++    SECURITY_ATTRIBUTES attributes{sizeof(attributes), nullptr, inheritable};
++    if (!CreatePipe(&read_end, &write_end, &attributes, 0)) return INVALID_HANDLE_VALUE;
++    CloseHandle(write_end);
++    return read_end;
++  }
++
++  HANDLE NewNull(DWORD access, bool inheritable) const {
++    HANDLE duplicate = INVALID_HANDLE_VALUE;
++    if (!verified_writable_) return INVALID_HANDLE_VALUE;
++    return DuplicateHandle(GetCurrentProcess(), handle_, GetCurrentProcess(), &duplicate,
++                           access, inheritable, 0) ? duplicate : INVALID_HANDLE_VALUE;
++  }
++
++ private:
++  bool contained_ = false;
++  bool verified_writable_ = false;
++  HANDLE handle_ = nullptr;
++};
++
++const AppContainerNull app_container_null;
++
++}  // namespace
++
++HANDLE OpenDescriptorPlaceholder(bool inheritable) {
++  SECURITY_ATTRIBUTES attributes{sizeof(attributes), nullptr, inheritable};
+@@ -134,9 +210,8 @@ HANDLE OpenFdPlaceholder(bool* pipe) {
+-                         nullptr, OPEN_EXISTING, 0, nullptr);
+-  if (h != INVALID_HANDLE_VALUE) return h;
+-  const DWORD nul_error = GetLastError();
+-  DWORD in_container = 0, size = 0;
+-  if (nul_error != ERROR_ACCESS_DENIED ||
+-      !GetTokenInformation(GetCurrentProcessToken(), TokenIsAppContainer,
+-                           &in_container, sizeof(in_container), &size) || !in_container) {
+-    SetLastError(nul_error);
+-    return INVALID_HANDLE_VALUE;
++                         &attributes, OPEN_EXISTING, 0, nullptr);
++  if (h == INVALID_HANDLE_VALUE) {
++    const DWORD error = GetLastError();
++    if (error != ERROR_ACCESS_DENIED) return h;
++    h = app_container_null.NewPlaceholder(inheritable);
++    if (h == INVALID_HANDLE_VALUE) {
++      SetLastError(error);
++    }
+@@ -144,6 +219,16 @@ HANDLE OpenFdPlaceholder(bool* pipe) {
+-  // An AppContainer can reserve a CRT slot with a private kernel file object.
+-  // The unused writer closes immediately. Runtime I/O uses the logical fd.
+-  HANDLE writer = nullptr;
+-  if (!CreatePipe(&h, &writer, nullptr, 1)) return INVALID_HANDLE_VALUE;
+-  CloseHandle(writer);
+-  if (pipe) *pipe = true;
++  return h;
++}
++
++HANDLE OpenNullDevice(DWORD access, bool inheritable) {
++  SECURITY_ATTRIBUTES attributes{sizeof(attributes), nullptr, inheritable};
++  HANDLE handle = CreateFileW(L"NUL", access, FILE_SHARE_READ | FILE_SHARE_WRITE,
++                              &attributes, OPEN_EXISTING, 0, nullptr);
++  if (handle != INVALID_HANDLE_VALUE || GetLastError() != ERROR_ACCESS_DENIED) return handle;
++  handle = app_container_null.NewNull(access, inheritable);
++  if (handle == INVALID_HANDLE_VALUE) SetLastError(ERROR_ACCESS_DENIED);
++  return handle;
++}
++
++HANDLE OpenFdPlaceholder(bool* pipe) {
++  HANDLE h = OpenDescriptorPlaceholder();
++  if (pipe) *pipe = h != INVALID_HANDLE_VALUE && GetFileType(h) == FILE_TYPE_PIPE;
+@@ -154,2 +239 @@ int ReserveFd() {
+-  bool use_pipe = false;
+-  HANDLE h = OpenFdPlaceholder(&use_pipe);
++  HANDLE h = OpenDescriptorPlaceholder();
+@@ -160 +244 @@ int ReserveFd() {
+-  else if ((use_pipe && RegisterOfd(fd, O_RDWR) < 0) ||
++  else if (RegisterOfd(fd, O_RDWR) < 0 ||
+@@ -162,0 +247 @@ int ReserveFd() {
++    ForgetOfd(fd);
+@@ -164 +248,0 @@ int ReserveFd() {
+-    if (use_pipe) ForgetOfd(fd);
+@@ -267,0 +352 @@ bool NativePipeIo(int fd, void* buffer, unsigned int count, bool writing, int* r
++    if (snapshot && snapshot->kind == gesher::DescriptorKind::kUnshareable) return false;
+diff --git a/compat/posix/src/fsops.cc b/compat/posix/src/fsops.cc
+index 4b6254d6b..9973aa11a 100644
+--- a/compat/posix/src/fsops.cc
++++ b/compat/posix/src/fsops.cc
+@@ -28,0 +29 @@
++#include "standalone_input.h"
+@@ -32,0 +34 @@
++#include "rooted_storage_client.h"
+@@ -170 +172,2 @@ int Rename(const char* oldpath, const char* newpath, unsigned flags) {
+-  if (!gesher::DiskPath(oldpath, &from, EACCES) || !gesher::DiskPath(newpath, &to, EACCES)) {
++  if (!gesher::DiskPath(oldpath, &from, EACCES, true) ||
++      !gesher::DiskPath(newpath, &to, EACCES, true)) {
+@@ -176,0 +180,6 @@ int Rename(const char* oldpath, const char* newpath, unsigned flags) {
++  const auto from_root = gesher::storage_root::Lookup(from);
++  const auto to_root = gesher::storage_root::Lookup(to);
++  if (from_root || to_root) {
++    const int error = gesher::storage_root::Rename(from_root, to_root, (flags & kRenameNoReplace) == 0);
++    return error != 0 ? (errno = error, -1) : 0;
++  }
+@@ -285 +294 @@ int Chmod(const char* path, mode_t mode, bool follow) {
+-  if (!gesher::DiskPath(path, &windows, EPERM)) return -1;
++  if (!gesher::DiskPath(path, &windows, EPERM, true)) return -1;
+@@ -286,0 +296,8 @@ int Chmod(const char* path, mode_t mode, bool follow) {
++  if (const auto rooted = gesher::storage_root::Lookup(windows)) {
++    HANDLE h;
++    const int error = gesher::storage_root::Open(rooted, gesher::rooted_storage_wire::kMetadataWrite, &h);
++    if (error != 0) return errno = error, -1;
++    const int result = SetMode(h, mode);
++    CloseHandle(h);
++    return result;
++  }
+@@ -341,3 +358,27 @@ int Access(const char* path, int mode, bool follow) {
+-  HANDLE h = gesher::CreateFileFollowingFifo(windows.c_str(), FILE_READ_ATTRIBUTES,
+-                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+-                         FILE_FLAG_BACKUP_SEMANTICS | (follow ? 0 : FILE_FLAG_OPEN_REPARSE_POINT));
++  if (gesher::standalone_input::Current().Matches(windows)) {
++    return (mode & (W_OK | X_OK)) != 0 ? (errno = EACCES, -1) : 0;
++  }
++  if (const auto bootstrap = gesher::storage_root::LookupBootstrap(windows)) {
++    if ((mode & (W_OK | X_OK)) != 0) return errno = EACCES, -1;
++    HANDLE h;
++    const int error = gesher::storage_root::OpenBootstrap(*bootstrap, &h);
++    if (error != 0) return errno = error, -1;
++    CloseHandle(h);
++    return 0;
++  }
++  const auto rooted = gesher::storage_root::Lookup(windows);
++  if (rooted.drop_alias && (mode & W_OK)) return errno = EACCES, -1;
++  HANDLE h;
++  if (rooted) {
++    namespace wire = gesher::rooted_storage_wire;
++    const uint32_t access = !rooted.IsInstalledMedia() ? wire::kMetadata
++        : access_kind == gesher::AccessKind::kWrite ? wire::kMetadataWrite
++        : access_kind == gesher::AccessKind::kRead ? wire::kRead : wire::kMetadata;
++    const int error = gesher::storage_root::Open(rooted, access, &h);
++    if (error != 0) return errno = error, -1;
++  } else {
++    h = gesher::CreateFileFollowingFifo(windows.c_str(), FILE_READ_ATTRIBUTES,
++                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
++                           FILE_FLAG_BACKUP_SEMANTICS | (follow ? 0 : FILE_FLAG_OPEN_REPARSE_POINT));
++
++  }
+@@ -345 +386 @@ int Access(const char* path, int mode, bool follow) {
+-  if (!gesher::CheckExternalStorageHandle(h, access_kind)) {
++  if (!rooted.IsInstalledMedia() && !gesher::CheckExternalStorageHandle(h, access_kind)) {
+@@ -421,0 +463,7 @@ ssize_t Readlink(const char* path, char* buf, size_t size) {
++      if (const auto rooted = gesher::storage_root::Lookup(windows)) {
++        HANDLE h;
++        const int error = gesher::storage_root::Open(rooted, gesher::rooted_storage_wire::kMetadata, &h);
++        if (error != 0) return errno = error, -1;
++        CloseHandle(h);
++        return errno = EINVAL, -1;  // The rooted view does not traverse reparse points.
++      }
+@@ -584 +632,13 @@ int remove(const char* path) {
+-  if (!gesher::DiskPath(path, &windows, EACCES)) return -1;
++  if (!gesher::DiskPath(path, &windows, EACCES, true)) return -1;
++  if (const auto rooted = gesher::storage_root::Lookup(windows)) {
++    HANDLE h;
++    int error = gesher::storage_root::Open(rooted, gesher::rooted_storage_wire::kMetadata, &h);
++    if (error != 0) return errno = error, -1;
++    BY_HANDLE_FILE_INFORMATION info;
++    const bool okay = GetFileInformationByHandle(h, &info);
++    if (!okay) gesher::FailWithLastError();
++    CloseHandle(h);
++    if (!okay) return -1;
++    error = gesher::storage_root::Remove(rooted, (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0);
++    return error != 0 ? (errno = error, -1) : 0;
++  }
+@@ -624,0 +685,3 @@ int fchdir(int fd) {
++  if (const auto rooted = gesher::storage_root::Lookup(path)) {
++    return errno = rooted.error != 0 ? rooted.error : EOPNOTSUPP, -1;
++  }
+@@ -852,0 +916,3 @@ FILE* gesher_freopen_state(const char* path, const char* mode, FILE* stream, int
++        if (const auto rooted = gesher::storage_root::Lookup(windows)) {
++          return fail_reopen(rooted.error != 0 ? rooted.error : EOPNOTSUPP);
++        }
+diff --git a/compat/posix/src/internal.h b/compat/posix/src/internal.h
+index b65ab5ac2..7e8a415f1 100644
+--- a/compat/posix/src/internal.h
++++ b/compat/posix/src/internal.h
+@@ -98 +98,2 @@ std::string LinuxPath(const wchar_t* windows);
+-bool DiskPath(const char* path, std::wstring* windows, int special);
++// Only operations with a broker implementation may use allow_broker.
++bool DiskPath(const char* path, std::wstring* windows, int special, bool allow_broker = false);
+diff --git a/compat/posix/src/ofd.cc b/compat/posix/src/ofd.cc
+index 3e16f60fd..73cf92fdf 100644
+--- a/compat/posix/src/ofd.cc
++++ b/compat/posix/src/ofd.cc
+@@ -4,0 +5 @@
++#include <gesher/binder_bootstrap.h>
+@@ -294 +295,6 @@ int ImportStartup(Table* state) try {
+-  if (!startup.lpReserved2 || startup.cbReserved2 < sizeof(int) + sizeof(ofd_transfer::Startup)) return 0;
++  size_t descriptor_bytes = startup.cbReserved2;
++  binder_bootstrap::Startup admission;
++  if (binder_bootstrap::ReadStartupRecord(&admission)) {
++    descriptor_bytes -= sizeof(admission);
++  }
++  if (!startup.lpReserved2 || descriptor_bytes < sizeof(int) + sizeof(ofd_transfer::Startup)) return 0;
+@@ -296 +302 @@ int ImportStartup(Table* state) try {
+-  std::memcpy(&extension, startup.lpReserved2 + startup.cbReserved2 - sizeof(extension), sizeof(extension));
++  std::memcpy(&extension, startup.lpReserved2 + descriptor_bytes - sizeof(extension), sizeof(extension));
+@@ -302 +308 @@ int ImportStartup(Table* state) try {
+-  if (crt_size > startup.cbReserved2 || startup.cbReserved2 - crt_size != sizeof(ofd_transfer::Startup)) return EINVAL;
++  if (crt_size > descriptor_bytes || descriptor_bytes - crt_size != sizeof(ofd_transfer::Startup)) return EINVAL;
+@@ -684,0 +691,5 @@ DescriptorSnapshotPtr CaptureFileHandle(HANDLE file) {
++std::wstring DropDescriptorPath(const DescriptorSnapshotPtr& descriptor) {
++  if (!descriptor || !descriptor->description) return {};
++  std::lock_guard<std::mutex> guard(descriptor->description->mutex);
++  return descriptor->description->drop_path;
++}
+diff --git a/compat/posix/src/ofd_internal.h b/compat/posix/src/ofd_internal.h
+index f656ad2d2..8fa6a1d4a 100644
+--- a/compat/posix/src/ofd_internal.h
++++ b/compat/posix/src/ofd_internal.h
+@@ -59,0 +60,2 @@ struct OpenFileDescription {
++  // Immutable once the new descriptor is published. Aliases share it via this OFD.
++  std::wstring drop_path;
+diff --git a/compat/posix/src/path.cc b/compat/posix/src/path.cc
+index 289354492..c580267ca 100644
+--- a/compat/posix/src/path.cc
++++ b/compat/posix/src/path.cc
+@@ -28,0 +29,5 @@
++#include "startup_null.h"
++#include "standalone_input.h"
++#include "rooted_storage_client.h"
++#include <gesher/drop_mount.h>
++
+@@ -37,0 +43 @@
++#include "ofd_internal.h"
+@@ -211 +217 @@ DWORD Access(int flags) {
+-int FdFromHandle(HANDLE h, int flags) {
++int FdFromHandle(HANDLE h, int flags, const std::wstring* drop_path = nullptr) {
+@@ -225,0 +232,9 @@ int FdFromHandle(HANDLE h, int flags) {
++  if (drop_path != nullptr) {
++    std::shared_ptr<OpenFileDescription> ofd;
++    if (!LookupOfd(fd, &ofd)) {
++      close(fd);
++      return errno = EIO, -1;
++    }
++    std::lock_guard<std::mutex> guard(ofd->mutex);
++    ofd->drop_path = *drop_path;
++  }
+@@ -244,0 +260,55 @@ int OpenFile(const std::wstring& path, int flags, mode_t mode) {
++  auto& selected = standalone_input::Current();
++  if (selected.Matches(path)) {
++    const bool metadata_only = (flags & O_PATH) != 0;
++    if ((flags & O_DIRECTORY) != 0) return errno = ENOTDIR, -1;
++    if (!metadata_only) {
++      if ((flags & (O_CREAT | O_EXCL)) == (O_CREAT | O_EXCL)) return errno = EEXIST, -1;
++      if ((Access(flags) & GENERIC_WRITE) != 0) return errno = EACCES, -1;
++    }
++    HANDLE owned = selected.Open(metadata_only, (flags & O_CLOEXEC) == 0);
++    if (owned == INVALID_HANDLE_VALUE) return errno = EACCES, -1;
++    return FdFromHandle(owned, flags);
++  }
++  if (const auto bootstrap = storage_root::LookupBootstrap(path)) {
++    if ((flags & O_DIRECTORY) != 0) return errno = ENOTDIR, -1;
++    if ((flags & (O_CREAT | O_TRUNC)) != 0 || (Access(flags) & GENERIC_WRITE) != 0) {
++      return errno = EACCES, -1;
++    }
++    HANDLE owned;
++    const int error = storage_root::OpenBootstrap(*bootstrap, &owned);
++    if (error != 0) return errno = error, -1;
++    if ((flags & O_CLOEXEC) == 0 && !SetHandleInformation(owned, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT)) {
++      const int result = FailWithLastError();
++      CloseHandle(owned);
++      return result;
++    }
++    return FdFromHandle(owned, flags);
++  }
++  if (const auto rooted = storage_root::Lookup(path)) {
++    namespace wire = rooted_storage_wire;
++    uint32_t access = wire::kMetadata;
++    if ((flags & O_PATH) == 0) {
++      switch (flags & O_ACCMODE) {
++        case O_RDONLY: access = (flags & O_TRUNC) != 0 ? wire::kReadWrite : wire::kRead; break;
++        case O_WRONLY: access = wire::kWrite; break;
++        default: access = wire::kReadWrite; break;
++      }
++      if ((flags & O_CREAT) != 0) {
++        access |= wire::kCreate;
++        if ((flags & O_EXCL) != 0) access |= wire::kExclusive;
++        if ((mode & 0200) == 0) access |= wire::kReadOnlyCreate;
++      }
++      if ((flags & O_TRUNC) != 0) access |= wire::kTruncate;
++      if ((flags & O_DSYNC) != 0) access |= wire::kWriteThrough;
++    }
++    if ((flags & O_DIRECTORY) != 0) access |= wire::kDirectory;
++    HANDLE owned;
++    const int error = storage_root::Open(rooted, access, &owned);
++    if (error != 0) return errno = error, -1;
++    if ((flags & O_CLOEXEC) == 0 && !SetHandleInformation(owned, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT)) {
++      const int result = FailWithLastError();
++      CloseHandle(owned);
++      return result;
++    }
++    return FdFromHandle(owned, flags, rooted.drop_alias ? &path : nullptr);
++  }
+@@ -370,3 +440 @@ int OpenDevice(PathKind kind, int flags) {
+-  SECURITY_ATTRIBUTES inherit = {sizeof(inherit), nullptr, (flags & O_CLOEXEC) == 0};
+-  HANDLE h = CreateFileW(L"NUL", Access(flags), FILE_SHARE_READ | FILE_SHARE_WRITE, &inherit,
+-                         OPEN_EXISTING, 0, nullptr);
++  HANDLE h = OpenNullDevice(Access(flags), (flags & O_CLOEXEC) == 0);
+@@ -421,2 +489 @@ bool ResolveAt(int dirfd, const char* path, std::string* out) {
+-  HANDLE h = HandleFromFd(dirfd);
+-  if (h == INVALID_HANDLE_VALUE) return errno = EBADF, false;
++  HANDLE h = snapshot->handle;
+@@ -435,5 +502,9 @@ bool ResolveAt(int dirfd, const char* path, std::string* out) {
+-  DWORD n = GetFinalPathNameByHandleW(h, nullptr, 0, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+-  std::wstring dir(n, L'\0');
+-  n = GetFinalPathNameByHandleW(h, dir.data(), n, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+-  if (n == 0 || n >= dir.size()) return FailWithLastError(), false;
+-  dir.resize(n);
++  auto dir = DropDescriptorPath(snapshot);
++  if (dir.empty()) dir = storage_root::DescriptorPath(h);
++  if (dir.empty()) {
++    DWORD n = GetFinalPathNameByHandleW(h, nullptr, 0, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
++    dir.resize(n);
++    n = GetFinalPathNameByHandleW(h, dir.data(), n, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
++    if (n == 0 || n >= dir.size()) return FailWithLastError(), false;
++    dir.resize(n);
++  }
+@@ -559,0 +631,6 @@ PathKind MapPath(const char* path, std::wstring* windows) {
++
++  if (std::string_view(path).starts_with(drop_mount::kAndroidPrefix) && drop_mount::Enabled()) {
++    *windows = Widen(path);
++    std::replace(windows->begin(), windows->end(), L'/', L'\\');
++    return PathKind::kFile;
++  }
+@@ -603 +680 @@ std::wstring NativeFontWindowsPath(const std::string& path) {
+-bool DiskPath(const char* path, std::wstring* windows, int special) {
++bool DiskPath(const char* path, std::wstring* windows, int special, bool allow_broker) {
+@@ -607,0 +685,4 @@ bool DiskPath(const char* path, std::wstring* windows, int special) {
++      if (!allow_broker) {
++        const auto rooted = storage_root::Lookup(*windows);
++        if (rooted) return errno = rooted.error != 0 ? rooted.error : EOPNOTSUPP, false;
++      }
+@@ -672,0 +754,4 @@ int PosixDelete(const std::wstring& windows, bool directory) {
++  if (const auto rooted = storage_root::Lookup(windows)) {
++    const int error = storage_root::Remove(rooted, directory);
++    return error != 0 ? (errno = error, -1) : 0;
++  }
+@@ -896,0 +982,8 @@ int utimensat(int dirfd, const char* path, const struct timespec times[2], int f
++      if (const auto rooted = gesher::storage_root::Lookup(windows)) {
++        HANDLE h;
++        const int error = gesher::storage_root::Open(rooted, gesher::rooted_storage_wire::kMetadataWrite, &h);
++        if (error != 0) return errno = error, -1;
++        const int result = SetTimes(h, times);
++        CloseTimeHandle(h);
++        return result;
++      }
+@@ -954 +1047 @@ int mkdir(const char* path) {
+-    case PathKind::kFile:
++    case PathKind::kFile: {
+@@ -955,0 +1049,4 @@ int mkdir(const char* path) {
++      if (const auto rooted = gesher::storage_root::Lookup(windows)) {
++        const int error = gesher::storage_root::MakeDirectory(rooted);
++        return error != 0 ? (errno = error, -1) : 0;
++      }
+@@ -956,0 +1054 @@ int mkdir(const char* path) {
++    }
+@@ -967 +1065 @@ int unlink(const char* path) {
+-  if (!gesher::DiskPath(path, &windows, EACCES)) return -1;  // EACCES: /dev and /proc names
++  if (!gesher::DiskPath(path, &windows, EACCES, true)) return -1;  // EACCES: /dev and /proc names
+diff --git a/compat/posix/src/pipe_io.cc b/compat/posix/src/pipe_io.cc
+index 2c5158fbd..b44d75fea 100644
+--- a/compat/posix/src/pipe_io.cc
++++ b/compat/posix/src/pipe_io.cc
+@@ -20,0 +21 @@
++#include <cwchar>
+@@ -361,0 +363,3 @@ int CreatePipeDescriptors(int descriptors[2], int flags) {
++  DWORD contained = 0, token_bytes = 0;
++  if (!GetTokenInformation(GetCurrentProcessToken(), TokenIsAppContainer,
++                           &contained, sizeof(contained), &token_bytes)) return FailWithLastError();
+@@ -365 +369,6 @@ int CreatePipeDescriptors(int descriptors[2], int flags) {
+-  wchar_t name[100] = L"\\\\.\\pipe\\gesher-";
++  // Windows lets an AppContainer create NPFS instances in its own LOCAL
++  // namespace. Descriptor inheritance and transfer use the opened handles.
++  const wchar_t* pipe_directory = contained ? L"\\\\.\\pipe\\LOCAL\\gesher-" : L"\\\\.\\pipe\\gesher-";
++  const size_t prefix = std::wcslen(pipe_directory);
++  wchar_t name[100];
++  std::copy_n(pipe_directory, prefix, name);
+@@ -367 +375,0 @@ int CreatePipeDescriptors(int descriptors[2], int flags) {
+-  const size_t prefix = 16;
+diff --git a/compat/posix/src/process.cc b/compat/posix/src/process.cc
+index 39abaebf0..82625ee68 100644
+--- a/compat/posix/src/process.cc
++++ b/compat/posix/src/process.cc
+@@ -40,0 +41 @@
++#include <gesher/windows_process_identity.h>
+@@ -314,17 +315,2 @@ pid_t getppid(void) {
+-  // NtQueryInformationProcess's ProcessBasicInformation (0).
+-  struct BasicInformation {
+-    LONG exit_status;
+-    void* peb;
+-    ULONG_PTR affinity;
+-    LONG base_priority;
+-    ULONG_PTR pid;
+-    ULONG_PTR parent_pid;
+-  };
+-  using QueryFn = LONG(NTAPI*)(HANDLE, int, PVOID, ULONG, PULONG);
+-  static auto query = reinterpret_cast<QueryFn>(reinterpret_cast<void*>(
+-      GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQueryInformationProcess")));
+-  BasicInformation info = {};
+-  if (query == nullptr || query(GetCurrentProcess(), 0, &info, sizeof(info), nullptr) < 0) {
+-    return 1;
+-  }
+-  DWORD parent = static_cast<DWORD>(info.parent_pid);
++  const DWORD parent = gesher::process_identity::ReadParentProcessId(GetCurrentProcess(), GetCurrentProcessId());
++  if (parent == 0) return 1;
+diff --git a/compat/posix/src/procfs.cc b/compat/posix/src/procfs.cc
+index 3071f5ff6..37765fd5d 100644
+--- a/compat/posix/src/procfs.cc
++++ b/compat/posix/src/procfs.cc
+@@ -1460,0 +1461,4 @@ bool ReadLink(const std::wstring& name, std::string* target) {
++    if (const auto drop = DropDescriptorPath(snapshot); !drop.empty()) {
++      *target = LinuxPath(drop.c_str());
++      return true;
++    }
+@@ -1505,0 +1510,3 @@ int Open(const std::wstring& name, int flags) {
++      if (const auto drop = DropDescriptorPath(snapshot); !drop.empty()) {
++        return open(LinuxPath(drop.c_str()).c_str(), flags & ~(O_CREAT | O_EXCL), 0);
++      }
+diff --git a/compat/posix/src/record_lock_descriptors.cc b/compat/posix/src/record_lock_descriptors.cc
+index ab2623f10..51f0e4a68 100644
+--- a/compat/posix/src/record_lock_descriptors.cc
++++ b/compat/posix/src/record_lock_descriptors.cc
+@@ -3,0 +4 @@
++#include <gesher/binder_endpoint.h>
+@@ -32,0 +34,2 @@ struct LocalState {
++  PTP_TIMER broker_sweep = nullptr;
++  bool sweep_pending = false;
+@@ -36,0 +40 @@ LocalState* local = nullptr;
++bool guest_record_locks = false;  // Protected by DescriptorGuard.
+@@ -177,0 +182,63 @@ bool Collect(RegistryState* state, const File& file) {
++
++bool MarkIdleBrokerAnchors() {
++  bool removable = false;
++  for (Anchor& anchor : local->anchors) {
++    uint32_t access = 0, handles = 0;
++    if (!anchor.used || anchor.close_after_commit ||
++        HandleAccess(anchor.handle, &access, &handles) || handles != 1) continue;
++    // This inaccessible private anchor is the FILE_OBJECT's sole handle.
++    // Even an inherited or transferred descriptor would raise this count.
++    anchor.close_after_commit = true;
++    removable = true;
++  }
++  return removable;
++}
++
++void RemoveMarkedAnchors(RegistryState* state) {
++  for (const Anchor& anchor : local->anchors) if (anchor.used && anchor.close_after_commit) {
++    RemoveOwner(&state->locks, anchor.description, &anchor.file);
++    RemoveAnchorReference(state, anchor);
++  }
++}
++
++int PublishSweep(RegistryState* state) {
++  RemoveMarkedAnchors(state);
++  const int error = local->registry.Commit();
++  if (error) CancelPending();
++  return error ? error : CloseCommitted();
++}
++
++void ScheduleBrokerSweep();
++void CALLBACK SweepBrokerAnchors(PTP_CALLBACK_INSTANCE, void*, PTP_TIMER) {
++  DescriptorGuard guard;
++  local->sweep_pending = false;
++  RegistryState* state = nullptr;
++  if (!CloseCommitted() && MarkIdleBrokerAnchors()) {
++    if (!local->registry.Begin(&state, 100)) {
++      PublishSweep(state);
++      local->registry.Unlock();
++    } else {
++      CancelPending();
++    }
++  }
++  ScheduleBrokerSweep();
++}
++
++void ScheduleBrokerSweep() {
++  if (local->sweep_pending) return;
++  bool has_anchors = false;
++  for (const Anchor& anchor : local->anchors) has_anchors |= anchor.used;
++  if (!has_anchors) return;
++  if (!local->broker_sweep) {
++    local->broker_sweep = CreateThreadpoolTimer(SweepBrokerAnchors, nullptr, nullptr);
++    if (!local->broker_sweep) return;
++  }
++  // Run only while the broker owns OFD anchors. Guest termination can bypass
++  // close notifications, including a descendant holding the last alias.
++  constexpr LONGLONG kOneSecond = -10'000'000;
++  const auto ticks = static_cast<ULONGLONG>(kOneSecond);
++  FILETIME due{static_cast<DWORD>(ticks), static_cast<DWORD>(ticks >> 32)};
++  SetThreadpoolTimer(local->broker_sweep, &due, 0, 100);
++  local->sweep_pending = true;
++}
++
+@@ -221,0 +289,59 @@ int Description(RegistryState* state, HANDLE file, const File& identity, bool cr
++
++int RunOperation(HANDLE file, const ProcessIdentity& caller, const PreparedOperation& prepared,
++                 LinuxFlock* broker_output, void* user_flock) {
++  int error = CloseCommitted();
++  RegistryState* state = nullptr;
++  if (!error) error = local->registry.Begin(&state);
++  if (error) return error;
++  Pruned pruned{};
++  PruneDeadOwners(state, &pruned);
++  bool changed = pruned.references || pruned.process_locks || pruned.description_locks || pruned.waits;
++  changed |= Collect(state, prepared.file);
++  Owner owner{Ownership::kProcess, caller.pid, caller.created};
++  Anchor* allocated = nullptr;
++  if (prepared.ofd) {
++    const bool create = !prepared.query && prepared.input.type != 2;
++    if (broker_output && create && MarkIdleBrokerAnchors()) {
++      error = PublishSweep(state);
++      if (error) {
++        local->registry.Unlock();
++        ScheduleBrokerSweep();
++        return error;
++      }
++      changed = false;  // Pruning and collection were published together.
++    }
++    if (!error) error = Description(state, file, prepared.file, create, &owner, &allocated);
++  }
++  LinuxFlock output{};
++  bool mutated = false;
++  if (!error) error = ApplyOperation(state, owner, prepared, &output, &mutated);
++  if (!error && prepared.query && user_flock) error = CopyQueryResult(output, user_flock);
++  if (!error && (changed || mutated || allocated)) error = local->registry.Commit();
++  if (error) {
++    CancelPending();
++    if (allocated) {
++      allocated->close_after_commit = true;
++      int cleanup = ClosePrivate(allocated);
++      if (cleanup) error = cleanup;
++    }
++  } else {
++    error = CloseCommitted();
++  }
++  local->registry.Unlock();
++  if (!error && broker_output && allocated) ScheduleBrokerSweep();
++  if (!error && prepared.query && broker_output) *broker_output = output;
++  return error;
++}
++
++int CloseFileLocks(RegistryState* state, const File& file, const ProcessIdentity& caller) {
++  Pruned pruned{};
++  PruneDeadOwners(state, &pruned);
++  Owner process{Ownership::kProcess, caller.pid, caller.created};
++  RemoveOwner(&state->locks, process, &file);
++  Collect(state, file);
++  int error = local->registry.Commit();
++  if (error) CancelPending();
++  else error = CloseCommitted();
++  local->registry.Unlock();
++  return error;
++}
+@@ -259,4 +384,0 @@ int DescriptorFcntl(int descriptor, int command, void* user_flock) {
+-  if (!error) error = Initialize();
+-  if (!error) error = CloseCommitted();  // Retry only private anchors whose references were already unpublished.
+-  RegistryState* state = nullptr;
+-  if (!error) error = local->registry.Begin(&state);
+@@ -264,20 +386,10 @@ int DescriptorFcntl(int descriptor, int command, void* user_flock) {
+-  Pruned pruned{};
+-  PruneDeadOwners(state, &pruned);
+-  bool changed = pruned.references || pruned.process_locks || pruned.description_locks || pruned.waits;
+-  changed |= Collect(state, prepared.file);
+-  Owner owner{Ownership::kProcess, local->process.pid, local->process.created};
+-  Anchor* allocated = nullptr;
+-  if (prepared.ofd) error = Description(state, file, prepared.file, !prepared.query && prepared.input.type != 2,
+-                                       &owner, &allocated);
+-  bool mutated = false;
+-  if (!error) error = ApplyOperation(state, owner, prepared, &mutated);
+-  if (!error && (changed || mutated || allocated)) error = local->registry.Commit();
+-  if (error) {
+-    CancelPending();
+-    if (allocated) {
+-      allocated->close_after_commit = true;
+-      int cleanup = ClosePrivate(allocated);
+-      if (cleanup) error = cleanup;
+-    }
+-  } else error = CloseCommitted();
+-  local->registry.Unlock();
++  if (binder_endpoint::Current().IsGuest()) {
++    LinuxFlock output;
++    std::memcpy(&output, &prepared.input, sizeof(output));
++    error = binder_endpoint::FileRecordLock(file, command, &output);
++    if (!error && prepared.query) error = CopyQueryResult(output, user_flock);
++    if (!error && !prepared.query && prepared.input.type != 2) guest_record_locks = true;
++  } else {
++    error = Initialize();
++    if (!error) error = RunOperation(file, local->process, prepared, nullptr, user_flock);
++  }
+@@ -288,0 +401,18 @@ int DescriptorFcntl(int descriptor, int command, void* user_flock) {
++int BrokerDescriptorFcntl(HANDLE file, const ProcessIdentity& caller, int command,
++                          const LinuxFlock& input, LinuxFlock* output) {
++  DescriptorGuard guard;
++  PreparedOperation prepared{};
++  int error = PrepareOperation(file, command, &input, &prepared);
++  if (!error) error = Initialize();
++  return error ? error : RunOperation(file, caller, prepared, output, nullptr);
++}
++
++int BrokerDescriptorClosed(const File& file, const ProcessIdentity& caller) {
++  DescriptorGuard guard;
++  int error = Initialize();
++  if (!error) error = CloseCommitted();
++  RegistryState* state = nullptr;
++  if (!error) error = local->registry.Begin(&state);
++  return error ? error : CloseFileLocks(state, file, caller);
++}
++
+@@ -292,2 +422,3 @@ ClosingDescriptor::ClosingDescriptor(int descriptor) : descriptor_(descriptor) {
+-  if (!local) return;
+-  error_ = CloseCommitted();
++  brokered_ = binder_endpoint::Current().IsGuest();
++  if (brokered_ ? !guest_record_locks : !local) return;
++  if (!brokered_) error_ = CloseCommitted();
+@@ -297 +428 @@ ClosingDescriptor::ClosingDescriptor(int descriptor) : descriptor_(descriptor) {
+-  error_ = FileIdentity(file, &file_);
++  if (!brokered_) error_ = FileIdentity(file, &file_);
+@@ -298,0 +430 @@ ClosingDescriptor::ClosingDescriptor(int descriptor) : descriptor_(descriptor) {
++  if (brokered_) return;
+@@ -313 +445 @@ int ClosingDescriptor::Finish(bool closed_or_replaced) {
+-  if (!begun_) return 0;
++  if (!probe_) return 0;
+@@ -319,0 +452,3 @@ int ClosingDescriptor::Finish(bool closed_or_replaced) {
++  if (brokered_ && !error && (closed_or_replaced || !same)) {
++    return binder_endpoint::FileRecordClosed(&probe_);
++  }
+@@ -323,10 +458,2 @@ int ClosingDescriptor::Finish(bool closed_or_replaced) {
+-  Pruned pruned{};
+-  PruneDeadOwners(staged_, &pruned);
+-  Owner process{Ownership::kProcess, local->process.pid, local->process.created};
+-  RemoveOwner(&staged_->locks, process, &file_);
+-  Collect(staged_, file_);
+-  error = local->registry.Commit();
+-  if (error) CancelPending();
+-  else error = CloseCommitted();
+-  local->registry.Unlock(); begun_ = false;
+-  return error;
++  begun_ = false;
++  return CloseFileLocks(staged_, file_, local->process);
+diff --git a/compat/posix/src/record_lock_descriptors.h b/compat/posix/src/record_lock_descriptors.h
+index 22a04c5c7..297031ba0 100644
+--- a/compat/posix/src/record_lock_descriptors.h
++++ b/compat/posix/src/record_lock_descriptors.h
+@@ -22,0 +23,6 @@ int DescriptorFcntl(int descriptor, int command, void* user_flock);
++// Trusted broker operations. The handle must be a broker-owned duplicate of
++// a file in the authenticated caller's handle table.
++int BrokerDescriptorFcntl(HANDLE file, const ProcessIdentity& caller, int command,
++                          const LinuxFlock& input, LinuxFlock* output);
++int BrokerDescriptorClosed(const File& file, const ProcessIdentity& caller);
++
+@@ -41,0 +48 @@ class ClosingDescriptor {
++  bool brokered_ = false;
+diff --git a/compat/posix/src/record_lock_duplicate.cc b/compat/posix/src/record_lock_duplicate.cc
+index be199b5ef..71ee788f0 100644
+--- a/compat/posix/src/record_lock_duplicate.cc
++++ b/compat/posix/src/record_lock_duplicate.cc
+@@ -4,0 +5 @@
++#include "startup_null.h"
+@@ -34 +35 @@ int EnsureNulIdentity() {
+-    HANDLE candidate = OpenFdPlaceholder();
++    HANDLE candidate = gesher::OpenDescriptorPlaceholder();
+diff --git a/compat/posix/src/record_lock_operation.cc b/compat/posix/src/record_lock_operation.cc
+index bf7cdb703..3e90c3e1b 100644
+--- a/compat/posix/src/record_lock_operation.cc
++++ b/compat/posix/src/record_lock_operation.cc
+@@ -45 +45 @@ int WriteUser(void* destination, const void* source, size_t bytes) {
+-int PrepareOperation(HANDLE anchor, int command, void* user_flock, PreparedOperation* prepared) {
++int PrepareOperation(HANDLE anchor, int command, const void* user_flock, PreparedOperation* prepared) {
+@@ -82 +81,0 @@ int PrepareOperation(HANDLE anchor, int command, void* user_flock, PreparedOpera
+-  prepared->user_flock = user_flock;
+@@ -89 +88 @@ int ApplyOperation(RegistryState* state, const Owner& owner,
+-                    const PreparedOperation& prepared, bool* mutated) {
++                    const PreparedOperation& prepared, LinuxFlock* output, bool* mutated) {
+@@ -99,2 +98,2 @@ int ApplyOperation(RegistryState* state, const Owner& owner,
+-    LinuxFlock output;
+-    std::memcpy(&output, &prepared.input, sizeof(output));  // Preserve all nonconflicting input fields/padding.
++    if (!output) return EINVAL;
++    std::memcpy(output, &prepared.input, sizeof(*output));  // Preserve unchanged input fields and padding.
+@@ -102 +101 @@ int ApplyOperation(RegistryState* state, const Owner& owner,
+-    if (!conflict) output.type = 2;
++    if (!conflict) output->type = 2;
+@@ -104,6 +103,6 @@ int ApplyOperation(RegistryState* state, const Owner& owner,
+-      output.type = static_cast<int16_t>(conflict->kind);
+-      output.whence = 0;
+-      output.start = static_cast<int64_t>(conflict->range.start);
+-      output.length = conflict->range.end == kThroughEof ? 0 :
+-                      static_cast<int64_t>(conflict->range.end - conflict->range.start);
+-      output.pid = conflict->pid;
++      output->type = static_cast<int16_t>(conflict->kind);
++      output->whence = 0;
++      output->start = static_cast<int64_t>(conflict->range.start);
++      output->length = conflict->range.end == kThroughEof ? 0 :
++                       static_cast<int64_t>(conflict->range.end - conflict->range.start);
++      output->pid = conflict->pid;
+@@ -111 +110 @@ int ApplyOperation(RegistryState* state, const Owner& owner,
+-    return WriteUser(prepared.user_flock, &output, sizeof(output));
++    return 0;
+@@ -119,0 +119,4 @@ int ApplyOperation(RegistryState* state, const Owner& owner,
++int CopyQueryResult(const LinuxFlock& output, void* user_flock) {
++  return WriteUser(user_flock, &output, sizeof(output));
++}
++
+@@ -126 +129,3 @@ int NonblockingOperation(RegistryState* state, HANDLE anchor, const Owner& owner
+-  return error ? error : ApplyOperation(state, owner, prepared, mutated);
++  LinuxFlock output{};
++  if (!error) error = ApplyOperation(state, owner, prepared, &output, mutated);
++  return !error && prepared.query ? CopyQueryResult(output, user_flock) : error;
+diff --git a/compat/posix/src/record_lock_operation.h b/compat/posix/src/record_lock_operation.h
+index 2b7556da0..3f2e18a3d 100644
+--- a/compat/posix/src/record_lock_operation.h
++++ b/compat/posix/src/record_lock_operation.h
+@@ -23 +22,0 @@ struct PreparedOperation {
+-  void* user_flock;
+@@ -30 +29,3 @@ struct PreparedOperation {
+-int PrepareOperation(HANDLE anchor, int command, void* user_flock, PreparedOperation* prepared);
++int PrepareOperation(HANDLE anchor, int command, const void* user_flock, PreparedOperation* prepared);
++// The transaction consumes only values and returns the query result in its own
++// address space. A broker must never dereference a guest process's user buffer.
+@@ -32 +33,2 @@ int ApplyOperation(RegistryState* state, const Owner& owner,
+-                    const PreparedOperation& prepared, bool* mutated);
++                    const PreparedOperation& prepared, LinuxFlock* output, bool* mutated);
++int CopyQueryResult(const LinuxFlock& output, void* user_flock);
+diff --git a/compat/posix/src/sqlite_path.cc b/compat/posix/src/sqlite_path.cc
+index 4d91f3f74..c89cfa9da 100644
+--- a/compat/posix/src/sqlite_path.cc
++++ b/compat/posix/src/sqlite_path.cc
+@@ -46 +46,3 @@ extern "C" int gesher_sqlite_full_pathname(
+-  if (!gesher::DiskPath(path, &windows, EINVAL)) return SQLITE_CANTOPEN;
++  // The Win32 SQL VFS handles actual selected-root access through its broker
++  // wrappers. This step only builds SQLite's owned canonical filename.
++  if (!gesher::DiskPath(path, &windows, EINVAL, true)) return SQLITE_CANTOPEN;
+diff --git a/compat/posix/src/stat.cc b/compat/posix/src/stat.cc
+index 9a9d28455..413d9b36e 100644
+--- a/compat/posix/src/stat.cc
++++ b/compat/posix/src/stat.cc
+@@ -14,0 +15,2 @@
++#include "rooted_storage_client.h"
++#include "standalone_input.h"
+@@ -142 +144,25 @@ int StatPath(const char* path, struct stat* buf, bool follow, int depth = 0) {
+-      HANDLE h = gesher::CreateFileFollowingFifo(windows.c_str(), FILE_READ_ATTRIBUTES,
++      auto& selected = gesher::standalone_input::Current();
++      const bool inherited = selected.Matches(windows);
++      if (!inherited) {
++        if (const auto bootstrap = gesher::storage_root::LookupBootstrap(windows)) {
++          HANDLE h;
++          const int error = gesher::storage_root::OpenBootstrap(*bootstrap, &h);
++          if (error != 0) return errno = error, -1;
++          const int result = gesher::CheckExternalStorageHandle(h, gesher::AccessKind::kStat)
++                       ? FromHandle(h, buf) : -1;
++          CloseHandle(h);
++          return result;
++        }
++        if (const auto rooted = gesher::storage_root::Lookup(windows)) {
++          HANDLE h;
++          const int error = gesher::storage_root::Open(rooted, gesher::rooted_storage_wire::kMetadata, &h);
++          if (error != 0) return errno = error, -1;
++          const int result = (rooted.IsInstalledMedia() ||
++              gesher::CheckExternalStorageHandle(h, gesher::AccessKind::kStat))
++                       ? FromHandle(h, buf) : -1;
++          if (result == 0 && rooted.drop_alias) buf->st_mode &= ~0222;
++          CloseHandle(h);
++          return result;
++        }
++      }
++      HANDLE h = inherited ? selected.Open(true) : gesher::CreateFileFollowingFifo(windows.c_str(), FILE_READ_ATTRIBUTES,
+@@ -145 +171,3 @@ int StatPath(const char* path, struct stat* buf, bool follow, int depth = 0) {
+-      if (h == INVALID_HANDLE_VALUE) return gesher::FailWithLastError();
++      if (h == INVALID_HANDLE_VALUE) {
++        return inherited ? (errno = EACCES, -1) : gesher::FailWithLastError();
++      }
+@@ -238,2 +266,5 @@ int fstat(int fd, struct stat* buf) {
+-    case FILE_TYPE_DISK:
+-      return FromHandle(h, buf, snapshot->description.get());
++    case FILE_TYPE_DISK: {
++      const int result = FromHandle(h, buf, snapshot->description.get());
++      if (result == 0 && !gesher::DropDescriptorPath(snapshot).empty()) buf->st_mode &= ~0222;
++      return result;
++    }
+diff --git a/compat/posix/src/storage_policy.cc b/compat/posix/src/storage_policy.cc
+index fca36f326..9481316ae 100644
+--- a/compat/posix/src/storage_policy.cc
++++ b/compat/posix/src/storage_policy.cc
+@@ -4,0 +5 @@
++#include <gesher/shared_storage_policy.h>
+@@ -18,0 +20 @@
++#include "rooted_storage_client.h"
+@@ -24,7 +26,2 @@ namespace {
+-enum class StorageMode {
+-  kScoped,
+-  kMediaRo,
+-  kLegacyRo,
+-  kLegacyRw,
+-  kManager,
+-};
++using shared_storage_policy::StorageMode;
++using shared_storage_policy::ParsePolicyContent;
+@@ -221,0 +219 @@ struct ProcessIdentity {
++  std::wstring media_nt_root;
+@@ -234,0 +233 @@ extern "C" __declspec(dllexport) ProcessIdentity* gesher_storage_policy_owner_v1
++    if (const wchar_t* root = _wgetenv(L"GESHER_STORAGE_MEDIA_NT_PATH")) value->media_nt_root = root;
+@@ -254,65 +252,0 @@ const ProcessIdentity& Identity() {
+-bool ParsePolicyContent(std::string_view content, std::string_view expected_pkg,
+-                        std::string_view expected_uid, StorageMode* out_mode, int* out_media_mask) {
+-  std::string_view version;
+-  std::string_view pkg;
+-  std::string_view uid;
+-  std::string_view mode_str;
+-  int media_mask = 0;
+-  bool has_media_mask = false;
+-
+-  size_t pos = 0;
+-  while (pos < content.size()) {
+-    size_t nl = content.find('\n', pos);
+-    std::string_view line =
+-        nl == std::string_view::npos ? content.substr(pos) : content.substr(pos, nl - pos);
+-    pos = nl == std::string_view::npos ? content.size() : nl + 1;
+-    if (!line.empty() && line.back() == '\r') line.remove_suffix(1);
+-    if (line.empty() || line[0] == '#') continue;
+-    size_t eq = line.find('=');
+-    if (eq == std::string_view::npos) continue;
+-    std::string_view key = line.substr(0, eq);
+-    std::string_view val = line.substr(eq + 1);
+-    if (key == "v") {
+-      version = val;
+-    } else if (key == "pkg") {
+-      pkg = val;
+-    } else if (key == "uid") {
+-      uid = val;
+-    } else if (key == "mode") {
+-      mode_str = val;
+-    } else if (key == "media_mask") {
+-      if (has_media_mask) return false;
+-      has_media_mask = true;
+-      std::string tmp(val);
+-      char* end = nullptr;
+-      long parsed = strtol(tmp.c_str(), &end, 10);
+-      if (end != tmp.c_str() && *end == '\0' && parsed >= 0 && parsed <= 7) {
+-        media_mask = static_cast<int>(parsed);
+-      } else return false;
+-    }
+-  }
+-
+-  if (version != "1" || pkg != expected_pkg || expected_uid.empty() || uid != expected_uid ||
+-      !has_media_mask)
+-    return false;
+-
+-  StorageMode mode;
+-  if (mode_str == "MANAGER") {
+-    mode = StorageMode::kManager;
+-  } else if (mode_str == "LEGACY_RW") {
+-    mode = StorageMode::kLegacyRw;
+-  } else if (mode_str == "LEGACY_RO") {
+-    mode = StorageMode::kLegacyRo;
+-  } else if (mode_str == "MEDIA_RO") {
+-    mode = StorageMode::kMediaRo;
+-  } else if (mode_str == "SCOPED") {
+-    mode = StorageMode::kScoped;
+-  } else {
+-    return false;
+-  }
+-
+-  *out_mode = mode;
+-  *out_media_mask = media_mask;
+-  return true;
+-}
+-
+@@ -398,7 +331,0 @@ void LoadPolicy(const std::wstring& policy_path, std::string_view app_pkg, std::
+-bool MatchesExtensionList(std::wstring_view ext, const wchar_t* const* list, size_t count) {
+-  for (size_t i = 0; i < count; ++i) {
+-    if (EqualsIgnoreCase(ext, list[i])) return true;
+-  }
+-  return false;
+-}
+-
+@@ -425,22 +352,2 @@ bool IsAllowedMediaFile(const std::wstring& canon_path, int media_mask, AccessKi
+-  std::wstring_view ext = name.substr(dot);
+-
+-  static constexpr const wchar_t* kImages[] = {
+-      L".jpg", L".jpeg", L".png", L".gif", L".webp", L".bmp", L".heic", L".heif", L".dng", L".avif",
+-  };
+-  static constexpr const wchar_t* kVideo[] = {
+-      L".mp4", L".m4v", L".mkv", L".webm", L".3gp", L".avi", L".mov", L".ts",
+-  };
+-  static constexpr const wchar_t* kAudio[] = {
+-      L".mp3", L".m4a", L".aac", L".ogg", L".oga", L".opus", L".wav", L".flac", L".mid", L".midi",
+-  };
+-
+-  if ((media_mask & 1) != 0 && MatchesExtensionList(ext, kImages, sizeof(kImages) / sizeof(kImages[0]))) {
+-    return true;
+-  }
+-  if ((media_mask & 2) != 0 && MatchesExtensionList(ext, kVideo, sizeof(kVideo) / sizeof(kVideo[0]))) {
+-    return true;
+-  }
+-  if ((media_mask & 4) != 0 && MatchesExtensionList(ext, kAudio, sizeof(kAudio) / sizeof(kAudio[0]))) {
+-    return true;
+-  }
+-  return false;
++
++  return shared_storage_policy::HasMediaExtension(name, media_mask);
+@@ -540,0 +448,2 @@ std::wstring ExternalStorageDataRoot() {
++const std::wstring& ExternalStorageMediaNtRoot() { return Identity().media_nt_root; }
++
+@@ -549 +458,2 @@ std::wstring ExternalStorageChildEnvironment(const wchar_t* environment) {
+-        !EqualsIgnoreCase(name, L"GESHER_UID") && !EqualsIgnoreCase(name, L"ANDROID_DATA"))
++        !EqualsIgnoreCase(name, L"GESHER_UID") && !EqualsIgnoreCase(name, L"ANDROID_DATA") &&
++        !EqualsIgnoreCase(name, L"GESHER_STORAGE_MEDIA_NT_PATH"))
+@@ -554,0 +465,2 @@ std::wstring ExternalStorageChildEnvironment(const wchar_t* environment) {
++  if (!identity.media_nt_root.empty())
++    entries.push_back(L"GESHER_STORAGE_MEDIA_NT_PATH=" + identity.media_nt_root);
+@@ -566,0 +479,4 @@ bool CheckExternalStorageAccess(const std::wstring& windows_path, AccessKind kin
++  // The installed broker authorizes the operation on its exact file object.
++  // In a lowbox, a DOS GetFileAttributes preflight cannot tell a permitted
++  // shared directory from a file the broker must keep private.
++  if (storage_root::Lookup(windows_path).IsInstalledMedia()) return true;
+@@ -575,0 +492,12 @@ bool CheckExternalStorageHandle(HANDLE handle, AccessKind kind) {
++  if (length && length < 32768) {
++    return CheckCanonicalPath(identity, LexicalCanonicalize(std::wstring(path, length)), kind);
++  }
++  const auto& root = identity.media_nt_root;
++  if (identity.media_root.empty() || !StartsWithIgnoreCase(root, L"\\Device\\")) {
++    return errno = EACCES, false;
++  }
++
++  // A lowbox can have an authorised file handle without access to the DOS
++  // drive mapping. Check the kernel object's actual name against the same
++  // media root pinned by the trusted launcher, without reopening the path.
++  length = GetFinalPathNameByHandleW(handle, path, 32768, FILE_NAME_NORMALIZED | VOLUME_NAME_NT);
+@@ -577 +505,5 @@ bool CheckExternalStorageHandle(HANDLE handle, AccessKind kind) {
+-  return CheckCanonicalPath(identity, LexicalCanonicalize(std::wstring(path, length)), kind);
++  const std::wstring_view actual(path, length);
++  if (!StartsWithIgnoreCase(actual, L"\\Device\\")) return errno = EACCES, false;
++  if (!StartsWithIgnoreCase(actual, root) ||
++      (actual.size() > root.size() && actual[root.size()] != L'\\')) return true;
++  return CheckCanonicalPath(identity, identity.media_root + std::wstring(actual.substr(root.size())), kind);
+diff --git a/compat/posix/src/storage_policy.h b/compat/posix/src/storage_policy.h
+index 2cedd4fe6..8a2e7382e 100644
+--- a/compat/posix/src/storage_policy.h
++++ b/compat/posix/src/storage_policy.h
+@@ -25,0 +26,4 @@ bool CheckExternalStorageHandle(HANDLE handle, AccessKind kind);
++// Native canonical name of the active profile's media root from the host
++// launcher. This is used to translate names, never to authorize an operation.
++const std::wstring& ExternalStorageMediaNtRoot();
++
+diff --git a/compat/posix/src/system.cc b/compat/posix/src/system.cc
+index 3f9268368..07a61c0c8 100644
+--- a/compat/posix/src/system.cc
++++ b/compat/posix/src/system.cc
+@@ -29,0 +30 @@
++#include <gesher/filesystem_capacity.h>
+@@ -49,0 +51 @@
++#include "rooted_storage_client.h"
+@@ -80,2 +82 @@ int NiceFromPriority(int priority) {
+-void FillStatvfs(ULARGE_INTEGER avail, ULARGE_INTEGER total, ULARGE_INTEGER free,
+-                 struct statvfs* buf) {
++void FillStatvfs(uint64_t avail, uint64_t total, uint64_t free, struct statvfs* buf) {
+@@ -86,3 +87,3 @@ void FillStatvfs(ULARGE_INTEGER avail, ULARGE_INTEGER total, ULARGE_INTEGER free
+-  buf->f_blocks = total.QuadPart / block;
+-  buf->f_bfree = free.QuadPart / block;
+-  buf->f_bavail = avail.QuadPart / block;
++  buf->f_blocks = total / block;
++  buf->f_bfree = free / block;
++  buf->f_bavail = avail / block;
+@@ -125,0 +127,8 @@ namespace {
++int RootedStatvfs(HANDLE file, struct statvfs* buf) {
++  gesher::rooted_storage_wire::Filesystem capacity;
++  const int error = gesher::QueryFilesystemCapacity(file, &capacity);
++  if (error != 0) return errno = error, -1;
++  FillStatvfs(capacity.available_bytes, capacity.total_bytes, capacity.free_bytes, buf);
++  return 0;
++}
++
+@@ -153 +162 @@ int StatvfsHandle(HANDLE h, struct statvfs* buf) {
+-  FillStatvfs(avail, total, free, buf);
++  FillStatvfs(avail.QuadPart, total.QuadPart, free.QuadPart, buf);
+@@ -215,0 +225,7 @@ int statvfs(const char* path, struct statvfs* buf) {
++  if (strcmp(path, "/data") == 0 && gesher::storage_root::HasBroker()) {
++    gesher::rooted_storage_wire::Filesystem capacity;
++    const int error = gesher::storage_root::StatAndroidData(&capacity);
++    if (error != 0) return errno = error, -1;
++    FillStatvfs(capacity.available_bytes, capacity.total_bytes, capacity.free_bytes, buf);
++    return 0;
++  }
+@@ -221 +237,12 @@ int statvfs(const char* path, struct statvfs* buf) {
+-  } else {
++    if (const auto rooted = gesher::storage_root::Lookup(mapped)) {
++      HANDLE h;
++      const int error = gesher::storage_root::Open(rooted, gesher::rooted_storage_wire::kMetadata, &h);
++      if (error != 0) return errno = error, -1;
++      const int result = RootedStatvfs(h, buf);
++      const int saved_errno = errno;
++      CloseHandle(h);
++      errno = saved_errno;
++      return result;
++    }
++  }
++  if (kind != gesher::PathKind::kFile) {
+@@ -264,0 +292 @@ int fstatvfs(int fd, struct statvfs* buf) {
++  if (!gesher::storage_root::DescriptorPath(h).empty()) return RootedStatvfs(h, buf);
+diff --git a/compat/posix/src/system_properties.cc b/compat/posix/src/system_properties.cc
+index 406ce51fd..4389a9179 100644
+--- a/compat/posix/src/system_properties.cc
++++ b/compat/posix/src/system_properties.cc
+@@ -8,0 +9 @@
++#include <gesher/cohost_bootstrap.h>
+@@ -24,0 +26 @@
++#include "rooted_storage_client.h"
+@@ -98 +100,3 @@ struct Area {
+-  std::wstring root, persistent;
++  Snapshot overrides;
++  std::wstring root, path, persistent;
++  bool writable = false;
+@@ -103,4 +107,11 @@ bool Valid(const std::string& name, const std::string& value);
+-bool InAppContainer() {
+-  DWORD contained = 0, size = 0;
+-  return GetTokenInformation(GetCurrentProcessToken(), TokenIsAppContainer,
+-                             &contained, sizeof(contained), &size) && contained != 0;
++bool WritableProcess() {
++  // Use the primary Windows token even when a thread is impersonating a client.
++  static const bool writable = [] {
++    Handle token;
++    DWORD contained = 0, size = 0;
++    if (ProtectedSystemServer()) return true;
++    return OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token.value) &&
++           GetTokenInformation(token.value, TokenIsAppContainer, &contained,
++                               sizeof(contained), &size) && !contained;
++  }();
++  return writable;
+@@ -231,5 +242 @@ bool Decode(const std::string& data, Snapshot* values) {
+-bool Read(const std::wstring& path, std::string* data, bool optional) {
+-  Handle file;
+-  file.value = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+-                           nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+-  if (file.value == INVALID_HANDLE_VALUE) return optional && GetLastError() == ERROR_FILE_NOT_FOUND;
++bool ReadContents(HANDLE file, std::string* data) {
+@@ -237 +244 @@ bool Read(const std::wstring& path, std::string* data, bool optional) {
+-  if (!GetFileSizeEx(file.value, &size) || size.QuadPart > kCapacity || size.QuadPart < 0) return false;
++  if (!GetFileSizeEx(file, &size) || size.QuadPart > kCapacity || size.QuadPart < 0) return false;
+@@ -240 +247 @@ bool Read(const std::wstring& path, std::string* data, bool optional) {
+-  return ReadFile(file.value, data->data(), static_cast<DWORD>(data->size()), &count, nullptr) &&
++  return ReadFile(file, data->data(), static_cast<DWORD>(data->size()), &count, nullptr) &&
+@@ -242,0 +250,7 @@ bool Read(const std::wstring& path, std::string* data, bool optional) {
++bool Read(const std::wstring& path, std::string* data, bool optional) {
++  Handle file;
++  file.value = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
++                          nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
++  if (file.value == INVALID_HANDLE_VALUE) return optional && GetLastError() == ERROR_FILE_NOT_FOUND;
++  return ReadContents(file.value, data);
++}
+@@ -334,0 +349,32 @@ Snapshot Initial() {
++
++bool LoadBootstrapOverrides(Area* area) {
++  if (area->writable) return true;
++  const auto& scope = cohost_bootstrap::Current();
++  if (!scope || scope.build_prop.empty()) return true;
++  Handle file;
++  if (storage_root::OpenBootstrap(rooted_storage_wire::Op::kOpenBuildProp, &file.value) != 0) return false;
++  std::string data;
++  if (!ReadContents(file.value, &data)) return false;
++  for (size_t start = 0; start < data.size();) {
++    const size_t end = data.find('\n', start);
++    const std::string line = Trim(data.substr(start, end == std::string::npos ? end : end - start));
++    start = end == std::string::npos ? data.size() : end + 1;
++    if (line.empty() || line.front() == '#') continue;
++    const size_t equal = line.find('=');
++    if (equal == 0 || equal == std::string::npos) continue;
++    std::string name = Trim(line.substr(0, equal));
++    if (!name.empty() && name.back() == '?') name = Trim(name.substr(0, name.size() - 1));
++    std::string text = Trim(line.substr(equal + 1));
++    if (!ServedBuildProperty(name, text) || !Valid(name, text)) continue;
++    const auto existing = area->values.find(name);
++    const bool present = existing != area->values.end();
++    // Match the standalone Java loader. Existing ro.* properties stay
++    // immutable, and an assignment of the existing value changes no serial.
++    if (present && (name.starts_with("ro.") || existing->second.text == text)) continue;
++    Value update{text, Serial(name, text, present ? existing->second.serial : 0, present)};
++    area->values[name] = update;
++    area->overrides[name] = std::move(update);
++  }
++  return true;
++}
++
+@@ -336,8 +382,4 @@ bool Refresh(Area* area) {
+-  const auto* layout = static_cast<const AreaLayout*>(area->view);
+-  const Header* header = &layout->header;
+-  // Writers serialize in the existing mutex. A read-only process reads the
+-  // published bank without being able to block a writer. A second publication
+-  // can reuse our bank, so verify the generation after copying it.
+-  for (int attempt = 0; attempt < 16; ++attempt) {
+-    const uint32_t generation = __atomic_load_n(&header->generation, __ATOMIC_ACQUIRE);
+-    if (generation == 0 || header->magic != kMagic || header->version != kVersion) return false;
++  const auto* header = static_cast<const Header*>(area->view);
++  for (int attempt = 0; attempt < 8; ++attempt) {
++    uint32_t generation = __atomic_load_n(&header->generation, __ATOMIC_ACQUIRE);
++    if (!generation || header->magic != kMagic || header->version != kVersion) return false;
+@@ -345,5 +387,7 @@ bool Refresh(Area* area) {
+-    const unsigned bank = generation & 1u;
+-    const uint32_t used = __atomic_load_n(&header->used[bank], __ATOMIC_RELAXED);
+-    if (used > kPayloadCapacity) return false;
+-    std::string data(layout->banks[bank], used);
+-    __atomic_thread_fence(__ATOMIC_ACQ_REL);
++    uint32_t slot = generation & 1;
++    uint32_t used = __atomic_load_n(&header->used[slot], __ATOMIC_RELAXED);
++    std::string data;
++    if (used <= kPayloadCapacity) data.assign(static_cast<const AreaLayout*>(area->view)->banks[slot], used);
++    // The writer publishes the other slot first. If it has published again
++    // while we copied, this slot might have been reused and must be discarded.
++    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+@@ -351 +395,2 @@ bool Refresh(Area* area) {
+-    if (!Decode(data, &area->values)) return false;
++    if (used > kPayloadCapacity || !Decode(data, &area->values)) return false;
++    for (const auto& [name, value] : area->overrides) area->values[name] = value;
+@@ -355,2 +400,2 @@ bool Refresh(Area* area) {
+-  // A writer can publish repeatedly while the reader is copying a snapshot.
+-  // Keep the last coherent values, and retry the new generation on next use.
++  // During sustained writes, keep the last coherent snapshot. Wait callers
++  // will poll again until the property changes or their timeout expires.
+@@ -359,0 +405 @@ bool Publish(Area* area, Snapshot values) {
++  if (!area->writable) return false;
+@@ -451 +497,3 @@ Area* Current() { // LocalMutex is held by every caller.
+-  area->read_only = InAppContainer() && !ProtectedSystemServer();
++  area->path = path;
++  area->writable = WritableProcess();
++  area->read_only = !area->writable;
+@@ -476,0 +525,2 @@ Area* Current() { // LocalMutex is held by every caller.
++    header->magic = kMagic;
++    header->version = kVersion;
+@@ -479 +529 @@ Area* Current() { // LocalMutex is held by every caller.
+-  if (!Refresh(area.get()) || !InheritRoot(session, data)) return nullptr;
++  if (!Refresh(area.get()) || !LoadBootstrapOverrides(area.get()) || !InheritRoot(session, data)) return nullptr;
+@@ -522,0 +573,8 @@ bool Initialize() {
++
++std::wstring ReadOnlyAreaPath() {
++  if (!WritableProcess()) return {};
++  std::lock_guard lock(LocalMutex());
++  Area* area = Current();
++  return area ? area->path : std::wstring{};
++}
++
+@@ -566 +624 @@ bool Set(const std::string& name, const std::string& value) {
+-  if (!Valid(name, value)) return false;
++  if (!WritableProcess() || !Valid(name, value)) return false;
+diff --git a/compat/posix/src/unistd.cc b/compat/posix/src/unistd.cc
+index 2497370f3..de1ce7107 100644
+--- a/compat/posix/src/unistd.cc
++++ b/compat/posix/src/unistd.cc
+@@ -25,0 +26,2 @@
++#include <gesher/binder_bootstrap.h>
++
+@@ -37,0 +40 @@
++#include "rooted_storage_client.h"
+@@ -45,0 +49,2 @@ uid_t AppUid() {
++    const uint32_t protected_uid = gesher::binder_bootstrap::GuestUid();
++    if (protected_uid != 0) return static_cast<uid_t>(protected_uid);
+@@ -71,0 +77,4 @@ bool FinalPath(HANDLE h, std::string* out) {
++  if (const auto scoped = gesher::storage_root::DescriptorPath(h); !scoped.empty()) {
++    *out = gesher::LinuxPath(scoped.c_str());
++    return true;
++  }
+@@ -903,2 +912,9 @@ char* realpath(const char* path, char* resolved_path) {
+-    HANDLE h = gesher::CreateFileFollowingFifo(wpath.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE |
+-                                               FILE_SHARE_DELETE, FILE_FLAG_BACKUP_SEMANTICS);
++    const auto rooted = gesher::storage_root::Lookup(wpath);
++    HANDLE h;
++    if (rooted) {
++      const int error = gesher::storage_root::Open(rooted, gesher::rooted_storage_wire::kMetadata, &h);
++      if (error != 0) return errno = error, nullptr;
++    } else {
++      h = gesher::CreateFileFollowingFifo(wpath.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
++                       FILE_FLAG_BACKUP_SEMANTICS);
++    }
+@@ -909 +925 @@ char* realpath(const char* path, char* resolved_path) {
+-    if (!gesher::CheckExternalStorageHandle(h, gesher::AccessKind::kStat)) {
++    if (!rooted.IsInstalledMedia() && !gesher::CheckExternalStorageHandle(h, gesher::AccessKind::kStat)) {
+@@ -915,2 +931,10 @@ char* realpath(const char* path, char* resolved_path) {
+-    bool ok = gesher::system_linker::IsFileHandle(h) ? (out = gesher::system_linker::kPath, true)
+-                                                      : FinalPath(h, &out);
++    bool ok;
++    if (rooted.drop_alias || rooted.IsInstalledMedia()) {
++      out = gesher::LinuxPath(wpath.c_str());
++      ok = true;
++    } else if (gesher::system_linker::IsFileHandle(h)) {
++      out = gesher::system_linker::kPath;
++      ok = true;
++    } else {
++      ok = FinalPath(h, &out);
++    }
+diff --git a/compat/posix/src/unix_rights.cc b/compat/posix/src/unix_rights.cc
+index e5b6f589a..a1b4707a6 100644
+--- a/compat/posix/src/unix_rights.cc
++++ b/compat/posix/src/unix_rights.cc
+@@ -27,0 +28,2 @@
++#include <gesher/binder_endpoint.h>
++
+@@ -102,2 +104,2 @@ HANDLE Connect() {
+-    pipe = CreateFileW(name.c_str(), wire::kPipeClientAccess, 0, nullptr, OPEN_EXISTING, 0,
+-                       nullptr);
++    pipe = CreateFileW(name.c_str(), wire::kPipeClientAccess, 0, nullptr, OPEN_EXISTING,
++                       SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, nullptr);
+@@ -109,0 +112,4 @@ HANDLE Connect() {
++  if (!binder_endpoint::Current().VerifyPipe(pipe)) {
++    CloseHandle(pipe);
++    return INVALID_HANDLE_VALUE;
++  }
+diff --git a/tests/native/ofd_transfer_host_test.cc.in b/tests/native/ofd_transfer_host_test.cc.in
+index 5b20c7cf9..e2ba05f8c 100644
+--- a/tests/native/ofd_transfer_host_test.cc.in
++++ b/tests/native/ofd_transfer_host_test.cc.in
+@@ -86 +86,2 @@ constexpr DWORD CREATE_UNICODE_ENVIRONMENT = 0x400, EXTENDED_STARTUPINFO_PRESENT
+-    CREATE_NO_WINDOW = 0x8000000, DETACHED_PROCESS = 0x8, CREATE_NEW_CONSOLE = 0x10;
++    CREATE_NO_WINDOW = 0x8000000, DETACHED_PROCESS = 0x8, CREATE_NEW_CONSOLE = 0x10,
++    CREATE_SUSPENDED = 0x4, CREATE_BREAKAWAY_FROM_JOB = 0x1000000;
+@@ -444,0 +446,33 @@ static BOOL CreateProcessW(const wchar_t*, wchar_t*, void*, void*, BOOL, DWORD,
++@BINDER_STARTUP_RECORD@
++
++// The Linux fixture exercises ordinary OFD transport. A real AppContainer
++// child is covered by the Windows admission and descriptor fixtures.
++static BOOL TerminateProcess(HANDLE, DWORD) { std::abort(); }
++static DWORD ResumeThread(HANDLE) { std::abort(); }
++
++namespace gesher::binder_bootstrap {
++static uint32_t GuestUid() { std::abort(); }
++}
++namespace gesher::binder_endpoint {
++struct FixtureEndpoint {
++  bool IsGuest() const { return false; }
++  bool IsStandalone() const { std::abort(); }
++  bool DuplicateToGuestChild(HANDLE*) const { std::abort(); }
++};
++static const FixtureEndpoint& Current() {
++  static const FixtureEndpoint endpoint;
++  return endpoint;
++}
++static bool EnrollChild(HANDLE) { std::abort(); }
++}
++namespace gesher::cohost_bootstrap {
++struct FixtureScope {
++  explicit operator bool() const { std::abort(); }
++  bool DuplicateForChild(HANDLE*, HANDLE*) const { std::abort(); }
++};
++static const FixtureScope& Current() {
++  static const FixtureScope scope;
++  return scope;
++}
++}
++
+@@ -445,0 +480,6 @@ namespace gesher {
++static HANDLE OpenDescriptorPlaceholder(bool inherit) {
++  SECURITY_ATTRIBUTES attributes{sizeof(attributes), nullptr, inherit ? TRUE : FALSE};
++  return CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
++                    &attributes, OPEN_EXISTING, 0, nullptr);
++}
++static HANDLE OpenNullDevice(DWORD, bool) { std::abort(); }
+diff --git a/tools/test_ofd_transfer_contracts.py b/tools/test_ofd_transfer_contracts.py
+index 17667bdeb..0b1f14efc 100644
+--- a/tools/test_ofd_transfer_contracts.py
++++ b/tools/test_ofd_transfer_contracts.py
+@@ -26,0 +27,25 @@ def without_includes(source):
++def load_host_template():
++    bootstrap = (ROOT / "compat/posix/include/gesher/binder_bootstrap.h").read_text()
++    boundary = "\ninline bool ReadStartup(Endpoint endpoint, Startup* result)"
++    if bootstrap.count(boundary) != 1:
++        raise ValueError("Binder startup-record boundary changed")
++    startup_record = without_includes(bootstrap[:bootstrap.index(boundary)])
++    template = (ROOT / "tests/native/ofd_transfer_host_test.cc.in").read_text()
++    headers = {
++        "@PE_EXPORTS_HEADER@": str(ROOT / "compat/elf/exec/pe_exports.h"),
++        "@ENVIRONMENT_ENCODING_HEADER@": str(ROOT / "compat/posix/include/gesher/environment_utf16.h"),
++        "@BINDER_STARTUP_RECORD@": startup_record + "\n}  // namespace gesher::binder_bootstrap\n",
++    }
++    for token, value in headers.items():
++        if template.count(token) != 1:
++            raise ValueError("OFD host boundary changed: " + token)
++        template = template.replace(token, value)
++    return template
++
++
++def require_rendered_host_source(source):
++    remaining = sorted(set(re.findall(r"@[A-Z][A-Z0-9_]*@", source)))
++    if remaining:
++        raise ValueError("Unresolved OFD host source markers: " + ", ".join(remaining))
++
++
+@@ -43 +68 @@ def main():
+-    template = (ROOT / "tests/native/ofd_transfer_host_test.cc.in").read_text()
++    template = load_host_template()
+@@ -45,2 +69,0 @@ def main():
+-        "@PE_EXPORTS_HEADER@": str(ROOT / "compat/elf/exec/pe_exports.h"),
+-        "@ENVIRONMENT_ENCODING_HEADER@": str(ROOT / "compat/posix/include/gesher/environment_utf16.h"),
+@@ -55,0 +79 @@ def main():
++    require_rendered_host_source(template)
+diff --git a/tools/test_revocable_file_contracts.py b/tools/test_revocable_file_contracts.py
+index c2fe1eef5..79fc5e7c5 100644
+--- a/tools/test_revocable_file_contracts.py
++++ b/tools/test_revocable_file_contracts.py
+@@ -17,0 +18,2 @@ import tempfile
++from test_ofd_transfer_contracts import load_host_template, require_rendered_host_source
++
+@@ -31 +33 @@ def main():
+-    base = (ROOT / "tests/native/ofd_transfer_host_test.cc.in").read_text()
++    base = load_host_template()
+@@ -33,2 +34,0 @@ def main():
+-    boundary = boundary.replace("@PE_EXPORTS_HEADER@", str(ROOT / "compat/elf/exec/pe_exports.h"))
+-    boundary = boundary.replace("@ENVIRONMENT_ENCODING_HEADER@", str(ROOT / "compat/posix/include/gesher/environment_utf16.h"))
+@@ -61,0 +62 @@ def main():
++    require_rendered_host_source(template)

@@ -39,6 +39,8 @@
 #include "poll_scratch.h"
 #include "record_lock_descriptors.h"
 #include "socket_internal.h"
+#include "startup_null.h"
+#include <gesher/binder_bootstrap.h>
 
 namespace gesher {
 namespace {
@@ -128,40 +130,122 @@ int ReadDevice(Device device, void* buf, unsigned int count) {
 
 }  // namespace
 
-HANDLE OpenFdPlaceholder(bool* pipe) {
-  if (pipe) *pipe = false;
-  HANDLE h = CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                         nullptr, OPEN_EXISTING, 0, nullptr);
-  if (h != INVALID_HANDLE_VALUE) return h;
-  const DWORD nul_error = GetLastError();
-  DWORD in_container = 0, size = 0;
-  if (nul_error != ERROR_ACCESS_DENIED ||
-      !GetTokenInformation(GetCurrentProcessToken(), TokenIsAppContainer,
-                           &in_container, sizeof(in_container), &size) || !in_container) {
-    SetLastError(nul_error);
-    return INVALID_HANDLE_VALUE;
+namespace {
+
+class AppContainerNull {
+ public:
+  AppContainerNull() {
+    HANDLE token = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return;
+    DWORD contained = 0;
+    DWORD size = 0;
+    const bool queried = GetTokenInformation(token, TokenIsAppContainer, &contained,
+                                             sizeof(contained), &size) != FALSE;
+    CloseHandle(token);
+    if (!queried || contained == 0) return;
+    contained_ = true;
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    GetStartupInfoW(&startup);
+    binder_bootstrap::Startup launch;
+    if (binder_bootstrap::ReadStartup(binder_bootstrap::Endpoint::kApplication, &launch) ||
+        binder_bootstrap::ReadStartup(binder_bootstrap::Endpoint::kStandalone, &launch)) {
+      HANDLE inherited = binder_bootstrap::DecodeHandle(launch.null_device);
+      handle_ = DuplicateVerifiedNull(inherited);
+      // Every linked POSIX copy reads this same process startup record.
+      // Keep its original handle alive for process lifetime so a later DLL
+      // cannot close an unrelated handle that reused its numeric value.
+      // Each module owns only its verified duplicate; rejected raw startup
+      // values are never closed here either.
+      verified_writable_ = handle_ != nullptr;
+      if (handle_ != nullptr) return;
+    }
+    if ((startup.dwFlags & STARTF_USESTDHANDLES) != 0 && startup.hStdInput != nullptr &&
+        startup.hStdInput != INVALID_HANDLE_VALUE) {
+      handle_ = DuplicateVerifiedNull(startup.hStdInput);
+    }
   }
-  // An AppContainer can reserve a CRT slot with a private kernel file object.
-  // The unused writer closes immediately. Runtime I/O uses the logical fd.
-  HANDLE writer = nullptr;
-  if (!CreatePipe(&h, &writer, nullptr, 1)) return INVALID_HANDLE_VALUE;
-  CloseHandle(writer);
-  if (pipe) *pipe = true;
+
+  ~AppContainerNull() {
+    if (handle_ != nullptr) CloseHandle(handle_);
+  }
+
+  HANDLE NewPlaceholder(bool inheritable) const {
+    if (!contained_) return INVALID_HANDLE_VALUE;
+    HANDLE duplicate;
+    if (handle_ != nullptr && DuplicateHandle(GetCurrentProcess(), handle_, GetCurrentProcess(),
+                                              &duplicate, 0, inheritable, DUPLICATE_SAME_ACCESS)) {
+      return duplicate;
+    }
+    // Child stdio can be redirected across exec. A closed private pipe
+    // supplies a CRT slot while the descriptor's owner handles all I/O.
+    HANDLE read_end;
+    HANDLE write_end;
+    SECURITY_ATTRIBUTES attributes{sizeof(attributes), nullptr, inheritable};
+    if (!CreatePipe(&read_end, &write_end, &attributes, 0)) return INVALID_HANDLE_VALUE;
+    CloseHandle(write_end);
+    return read_end;
+  }
+
+  HANDLE NewNull(DWORD access, bool inheritable) const {
+    HANDLE duplicate = INVALID_HANDLE_VALUE;
+    if (!verified_writable_) return INVALID_HANDLE_VALUE;
+    return DuplicateHandle(GetCurrentProcess(), handle_, GetCurrentProcess(), &duplicate,
+                           access, inheritable, 0) ? duplicate : INVALID_HANDLE_VALUE;
+  }
+
+ private:
+  bool contained_ = false;
+  bool verified_writable_ = false;
+  HANDLE handle_ = nullptr;
+};
+
+const AppContainerNull app_container_null;
+
+}  // namespace
+
+HANDLE OpenDescriptorPlaceholder(bool inheritable) {
+  SECURITY_ATTRIBUTES attributes{sizeof(attributes), nullptr, inheritable};
+  HANDLE h = CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                         &attributes, OPEN_EXISTING, 0, nullptr);
+  if (h == INVALID_HANDLE_VALUE) {
+    const DWORD error = GetLastError();
+    if (error != ERROR_ACCESS_DENIED) return h;
+    h = app_container_null.NewPlaceholder(inheritable);
+    if (h == INVALID_HANDLE_VALUE) {
+      SetLastError(error);
+    }
+  }
+  return h;
+}
+
+HANDLE OpenNullDevice(DWORD access, bool inheritable) {
+  SECURITY_ATTRIBUTES attributes{sizeof(attributes), nullptr, inheritable};
+  HANDLE handle = CreateFileW(L"NUL", access, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                              &attributes, OPEN_EXISTING, 0, nullptr);
+  if (handle != INVALID_HANDLE_VALUE || GetLastError() != ERROR_ACCESS_DENIED) return handle;
+  handle = app_container_null.NewNull(access, inheritable);
+  if (handle == INVALID_HANDLE_VALUE) SetLastError(ERROR_ACCESS_DENIED);
+  return handle;
+}
+
+HANDLE OpenFdPlaceholder(bool* pipe) {
+  HANDLE h = OpenDescriptorPlaceholder();
+  if (pipe) *pipe = h != INVALID_HANDLE_VALUE && GetFileType(h) == FILE_TYPE_PIPE;
   return h;
 }
 
 int ReserveFd() {
-  bool use_pipe = false;
-  HANDLE h = OpenFdPlaceholder(&use_pipe);
+  HANDLE h = OpenDescriptorPlaceholder();
   if (h == INVALID_HANDLE_VALUE) return FailWithLastError();
   record_locks::DescriptorGuard descriptor_guard;
   int fd = CrtResult(_open_osfhandle(reinterpret_cast<intptr_t>(h), _O_RDWR | _O_NOINHERIT));
   if (fd < 0) CloseHandle(h);
-  else if ((use_pipe && RegisterOfd(fd, O_RDWR) < 0) ||
+  else if (RegisterOfd(fd, O_RDWR) < 0 ||
            SetDescriptorKind(fd, DescriptorKind::kUnshareable) < 0) {
     int error = errno;
+    ForgetOfd(fd);
     _close(fd);
-    if (use_pipe) ForgetOfd(fd);
     return errno = error, -1;
   }
   return fd;
@@ -265,6 +349,7 @@ bool NativePipeIo(int fd, void* buffer, unsigned int count, bool writing, int* r
     if (file == INVALID_HANDLE_VALUE) { *result = (errno = EBADF, -1); return true; }
     if (GetFileType(file) != FILE_TYPE_PIPE) return false;
     snapshot = gesher::CaptureDescriptor(fd);
+    if (snapshot && snapshot->kind == gesher::DescriptorKind::kUnshareable) return false;
   }
   if (snapshot && snapshot->kind == gesher::DescriptorKind::kUnshareable) return false;
   // Validate status and transfer through one capture. Looking the fd up again

@@ -62,6 +62,16 @@ final class PermissionRequests {
         }
     }
 
+    private interface Owner {
+        ApkPackage code();
+        default PermissionPolicy.ScopedOwner scoped() { return null; }
+        default Runnable retire() { return null; }
+        String name();
+        boolean isCurrent();
+        int check(String permission);
+        void recordUserDecision(List<String> permissions, boolean allowed);
+    }
+
     private final PackageManagerService mPm;
     private final Executor mExecutor;
     private final Executor mReviewExecutor;
@@ -216,6 +226,16 @@ final class PermissionRequests {
      */
     CompletableFuture<Boolean> reviewPermissions(ApkPackage captured) {
         if (captured == null) throw new IllegalArgumentException("Invalid review request");
+        return reviewPermissions(captured, null, () -> current(captured));
+    }
+
+    CompletableFuture<Boolean> reviewScopedPermissions(PermissionPolicy.ScopedOwner scoped,
+            java.util.function.BooleanSupplier opening) {
+        return reviewPermissions(scoped.code(), scoped, () -> scoped.canReviewBeforeLaunch(opening));
+    }
+
+    private CompletableFuture<Boolean> reviewPermissions(ApkPackage captured, PermissionPolicy.ScopedOwner scoped,
+            java.util.function.BooleanSupplier currentOwner) {
         CompletableFuture<Boolean> future;
         synchronized (mPendingReviews) {
             CompletableFuture<Boolean> existing = mPendingReviews.get(captured);
@@ -228,9 +248,10 @@ final class PermissionRequests {
                 boolean proceed = false;
                 try {
                     PermissionPolicy policy = mPm.permissions();
-                    List<PermissionPolicy.ReviewGroup> groups = current(captured)
-                            ? policy.pendingReviewGroups(captured) : List.of();
-                    if (!current(captured)) {
+                    List<PermissionPolicy.ReviewGroup> groups = !currentOwner.getAsBoolean() ? List.of()
+                            : scoped == null ? policy.pendingReviewGroups(captured)
+                            : policy.pendingScopedReview(scoped, currentOwner);
+                    if (!currentOwner.getAsBoolean()) {
                         proceed = false;
                     } else if (groups.isEmpty()) {
                         proceed = true;
@@ -243,13 +264,16 @@ final class PermissionRequests {
                             changeable[i] = groups.get(i).changeable();
                         }
                         int decision = mDecision.decideReview(captured.packageName, labels, enabled, changeable);
-                        if (decision == ALLOWED && current(captured)) {
+                        if (decision == ALLOWED && currentOwner.getAsBoolean()) {
                             Set<String> kept = new HashSet<>();
                             for (int i = 0; i < groups.size(); i++) {
                                 if (groups.get(i).changeable() && enabled[i]) kept.add(groups.get(i).groupName());
                             }
-                            proceed = policy.recordPermissionReview(captured, groups, kept)
-                                    && current(captured) && !policy.isReviewRequired(captured);
+                            proceed = (scoped == null ? policy.recordPermissionReview(captured, groups, kept)
+                                    : policy.recordScopedPermissionReview(scoped, currentOwner, groups, kept))
+                                    && currentOwner.getAsBoolean()
+                                    && (scoped == null ? !policy.isReviewRequired(captured)
+                                        : policy.pendingScopedReview(scoped, currentOwner).isEmpty());
                         }
                     }
                 } catch (RuntimeException e) {
@@ -299,7 +323,46 @@ final class PermissionRequests {
     }
 
     void request(ApkPackage captured, String[] requested, Consumer<Intent> completion) {
-        if (captured == null || requested == null || requested.length > 128) {
+        if (captured == null) throw new IllegalArgumentException("Invalid runtime permission owner");
+        PermissionPolicy policy = mPm.permissions();
+        request(new Owner() {
+            @Override public ApkPackage code() { return captured; }
+            @Override public String name() { return captured.packageName; }
+            @Override public boolean isCurrent() {
+                return !mPm.isRemovalPending(name()) && mPm.get(name()) == captured;
+            }
+            @Override public int check(String permission) {
+                return policy.checkPermission(name(), permission);
+            }
+            @Override public void recordUserDecision(List<String> permissions, boolean allowed) {
+                policy.recordUserDecision(captured, permissions, allowed);
+            }
+        }, requested, completion);
+    }
+
+    void requestScoped(PermissionPolicy.ScopedOwner captured, String[] requested,
+            Consumer<Intent> completion) {
+        requestScoped(captured, requested, completion, null);
+    }
+
+    void requestScoped(PermissionPolicy.ScopedOwner captured, String[] requested,
+            Consumer<Intent> completion, Runnable retire) {
+        if (captured == null) throw new IllegalArgumentException("Invalid runtime permission owner");
+        request(new Owner() {
+            @Override public ApkPackage code() { return captured.code(); }
+            @Override public PermissionPolicy.ScopedOwner scoped() { return captured; }
+            @Override public Runnable retire() { return retire; }
+            @Override public String name() { return captured.packageName(); }
+            @Override public boolean isCurrent() { return captured.isCurrent(); }
+            @Override public int check(String permission) { return captured.check(permission); }
+            @Override public void recordUserDecision(List<String> permissions, boolean allowed) {
+                captured.recordUserDecision(permissions, allowed);
+            }
+        }, requested, completion);
+    }
+
+    private void request(Owner owner, String[] requested, Consumer<Intent> completion) {
+        if (requested == null || requested.length > 128) {
             throw new IllegalArgumentException("Invalid runtime permission request");
         }
         String[] names = requested.clone();
@@ -309,7 +372,7 @@ final class PermissionRequests {
             }
         }
         boolean accepted;
-        synchronized (mPending) { accepted = mPending.add(captured.packageName); }
+        synchronized (mPending) { accepted = mPending.add(owner.name()); }
         if (!accepted) {
             int[] denied = new int[names.length];
             Arrays.fill(denied, PackageManager.PERMISSION_DENIED);
@@ -321,48 +384,72 @@ final class PermissionRequests {
                 int[] grants = new int[names.length];
                 Arrays.fill(grants, PackageManager.PERMISSION_DENIED);
                 try {
-                    PermissionPolicy policy = mPm.permissions();
-                    PermissionPolicy.RequestPlan plan = current(captured)
-                            ? policy.planRequest(captured, names) : PermissionPolicy.RequestPlan.NONE;
-                    List<String> prompt = plan.foreground();
-                    int decision = !prompt.isEmpty() && current(captured)
-                            ? mDecision.decide(captured.packageName, describe(policy, prompt)) : DISMISSED;
-                    // PM.add/remove are synchronized on the PM. Keep identity stable
-                    // across the final recheck and the entire grant operation.
-                    synchronized (mPm) {
-                        if (current(captured) && (decision == ALLOWED || decision == DENIED)) {
-                            policy.recordUserDecision(captured, prompt, decision == ALLOWED);
-                        }
-                    }
-                    // Each background permission gets its own choice once its foreground is
-                    // granted; a foreground denial leaves it unasked, as on Android. A target
-                    // R+ request reaches it only alone, which Android sends to Settings.
-                    BackgroundMode mode = captured.parsed.getTargetSdkVersion() >= android.os.Build.VERSION_CODES.R
-                            ? BackgroundMode.REDIRECT : BackgroundMode.UPGRADE;
-                    for (String background : plan.background()) {
-                        chooseBackground(policy, captured, background,
-                                plan.foregroundAlreadyGranted().contains(background), mode);
-                    }
-                    synchronized (mPm) {
-                        if (current(captured)) {
-                            for (int i = 0; i < names.length; i++) {
-                                if (names[i] != null) {
-                                    grants[i] = policy.checkPermission(captured.packageName, names[i]);
-                                }
+                    if (mPm.isCohost()) {
+                        if (owner.isCurrent()) {
+                            int[] actual = Zygote.nativeCohostPermissionExchange(
+                                    CohostPermissionHost.REQUEST, names);
+                            if (actual != null && actual.length == names.length && owner.isCurrent()) {
+                                grants = actual;
                             }
                         }
+                    } else {
+                        hostConsent(owner, names, grants);
                     }
                 } catch (RuntimeException e) {
-                    SystemServer.log("permission request denied for " + captured.packageName
+                    SystemServer.log("permission request denied for " + owner.name()
                             + ": " + e.getClass().getSimpleName());
                 } finally {
-                    synchronized (mPending) { mPending.remove(captured.packageName); }
+                    synchronized (mPending) { mPending.remove(owner.name()); }
                 }
                 completion.accept(result(names, grants));
             });
         } catch (RuntimeException e) {
-            synchronized (mPending) { mPending.remove(captured.packageName); }
+            synchronized (mPending) { mPending.remove(owner.name()); }
             throw e;
+        }
+    }
+
+    private void hostConsent(Owner owner, String[] names, int[] grants) {
+        PermissionPolicy policy = mPm.permissions();
+        ApkPackage captured = owner.code();
+        PermissionPolicy.ScopedOwner scoped = owner.scoped();
+        PermissionPolicy.RequestPlan plan = !owner.isCurrent() ? PermissionPolicy.RequestPlan.NONE
+                : scoped == null ? policy.planRequest(captured, names) : policy.planScopedRequest(scoped, names);
+        List<String> prompt = plan.foreground();
+        int decision = !prompt.isEmpty() && owner.isCurrent()
+                ? mDecision.decide(owner.name(), describe(policy, prompt)) : DISMISSED;
+        synchronized (mPm) {
+            if (owner.isCurrent() && (decision == ALLOWED || decision == DENIED)) {
+                owner.recordUserDecision(prompt, decision == ALLOWED);
+            }
+        }
+        BackgroundMode mode = captured.parsed.getTargetSdkVersion() >= android.os.Build.VERSION_CODES.R
+                ? BackgroundMode.REDIRECT : BackgroundMode.UPGRADE;
+        for (String background : plan.background()) {
+            boolean killOnRevoke = plan.foregroundAlreadyGranted().contains(background);
+            if (scoped == null) {
+                chooseBackground(policy, captured, background, killOnRevoke, mode);
+            } else {
+                chooseScopedBackground(policy, scoped, background, killOnRevoke, mode, owner.retire());
+            }
+        }
+        synchronized (mPm) {
+            if (!owner.isCurrent()) return;
+            for (int i = 0; i < names.length; i++) {
+                if (names[i] != null) grants[i] = owner.check(names[i]);
+            }
+        }
+    }
+
+    private void chooseScopedBackground(PermissionPolicy policy, PermissionPolicy.ScopedOwner owner,
+            String background, boolean killOnRevoke, BackgroundMode mode, Runnable retire) {
+        boolean settings = mode != BackgroundMode.UPGRADE;
+        if (!policy.scopedBackgroundChoiceAvailable(owner, background, settings)) return;
+        int choice = mDecision.decideBackground(owner.packageName(), describe(policy, List.of(background)));
+        if (choice == DENIED || choice == FOREGROUND_ONLY || choice == ALWAYS) {
+            policy.recordScopedBackgroundChoice(owner, background, choice, killOnRevoke, settings, retire);
+        } else if (choice == DISMISSED && mode == BackgroundMode.REDIRECT) {
+            policy.recordScopedBackgroundDismissal(owner, background);
         }
     }
 

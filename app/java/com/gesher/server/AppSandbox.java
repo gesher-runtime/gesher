@@ -7,6 +7,7 @@ package com.gesher.server;
 import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
@@ -44,7 +45,7 @@ final class AppSandbox {
     static final int MODIFY = 0x001301BF;
 
     static boolean enabled() {
-        return "appcontainer".equalsIgnoreCase(System.getenv(ENV));
+        return SystemServer.isProtectedDevice() || "appcontainer".equalsIgnoreCase(System.getenv(ENV));
     }
 
     /**
@@ -55,6 +56,13 @@ final class AppSandbox {
      */
     static String containerName(String packageName) {
         return containerName(canonical(new File(Device.dataDir())).getPath(), packageName);
+    }
+
+    static String installationContainer(ApkPackage pkg) {
+        if (!enabled()) return null;
+        if (!SystemServer.isProtectedDevice()) return containerName(pkg.packageName);
+        String owner = java.util.UUID.fromString(pkg.enabledStateOwner()).toString();
+        return containerName(pkg.packageName + "\0" + owner);
     }
 
     /**
@@ -101,24 +109,36 @@ final class AppSandbox {
      * idempotent: an ACE already there is not written (or propagated) again.
      */
     static int spawn(String commandLine, List<String> env, File logFile,
-            PackageManagerService pm, ApkPackage pkg, String packageName, boolean internet) {
-        String container = containerName(packageName);
+            PackageManagerService pm, ApkPackage pkg,
+            String packageName, boolean internet, long startSeq, Zygote.StandaloneInput input) {
+        if (SystemServer.isProtectedDevice() && input == null && SandboxOptOut.isApproved(pkg)) {
+            ExternalStorageAccess.syncPackage(pm, pkg);
+            SystemServer.log("sandbox: explicit operator opt-out for " + packageName);
+            return Zygote.spawnUnisolatedApprovedApp(commandLine, env, logFile.getPath(), pkg, startSeq);
+        }
+        String container = installationContainer(pkg);
         int error = Zygote.nativeEnsureAppContainer(container, packageName);
         if (error != 0) {
             throw new IllegalStateException("AppContainer profile " + container + " for "
                     + packageName + ": Win32 error " + error);
         }
-        // dalvikvm.exe's own directory: a Windows path already (GetModuleFileNameW).
-        String exeDir = exeDirectory();
-        if (exeDir != null) {
-            int granted = Zygote.nativeGrantToCapability(exeDir, RUNTIME_FILES, READ_EXECUTE, true);
-            if (granted != 0) {
-                SystemServer.log("sandbox: granting " + RUNTIME_FILES + " " + exeDir
-                        + ": Win32 error " + granted);
-            }
+        int propertyError = Zygote.nativeGrantPropertyAreaRead(container);
+        if (propertyError != 0) {
+            throw new IllegalStateException("AppContainer property area for " + packageName
+                    + ": Win32 error " + propertyError);
         }
-        for (String dir : runtimeDirectories()) {
-            grantCapability(dir, RUNTIME_FILES, READ_EXECUTE, true);
+        if (SystemServer.isProtectedDevice()) {
+            prepareStandaloneRuntime();
+        } else {
+            // The earlier developer fixture keeps its existing layout.
+            String exeDir = exeDirectory();
+            if (exeDir != null) {
+                checkGrant(Zygote.nativeGrantToCapability(exeDir, RUNTIME_FILES, READ_EXECUTE, true),
+                        RUNTIME_FILES, exeDir);
+            }
+            for (String dir : runtimeDirectories()) {
+                grantCapability(dir, RUNTIME_FILES, READ_EXECUTE, true);
+            }
         }
         // The shared boot property snapshots are read-only to apps. Persistent
         // properties and the rest of the system data remain outside the grant.
@@ -132,15 +152,20 @@ final class AppSandbox {
         // The APK itself; its directory (and the oat files in it) only when it is the
         // package's own code directory under data/app. An APK run from where the user
         // keeps it (Downloads) must not open that directory to the container.
-        File apk = canonical(new File(pkg.apkPath));
-        grantContainer(apk.getPath(), container, READ_EXECUTE, false);
-        File apps = canonical(new File(Device.dataDir(), "app"));
-        File code = apk.getParentFile();
-        if (code != null && apps.getPath().equals(code.getParent())) {
-            grantContainer(code.getPath(), container, READ_EXECUTE, true);
+        if (input == null) {
+            File apk = grantPath(new File(pkg.apkPath));
+            grantContainer(apk.getPath(), container, READ_EXECUTE, false);
+            File apps = grantPath(new File(Device.dataDir(), "app"));
+            File code = apk.getParentFile();
+            if (code != null && apps.getPath().equals(code.getParent())) {
+                grantContainer(code.getPath(), container, READ_EXECUTE, true);
+            }
         }
         grantContainer(pkg.credentialProtectedDataDir(), container, MODIFY, true);
         grantContainer(pkg.deviceProtectedDataDir(), container, MODIFY, true);
+        if (SystemServer.isProtectedDevice()) {
+            grantExternalStorage(packageName, container);
+        }
         File profile = Dexopt.currentProfile(packageName).getParentFile();
         if (profile != null) grantContainer(profile.getPath(), container, MODIFY, true);
         // The logcat file the process opens by name (GESHER_LOG_FILE); its stdout and
@@ -150,6 +175,9 @@ final class AppSandbox {
             logcat.getParentFile().mkdirs();
             logcat.createNewFile();
         } catch (java.io.IOException e) {
+            if (SystemServer.isProtectedDevice()) {
+                throw new IllegalStateException("Cannot create contained log " + logcat, e);
+            }
             SystemServer.log("sandbox: cannot create " + logcat + ": " + e);
         }
         grantContainer(logcat.getPath(), container, MODIFY, false);
@@ -159,6 +187,10 @@ final class AppSandbox {
         List<String> caps = capabilities(internet);
         SystemServer.log("sandbox: " + packageName + " in AppContainer " + container
                 + " with " + caps);
+        if (SystemServer.isProtectedDevice()) {
+            return Zygote.spawnProtectedApp(commandLine, env, logFile.getPath(), container,
+                    caps, pkg, startSeq, input);
+        }
         return Zygote.spawnInAppContainer(commandLine, env, logFile.getPath(), container,
                 packageName, caps);
     }
@@ -167,14 +199,14 @@ final class AppSandbox {
      * Prepare the new inode before atomic policy publication: replacing a file
      * does not copy its old explicit AppContainer ACE to the replacement.
      */
-    static void prepareStoragePolicyFile(String packageName, File stagedFile) throws IOException {
+    static void prepareStoragePolicyFile(ApkPackage pkg, File stagedFile) throws IOException {
         if (!enabled()) return;
         File policyRoot = new File(Device.dataDir(), "system/storage-policy").getCanonicalFile();
         File staged = stagedFile.getCanonicalFile();
         if (!policyRoot.equals(staged.getParentFile()) || !staged.isFile()) {
             throw new IOException("Storage policy file outside the policy directory: " + stagedFile);
         }
-        setStorageAccess(staged, containerName(packageName), READ_EXECUTE, false);
+        setStorageAccess(staged, installationContainer(pkg), READ, false);
     }
 
     /**
@@ -185,7 +217,7 @@ final class AppSandbox {
      */
     static void syncStorageAccess(String packageName, ExternalStorageAccess.Policy policy)
             throws IOException {
-        if (!enabled()) return;
+        if (!enabled() || SystemServer.isProtectedDevice()) return;
         if (packageName == null || packageName.isEmpty() || packageName.indexOf('/') >= 0
                 || packageName.indexOf('\\') >= 0 || ".".equals(packageName)
                 || "..".equals(packageName)) {
@@ -262,9 +294,8 @@ final class AppSandbox {
     }
 
     /** The package is uninstalled: its container's profile goes with it. */
-    static void deleteContainer(String packageName) {
-        if (!enabled()) return;
-        String container = containerName(packageName);
+    static void deleteContainer(String packageName, String container) {
+        if (container == null) return;
         int error = Zygote.nativeDeleteAppContainer(container);
         if (error != 0) {
             SystemServer.log("sandbox: deleting AppContainer " + container + " of "
@@ -299,15 +330,43 @@ final class AppSandbox {
         return dirs;
     }
 
+    static void prepareStandaloneRuntime() {
+        String exeDir = exeDirectory();
+        if (exeDir == null) throw new IllegalStateException("The contained runtime is unavailable");
+        String runtime = Zygote.fromWindowsPath(exeDir);
+        // Share the runtime files, not other files that happen to sit next to
+        // dalvikvm (including a standalone APK or DEX chosen by the caller).
+        ensureGrant(Zygote.nativeGrantToCapability(exeDir, RUNTIME_FILES, READ_EXECUTE, false),
+                RUNTIME_FILES, exeDir);
+        for (String name : List.of("dalvikvm.exe", "gesher-exec.exe", "gesher_arm64.dll",
+                "libEGL.dll", "libGLESv2.dll", "WebView2Loader.dll", "libgesher_webview_bridge.so",
+                "framework-res.apk", "build.prop")) {
+            grantRuntimePath(new File(runtime, name), false);
+        }
+        grantRuntimePath(new File(runtime, "framework"), true);
+        for (String name : List.of("ANDROID_ROOT", "ANDROID_ART_ROOT", "ANDROID_I18N_ROOT",
+                "ANDROID_TZDATA_ROOT")) {
+            String directory = System.getenv(name);
+            if (directory != null && !directory.isEmpty()) grantRuntimePath(new File(directory), true);
+        }
+        for (String jar : System.getProperty("java.boot.class.path", "").split(":")) {
+            if (!jar.isEmpty()) grantRuntimePath(new File(jar), false);
+        }
+    }
+
+    private static void grantRuntimePath(File path, boolean inherit) {
+        if (!path.exists()) return;
+        String windows = Zygote.windowsPath(path.getPath());
+        ensureGrant(Zygote.nativeGrantToCapability(windows, RUNTIME_FILES, READ_EXECUTE, inherit),
+                RUNTIME_FILES, windows);
+    }
+
     private static void grantCapability(String path, String capability, int access,
             boolean inherit) {
         if (path == null || !new File(path).exists()) return;
         String target = Zygote.windowsPath(path);
         int error = Zygote.nativeGrantToCapability(target, capability, access, inherit);
-        if (error != 0) {
-            SystemServer.log("sandbox: granting " + capability + " " + target
-                    + ": Win32 error " + error);
-        }
+        checkGrant(error, capability, target);
     }
 
     private static void grantContainer(String path, String container, int access,
@@ -315,9 +374,39 @@ final class AppSandbox {
         if (path == null || !new File(path).exists()) return;
         String target = Zygote.windowsPath(path);
         int error = Zygote.nativeGrantToAppContainer(target, container, access, inherit);
-        if (error != 0) {
-            SystemServer.log("sandbox: granting " + container + " " + target
-                    + ": Win32 error " + error);
+        checkGrant(error, container, target);
+    }
+
+    private static void grantExternalStorage(String packageName, String container) {
+        List<Path> directories;
+        try {
+            directories = AppDataStorage.prepareExternalDirectories(new File(Device.dataDir()),
+                    packageName);
+        } catch (IOException e) {
+            throw new IllegalStateException("Cannot prepare external storage for " + packageName, e);
         }
+        for (Path directory : directories) {
+            String target = Zygote.windowsPath(directory.toString());
+            ensureGrant(Zygote.nativeGrantToAppContainer(target, container, MODIFY, true),
+                    container, target);
+        }
+    }
+
+    private static File grantPath(File path) {
+        // Keep the requested spelling for the native handle check. Resolving a
+        // guest-controlled junction here could hide where the path was redirected.
+        return SystemServer.isProtectedDevice() ? path.getAbsoluteFile() : canonical(path);
+    }
+
+    private static void checkGrant(int error, String sid, String target) {
+        if (error == 0) return;
+        String message = "sandbox: granting " + sid + " " + target + ": Win32 error " + error;
+        if (SystemServer.isProtectedDevice()) throw new IllegalStateException(message);
+        SystemServer.log(message);
+    }
+
+    private static void ensureGrant(int error, String sid, String target) {
+        if (error != 0) throw new IllegalStateException("Could not grant " + sid + " access to "
+                + target + " (Win32 error " + error + ")");
     }
 }

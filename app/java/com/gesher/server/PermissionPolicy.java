@@ -33,6 +33,7 @@ import static android.app.AppOpsManager.*;
 /** UID permission state shared by package/activity/permission services. */
 public final class PermissionPolicy extends IPermissionManager.Default {
     private final PackageManagerService mPm;
+    private final boolean mCohost;
     private final PermissionCatalog mCatalog;
     private final File mFile = new File(Device.dataDir(), "system/runtime-permissions");
     private final Properties mDecisions;
@@ -57,11 +58,21 @@ public final class PermissionPolicy extends IPermissionManager.Default {
     private volatile CallerIdentity mCallers;
 
     PermissionPolicy(PackageManagerService pm) {
+        this(pm, false);
+    }
+
+    PermissionPolicy(PackageManagerService pm, boolean cohost) {
         mPm = pm;
+        mCohost = cohost;
         mCatalog = new PermissionCatalog(pm);
         mCallers = new CallerIdentity(pm, null);
-        mPermissionFile = new AtomicFile(mFile);
         mDecisions = new Properties();
+        if (cohost) {
+            mPermissionFile = null;
+            mWriter = null;
+            return;
+        }
+        mPermissionFile = new AtomicFile(mFile);
         try (var input = mPermissionFile.openRead()) {
             mDecisions.load(input);
             for (String key : mDecisions.stringPropertyNames()) {
@@ -93,6 +104,7 @@ public final class PermissionPolicy extends IPermissionManager.Default {
         }
     }
     private void scheduleWrite() {
+        if (mCohost) return;
         Properties snapshot = new Properties();
         snapshot.putAll(mDecisions);
         // PermissionFlags.ONE_TIME and its user decisions are session state. Persisting the
@@ -110,7 +122,7 @@ public final class PermissionPolicy extends IPermissionManager.Default {
     }
 
     private void requireSystem() {
-        if (mCallers == null || !mCallers.isSystem()) {
+        if (mCohost || mCallers == null || !mCallers.isSystem()) {
             throw new SecurityException("Only the Gesher host can change permission grants");
         }
     }
@@ -140,12 +152,20 @@ public final class PermissionPolicy extends IPermissionManager.Default {
     synchronized boolean granted(String name, String packageName) {
         ApkPackage pkg = mPm.get(packageName);
         if (pkg == null || name == null) return false;
+        if (mCohost) {
+            return cohostValue(CohostPermissionHost.CHECK, name, PackageManager.PERMISSION_DENIED)
+                    == PackageManager.PERMISSION_GRANTED;
+        }
+        return granted(name, pkg, uidMembers(pkg.uid()), null);
+    }
+
+    private boolean granted(String name, ApkPackage pkg, List<ApkPackage> members,
+            ApkPackage scoped) {
         if (GmsSignatureSpoofing.PERMISSION_FAKE_PACKAGE_SIGNATURE.equals(name)) {
             return pkg.parsed.getRequestedPermissions().contains(name)
                     && GmsSignatureSpoofing.isTrustedPackage(pkg);
         }
-        List<ApkPackage> members = uidMembers(pkg.uid());
-        PermissionInfo info = mCatalog.get(name);
+        PermissionInfo info = mCatalog.get(name, scoped);
         // A normal grant depends on the installed UID's manifest requests, not
         // runtime decisions or flags. Flag queries still take the full path below.
         if (info != null && (info.protectionLevel & PermissionInfo.PROTECTION_MASK_BASE)
@@ -154,7 +174,8 @@ public final class PermissionPolicy extends IPermissionManager.Default {
         }
         if (permissionState(pkg.uid(), name, members, info).granted) return true;
         String fuller = fullerPermission(name);
-        return fuller != null && permissionState(pkg.uid(), fuller, members).granted;
+        return fuller != null && permissionState(pkg.uid(), fuller, members,
+                mCatalog.get(fuller, scoped)).granted;
     }
 
     /**
@@ -306,14 +327,21 @@ public final class PermissionPolicy extends IPermissionManager.Default {
     }
 
     private int permissionMode(int uid, String permission, List<ApkPackage> members) {
-        PermissionInfo info = mCatalog.get(permission);
-        if (info != null && permissionState(uid, permission, members).appOpGranted()) {
+        return permissionMode(uid, permission, members, null);
+    }
+
+    private int permissionMode(int uid, String permission, List<ApkPackage> members,
+            ApkPackage scoped) {
+        if (mCohost) return cohostValue(CohostPermissionHost.APP_OP_MODE, permission, MODE_IGNORED);
+        PermissionInfo info = mCatalog.get(permission, scoped);
+        if (info != null && permissionState(uid, permission, members, info).appOpGranted()) {
             return info.backgroundPermission == null
-                    || permissionState(uid, info.backgroundPermission, members).appOpGranted()
+                    || permissionState(uid, info.backgroundPermission, members,
+                            mCatalog.get(info.backgroundPermission, scoped)).appOpGranted()
                     ? MODE_ALLOWED : MODE_FOREGROUND;
         }
         String fuller = fullerPermission(permission);
-        return fuller == null ? MODE_IGNORED : permissionMode(uid, fuller, members);
+        return fuller == null ? MODE_IGNORED : permissionMode(uid, fuller, members, scoped);
     }
 
     private Map<Integer, Integer> runtimeModes(int uid) {
@@ -533,6 +561,7 @@ public final class PermissionPolicy extends IPermissionManager.Default {
 
     /** Boot admission re-evaluates saved flags against the installed requesting packages. */
     synchronized void initializePackages() {
+        if (mCohost) return;
         Properties saved = new Properties(); saved.putAll(mDecisions);
         // Definitions do not change while the initial admitted set is reconciled.
         // Rebuilding the entire catalogue for each UID multiplies package scans.
@@ -696,7 +725,7 @@ public final class PermissionPolicy extends IPermissionManager.Default {
         if (NotificationManagerService.sLast != null) NotificationManagerService.sLast.permissionChanged(packageName);
         // Retirement is an explicit durable boundary, unlike an ordinary permission change.
         // The installer must not publish a successful uninstall with stale grants on disk.
-        if (!mWriter.flush()) throw new IllegalStateException("Cannot clear permission decisions");
+        if (mWriter != null && !mWriter.flush()) throw new IllegalStateException("Cannot clear permission decisions");
     }
 
     /** Called under the PM monitor after commit or rollback of this exact removal. */
@@ -797,6 +826,8 @@ public final class PermissionPolicy extends IPermissionManager.Default {
      * restriction of a pre-Q UID) is never offered to the user.
      */
     public synchronized boolean canRequest(String pkg, String permission) {
+        if (mCohost) return mPm.get(pkg) != null
+                && cohostValue(CohostPermissionHost.CAN_REQUEST, permission, 0) != 0;
         ApkPackage installed = mPm.get(pkg);
         return installed != null && installed.parsed.getTargetSdkVersion() >= 23 && requestable(pkg, permission)
                 && !permissionState(installed.uid(), permission, uidMembers(installed.uid())).restricted;
@@ -842,9 +873,19 @@ public final class PermissionPolicy extends IPermissionManager.Default {
         return foregrounds;
     }
 
-    private boolean anyGranted(ApkPackage pkg, List<String> permissions) {
-        for (String permission : permissions) if (granted(permission, pkg.packageName)) return true;
+    private boolean anyGranted(ApkPackage pkg, ScopedOwner scoped, List<String> permissions) {
+        for (String permission : permissions) if (isGranted(pkg, scoped, permission)) return true;
         return false;
+    }
+
+    private boolean isGranted(ApkPackage expected, ScopedOwner scoped, String permission) {
+        return scoped == null ? granted(permission, expected.packageName)
+                : scoped.check(permission) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private boolean canChange(ApkPackage expected, ScopedOwner scoped, String permission, boolean settings) {
+        return scoped == null ? changeable(expected.packageName, permission, settings)
+                : scoped.canChange(permission, settings);
     }
 
     /**
@@ -857,13 +898,23 @@ public final class PermissionPolicy extends IPermissionManager.Default {
      * UPGRADE_SETTINGS_LINK).
      */
     synchronized RequestPlan planRequest(ApkPackage expected, String[] names) {
+        return planRequest(expected, null, names);
+    }
+
+    RequestPlan planScopedRequest(ScopedOwner scoped, String[] names) {
+        synchronized (mPm) { synchronized (this) {
+            return !scoped.isCurrent() ? RequestPlan.NONE : planRequest(scoped.code(), scoped, names);
+        } }
+    }
+
+    private RequestPlan planRequest(ApkPackage expected, ScopedOwner scoped, String[] names) {
         java.util.Set<String> backgrounds = RuntimePermissionGroups.backgroundPermissions(mCatalog.permissions());
         List<String> foreground = new ArrayList<>(), background = new ArrayList<>();
         java.util.Set<String> foregroundGranted = new java.util.HashSet<>();
         List<String> requested = new ArrayList<>();
         for (String name : names) if (name != null) requested.add(name);
         for (String name : requested) {
-            if (!canRequest(expected.packageName, name) || granted(name, expected.packageName)) continue;
+            if (!canChange(expected, scoped, name, false) || isGranted(expected, scoped, name)) continue;
             if (!backgrounds.contains(name)) {
                 if (!foreground.contains(name)) foreground.add(name);
                 continue;
@@ -871,7 +922,7 @@ public final class PermissionPolicy extends IPermissionManager.Default {
             if (background.contains(name)) continue;
             List<String> foregrounds = foregroundsOf(expected, name);
             boolean requestsForeground = requested.stream().anyMatch(foregrounds::contains);
-            boolean grantedForeground = anyGranted(expected, foregrounds);
+            boolean grantedForeground = anyGranted(expected, scoped, foregrounds);
             if (!requestsForeground && !grantedForeground) continue; // NO_UI_REJECT_THIS_GROUP
             if (expected.parsed.getTargetSdkVersion() >= BACKGROUND_SPLIT_SDK && requestsForeground) {
                 return RequestPlan.NONE; // NO_UI_REJECT_ALL_GROUPS
@@ -889,9 +940,22 @@ public final class PermissionPolicy extends IPermissionManager.Default {
      * dialog of a pre-R target, which does not.
      */
     synchronized boolean backgroundChoiceAvailable(ApkPackage expected, String background, boolean settings) {
-        return mPm.get(expected.packageName) == expected && !mPm.isRemovalPending(expected.packageName)
-                && changeable(expected.packageName, background, settings) && !granted(background, expected.packageName)
-                && anyGranted(expected, foregroundsOf(expected, background));
+        return backgroundChoiceAvailable(expected, null, background, settings);
+    }
+
+    boolean scopedBackgroundChoiceAvailable(ScopedOwner scoped, String background, boolean settings) {
+        synchronized (mPm) { synchronized (this) {
+            return backgroundChoiceAvailable(scoped.code(), scoped, background, settings);
+        } }
+    }
+
+    private boolean backgroundChoiceAvailable(ApkPackage expected, ScopedOwner scoped,
+            String background, boolean settings) {
+        boolean current = scoped == null ? mPm.get(expected.packageName) == expected
+                && !mPm.isRemovalPending(expected.packageName) : scoped.isCurrent();
+        return current && canChange(expected, scoped, background, settings)
+                && !isGranted(expected, scoped, background)
+                && anyGranted(expected, scoped, foregroundsOf(expected, background));
     }
 
     /**
@@ -920,6 +984,16 @@ public final class PermissionPolicy extends IPermissionManager.Default {
      */
     void recordBackgroundChoice(ApkPackage expected, String background, int choice, boolean killOnRevoke,
             boolean settings) {
+        recordBackgroundChoice(expected, null, background, choice, killOnRevoke, settings, null);
+    }
+
+    void recordScopedBackgroundChoice(ScopedOwner scoped, String background, int choice,
+            boolean killOnRevoke, boolean settings, Runnable retire) {
+        recordBackgroundChoice(scoped.code(), scoped, background, choice, killOnRevoke, settings, retire);
+    }
+
+    private void recordBackgroundChoice(ApkPackage expected, ScopedOwner scoped, String background,
+            int choice, boolean killOnRevoke, boolean settings, Runnable retire) {
         requireSystem();
         if (choice != PermissionRequests.ALWAYS && choice != PermissionRequests.FOREGROUND_ONLY
                 && choice != PermissionRequests.DENIED) return;
@@ -927,21 +1001,25 @@ public final class PermissionPolicy extends IPermissionManager.Default {
         boolean changed;
         // One commit: the foreground cannot change between this check and the grant.
         synchronized (mPm) { synchronized (this) {
-            if (!backgroundChoiceAvailable(expected, background, settings)) return;
+            if (!backgroundChoiceAvailable(expected, scoped, background, settings)) return;
+            List<ApkPackage> members = scoped == null ? uidMembers(expected.uid()) : scoped.members();
             if (settings && choice == PermissionRequests.FOREGROUND_ONLY
-                    && (permissionState(expected.uid(), background, uidMembers(expected.uid())).flags
+                    && (permissionState(expected.uid(), background, members).flags
                             & PackageManager.FLAG_PERMISSION_USER_FIXED) == 0) return;
-            changed = commitUserDecision(expected, List.of(background), choice == PermissionRequests.ALWAYS,
+            changed = commitUserDecision(expected, scoped, List.of(background), choice == PermissionRequests.ALWAYS,
                     false, settings, revoked);
             if (choice == PermissionRequests.DENIED) {
-                changed |= commitUserDecision(expected, foregroundsOf(expected, background), false, true,
+                changed |= commitUserDecision(expected, scoped, foregroundsOf(expected, background), false, true,
                         settings, revoked);
             }
         } }
         // Process retirement and notifications run outside the PM and policy monitors.
-        if (changed) permissionsChanged(expected, () -> killOnRevoke && revoked.stream()
-                .anyMatch(name -> !granted(name, expected.packageName)),
-                ExternalStorageAccess.isStoragePermission(background));
+        if (changed) {
+            permissionsChanged(expected, () -> killOnRevoke && revoked.stream()
+                    .anyMatch(name -> !isGranted(expected, scoped, name)),
+                    ExternalStorageAccess.isStoragePermission(background));
+            if (retire != null && killOnRevoke && !revoked.isEmpty()) retire.run();
+        }
     }
 
     /**
@@ -951,11 +1029,19 @@ public final class PermissionPolicy extends IPermissionManager.Default {
      * so an app cannot keep reopening the choice.
      */
     void recordBackgroundDismissal(ApkPackage expected, String background) {
+        recordBackgroundDismissal(expected, null, background);
+    }
+
+    void recordScopedBackgroundDismissal(ScopedOwner scoped, String background) {
+        recordBackgroundDismissal(scoped.code(), scoped, background);
+    }
+
+    private void recordBackgroundDismissal(ApkPackage expected, ScopedOwner scoped, String background) {
         requireSystem();
         synchronized (mPm) { synchronized (this) {
-            if (!backgroundChoiceAvailable(expected, background, false)) return;
-            List<ApkPackage> members = uidMembers(expected.uid());
-            PermissionInfo info = mCatalog.get(background);
+            if (!backgroundChoiceAvailable(expected, scoped, background, false)) return;
+            List<ApkPackage> members = scoped == null ? uidMembers(expected.uid()) : scoped.members();
+            PermissionInfo info = scoped == null ? mCatalog.get(background) : mCatalog.get(background, expected);
             int flags = permissionState(expected.uid(), background, members, info).flags;
             flags |= (flags & PackageManager.FLAG_PERMISSION_USER_SET) != 0
                     ? PackageManager.FLAG_PERMISSION_USER_FIXED : PackageManager.FLAG_PERMISSION_USER_SET;
@@ -975,6 +1061,130 @@ public final class PermissionPolicy extends IPermissionManager.Default {
      */
     boolean flushDecisions() { return mWriter.flush(); }
 
+    /** Admission is an operation on the host's existing policy owner and UID registry. */
+    ScopedOwner openScopedOwner(String apk,
+            java.util.function.BooleanSupplier processLive) throws Exception {
+        if (!Zygote.nativeHasProtectedLaunchAuthority(false)) {
+            throw new SecurityException("Standalone permission admission requires the protected system server");
+        }
+        java.util.Objects.requireNonNull(processLive);
+        Zygote.StandaloneInput input = new Zygote.StandaloneInput(apk);
+        try {
+            ApkPackage code = ApkPackage.parseStandaloneInput(input);
+            synchronized (mPm) {
+                if (mPm.isRemovalPending(code.packageName)) {
+                    throw new SecurityException("Standalone permission owner is retiring");
+                }
+                ApkPackage installed = mPm.get(code.packageName);
+                try (PackageUids.Admission identity = PackageUids.prepare(List.of(code),
+                        mPm.packageSnapshot().values())) {
+                    identity.commit();
+                    identity.accept();
+                }
+                return new ScopedOwner(input, code, installed, processLive);
+            }
+        } catch (Exception | Error failure) {
+            input.close();
+            throw failure;
+        }
+    }
+
+    /** Exact transient source without publishing it as an installed package. */
+    final class ScopedOwner implements AutoCloseable {
+        private final Zygote.StandaloneInput mInput;
+        private final ApkPackage mCode;
+        private final ApkPackage mInstalled;
+        private final java.util.function.BooleanSupplier mProcessLive;
+        private boolean mClosed; // guarded by the PM monitor
+
+        private ScopedOwner(Zygote.StandaloneInput input, ApkPackage code, ApkPackage installed,
+                java.util.function.BooleanSupplier processLive) {
+            mInput = input;
+            mCode = code;
+            mInstalled = installed;
+            mProcessLive = processLive;
+        }
+
+        ApkPackage code() { return mCode; }
+        Zygote.StandaloneInput input() { return mInput; }
+        String packageName() { return mCode.packageName; }
+
+        boolean isCurrent() {
+            synchronized (mPm) {
+                return !mClosed && mInput.isOpen() && mProcessLive.getAsBoolean()
+                        && !mPm.isRemovalPending(packageName())
+                        && mPm.get(packageName()) == mInstalled;
+            }
+        }
+
+        boolean canReviewBeforeLaunch(java.util.function.BooleanSupplier opening) {
+            synchronized (mPm) {
+                return !mClosed && mInput.isOpen() && opening.getAsBoolean()
+                        && !mPm.isRemovalPending(packageName())
+                        && mPm.get(packageName()) == mInstalled;
+            }
+        }
+
+        private List<ApkPackage> members() {
+            List<ApkPackage> members = new ArrayList<>(uidMembers(mCode.uid()));
+            members.removeIf(member -> member.packageName.equals(packageName()));
+            members.add(mCode);
+            return members;
+        }
+
+        boolean canRequest(String name) {
+            return canChange(name, false);
+        }
+
+        boolean canChange(String name, boolean settings) {
+            if (name == null) return false;
+            synchronized (mPm) { synchronized (PermissionPolicy.this) {
+                PermissionInfo info = mCatalog.get(name, mCode);
+                if (!isCurrent() || mCode.parsed.getTargetSdkVersion() < 23
+                        || !mCode.parsed.getRequestedPermissions().contains(name)
+                        || info == null || !info.isRuntime()) return false;
+                PermissionState state = permissionState(mCode.uid(), name, members(), info);
+                return settings ? !state.restricted && (state.flags & (PackageManager.FLAG_PERMISSION_POLICY_FIXED
+                        | PackageManager.FLAG_PERMISSION_SYSTEM_FIXED)) == 0 : !unrequestable(info, state);
+            } }
+        }
+
+        int check(String name) {
+            if (name == null) return PackageManager.PERMISSION_DENIED;
+            synchronized (mPm) { synchronized (PermissionPolicy.this) {
+                return isCurrent() && granted(name, mCode, members(), mCode)
+                        ? PackageManager.PERMISSION_GRANTED : PackageManager.PERMISSION_DENIED;
+            } }
+        }
+
+        int flags(String name) {
+            if (name == null) return 0;
+            synchronized (mPm) { synchronized (PermissionPolicy.this) {
+                return isCurrent() ? permissionState(mCode.uid(), name, members(),
+                        mCatalog.get(name, mCode)).flags : 0;
+            } }
+        }
+
+        int mode(String name) {
+            if (name == null) return MODE_IGNORED;
+            synchronized (mPm) { synchronized (PermissionPolicy.this) {
+                return isCurrent() ? permissionMode(mCode.uid(), name, members(), mCode) : MODE_IGNORED;
+            } }
+        }
+
+        void recordUserDecision(List<String> names, boolean allowed) {
+            PermissionPolicy.this.recordUserDecision(mCode, this, names, allowed);
+        }
+
+        @Override public void close() {
+            synchronized (mPm) {
+                if (mClosed) return;
+                mClosed = true;
+                mInput.close();
+            }
+        }
+    }
+
     public boolean isProtectedBroadcast(String action) { return mCatalog.isProtectedBroadcast(action); }
 
     boolean isKnownProtectedBroadcast(String action) { return mCatalog.isKnownProtectedBroadcast(action); }
@@ -985,14 +1195,25 @@ public final class PermissionPolicy extends IPermissionManager.Default {
         return checkPermission(pkg, permission, "default:0", 0);
     }
 
+    private static int cohostValue(int operation, String name, int fallback) {
+        if (name == null) return fallback;
+        int[] result = Zygote.nativeCohostPermissionExchange(operation, new String[] {name});
+        return result != null && result.length == 1 ? result[0] : fallback;
+    }
+
     public void grantRuntime(String pkg, String permission, int userId) {
         grantRuntimePermission(pkg, permission, "default:0", userId);
     }
 
     /** Commit an explicit host-dialog choice, never a dismissal or an unavailable dialog. */
     void recordUserDecision(ApkPackage expected, List<String> permissions, boolean allowed) {
+        recordUserDecision(expected, null, permissions, allowed);
+    }
+
+    private void recordUserDecision(ApkPackage expected, ScopedOwner scoped,
+            List<String> permissions, boolean allowed) {
         requireSystem();
-        if (!commitUserDecision(expected, permissions, allowed, false, false, new ArrayList<>())) return;
+        if (!commitUserDecision(expected, scoped, permissions, allowed, false, false, new ArrayList<>())) return;
         // Every changed permission was still denied at commit time. In particular,
         // an old dialog cannot revoke a grant that another controller just made.
         permissionsChanged(expected, () -> false,
@@ -1007,7 +1228,10 @@ public final class PermissionPolicy extends IPermissionManager.Default {
     synchronized boolean isReviewRequired(ApkPackage expected) {
         if (expected == null || mPm.get(expected.packageName) != expected
                 || mPm.isRemovalPending(expected.packageName)) return false;
-        List<ApkPackage> members = uidMembers(expected.uid());
+        return isReviewRequired(expected, uidMembers(expected.uid()));
+    }
+
+    private boolean isReviewRequired(ApkPackage expected, List<ApkPackage> members) {
         if (minimumTargetSdk(members) >= 23) return false;
         for (String name : expected.parsed.getRequestedPermissions()) {
             PermissionInfo info = mCatalog.get(name);
@@ -1024,11 +1248,23 @@ public final class PermissionPolicy extends IPermissionManager.Default {
     synchronized List<ReviewGroup> pendingReviewGroups(ApkPackage expected) {
         if (expected == null || mPm.get(expected.packageName) != expected
                 || mPm.isRemovalPending(expected.packageName)) return List.of();
-        List<ApkPackage> members = uidMembers(expected.uid());
+        return pendingReviewGroups(expected, uidMembers(expected.uid()), null);
+    }
+
+    List<ReviewGroup> pendingScopedReview(ScopedOwner scoped,
+            java.util.function.BooleanSupplier opening) {
+        synchronized (mPm) { synchronized (this) {
+            return scoped.canReviewBeforeLaunch(opening)
+                    ? pendingReviewGroups(scoped.code(), scoped.members(), scoped.code()) : List.of();
+        } }
+    }
+
+    private List<ReviewGroup> pendingReviewGroups(ApkPackage expected, List<ApkPackage> members,
+            ApkPackage permissionSource) {
         if (minimumTargetSdk(members) >= 23) return List.of();
         java.util.Set<String> reviewedGroups = new java.util.HashSet<>();
         for (String name : expected.parsed.getRequestedPermissions()) {
-            PermissionInfo info = mCatalog.get(name);
+            PermissionInfo info = permissionSource == null ? mCatalog.get(name) : mCatalog.get(name, permissionSource);
             if (info == null || !info.isRuntime()
                     || (permissionState(expected.uid(), name, members, info).flags
                             & PackageManager.FLAG_PERMISSION_REVIEW_REQUIRED) == 0) continue;
@@ -1040,7 +1276,7 @@ public final class PermissionPolicy extends IPermissionManager.Default {
         List<ReviewGroup> managed = new ArrayList<>();
         java.util.Set<String> managedGroups = new java.util.HashSet<>();
         for (String name : expected.parsed.getRequestedPermissions()) {
-            PermissionInfo info = mCatalog.get(name);
+            PermissionInfo info = permissionSource == null ? mCatalog.get(name) : mCatalog.get(name, permissionSource);
             if (info == null || !info.isRuntime()) continue;
             PermissionState state = permissionState(expected.uid(), name, members, info);
             String group = RuntimePermissionGroups.group(info);
@@ -1080,17 +1316,34 @@ public final class PermissionPolicy extends IPermissionManager.Default {
      */
     boolean recordPermissionReview(ApkPackage expected, List<ReviewGroup> shown,
             java.util.Set<String> enabledGroups) {
+        return recordPermissionReview(expected, null, null, shown, enabledGroups);
+    }
+
+    boolean recordScopedPermissionReview(ScopedOwner scoped, java.util.function.BooleanSupplier opening,
+            List<ReviewGroup> shown, java.util.Set<String> enabledGroups) {
+        return recordPermissionReview(scoped.code(), scoped, opening, shown, enabledGroups);
+    }
+
+    private boolean recordPermissionReview(ApkPackage expected, ScopedOwner scoped,
+            java.util.function.BooleanSupplier opening, List<ReviewGroup> shown,
+            java.util.Set<String> enabledGroups) {
         requireSystem();
         if (expected == null || shown == null || enabledGroups == null) return false;
         boolean changed = false;
         synchronized (mPm) { synchronized (this) {
-            if (mPm.get(expected.packageName) != expected
-                    || mPm.isRemovalPending(expected.packageName)
-                    || !pendingReviewGroups(expected).equals(shown)) return false;
-            List<ApkPackage> members = uidMembers(expected.uid());
+            List<ApkPackage> members;
+            if (scoped == null) {
+                if (mPm.get(expected.packageName) != expected || mPm.isRemovalPending(expected.packageName)) return false;
+                members = uidMembers(expected.uid());
+            } else {
+                if (!scoped.canReviewBeforeLaunch(opening)) return false;
+                members = scoped.members();
+            }
+            ApkPackage permissionSource = scoped == null ? null : expected;
+            if (!pendingReviewGroups(expected, members, permissionSource).equals(shown)) return false;
             Map<Integer, Integer> before = runtimeModes(expected.uid());
             for (String name : expected.parsed.getRequestedPermissions()) {
-                PermissionInfo info = mCatalog.get(name);
+                PermissionInfo info = permissionSource == null ? mCatalog.get(name) : mCatalog.get(name, permissionSource);
                 if (info == null || !info.isRuntime()) continue;
                 PermissionState state = permissionState(expected.uid(), name, members, info);
                 if ((state.flags & PackageManager.FLAG_PERMISSION_REVIEW_REQUIRED) == 0) continue;
@@ -1130,23 +1383,30 @@ public final class PermissionPolicy extends IPermissionManager.Default {
      * {@code settings}: a Settings page change, which may change a USER_FIXED permission and
      * whose denial never fixes one (AOSP revokes there with userFixed=false).
      */
-    private boolean commitUserDecision(ApkPackage expected, List<String> permissions, boolean allowed,
-            boolean revokeGranted, boolean settings, List<String> revoked) {
+    private boolean commitUserDecision(ApkPackage expected, ScopedOwner scoped, List<String> permissions,
+            boolean allowed, boolean revokeGranted, boolean settings, List<String> revoked) {
         synchronized (mPm) { synchronized (this) {
-            if (mPm.get(expected.packageName) != expected || mPm.isRemovalPending(expected.packageName)) return false;
-            List<ApkPackage> members = uidMembers(expected.uid());
+            if (scoped != null) {
+                if (!scoped.isCurrent()) return false;
+            } else if (mPm.get(expected.packageName) != expected
+                    || mPm.isRemovalPending(expected.packageName)) {
+                return false;
+            }
+            List<ApkPackage> members = scoped != null ? scoped.members() : uidMembers(expected.uid());
+            java.util.function.Function<String, PermissionInfo> permissionInfo = scoped != null
+                    ? name -> mCatalog.get(name, expected) : mCatalog::get;
             Map<String, PermissionState> pending = new LinkedHashMap<>();
             Map<String, Boolean> previouslySet = new LinkedHashMap<>();
             java.util.Set<String> background = allowed ? java.util.Set.of()
                     : RuntimePermissionGroups.backgroundPermissions(mCatalog.permissions());
             for (String name : permissions) {
-                if (!changeable(expected.packageName, name, settings)) continue;
-                if (granted(name, expected.packageName)) {
+                if (!canChange(expected, scoped, name, settings)) continue;
+                if (granted(name, expected, members, scoped != null ? expected : null)) {
                     if (allowed || !revokeGranted) continue;
                     if (permissionState(expected.uid(), name, members).granted) revoked.add(name);
                 }
-                PermissionInfo info = mCatalog.get(name);
-                pending.put(name, permissionState(expected.uid(), name, members));
+                PermissionInfo info = permissionInfo.apply(name);
+                pending.put(name, permissionState(expected.uid(), name, members, info));
                 if (allowed) continue;
                 // Revoking access the user already has is the Settings page's change,
                 // which AOSP records as USER_SET without USER_FIXED.
@@ -1156,12 +1416,12 @@ public final class PermissionPolicy extends IPermissionManager.Default {
                 boolean userSet = false;
                 String group = RuntimePermissionGroups.group(info);
                 for (String requested : expected.parsed.getRequestedPermissions()) {
-                    PermissionInfo other = mCatalog.get(requested);
+                    PermissionInfo other = permissionInfo.apply(requested);
                     boolean sameGroup = other != null && other.isRuntime() && (name.equals(requested)
                             || group != null && group.equals(RuntimePermissionGroups.group(other))
                             && java.util.Objects.equals(info.packageName, other.packageName)
                             && background.contains(name) == background.contains(requested));
-                    if (sameGroup && (permissionState(expected.uid(), requested, members).flags
+                    if (sameGroup && (permissionState(expected.uid(), requested, members, other).flags
                             & PackageManager.FLAG_PERMISSION_USER_SET) != 0) userSet = true;
                 }
                 previouslySet.put(name, userSet);
@@ -1170,7 +1430,7 @@ public final class PermissionPolicy extends IPermissionManager.Default {
             Map<Integer, Integer> before = runtimeModes(expected.uid());
             for (Map.Entry<String, PermissionState> entry : pending.entrySet()) {
                 String name = entry.getKey();
-                PermissionInfo info = mCatalog.get(name);
+                PermissionInfo info = permissionInfo.apply(name);
                 int flags = (entry.getValue().flags | PackageManager.FLAG_PERMISSION_USER_SET)
                         & ~(PackageManager.FLAG_PERMISSION_USER_FIXED | PackageManager.FLAG_PERMISSION_ONE_TIME
                             | PackageManager.FLAG_PERMISSION_AUTO_REVOKED | PackageManager.FLAG_PERMISSION_REVIEW_REQUIRED);
@@ -1305,6 +1565,7 @@ public final class PermissionPolicy extends IPermissionManager.Default {
     @Override public synchronized int getPermissionFlags(String pkg, String permission, String deviceId, int userId) {
         ApkPackage installed = mPm.get(pkg);
         if (installed == null || userId != 0 || !"default:0".equals(deviceId)) return 0;
+        if (mCohost) return cohostValue(CohostPermissionHost.FLAGS, permission, 0);
         return permissionState(installed.uid(), permission, uidMembers(installed.uid())).flags;
     }
 

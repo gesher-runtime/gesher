@@ -13,6 +13,9 @@
 #include <memory>
 #include <mutex>
 #include <new>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -22,12 +25,20 @@
 #include "storage_policy.h"
 #include <gesher/file_description.h>
 #include <gesher/procfs_fd.h>
+#include "rooted_storage_client.h"
+#include <gesher/file_description.h>
 #include <gesher/reserved_names.h>
+#include <gesher/binder_endpoint.h>
 #if __has_include(<gesher/fork.h>)
 #include <gesher/fork.h>
 #endif
 
 struct gesher_DIR {
+  struct RootedScan {
+    unsigned char bytes[16384]{};
+    size_t used = 0;
+    size_t offset = 0;
+  };
   std::wstring path;     // the directory, as MapPath gave it
   std::wstring pattern;  // path\*
   HANDLE find = INVALID_HANDLE_VALUE;
@@ -35,6 +46,7 @@ struct gesher_DIR {
   bool have_data = false;  // `data` holds an entry not yet returned
   long long position = 0;
   bool is_virtual = false;
+  std::unique_ptr<RootedScan> rooted;
   std::vector<gesher::procfs::Entry> entries;  // a virtual directory's
   int fd = -1;  // fdopendir's fd, or dirfd's; closed by closedir
   struct dirent entry;
@@ -45,6 +57,10 @@ namespace {
 bool Start(DIR* dir) {
   dir->position = 0;
   if (dir->is_virtual) return gesher::procfs::List(dir->path, &dir->entries);
+  if (dir->rooted) {
+    dir->rooted->used = dir->rooted->offset = 0;
+    return lseek(dir->fd, 0, SEEK_SET) >= 0;
+  }
   dir->find = FindFirstFileExW(dir->pattern.c_str(), FindExInfoBasic, &dir->data,
                                FindExSearchNameMatch, nullptr, FIND_FIRST_EX_LARGE_FETCH);
   dir->have_data = dir->find != INVALID_HANDLE_VALUE;
@@ -66,6 +82,36 @@ void Fill(struct dirent* e, const std::string& name, unsigned char type, long lo
   e->d_reclen = sizeof(*e);
 }
 
+struct dirent* ReadRooted(DIR* dir) {
+  auto& scan = *dir->rooted;
+  if (scan.offset == scan.used) {
+    const ssize_t size = getdents64(dir->fd, scan.bytes, sizeof(scan.bytes));
+    if (size <= 0) return nullptr;
+    scan.used = static_cast<size_t>(size);
+    scan.offset = 0;
+  }
+  constexpr size_t name_offset = 19;
+  const size_t available = scan.used - scan.offset;
+  if (available < name_offset + 1) return errno = EIO, nullptr;
+  const auto* record = scan.bytes + scan.offset;
+  unsigned long long inode = 0;
+  long long next = 0;
+  unsigned short length = 0;
+  memcpy(&inode, record, sizeof(inode));
+  memcpy(&next, record + 8, sizeof(next));
+  memcpy(&length, record + 16, sizeof(length));
+  if (length < name_offset + 1 || length > available || length % 8 != 0)
+    return errno = EIO, nullptr;
+  const char* name = reinterpret_cast<const char*>(record + name_offset);
+  const auto* end = static_cast<const char*>(memchr(name, 0, length - name_offset));
+  if (!end) return errno = EIO, nullptr;
+  Fill(&dir->entry, std::string(name, end), record[18], next);
+  dir->entry.d_ino = inode;
+  dir->position = next;
+  scan.offset += length;
+  return &dir->entry;
+}
+
 DIR* Open(const char* name, int fd) {
   if (name == nullptr || name[0] == '\0') {
     errno = name == nullptr ? EFAULT : ENOENT;
@@ -83,6 +129,21 @@ DIR* Open(const char* name, int fd) {
     if (!gesher::CheckExternalStorageAccess(dir->path, gesher::AccessKind::kRead)) {
       delete dir;
       return nullptr;
+    }
+    const auto rooted = gesher::storage_root::Lookup(dir->path);
+    if (rooted) {
+      if (rooted.error != 0) {
+        errno = rooted.error;
+        delete dir;
+        return nullptr;
+      }
+      dir->fd = fd >= 0 ? fd : open(name, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+      if (dir->fd < 0) {
+        delete dir;
+        return nullptr;
+      }
+      dir->rooted = std::make_unique<gesher_DIR::RootedScan>();
+      return dir;
     }
     DWORD attrs = GetFileAttributesW(dir->path.c_str());
     if (attrs == INVALID_FILE_ATTRIBUTES) {
@@ -126,6 +187,14 @@ bool DirectoryOfHandle(HANDLE h, std::string* path, bool* on_disk) {
   std::wstring buffer(32768, L'\0');
   DWORD n = GetFinalPathNameByHandleW(h, buffer.data(), 32768, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
   if (n == 0 || n >= 32768) {
+    // A contained descriptor needs no path to enumerate. Keep an immutable
+    // identity key solely for the process-local stream cache; reopen through
+    // its authenticated broker using the actual descriptor, never this key.
+    if (gesher::binder_endpoint::Current().IsGuest()) {
+      *path = "gesher-directory:" + std::to_string(info.dwVolumeSerialNumber) + ":" +
+          std::to_string(info.nFileIndexHigh) + ":" + std::to_string(info.nFileIndexLow);
+      return true;
+    }
     // A directory removed while open has no name left: still a directory.
     FILE_STANDARD_INFO standard;
     if (GetFileInformationByHandleEx(h, FileStandardInfo, &standard, sizeof(standard)) &&
@@ -329,6 +398,13 @@ bool OpenDirectory(HANDLE fd_handle, std::atomic<HANDLE>* slot, bool* gone) {
     *gone = true;
     return false;
   }
+  if (gesher::binder_endpoint::Current().IsGuest()) {
+    HANDLE reopened = INVALID_HANDLE_VALUE;
+    const int error = gesher::binder_endpoint::ReopenDirectory(fd_handle, &reopened);
+    if (error != 0) return errno = error, false;
+    slot->store(reopened);
+    return true;
+  }
   FILE_ID_DESCRIPTOR id = {};
   id.dwSize = sizeof(id);
   id.Type = ExtendedFileIdType;
@@ -530,10 +606,23 @@ DIR* opendir(const char* name) { return Open(name, -1); }
 DIR* fdopendir(int fd) {
   auto snapshot = gesher::CaptureDescriptor(fd);
   if (!snapshot) return nullptr;
+  if (gesher::FileDescriptionFlags(snapshot) & O_PATH) return errno = EBADF, nullptr;
   if (snapshot->description && !snapshot->description->virtual_directory.empty()) {
     const std::string name = gesher::procfs::LinuxName(snapshot->description->virtual_directory);
     return Open(name.c_str(), fd);
   }
+  if (gesher::binder_endpoint::Current().IsGuest()) {
+    BY_HANDLE_FILE_INFORMATION info{};
+    if (!GetFileInformationByHandle(snapshot->handle, &info) ||
+        !(info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) return errno = ENOTDIR, nullptr;
+    auto dir = std::make_unique<gesher_DIR>();
+    dir->rooted = std::make_unique<gesher_DIR::RootedScan>();
+    dir->fd = fd;
+    return dir.release();
+  }
+  auto scoped = gesher::DropDescriptorPath(snapshot);
+  if (scoped.empty()) scoped = gesher::storage_root::DescriptorPath(snapshot->handle);
+  if (!scoped.empty()) return Open(gesher::LinuxPath(scoped.c_str()).c_str(), fd);
   std::string path;
   if (!DirectoryOfFd(fd, &path)) return nullptr;
   return Open(path.c_str(), fd);
@@ -544,6 +633,7 @@ ssize_t getdents64(int fd, void* buffer, size_t size) {
   // cannot turn this call to another file (Linux pins it with fdget_pos).
   gesher::DescriptorSnapshotPtr snapshot = gesher::CaptureDescriptor(fd);
   if (!snapshot) return errno == 0 ? (errno = EBADF, -1) : -1;
+  if (gesher::FileDescriptionFlags(snapshot) & O_PATH) return errno = EBADF, -1;
   if (snapshot->description && !snapshot->description->virtual_directory.empty() &&
       gesher::procfs::Type(snapshot->description->virtual_directory) != S_IFDIR) {
     return errno = ENOENT, -1;  // The USB authority/session no longer exposes this directory.
@@ -657,6 +747,7 @@ ssize_t getdents64(int fd, void* buffer, size_t size) {
 }
 
 struct dirent* readdir(DIR* dir) {
+  if (dir->rooted) return ReadRooted(dir);
   struct dirent* e = &dir->entry;
   if (dir->is_virtual) {
     if (dir->position >= static_cast<long long>(dir->entries.size())) return nullptr;

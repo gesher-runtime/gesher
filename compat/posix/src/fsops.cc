@@ -26,10 +26,12 @@
 
 #include "internal.h"
 #include "usb_block_internal.h"
+#include "standalone_input.h"
 #include "descriptor_resources.h"
 #include "fifo_internal.h"
 #include "record_lock_descriptors.h"
 #include "revocable_internal.h"
+#include "rooted_storage_client.h"
 #include "stdio_internal.h"
 #include "system_linker.h"
 #include "storage_policy.h"
@@ -167,12 +169,19 @@ int Rename(const char* oldpath, const char* newpath, unsigned flags) {
     return -1;
   }
   std::wstring from, to;
-  if (!gesher::DiskPath(oldpath, &from, EACCES) || !gesher::DiskPath(newpath, &to, EACCES)) {
+  if (!gesher::DiskPath(oldpath, &from, EACCES, true) ||
+      !gesher::DiskPath(newpath, &to, EACCES, true)) {
     return -1;
   }
   if (!gesher::CheckExternalStorageAccess(from, gesher::AccessKind::kWrite) ||
       !gesher::CheckExternalStorageAccess(to, gesher::AccessKind::kWrite)) {
     return -1;
+  }
+  const auto from_root = gesher::storage_root::Lookup(from);
+  const auto to_root = gesher::storage_root::Lookup(to);
+  if (from_root || to_root) {
+    const int error = gesher::storage_root::Rename(from_root, to_root, (flags & kRenameNoReplace) == 0);
+    return error != 0 ? (errno = error, -1) : 0;
   }
   HANDLE h = CreateFileW(from.c_str(), DELETE | SYNCHRONIZE | FILE_READ_ATTRIBUTES,
                          FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
@@ -282,8 +291,16 @@ int SetMode(HANDLE h, mode_t mode) {
 int Chmod(const char* path, mode_t mode, bool follow) {
   if (gesher::system_linker::RefuseChange(path) != 0) return -1;
   std::wstring windows;
-  if (!gesher::DiskPath(path, &windows, EPERM)) return -1;
+  if (!gesher::DiskPath(path, &windows, EPERM, true)) return -1;
   if (!gesher::CheckExternalStorageAccess(windows, gesher::AccessKind::kWrite)) return -1;
+  if (const auto rooted = gesher::storage_root::Lookup(windows)) {
+    HANDLE h;
+    const int error = gesher::storage_root::Open(rooted, gesher::rooted_storage_wire::kMetadataWrite, &h);
+    if (error != 0) return errno = error, -1;
+    const int result = SetMode(h, mode);
+    CloseHandle(h);
+    return result;
+  }
   HANDLE h = gesher::CreateFileFollowingFifo(windows.c_str(), FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES,
                          FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                          FILE_FLAG_BACKUP_SEMANTICS | (follow ? 0 : FILE_FLAG_OPEN_REPARSE_POINT));
@@ -338,11 +355,35 @@ int Access(const char* path, int mode, bool follow) {
     case PathKind::kMissing:
       return errno = ENOENT, -1;
   }
-  HANDLE h = gesher::CreateFileFollowingFifo(windows.c_str(), FILE_READ_ATTRIBUTES,
-                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                         FILE_FLAG_BACKUP_SEMANTICS | (follow ? 0 : FILE_FLAG_OPEN_REPARSE_POINT));
+  if (gesher::standalone_input::Current().Matches(windows)) {
+    return (mode & (W_OK | X_OK)) != 0 ? (errno = EACCES, -1) : 0;
+  }
+  if (const auto bootstrap = gesher::storage_root::LookupBootstrap(windows)) {
+    if ((mode & (W_OK | X_OK)) != 0) return errno = EACCES, -1;
+    HANDLE h;
+    const int error = gesher::storage_root::OpenBootstrap(*bootstrap, &h);
+    if (error != 0) return errno = error, -1;
+    CloseHandle(h);
+    return 0;
+  }
+  const auto rooted = gesher::storage_root::Lookup(windows);
+  if (rooted.drop_alias && (mode & W_OK)) return errno = EACCES, -1;
+  HANDLE h;
+  if (rooted) {
+    namespace wire = gesher::rooted_storage_wire;
+    const uint32_t access = !rooted.IsInstalledMedia() ? wire::kMetadata
+        : access_kind == gesher::AccessKind::kWrite ? wire::kMetadataWrite
+        : access_kind == gesher::AccessKind::kRead ? wire::kRead : wire::kMetadata;
+    const int error = gesher::storage_root::Open(rooted, access, &h);
+    if (error != 0) return errno = error, -1;
+  } else {
+    h = gesher::CreateFileFollowingFifo(windows.c_str(), FILE_READ_ATTRIBUTES,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                           FILE_FLAG_BACKUP_SEMANTICS | (follow ? 0 : FILE_FLAG_OPEN_REPARSE_POINT));
+
+  }
   if (h == INVALID_HANDLE_VALUE) return gesher::FailWithLastError();
-  if (!gesher::CheckExternalStorageHandle(h, access_kind)) {
+  if (!rooted.IsInstalledMedia() && !gesher::CheckExternalStorageHandle(h, access_kind)) {
     CloseHandle(h);
     return errno = EACCES, -1;
   }
@@ -419,6 +460,13 @@ ssize_t Readlink(const char* path, char* buf, size_t size) {
       break;
     case PathKind::kFile: {
       if (!gesher::CheckExternalStorageAccess(windows, gesher::AccessKind::kRead)) return -1;
+      if (const auto rooted = gesher::storage_root::Lookup(windows)) {
+        HANDLE h;
+        const int error = gesher::storage_root::Open(rooted, gesher::rooted_storage_wire::kMetadata, &h);
+        if (error != 0) return errno = error, -1;
+        CloseHandle(h);
+        return errno = EINVAL, -1;  // The rooted view does not traverse reparse points.
+      }
       HANDLE h = CreateFileW(windows.c_str(), FILE_READ_ATTRIBUTES,
                              FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
                              OPEN_EXISTING,
@@ -581,7 +629,19 @@ int renameat(int olddirfd, const char* oldpath, int newdirfd, const char* newpat
 int remove(const char* path) {
   if (gesher::system_linker::RefuseChange(path) != 0) return -1;
   std::wstring windows;
-  if (!gesher::DiskPath(path, &windows, EACCES)) return -1;
+  if (!gesher::DiskPath(path, &windows, EACCES, true)) return -1;
+  if (const auto rooted = gesher::storage_root::Lookup(windows)) {
+    HANDLE h;
+    int error = gesher::storage_root::Open(rooted, gesher::rooted_storage_wire::kMetadata, &h);
+    if (error != 0) return errno = error, -1;
+    BY_HANDLE_FILE_INFORMATION info;
+    const bool okay = GetFileInformationByHandle(h, &info);
+    if (!okay) gesher::FailWithLastError();
+    CloseHandle(h);
+    if (!okay) return -1;
+    error = gesher::storage_root::Remove(rooted, (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0);
+    return error != 0 ? (errno = error, -1) : 0;
+  }
   bool link;
   DWORD attributes = AttributesNoFollow(windows, &link);
   bool directory = attributes != INVALID_FILE_ATTRIBUTES &&
@@ -622,6 +682,9 @@ int fchdir(int fd) {
   wchar_t path[32768];
   DWORD n = GetFinalPathNameByHandleW(h, path, 32768, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
   if (n == 0 || n >= 32768) return errno = ENOTDIR, -1;
+  if (const auto rooted = gesher::storage_root::Lookup(path)) {
+    return errno = rooted.error != 0 ? rooted.error : EOPNOTSUPP, -1;
+  }
   return SetCurrent(path);
 }
 
@@ -849,6 +912,9 @@ FILE* gesher_freopen_state(const char* path, const char* mode, FILE* stream, int
         if (!gesher::CheckExternalStorageAccess(
                 windows, is_write ? gesher::AccessKind::kWrite : gesher::AccessKind::kRead)) {
           return fail_reopen(errno);
+        }
+        if (const auto rooted = gesher::storage_root::Lookup(windows)) {
+          return fail_reopen(rooted.error != 0 ? rooted.error : EOPNOTSUPP);
         }
         break;
       }

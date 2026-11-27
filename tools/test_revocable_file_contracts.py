@@ -15,6 +15,8 @@ import shlex
 import subprocess
 import tempfile
 
+from test_ofd_transfer_contracts import load_host_template, require_rendered_host_source
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -28,10 +30,8 @@ def main():
     parser.add_argument("--sanitize", action="store_true")
     parser.add_argument("--io-source-ref", help="Compile an exact prior NativeFileIo as a negative control")
     args = parser.parse_args()
-    base = (ROOT / "tests/native/ofd_transfer_host_test.cc.in").read_text()
+    base = load_host_template()
     boundary, rest = base.split("@OFD_DECLARATIONS@", 1)
-    boundary = boundary.replace("@PE_EXPORTS_HEADER@", str(ROOT / "compat/elf/exec/pe_exports.h"))
-    boundary = boundary.replace("@ENVIRONMENT_ENCODING_HEADER@", str(ROOT / "compat/posix/include/gesher/environment_utf16.h"))
     boundary = boundary.replace("CloseHandle(", "HostCloseHandle(")
     boundary = boundary.replace("CreateFileMappingW(", "HostCreateFileMappingW(")
     # The inherited pipe fixture now supplies these Win32 boundaries too.
@@ -59,6 +59,7 @@ def main():
                          "@REVOCABLE_IMPLEMENTATION@": implementations[1], "@NATIVE_FILE_IO@": io}.items():
         assert template.count(token) == 1, token
         template = template.replace(token, value)
+    require_rendered_host_source(template)
     with tempfile.TemporaryDirectory(prefix="gesher-revocable-") as temporary:
         folder = Path(temporary)
         cpp, executable = folder / "revocable.cc", folder / "revocable"

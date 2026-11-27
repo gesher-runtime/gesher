@@ -69,7 +69,7 @@ extern "C" int gesher_errno_from_crt(int crt_errno) {
 
 extern "C" int gesher_rmdir(const char* path) {
   std::wstring windows;
-  if (!gesher::DiskPath(path, &windows, ENOTDIR)) return -1;  // ENOTDIR: a device or /proc file
+  if (!gesher::DiskPath(path, &windows, ENOTDIR, true)) return -1;  // ENOTDIR: a device or /proc file
   return gesher::PosixDelete(windows, true);
 }
 

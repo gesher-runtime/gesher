@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdio>
+#include <cwchar>
 
 namespace gesher {
 namespace {
@@ -359,12 +360,19 @@ int SetPipeNonBlocking(HANDLE file, bool nonblocking) {
 
 int CreatePipeDescriptors(int descriptors[2], int flags) {
   if (!descriptors) return errno = EFAULT, -1;
+  DWORD contained = 0, token_bytes = 0;
+  if (!GetTokenInformation(GetCurrentProcessToken(), TokenIsAppContainer,
+                           &contained, sizeof(contained), &token_bytes)) return FailWithLastError();
   unsigned char nonce[16];
   if (!BCRYPT_SUCCESS(BCryptGenRandom(nullptr, nonce, sizeof(nonce), BCRYPT_USE_SYSTEM_PREFERRED_RNG)))
     return errno = EIO, -1;
-  wchar_t name[100] = L"\\\\.\\pipe\\gesher-";
+  // Windows lets an AppContainer create NPFS instances in its own LOCAL
+  // namespace. Descriptor inheritance and transfer use the opened handles.
+  const wchar_t* pipe_directory = contained ? L"\\\\.\\pipe\\LOCAL\\gesher-" : L"\\\\.\\pipe\\gesher-";
+  const size_t prefix = std::wcslen(pipe_directory);
+  wchar_t name[100];
+  std::copy_n(pipe_directory, prefix, name);
   constexpr wchar_t hex[] = L"0123456789abcdef";
-  const size_t prefix = 16;
   for (size_t i = 0; i != sizeof(nonce); ++i) {
     name[prefix + 2 * i] = hex[nonce[i] >> 4];
     name[prefix + 2 * i + 1] = hex[nonce[i] & 15];

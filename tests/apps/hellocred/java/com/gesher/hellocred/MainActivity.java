@@ -12,11 +12,19 @@ import android.content.pm.PackageManager;
 import android.hardware.biometrics.BiometricManager;
 import android.hardware.biometrics.BiometricManager.Authenticators;
 import android.hardware.biometrics.BiometricPrompt;
+import android.hardware.biometrics.IAuthService;
+import android.hardware.biometrics.IBiometricServiceReceiver;
+import android.hardware.biometrics.PromptInfo;
+import android.os.Binder;
 import android.os.Bundle;
 import android.os.CancellationSignal;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.RemoteException;
+import android.os.ServiceManager;
+import android.os.UserHandle;
 import android.util.Log;
+import android.widget.TextView;
 
 /**
  * Asks Android for the device credential the way apps do and prints every answer.
@@ -39,6 +47,8 @@ public class MainActivity extends Activity {
     private final Handler mHandler = new Handler(Looper.getMainLooper());
     private String mMode;
     private boolean mSecure;
+    private boolean mManual;
+    private boolean mManualStarted;
 
     private static void line(String message) {
         System.out.println("hellocred: " + message);
@@ -52,7 +62,18 @@ public class MainActivity extends Activity {
         if (savedInstanceState != null) return;
         String mode = System.getenv("GESHER_HELLOCRED_MODE");
         mMode = mode == null || mode.isEmpty() ? "prompt" : mode;
+        mManual = getIntent().getBooleanExtra("manual-hello", false);
+        if (mManual) {
+            if (getIntent().getBooleanExtra("app-cancel", false)) mMode = "app-cancel";
+            else if (getIntent().getBooleanExtra("owner-lost", false)) mMode = "owner-lost";
+            else if (getIntent().getBooleanExtra("user-cancel", false)) mMode = "user-cancel";
+            else mMode = "verify";
+            TextView view = new TextView(this);
+            view.setText("Gesher Windows Hello verification");
+            setContentView(view);
+        }
         line("mode: " + mMode);
+        if (mManual) line("probe-process: " + android.os.Process.myPid());
         line("feature: secure_lock_screen "
                 + getPackageManager().hasSystemFeature(PackageManager.FEATURE_SECURE_LOCK_SCREEN));
         KeyguardManager keyguard = getSystemService(KeyguardManager.class);
@@ -77,8 +98,49 @@ public class MainActivity extends Activity {
                 "Confirm it is you");
         line("keyguard: createConfirmDeviceCredentialIntent "
                 + (created == null ? "null" : created.getAction() + " for " + created.getPackage()));
-        // Posted: the prompts need this activity's window.
-        mHandler.post(this::biometricOnly);
+        if (!mManual) mHandler.post(this::biometricOnly);
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean focused) {
+        super.onWindowFocusChanged(focused);
+        if (mManual && focused && !mManualStarted) {
+            mManualStarted = true;
+            mHandler.post(this::operationBound);
+        }
+    }
+
+    /** There is no supported key handle to obtain from AndroidKeyStore today. Exercise
+     * the actual Binder refusal for a nonzero operation ID without creating a pretend key. */
+    private void operationBound() {
+        IAuthService auth = IAuthService.Stub.asInterface(ServiceManager.getService("auth"));
+        PromptInfo info = new PromptInfo();
+        info.setTitle("Gesher operation-bound verification");
+        info.setAuthenticators(Authenticators.BIOMETRIC_STRONG | Authenticators.DEVICE_CREDENTIAL);
+        try {
+            if (auth == null) throw new IllegalStateException("No auth service");
+            auth.authenticate(new Binder(), 1L, UserHandle.myUserId(),
+                    new IBiometricServiceReceiver.Stub() {
+                @Override public void onAuthenticationSucceeded(int type) {
+                    line("operation-bound: unexpected success");
+                    mHandler.post(MainActivity.this::biometricOnly);
+                }
+
+                @Override public void onAuthenticationFailed() { }
+
+                @Override public void onError(int modality, int errorCode, int vendorCode) {
+                    line("operation-bound: error " + errorCode);
+                    mHandler.post(MainActivity.this::biometricOnly);
+                }
+
+                @Override public void onAcquired(int acquireInfo, String message) { }
+                @Override public void onDialogDismissed(int reason) { }
+                @Override public void onSystemEvent(int event) { }
+            }, getPackageName(), info);
+        } catch (RuntimeException | RemoteException failure) {
+            line("operation-bound: could not invoke auth API");
+            mHandler.post(this::biometricOnly);
+        }
     }
 
     private static String can(BiometricManager biometrics, int authenticators) {
@@ -146,7 +208,7 @@ public class MainActivity extends Activity {
                     .setAllowedAuthenticators(
                             Authenticators.BIOMETRIC_STRONG | Authenticators.DEVICE_CREDENTIAL)
                     .build()
-                    .authenticate(cancel, getMainExecutor(), callback("credential", this::confirm));
+                    .authenticate(cancel, getMainExecutor(), callback("credential", this::afterCredential));
             line("prompt: credential: started");
             if ("app-cancel".equals(mMode)) {
                 mHandler.postDelayed(() -> {
@@ -156,7 +218,16 @@ public class MainActivity extends Activity {
             }
         } catch (RuntimeException e) {
             line("prompt: credential: throws " + e);
-            mHandler.post(this::confirm);
+            mHandler.post(this::afterCredential);
+        }
+    }
+
+    private void afterCredential() {
+        if (mManual && ("app-cancel".equals(mMode) || "owner-lost".equals(mMode))) {
+            line("done");
+            finish();
+        } else {
+            confirm();
         }
     }
 

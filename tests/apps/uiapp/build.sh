@@ -7,8 +7,8 @@
 # aapt2 compiles the resources and links them with the manifest against
 # framework-res.apk, which also writes R.java; javac compiles the app against
 # framework.jar's classes (and libcore's java.base, as app/build.sh does); d8 dexes it;
-# the dex is added to the APK and the APK is zip-aligned. It is not signed: gesher-app
-# does not verify signatures.
+# the dex is added to the APK and the APK is zip-aligned. SIGN_TEST_APK=1 signs
+# it with a disposable certificate for the installed app isolation test.
 #
 # aapt2 and zipalign come from Google's build-tools r36.1 (BUILD_TOOLS_DIR to use an
 # unpacked copy), d8 from Google's Maven repository (R8_JAR to use a local copy).
@@ -92,4 +92,14 @@ javac -source 17 -target 17 "${system[@]}" -encoding UTF-8 -nowarn -Xlint:-optio
 # The dex into the APK, then 4-byte alignment.
 (cd "$work/dex" && jar -u -M -f "$(native "$work/unaligned.apk")" classes.dex)
 "$zipalign" -f -p 4 "$(native "$work/unaligned.apk")" "$(native "$out/uiapp.apk")"
+if [[ ${SIGN_TEST_APK:-0} == 1 ]]; then
+  keytool -genkeypair -keystore "$(native "$work/fixture.p12")" -storetype PKCS12 \
+    -storepass fixture-only -alias fixture -keyalg RSA -keysize 2048 -validity 36500 \
+    -dname 'CN=Gesher disposable UI APK fixture' -noprompt > /dev/null 2>&1
+  java -jar "$(native "$tools/lib/apksigner.jar")" sign \
+    --ks "$(native "$work/fixture.p12")" --ks-pass pass:fixture-only \
+    --ks-key-alias fixture --out "$(native "$work/signed.apk")" "$(native "$out/uiapp.apk")"
+  java -jar "$(native "$tools/lib/apksigner.jar")" verify --verbose "$(native "$work/signed.apk")"
+  mv "$work/signed.apk" "$out/uiapp.apk"
+fi
 echo "uiapp.apk written to $out"

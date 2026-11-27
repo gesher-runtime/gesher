@@ -23,6 +23,15 @@ try {
   Check 'sandbox: AppContainer isolation, Binder identity and live storage ACL lifecycle' {
     & "$Dir/appcontainer_probe.exe" $sandboxDevice
   } @('all passed')
+  Check 'sandbox: real AppContainer reads live broker properties with write access denied' {
+    & "$Dir/appcontainer_property_probe.exe" (Join-Path $root 'sandbox-property')
+  } @('property-area probe all passed')
+  Check 'sandbox: real AppContainer preserves Binder admission, record locks and directory descriptors' {
+    & "$Dir/appcontainer_record_lock_probe.exe" $Dir (Join-Path $root 'sandbox-record-locks')
+  } @('protected server drives fixture: ok')
+  Check 'sandbox: installed AppContainer mediates scoped and shared storage operations' {
+    & "$Dir/appcontainer_installed_media_probe.exe" $Dir (Join-Path $root 'sandbox-installed-media')
+  } @('installed media probe all passed')
 } finally {
   if ($null -eq $sandboxSaved) { Remove-Item Env:GESHER_SANDBOX -ErrorAction SilentlyContinue }
   else { $env:GESHER_SANDBOX = $sandboxSaved }

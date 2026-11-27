@@ -23,4 +23,8 @@ bool CheckExternalStorageAccess(const std::wstring& windows_path, AccessKind kin
 // Use before a handle-based operation can read or change external storage.
 bool CheckExternalStorageHandle(HANDLE handle, AccessKind kind);
 
+// Native canonical name of the active profile's media root from the host
+// launcher. This is used to translate names, never to authorize an operation.
+const std::wstring& ExternalStorageMediaNtRoot();
+
 }  // namespace gesher

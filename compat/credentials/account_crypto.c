@@ -301,6 +301,29 @@ Java_com_gesher_server_AccountManagerService_nativeConfirmToken(JNIEnv* env, jcl
 #include "account_chooser.inc"
 
 JNIEXPORT jboolean GESHER_NATIVE
+Java_com_gesher_server_SandboxOptOut_nativeConfirm(JNIEnv* env, jclass cls, jstring package_name) {
+  (void)cls;
+  if (!RequireServer(env) || package_name == NULL) return JNI_FALSE;
+  jsize name_length = (*env)->GetStringLength(env, package_name);
+  if (name_length <= 0 || name_length > 255) return JNI_FALSE;
+  WCHAR text[1024] = {0};
+  text[0] = 0x2068;
+  (*env)->GetStringRegion(env, package_name, 0, name_length, (jchar*)(text + 1));
+  if ((*env)->ExceptionCheck(env)) return JNI_FALSE;
+  text[name_length + 1] = 0x2069;
+  text[name_length + 2] = L'\n';
+  text[name_length + 3] = L'\n';
+  enum GesherUiLanguage lang = GesherUiCurrentLanguage();
+  const WCHAR* warning = GesherUiText(lang, "sandbox_override_warning");
+  size_t warning_length = wcslen(warning);
+  if (warning_length + name_length + 5 > sizeof(text) / sizeof(text[0])) return JNI_FALSE;
+  memcpy(text + name_length + 4, warning, (warning_length + 1) * sizeof(WCHAR));
+  return GesherHostPrompt(GesherUiText(lang, "sandbox_override_title"), text,
+      GesherUiText(lang, "sandbox_override_accept"), GesherUiText(lang, "chooser_cancel"),
+      GesherUiRtl(lang), NULL, MB_ICONWARNING) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jboolean GESHER_NATIVE
 Java_com_gesher_server_WindowsLocation_nativePromptEnable(JNIEnv* env, jclass cls,
     jstring app_label) {
   (void)cls;
