@@ -43,6 +43,57 @@ function Assert-ProtectedOwner([string]$Path) {
     if ($sid -notin $trustedOwners) { throw "Unprotected owner on $Path" }
 }
 
+# Read only the exact marker published by the completed protected startup.
+# These ancestors have trusted Windows owners and cannot be replaced by the
+# filtered desktop token. Reject reparse points before opening the retained file.
+function Read-ProtectedInstallationOwner([string]$DataRoot, [string]$Package, [string]$RuntimeSid) {
+    if ($RuntimeSid -cnotmatch '^S-1-5-80-[0-9]+-[0-9]+-[0-9]+-[0-9]+-[0-9]+$') {
+        throw 'Invalid attested private runtime SID.'
+    }
+    if ($Package -cnotmatch '^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)*$') {
+        throw 'Invalid installation owner package.'
+    }
+    $root = [IO.Path]::GetFullPath($DataRoot)
+    $system = Join-Path $root 'system'
+    $owners = Join-Path $system 'package-enabled-owners'
+    $marker = Join-Path $owners $Package
+    foreach ($path in $root, $system, $owners, $marker) {
+        $item = Get-Item -LiteralPath $path -Force -ErrorAction Stop
+        if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+            $item.PSIsContainer -eq ($path -ceq $marker)) {
+            throw "Invalid protected installation owner object: $path"
+        }
+        # Java-created metadata can be owned by the exact SCM private user
+        # independently attested above; it must never be desktop/app-owned.
+        $ownerSid = (Get-Acl -LiteralPath $path).GetOwner([Security.Principal.SecurityIdentifier]).Value
+        if ($ownerSid -notin $trustedOwners -and $ownerSid -cne $RuntimeSid) {
+            throw "Unprotected installation owner metadata on $path"
+        }
+        Assert-DesktopDenied $path
+    }
+    $stream = [IO.File]::Open($marker, [IO.FileMode]::Open, [IO.FileAccess]::Read,
+        [IO.FileShare]::Read)
+    try {
+        if ($stream.Length -ne 36) { throw 'Invalid installation owner marker length.' }
+        $bytes = [byte[]]::new(36)
+        $offset = 0
+        while ($offset -lt $bytes.Length) {
+            $read = $stream.Read($bytes, $offset, $bytes.Length - $offset)
+            if ($read -eq 0) { throw 'Truncated installation owner marker.' }
+            $offset += $read
+        }
+        if ($stream.ReadByte() -ne -1 -or ($bytes | Where-Object { $_ -gt 127 })) {
+            throw 'Invalid installation owner marker encoding.'
+        }
+        $owner = [Text.Encoding]::ASCII.GetString($bytes)
+        if ($owner -cnotmatch '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' -or
+            $owner -ceq '00000000-0000-0000-0000-000000000000') {
+            throw 'Invalid canonical installation owner.'
+        }
+        return $owner
+    } finally { $stream.Dispose() }
+}
+
 function Read-ServiceAcl([string]$Name = $service) {
     $sddl = @(& sc.exe sdshow $Name | Where-Object { $_ -match '^[OGDS]:' }) -join ''
     if ($LASTEXITCODE -ne 0 -or -not $sddl) { throw 'Could not read the optional service ACL.' }
@@ -483,7 +534,10 @@ try {
                 throw 'Protected startup did not use the seeded desktop-private Android root.'
             }
             $androidRoot = $roots[0].FullName
-            foreach ($relative in '', 'data', 'stage', 'tmp', 'tmp\server', 'tmp\com.cardwake.otgroot') {
+            $package = 'com.cardwake.otgroot'
+            $installationOwner = Read-ProtectedInstallationOwner $freshData $package $runtimeSid
+            $generationName = "$package.$installationOwner"
+            foreach ($relative in '', 'data', 'stage', 'tmp', 'tmp\server', (Join-Path 'tmp' $generationName)) {
                 $path = if ($relative) { Join-Path $androidRoot $relative } else { $androidRoot }
                 Assert-ProtectedOwner $path
                 Assert-DesktopDenied $path
@@ -514,7 +568,7 @@ try {
             $windowShown = $false
             $webViewLoaded = $false
             do {
-                $appLog = @('com.cardwake.otgroot.log', 'com.cardwake.otgroot.logcat') |
+                $appLog = @("$generationName.log", "$generationName.logcat") |
                     ForEach-Object {
                         $path = Join-Path $logDirectory $_
                         if (Test-Path -LiteralPath $path) { Read-SharedText $path }
