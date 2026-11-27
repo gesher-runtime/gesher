@@ -299,6 +299,7 @@ public final class Launcher {
                 return MobileDataCommands.run(rest);
             case "windows": return windows(rest);
             case "special-access": return specialAccess(rest);
+            case "accounts": return accounts(rest);
             case "settings-closed": return settingsClosed(rest, false);
             case "settings-shown": return settingsClosed(rest, true);
             case "view": {
@@ -458,6 +459,42 @@ public final class Launcher {
     }
 
     /**
+     * {@code accounts [list | remove TYPE NAME]}: lists saved accounts ({@code account TAB type
+     * TAB name}) or removes one on explicit host request.
+     */
+    private static int accounts(List<String> args) throws Exception {
+        boolean list = args.isEmpty() || (args.size() == 1 && "list".equals(args.get(0)));
+        boolean remove = args.size() == 3 && "remove".equals(args.get(0));
+        if (!list && !remove) return usage();
+        ensureDevice(true);
+        return accounts(gesher(), args, System.out);
+    }
+
+    static int accounts(GesherService.Client gesher, List<String> args,
+            java.io.PrintStream out) throws Exception {
+        try {
+            if (args.size() == 3 && "remove".equals(args.get(0))) {
+                if (!gesher.removeAccount(args.get(1), args.get(2))) {
+                    log(text("account_not_found", args.get(2)));
+                    return 1;
+                }
+                out.println("account-removed\t" + args.get(1) + "\t" + args.get(2));
+                out.flush();
+                return 0;
+            }
+            for (String row : gesher.listAccounts()) out.println("account\t" + row);
+            out.flush();
+            return 0;
+        } catch (UnsupportedOperationException e) {
+            log(e.getMessage());
+            return 4;
+        } catch (IllegalArgumentException | IllegalStateException | SecurityException e) {
+            log(e.getMessage());
+            return 1;
+        }
+    }
+
+    /**
      * {@code settings-closed TOKEN...}: (run by the Control Center) the app details it showed
      * for these Settings requests closed, so the apps that asked get their results
      * (com.gesher.server.SettingsResults). Never starts a device.
@@ -503,7 +540,7 @@ public final class Launcher {
                 + " true|false]... [--proxy host:port|socks5://host:port|direct|windows]"
                 + " [--window | --hidden-window | --headless [--keep-task]] [--detach | --wait]"
                 + " | proxy [[PACKAGE] host:port|socks5://host:port|direct|windows] | windows PACKAGE separate|shared"
-                + " | special-access PACKAGE [OP allow|deny] | install APK [--desktop-shortcut] | uninstall PACKAGE | view PACKAGE URL | list | status | start"
+                + " | special-access PACKAGE [OP allow|deny] | accounts [list | remove TYPE NAME] | install APK [--desktop-shortcut] | uninstall PACKAGE | view PACKAGE URL | list | status | start"
                 + " | shutdown | apk-icon APK | apk-info APK OUT [SNAPSHOT_DIR] | spell-checker list|use COMPONENT|automatic|enable|disable|language ID"
                 + " | " + MobileDataCommands.USAGE);
         return 2;

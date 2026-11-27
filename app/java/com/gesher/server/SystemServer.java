@@ -601,6 +601,18 @@ public final class SystemServer {
         }
 
         @Override
+        public String[] listAccounts() {
+            return mServices.accounts.listAccountsForHost();
+        }
+
+        @Override
+        public boolean removeAccount(String type, String name) {
+            boolean removed = mServices.accounts.removeAccountForHost(type, name);
+            if (removed) log("account removed: " + type + " (host request)");
+            return removed;
+        }
+
+        @Override
         public int lastExitCode(String packageName) {
             Integer code = mServices.atm.lastExitCode(packageName);
             return code == null ? Integer.MIN_VALUE : code;

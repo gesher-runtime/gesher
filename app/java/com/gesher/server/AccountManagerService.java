@@ -936,6 +936,47 @@ public final class AccountManagerService extends IAccountManager.Default {
         deliverChange(change); return true;
     }
 
+    /** Host Control Center / CLI: list persisted accounts as "type\tname", sorted cleanly. */
+    synchronized String[] listAccountsForHost() {
+        List<Account> visible = new ArrayList<>();
+        for (Map.Entry<Account, Entry> item : mAccounts.entrySet()) {
+            if (!retiring(item.getValue())) visible.add(item.getKey());
+        }
+        visible.sort(java.util.Comparator.comparing((Account a) -> a.type).thenComparing(a -> a.name));
+        String[] rows = new String[visible.size()];
+        for (int i = 0; i < visible.size(); i++) {
+            Account account = visible.get(i);
+            rows[i] = account.type + "\t" + account.name;
+        }
+        return rows;
+    }
+
+    /** Host Control Center / CLI: remove an account on explicit user request and retire its sync state. */
+    boolean removeAccountForHost(String type, String name) {
+        if (type == null || type.isEmpty() || name == null || name.isEmpty()) {
+            throw new IllegalArgumentException("Account type and name are required");
+        }
+        Account account = new Account(name, type);
+        AccountChange change;
+        Set<Account> retained;
+        synchronized (this) {
+            Entry removed = mAccounts.get(account);
+            if (removed == null || retiring(removed)) return false;
+            change = captureChange(account, true, removed, true);
+            beginMutation();
+            mAccounts.remove(account);
+            save();
+            retained = new HashSet<>(mAccounts.keySet());
+        }
+        deliverChange(change);
+        try {
+            mRetireSync.accept(Set.of(account), retained);
+        } catch (IllegalStateException e) {
+            SystemServer.log(TAG + "removed account sync settings not removed: " + e);
+        }
+        return true;
+    }
+
     @Override
     public void removeAccountAsUser(IAccountManagerResponse response, Account account,
             boolean expectActivityLaunch, int userId) {

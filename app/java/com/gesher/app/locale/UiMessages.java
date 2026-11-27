@@ -320,6 +320,17 @@ public final class UiMessages {
             case "update_done_text": value = lang.equals("he") ? "{0} \u05e2\u05d5\u05d3\u05db\u05df." : "{0} was updated."; break;
             case "install_open_button": value = lang.equals("he") ? "\u05e4\u05ea\u05d9\u05d7\u05d4" : "Open"; break;
             case "install_done_button": value = lang.equals("he") ? "\u05e1\u05d9\u05d5\u05dd" : "Done"; break;
+            case "account_not_found": value = lang.equals("he") ? "\u05d4\u05d7\u05e9\u05d1\u05d5\u05df \u05dc\u05d0 \u05e0\u05de\u05e6\u05d0: {0}" : "Account not found: {0}"; break;
+            case "cp_btn_manage_accounts": value = lang.equals("he") ? "\u05e0\u05d9\u05d4\u05d5\u05dc \u05d7\u05e9\u05d1\u05d5\u05e0\u05d5\u05ea" : "Manage Accounts"; break;
+            case "cp_accounts_title": value = lang.equals("he") ? "\u05d7\u05e9\u05d1\u05d5\u05e0\u05d5\u05ea" : "Accounts"; break;
+            case "cp_accounts_desc": value = lang.equals("he") ? "\u05d4\u05e1\u05e8\u05ea \u05d7\u05e9\u05d1\u05d5\u05df \u05e9\u05de\u05d5\u05e8 \u05de\u05e1\u05d1\u05d9\u05d1\u05ea \u05d2\u05e9\u05e8 \u05d6\u05d5." : "Remove a saved account from this Gesher device."; break;
+            case "cp_accounts_loading": value = lang.equals("he") ? "\u05d8\u05d5\u05e2\u05df \u05d7\u05e9\u05d1\u05d5\u05e0\u05d5\u05ea..." : "Loading accounts..."; break;
+            case "cp_accounts_empty": value = lang.equals("he") ? "\u05d0\u05d9\u05df \u05db\u05e8\u05d2\u05e2 \u05d7\u05e9\u05d1\u05d5\u05e0\u05d5\u05ea \u05de\u05d7\u05d5\u05d1\u05e8\u05d9\u05dd." : "No accounts are currently signed in."; break;
+            case "cp_accounts_error": value = lang.equals("he") ? "\u05dc\u05d0 \u05e0\u05d9\u05ea\u05df \u05dc\u05d8\u05e2\u05d5\u05df \u05d0\u05ea \u05d4\u05d7\u05e9\u05d1\u05d5\u05e0\u05d5\u05ea. \u05d5\u05d3\u05d0 \u05e9\u05e1\u05d1\u05d9\u05d1\u05ea \u05d2\u05e9\u05e8 \u05e4\u05e2\u05d9\u05dc\u05d4 \u05d5\u05e0\u05e1\u05d4 \u05e9\u05d5\u05d1." : "Could not load accounts. Make sure the Gesher device can start and try again."; break;
+            case "cp_btn_remove_account": value = lang.equals("he") ? "\u05d4\u05e1\u05e8" : "Remove"; break;
+            case "cp_remove_account_title": value = lang.equals("he") ? "\u05d4\u05e1\u05e8\u05ea \u05d7\u05e9\u05d1\u05d5\u05df" : "Remove Account"; break;
+            case "cp_remove_account_confirm": value = lang.equals("he") ? "\u05dc\u05d4\u05e1\u05d9\u05e8 \u05d0\u05ea \u05d4\u05d7\u05e9\u05d1\u05d5\u05df {0} ({1}) \u05de\u05d2\u05e9\u05e8? \u05d0\u05e4\u05dc\u05d9\u05e7\u05e6\u05d9\u05d5\u05ea \u05d4\u05de\u05e9\u05ea\u05de\u05e9\u05d5\u05ea \u05d1\u05d7\u05e9\u05d1\u05d5\u05df \u05d6\u05d4 \u05d9\u05ea\u05e0\u05ea\u05e7\u05d5 \u05de\u05de\u05e0\u05d5." : "Remove account {0} ({1}) from Gesher? Apps using this account will be signed out."; break;
+            case "cp_remove_account_failed": value = lang.equals("he") ? "\u05dc\u05d0 \u05e0\u05d9\u05ea\u05df \u05dc\u05d4\u05e1\u05d9\u05e8 \u05d0\u05ea \u05d4\u05d7\u05e9\u05d1\u05d5\u05df {0}." : "Could not remove account {0}."; break;
             default: throw new IllegalArgumentException("Unknown UI text: " + key);
         }
         // Replace in one pass: user data containing {1} is never a template.

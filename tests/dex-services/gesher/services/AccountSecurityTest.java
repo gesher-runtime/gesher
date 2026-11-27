@@ -235,6 +235,100 @@ public final class AccountSecurityTest {
                 && ((Map<?, ?>) field(syncManager, "mActive")).isEmpty(),
                 "An unauthorized adapter received an account sync");
         System.out.println("AccountSecurityTest: unauthorized sync adapter cannot queue or receive an account");
+
+        String[] listed = (String[]) method(service, "listAccountsForHost").invoke(manager);
+        require(listed.length == 1 && "test.type\tfixture@example.test".equals(listed[0]),
+                "Host account listing did not return the persisted account");
+        Object hostManager = construct(service, new Class<?>[] {am, pm, boolean.class}, null, packageManager, false);
+        @SuppressWarnings("unchecked") Map<Account, Object> hostAccounts =
+                (Map<Account, Object>) field(hostManager, "mAccounts");
+        hostAccounts.put(account, record);
+        List<Account> retiredAccounts = new ArrayList<>();
+        method(service, "setSyncRetirement", java.util.function.BiConsumer.class).invoke(hostManager,
+                (java.util.function.BiConsumer<java.util.Set<Account>, java.util.Set<Account>>)
+                        (removedSet, retainedSet) -> retiredAccounts.addAll(removedSet));
+        Method hostRemove = method(service, "removeAccountForHost", String.class, String.class);
+        Method hostList = method(service, "listAccountsForHost");
+        boolean rejectedBlank = false;
+        try { hostRemove.invoke(hostManager, "test.type", ""); }
+        catch (InvocationTargetException expected) { rejectedBlank = expected.getCause() instanceof IllegalArgumentException; }
+        require(rejectedBlank, "Host account removal accepted an empty name");
+        require(!(Boolean) hostRemove.invoke(hostManager, "test.type", "missing@example.test"),
+                "Host account removal returned true for a missing account");
+        require((Boolean) hostRemove.invoke(hostManager, "test.type", "fixture@example.test"),
+                "Host account removal returned false for an existing account");
+        require(retiredAccounts.contains(account) && ((String[]) hostList.invoke(hostManager)).length == 0,
+                "Host account removal did not clear the account or retire its sync settings");
+        hostAccounts.put(account, record);
+
+        Class<?> servicesType = Class.forName("com.gesher.server.Services");
+        Class<?> atmType = Class.forName("com.gesher.server.ActivityTaskManagerService");
+        Object atm = atmType.getConstructor(pm).newInstance(packageManager);
+        Object created = construct(Class.forName("com.gesher.server.Services$Created"),
+                new Class<?>[] {pm, atmType, am, Class.forName("com.gesher.server.ClipboardService"), Map.class},
+                packageManager, atm, null, null, new java.util.HashMap<>());
+        java.lang.reflect.Field sLast = servicesType.getDeclaredField("sLast");
+        sLast.setAccessible(true);
+        Object previousCreated = sLast.get(null);
+        sLast.set(null, created);
+        try {
+            Class<?> deviceType = Class.forName("com.gesher.server.GesherService$Device");
+            Object device = Proxy.newProxyInstance(deviceType.getClassLoader(), new Class<?>[] {deviceType},
+                    (proxy, op, opArgs) -> {
+                        switch (op.getName()) {
+                            case "listAccounts": return hostList.invoke(hostManager);
+                            case "removeAccount": return hostRemove.invoke(hostManager, opArgs[0], opArgs[1]);
+                            case "touch": return null;
+                            default: throw new AssertionError("Unexpected device call " + op.getName());
+                        }
+                    });
+            android.os.IBinder gesher = (android.os.IBinder) construct(
+                    Class.forName("com.gesher.server.GesherService"), new Class<?>[] {deviceType}, device);
+            Class<?> clientType = Class.forName("com.gesher.server.GesherService$Client");
+            Object ipcClient = construct(clientType, new Class<?>[] {android.os.IBinder.class}, gesher);
+            long savedIdentity = android.os.Binder.clearCallingIdentity();
+            try {
+                android.os.Binder.restoreCallingIdentity((11001L << 32) | 101L);
+                denied(() -> method(clientType, "listAccounts").invoke(ipcClient));
+                denied(() -> method(clientType, "removeAccount", String.class, String.class)
+                        .invoke(ipcClient, "test.type", "fixture@example.test"));
+
+                android.os.Binder.restoreCallingIdentity(
+                        ((long) android.os.Process.SYSTEM_UID << 32) | android.os.Process.myPid());
+                String[] ipcRows = (String[]) method(clientType, "listAccounts").invoke(ipcClient);
+                require(ipcRows.length == 1 && "test.type\tfixture@example.test".equals(ipcRows[0]),
+                        "GesherService listAccounts did not return the account");
+                Method launcherAccounts = Class.forName("com.gesher.app.Launcher").getDeclaredMethod("accounts",
+                        clientType, List.class, java.io.PrintStream.class);
+                launcherAccounts.setAccessible(true);
+                java.io.ByteArrayOutputStream printed = new java.io.ByteArrayOutputStream();
+                java.io.PrintStream out = new java.io.PrintStream(printed, true, "UTF-8");
+                require((Integer) launcherAccounts.invoke(null, ipcClient, List.of("list"), out) == 0
+                        && printed.toString("UTF-8").trim().equals("account\ttest.type\tfixture@example.test"),
+                        "Launcher accounts list output mismatch");
+                printed.reset();
+                require((Integer) launcherAccounts.invoke(null, ipcClient,
+                        List.of("remove", "test.type", "fixture@example.test"), out) == 0
+                        && ((String[]) hostList.invoke(hostManager)).length == 0,
+                        "Launcher accounts remove did not remove the account");
+                require((Integer) launcherAccounts.invoke(null, ipcClient,
+                        List.of("remove", "test.type", "fixture@example.test"), out) == 1,
+                        "Launcher accounts remove should exit 1 when account is absent");
+                Object older = construct(clientType, new Class<?>[] {android.os.IBinder.class},
+                        new android.os.Binder());
+                boolean unsupported = false;
+                try { method(clientType, "listAccounts").invoke(older); }
+                catch (InvocationTargetException expected) {
+                    unsupported = expected.getCause() instanceof UnsupportedOperationException;
+                }
+                require(unsupported, "Older device without account transactions was accepted");
+            } finally {
+                android.os.Binder.restoreCallingIdentity(savedIdentity);
+            }
+        } finally {
+            sLast.set(null, previousCreated);
+        }
+        System.out.println("AccountSecurityTest: host account listing and removal enforce system identity and clear account");
         Files.delete(temporary.toPath());
     }
 
