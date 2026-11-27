@@ -82,10 +82,16 @@ public final class DnsResolverHost {
     }
 
     static void until(BooleanSupplier condition, String message, long end) throws Exception {
-        while (!condition.getAsBoolean() && System.nanoTime() < end) Thread.sleep(2);
+        // A state such as TIMED_WAITING can change as soon as it is observed.
+        // Preserve that successful observation instead of sampling it again.
+        boolean observed = condition.getAsBoolean();
+        while (!observed && System.nanoTime() < end) {
+            Thread.sleep(2);
+            observed = condition.getAsBoolean();
+        }
         Throwable failure = ASYNC_FAILURE.get();
         if (failure != null) throw new AssertionError("asynchronous fixture failure", failure);
-        check(condition.getAsBoolean(), message);
+        check(observed, message);
     }
 
     static void drain() throws Exception {
@@ -584,6 +590,10 @@ public final class DnsResolverHost {
     }
 
     static void deadlineRetirement() throws Exception {
+        AtomicInteger observations = new AtomicInteger();
+        until(() -> observations.getAndIncrement() == 0,
+                "a successful transient observation is preserved");
+        check(observations.get() == 1, "a successful wait samples its predicate only once");
         CountDownLatch nativeReturn = new CountDownLatch(1), executorReturn = new CountDownLatch(1);
         CountDownLatch queuedCallbackReturned = new CountDownLatch(1), observationDone = new CountDownLatch(1);
         AtomicReference<Throwable> observationFailure = new AtomicReference<>();
