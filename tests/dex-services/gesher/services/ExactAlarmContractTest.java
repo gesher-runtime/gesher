@@ -711,6 +711,39 @@ public final class ExactAlarmContractTest {
                 check(get(source, "state").toString().equals("RESUMED") && (int)get(source, "exactAlarmSettings") == 0,
                         "Closing Settings restores the live source activity once");
             }
+            // Enrollment uses the same production task cover/result owner, even
+            // when invalid receiver metadata makes the Settings visit cancel.
+            Class<?> adminDialogType = type("DeviceAdminRequests$Dialog");
+            Object adminDialog = java.lang.reflect.Proxy.newProxyInstance(adminDialogType.getClassLoader(),
+                    new Class<?>[]{adminDialogType}, (proxy, method, arguments) -> {
+                        throw new AssertionError("An enrollment without a receiver must never offer activation");
+                    });
+            java.util.ArrayDeque<Runnable> adminQueue = new java.util.ArrayDeque<>();
+            Object adminRequests = make(type("DeviceAdminRequests"), new Class<?>[]{type("PackageManagerService"),
+                    java.util.concurrent.Executor.class, adminDialogType}, h.pm,
+                    (java.util.concurrent.Executor)adminQueue::add, adminDialog);
+            Object previousAdminRequests = get(h.pm, "mDeviceAdminRequests");
+            set(h.pm, "mDeviceAdminRequests", adminRequests);
+            try {
+                order.clear(); delivered.clear();
+                runAs(EXACT_UID, EXACT_PID, () -> {
+                    int result = ((android.app.IActivityTaskManager)h.atm).startActivity(h.thread, EXACT_PKG,
+                            null, new Intent("android.app.action.ADD_DEVICE_ADMIN"), null,
+                            (IBinder)get(source, "token"), "enrollment", 44, 0, null, null);
+                    check(result == ActivityManager.START_SUCCESS, "Actual starter dispatches administrator Settings");
+                });
+                check(adminQueue.size() == 1 && delivered.isEmpty()
+                        && order.indexOf("PauseActivityItem") >= 0 && order.indexOf("StopActivityItem") > order.indexOf("PauseActivityItem"),
+                        "Enrollment remains pending after ordered pause/stop until the Settings visit completes");
+                adminQueue.remove().run();
+                check(delivered.size() == 1 && delivered.get(0).mResultCode == android.app.Activity.RESULT_CANCELED
+                        && delivered.get(0).mRequestCode == 44 && "enrollment".equals(delivered.get(0).mResultWho),
+                        "Invalid enrollment returns cancellation through the actual result route");
+                check(order.indexOf("ResumeActivityItem") > order.indexOf("ActivityResultItem")
+                        && get(source, "state").toString().equals("RESUMED") && (int)get(source, "exactAlarmSettings") == 0,
+                        "Enrollment completion sends result before resume and releases its task cover");
+            } finally { set(h.pm, "mDeviceAdminRequests", previousAdminRequests); }
+
             // startActivity without a result token still covers the visible activity.
             selection.set(-1); order.clear(); delivered.clear();
             runAs(EXACT_UID, EXACT_PID, () -> {
@@ -1624,7 +1657,12 @@ public final class ExactAlarmContractTest {
         String previous = System.getenv("ANDROID_DATA");
         java.nio.file.Path data = java.nio.file.Files.createTempDirectory("gesher-exact-alarm-contract-");
         android.system.Os.setenv("ANDROID_DATA", data.toString(), true);
-        try { contracts(true); }
+        try {
+            if (args.length == 1 && "settings-lifecycle".equals(args[0])) {
+                try (TestHarness h = new TestHarness(true)) { settingsLifecycle(h); }
+                System.out.println("ExactAlarmContractTest settings lifecycle passed: " + checks + " checks verified");
+            } else { contracts(true); }
+        }
         finally {
             if (previous == null) android.system.Os.unsetenv("ANDROID_DATA");
             else android.system.Os.setenv("ANDROID_DATA", previous, true);

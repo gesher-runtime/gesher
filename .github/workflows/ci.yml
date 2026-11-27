@@ -827,6 +827,8 @@ jobs:
         if: matrix.group == 'java'
         run: |
           python3 tools/test_package_enabled_store.py --java-home "$JAVA_HOME"
+          python3 tools/test_device_admin_store.py --java-home "$JAVA_HOME"
+          python3 tools/test_device_admin_requests.py --java-home "$JAVA_HOME"
           python3 tools/test_zygote_child_lifetime.py --sanitize
 
       - name: Audio JNI buffer contracts with checked JNI and UBSan
@@ -1205,7 +1207,7 @@ jobs:
           ninja -C out thread_watch_clock_test dlopen_errors_test
           ninja -C out
           # Native fixtures are CI-only; none is installed by gesher.iss.
-          ninja -C out install_pipe_test account_chooser_test window_promotion_test permission_dialog_test window_frame_test
+          ninja -C out install_pipe_test account_chooser_test window_promotion_test permission_dialog_test device_admin_dialog_test window_frame_test
           ninja -C out arm64_numeric_return_host arm64_numeric_fenv_test
           ninja -C out font_environment_test
 

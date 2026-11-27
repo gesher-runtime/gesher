@@ -266,6 +266,14 @@ jint WindowsHost_sessionLockState(JNIEnv*, jclass) {
   return dev::SessionLockState();
 }
 
+jboolean WindowsHost_deviceAdminAvailable(JNIEnv*, jclass) {
+  return JNI_TRUE;
+}
+
+jboolean WindowsHost_lockWorkstation(JNIEnv*, jclass) {
+  return dev::LockWorkstation() ? JNI_TRUE : JNI_FALSE;
+}
+
 jint WindowsHost_alarmWait(JNIEnv*, jclass, jlong utcMillis, jboolean wakeup, jint timeoutMs) {
   return dev::AlarmWait(utcMillis, wakeup == JNI_TRUE, timeoutMs);
 }
@@ -528,6 +536,8 @@ const JNINativeMethod gWindowsHostMethods[] = {
     {"nativeClipboardSequence", "()I", GESHER_JNI(WindowsHost_clipboardSequence)},
     {"nativeForegroundProcess", "()[J", GESHER_JNI(WindowsHost_foregroundProcess)},
     {"nativeSessionLockState", "()I", GESHER_JNI(WindowsHost_sessionLockState)},
+    {"nativeLockWorkstation", "()Z", GESHER_JNI(WindowsHost_lockWorkstation)},
+    {"nativeDeviceAdminAvailable", "()Z", GESHER_JNI(WindowsHost_deviceAdminAvailable)},
     {"nativeAlarmWait", "(JZI)I", GESHER_JNI(WindowsHost_alarmWait)},
     {"nativeAlarmKick", "()V", GESHER_JNI(WindowsHost_alarmKick)},
     {"nativeAppsUseLightTheme", "()I", GESHER_JNI(WindowsHost_appsUseLightTheme)},

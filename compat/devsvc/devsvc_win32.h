@@ -57,6 +57,8 @@ uint32_t ClipboardSequence();
 bool ForegroundProcess(uint32_t* pid, uint64_t* created);
 // The server's Windows session: 0 unlocked, 1 locked, -1 unknown. Windows 10+.
 int SessionLockState();
+// True only after Windows reports this session locked, never just request submission.
+bool LockWorkstation();
 
 // --- alarms ----------------------------------------------------------------------------
 // Waits until the wall clock reaches `utc_ms` (milliseconds since 1970, a

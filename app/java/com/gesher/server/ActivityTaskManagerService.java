@@ -2622,8 +2622,9 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     private int requestExactAlarmAccess(Intent intent, String callingPackage,
             IBinder resultToToken, String resultWho, int requestCode, int launchTaskId,
             AppTaskRecord requiredTask) {
-        String target = ExactAlarmAccessRequests.target(intent);
-        if (!mExactAlarmRequests.available()) return ActivityManager.START_INTENT_NOT_RESOLVED;
+        boolean deviceAdmin = DeviceAdminRequests.handles(intent, intent.getType());
+        String target = deviceAdmin ? null : ExactAlarmAccessRequests.target(intent);
+        if (!(deviceAdmin ? mPm.deviceAdminRequests().available() : mExactAlarmRequests.available())) return ActivityManager.START_INTENT_NOT_RESOLVED;
         final ActivityRecord origin;
         final ActivityRecord covered;
         final ExactAlarmSettingsSession session;
@@ -2690,7 +2691,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                     (intent.getFlags() & Intent.FLAG_ACTIVITY_NO_USER_ACTION) == 0);
             for (ActivityRecord activity : toStop) stop(activity);
             updateTopResumed();
-            boolean queued = mExactAlarmRequests.request(target, () -> {
+            Runnable beforeOpen = () -> {
                 // Preserve pause-before-Settings ordering without holding a Binder
                 // transaction open. Android also bounds a missing pause acknowledgment.
                 if (covered == null) return;
@@ -2704,7 +2705,9 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                         catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); break; }
                     }
                 }
-            }, complete);
+            };
+            boolean queued = deviceAdmin ? mPm.deviceAdminRequests().request(intent, beforeOpen, complete)
+                    : mExactAlarmRequests.request(target, beforeOpen, complete);
             if (!queued) { complete.accept(android.app.Activity.RESULT_CANCELED); return ActivityManager.START_CANCELED; }
             return ActivityManager.START_SUCCESS;
         } catch (RuntimeException | Error failure) {
@@ -3065,10 +3068,11 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             return requestPermissions(caller, callingPackage, intent, resultToToken,
                     resultWho, requestCode);
         }
-        if (ExactAlarmAccessRequests.handles(intent, resolvedType)
+        if ((ExactAlarmAccessRequests.handles(intent, resolvedType) || DeviceAdminRequests.handles(intent, resolvedType))
                 && mPm.get(ExactAlarmAccessRequests.PACKAGE) == null) {
             ResolveInfo settings = mPm.resolveIntent(intent, resolvedType, PackageManager.MATCH_DEFAULT_ONLY, 0);
-            if (settings != null && ExactAlarmAccessRequests.isActivity(settings.activityInfo)) {
+            if (settings != null && (ExactAlarmAccessRequests.isActivity(settings.activityInfo)
+                    || DeviceAdminRequests.isActivity(settings.activityInfo))) {
                 return requestExactAlarmAccess(intent, callingPackage, resultToToken, resultWho,
                         requestCode, launchTaskId, requiredTask);
             }

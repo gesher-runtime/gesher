@@ -54,4 +54,17 @@ int SessionLockState() {
   return result;
 }
 
+bool LockWorkstation() {
+  if (SessionLockState() == 1) return true;
+  if (!::LockWorkStation()) return false;
+  // LockWorkStation's nonzero return only acknowledges an asynchronous request.
+  // Do not turn a rejected/blocked request into an Android lock success.
+  const ULONGLONG deadline = GetTickCount64() + 3000;
+  do {
+    if (SessionLockState() == 1) return true;
+    Sleep(20);
+  } while (GetTickCount64() < deadline);
+  return false;
+}
+
 }  // namespace gesher::devsvc

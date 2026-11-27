@@ -1097,7 +1097,7 @@ function ConvertFrom-SpecialAccessOutput([string[]] $lines) {
 # the device authenticates it as the host shell. Returns its exit code and output lines.
 # Runs in a background runspace for the dialog (Start-PanelSpecialAccess): never on the UI thread.
 function Invoke-PanelSpecialAccess([string[]] $arguments,
-        [ValidateSet('special-access', 'settings-shown', 'settings-closed')] [string] $command = 'special-access') {
+        [ValidateSet('special-access', 'device-admin', 'settings-shown', 'settings-closed')] [string] $command = 'special-access') {
     $appScript = Join-Path $here 'gesher-app.ps1'
     $system = [Environment]::GetFolderPath('System')
     $info = [System.Diagnostics.ProcessStartInfo]::new((Join-Path $system 'WindowsPowerShell\v1.0\powershell.exe'))
@@ -1659,6 +1659,60 @@ function Set-PanelInstallationBusy([bool] $busy) {
     else { Set-Busy $false }
 }
 
+function Initialize-PanelDeviceAdminControls($dialog, [string] $pkg) {
+    if (-not (Test-PanelPackageName $pkg)) { return }
+    $button = $dialog.FindName('BtnRevokeAdmin')
+    $status = $dialog.FindName('AdminStatus')
+    $button.Content = Get-GesherText 'cp_admin_revoke'
+    $state = @{ Worker = $null; Revoking = $false; Closed = $false }
+    $orphanWorkers = $script:OrphanSpecialAccessWorkers
+    $timer = [System.Windows.Threading.DispatcherTimer]::new()
+    $timer.Interval = [TimeSpan]::FromMilliseconds(100)
+    $timer.Add_Tick({
+        if ($state.Closed -or -not $state.Worker -or -not (Test-PanelSpecialAccessDone $state.Worker)) { return }
+        $result = Receive-PanelSpecialAccess $state.Worker
+        $state.Worker = $null
+        $answer = @($result.Lines | Where-Object { $_ -cmatch '^device-admin\t(active|inactive)$' })
+        if ($result.ExitCode -eq 0 -and $answer.Count -eq 1) {
+            $active = $answer[0] -ceq "device-admin`tactive"
+            $button.Visibility = if ($active) { 'Visible' } else { 'Collapsed' }
+            $button.IsEnabled = $active
+            $status.Visibility = 'Collapsed'
+            if ($state.Revoking -and $active) {
+                $status.Text = Get-GesherText 'cp_admin_failed'
+                $status.Visibility = 'Visible'
+            }
+        } elseif ($result.ExitCode -ne 4 -and $result.ExitCode -ne 3) {
+            $button.IsEnabled = $true
+            $status.Text = Get-GesherText 'cp_admin_failed'
+            $status.Visibility = 'Visible'
+        }
+        $state.Revoking = $false
+    }.GetNewClosure())
+    $button.Add_Click({
+        if ($state.Worker -or $state.Closed) { return }
+        $button.IsEnabled = $false
+        $status.Visibility = 'Collapsed'
+        try {
+            $state.Worker = Start-PanelSpecialAccess @($pkg, 'revoke') 'device-admin'
+            $state.Revoking = $true
+        } catch {
+            $button.IsEnabled = $true
+            $status.Text = Get-GesherText 'cp_admin_failed'
+            $status.Visibility = 'Visible'
+        }
+    }.GetNewClosure())
+    $dialog.Add_Loaded({
+        try { $state.Worker = Start-PanelSpecialAccess @($pkg) 'device-admin'; $timer.Start() }
+        catch { Write-PanelLog "device admin: $($_.Exception.Message)" }
+    }.GetNewClosure())
+    $dialog.Add_Closed({
+        $state.Closed = $true
+        $timer.Stop()
+        if ($state.Worker) { $orphanWorkers.Add($state.Worker); $state.Worker = $null }
+    }.GetNewClosure())
+}
+
 function Show-ModernConfirmDialog {
     param(
         [Parameter(Mandatory)] [string] $Title,
@@ -1704,6 +1758,7 @@ function Show-ModernConfirmDialog {
     if ($window.Icon) { $dialog.Icon = $window.Icon }
 
     if ($SpecialAccessPackage) {
+        Initialize-PanelDeviceAdminControls $dialog $SpecialAccessPackage
         # The switches load and change in background runspaces; a timer of the dialog takes
         # their answers on the UI thread. A switch is disabled while its change is pending.
         $accessState = @{ Query = $null; Pending = @{}; Closed = $false }
