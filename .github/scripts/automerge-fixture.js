@@ -196,7 +196,7 @@ function world(over = {}) {
           const latest = new Map();
           for (const s of w.statuses) if (!latest.has(s.context) || latest.get(s.context).id < s.id)
             latest.set(s.context, s);
-          return [...latest.values()];
+          return [...latest.values()].map(({creator, ...value}) => value);
         }, 'statuses')(args);
         response.data.sha = w.statusReadbackHead ?? args.ref;
         return response;

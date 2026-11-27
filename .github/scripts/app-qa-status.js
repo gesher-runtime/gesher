@@ -44,9 +44,9 @@ module.exports = ({github, readGithub = github, appGithub, owner, repo, enabled 
     }
   };
   const valid = (value, sha, state) => trustedStatus(value, owner, repo, sha, APP_STATUS, state);
-  const current = async (sha, receipt) => {
-    // Combined status returns the current row per context, avoiding a growing
-    // full history scan on every controller event. Still paginate contexts.
+  const currentRow = async (sha) => {
+    // Combined rows establish the latest status ID, but GitHub omits creator
+    // from this endpoint. Provenance must come from the full status endpoint.
     const values = await list(async args => {
       const response = await readGithub.rest.repos.getCombinedStatusForRef(args);
       if (response.data.sha !== sha) throw new Error('Gesher App QA status readback head mismatch');
@@ -55,8 +55,31 @@ module.exports = ({github, readGithub = github, appGithub, owner, repo, enabled 
     const matching = values.filter(s => s.context === APP_STATUS);
     if (matching.some(s => !Number.isSafeInteger(s.id) || s.id <= 0))
       throw new Error('Gesher App QA status has an invalid identity');
-    const latest = matching.sort((a, b) => b.id - a.id)[0];
-    if (!latest || latest.id !== receipt.id || !valid(latest, sha, receipt.state))
+    return matching.sort((a, b) => b.id - a.id)[0];
+  };
+  const current = async (sha, receipt) => {
+    const matches = value => value?.id === receipt.id && value.context === APP_STATUS &&
+      value.state === receipt.state && value.url === receipt.url;
+    if (!matches(await currentRow(sha)))
+      throw new Error('Gesher App QA status is missing, replaced or from a different source');
+    let authenticated = false;
+    // New write receipts normally occur on the first page. Do not scan an
+    // unbounded history, or authenticate a different row with the same context.
+    for (let page = 1; page <= 10; page++) {
+      const {data} = await readGithub.rest.repos.listCommitStatusesForRef({owner, repo, ref: sha,
+        per_page: 100, page});
+      if (!Array.isArray(data) || data.length > 100) throw new Error('invalid API listing');
+      const value = data.find(s => s.id === receipt.id);
+      if (value) {
+        if (!valid(value, sha, receipt.state))
+          throw new Error('Gesher App QA status is missing, replaced or from a different source');
+        authenticated = true;
+        break;
+      }
+      if (data.length < 100) break;
+    }
+    // The immutable provenance row alone cannot prove it is still current.
+    if (!authenticated || !matches(await currentRow(sha)))
       throw new Error('Gesher App QA status is missing, replaced or from a different source');
   };
   const app = async (sha, ok) => {

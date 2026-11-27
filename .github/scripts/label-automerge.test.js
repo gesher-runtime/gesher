@@ -1373,6 +1373,7 @@ test('with the App status off the schedule reads the legacy gate with the Action
 // Included by the existing CI and runner-probe entrypoint.
 require('./automerge-release-cases.js');
 require('./automerge-exact-release-cases.js');
+require('./app-qa-status.test.js');
 
 for (const appQaStatus of [false, true]) {
   const make = over => appQaStatus ? appStatusWorld(over) : world(over);
