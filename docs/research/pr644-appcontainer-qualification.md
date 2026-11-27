@@ -329,3 +329,93 @@ and missing-image cleanup controls pass. The 18-artifact receipt is
 `out/qa314/owned-desktop-matrix/final-inputs.json`; actual private/lowbox matrix
 execution remains pending hosted CI. Ordinary mechanics do not qualify that
 matrix, the service UI, physical USB or default enablement.
+
+## Integrated owner, lifecycle and canonical-name repairs
+
+The native application identity now includes the authenticated installation
+owner, rather than reusing a package/signer identity after uninstall. The v4
+wire protocol rejects missing or obsolete owner records. Native admission pins
+the real protected owner marker and preserves an authority-only history of
+retired generations. A changed signer cannot reuse an existing owner's grants.
+Installation jobs include raw descendants and are terminated before changing
+the admitted generation. Legacy ACE removal includes inherited grants and
+checks the result; unsupported objects fail closed without following them.
+
+This repairs an actual Windows AppContainer primitive in which the old token
+could read an old tree after it was moved beneath a sealed parent. The
+corrected exact-tree revocation denies that token while preserving access by
+the new owner and unrelated security entries. The frozen 20-source inventory
+and real native probes are recorded in
+`out/qa314/profile-owner-v4-qa/qualified-final-v1/inventory.json`. Subsequent
+exact CI-step execution exposed intermittent sharing failures during atomic
+journal publication. The corrected identical-head fast path avoids rewriting
+an unchanged head; bounded retries apply only to transient errors on the same
+atomic rename. Permanent failure still returns an error. The later immutable
+inventory is `out/qa314/owner-ci-wiring/qualified-atomic-v3/inventory.json`;
+200 deep-path trials and the exact five-fixture Windows step pass. These
+controls do not establish full installed-service qualification.
+
+Ordinary uninstall retains its durable native fence until an affirmative stop
+and storage/native recovery acknowledgment. Ambiguous acknowledgment loss
+keeps the installation sealed. Quarantine covers the exact current logs and
+profile tree; it does not delete protected legacy Keystore archives. Host
+checks, fresh ART runs and a signed update/uninstall/reinstall exercise are
+bound by `out/qa314/reinstall-ordinary/final-inputs.json`. Real post-success
+acknowledgment-loss controls and their recovery limits are recorded separately
+in `out/qa314/reinstall-ordinary/ack-loss-inputs.json`. The latter uses matching
+v4 Java/native builds; the earlier lifecycle run explicitly used a parent-ABI
+projection and does not claim whole-current-runtime execution.
+
+The WebView suffix-alias failure came from ordinary canonical-name lookup:
+the contained process could open the file but could not query its DOS final
+name. The fallback now obtains the actual normalized volume-relative name,
+reopens the candidate under the current token and requires full volume/file
+identity equality before publishing it. Relative, ambiguous and unsupported
+paths retain failure. There is no package or WebView exception. Exact matched
+AppContainer runtime pairs reproduce the original alias failure and pass all
+five unchanged lifecycle cases after the repair. Source, binary, boot-image,
+PID/birth and cleanup evidence is in
+`out/qa314/webview-lifecycle-repair/final-inputs.json`. The strict native
+identity fixture also runs as a separate hard CI gate. General WebView
+networking is a different, unresolved gate.
+
+The elevated installer fixture now reads the actual protected generation
+marker and checks only its exact generation-specific temporary/log paths.
+Its ancestry, identity, reparse, isolation, frame and archive assertions remain
+in force. Local extraction controls pass, but its complete installed-service
+run remains pending CI.
+
+## Latest hosted failures and pending rerun
+
+Run `46014260382` on `d0684d64a` stopped before packaging/runtime shards.
+The Binder fixture accidentally depended on a newly adjacent production
+declaration; its inert fixture peer now supplies the referenced installation
+field, while fake registry admission still aborts. The Windows ownership
+corpus and original negative controls pass. The stdio generator likewise now
+ends exactly at the real `LookupSocket` function, excluding only an unrelated
+Winsock routing helper. Both generated adapter bodies preserve their original
+ownership assertions, and main/historical extraction controls are unchanged.
+Actual Linux sanitizer execution of these repaired fixtures awaits CI.
+
+The seven-case hosted GDI matrix on both Windows versions isolated one useful
+difference: the lowbox subject loads USER32 when its owned station gains
+READ_CONTROL while its desktop keeps the original minimal rights. Production
+now adds only that station right, without full-access grants or changing the
+desktop mask. This result motivates the repair; it does not prove the original
+WinSta0/Default launch passes. Its original launch gates and the full elevated
+CardWake/archive flow remain mandatory on the next run. See
+`user32-private-launch-2026-11-27.md` for exact matrix results and limits.
+
+The historical source transition additionally reconstructs the exact
+owner-unaware profile header before replaying the USB proof. All 52 previous
+predecessor hashes, historical measurements, archived source bytes and
+rejection controls remain preserved. No source projection grants native
+runtime or performance approval.
+
+Shipping isolation remains off. General UDP, WebView and source/interface
+binding, the protected installed-service route, final clean installation and
+upgrade, every no-flag launcher route, and real configured Windows Hello
+approval/cancellation/lifecycle still block default enablement and overall
+approval. The user does not know whether a Windows driver-signing
+infrastructure exists; none is assumed and no driver or machine network policy
+was installed by this work. Physical USB remains unqualified without hardware.

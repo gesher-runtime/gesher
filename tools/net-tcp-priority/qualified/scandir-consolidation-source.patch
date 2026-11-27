@@ -1,5 +1,5 @@
 diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
-index f9e6560..f2cc8bc 100644
+index f9e6560..737d267 100644
 --- a/.github/workflows/ci.yml
 +++ b/.github/workflows/ci.yml
 @@ -29,6 +29,27 @@ env:
@@ -333,7 +333,7 @@ index f9e6560..f2cc8bc 100644
        - name: Exact native reader ownership and handle reuse controls
          if: ${{ !cancelled() }}
          shell: pwsh
-@@ -148,6 +406,91 @@ jobs:
+@@ -148,6 +406,117 @@ jobs:
          if: ${{ !cancelled() }}
          shell: pwsh
          run: python tools/test_windows_host_events.py --java-home "$env:JAVA_HOME"
@@ -404,6 +404,32 @@ index f9e6560..f2cc8bc 100644
 +          cl /nologo /std:c++20 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /DNOMINMAX tests\native\protected_profile_name_test.cc /Fe:protected_profile_name_test.exe bcrypt.lib
 +          if errorlevel 1 exit /b 1
 +          protected_profile_name_test.exe
++      - name: Protected installation owner, retirement and inherited ACL contracts
++        if: ${{ !cancelled() }}
++        shell: pwsh
++        run: |
++          $ownerContractRoot = Join-Path $env:RUNNER_TEMP ('gesher-owner-' + [guid]::NewGuid().ToString('N'))
++          New-Item -ItemType Directory -Path $ownerContractRoot -ErrorAction Stop | Out-Null
++          $compileFlags = @('/nologo', '/std:c++20', '/EHsc', '/W4', '/WX', '/D_WIN32_WINNT=0x0A00', '/DNOMINMAX')
++          $containerObject = Join-Path $ownerContractRoot 'container.obj'
++          & cl @compileFlags /c compat/framework/app_container.cc "/Fo:$containerObject"
++          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
++          foreach ($kind in 'journal', 'marker', 'revocation', 'wire', 'job') {
++            $source = "tests/native/protected_owner_${kind}_test.cc"
++            $binary = Join-Path $ownerContractRoot ($kind + '.exe')
++            $object = Join-Path $ownerContractRoot ($kind + '.obj')
++            $arguments = $compileFlags + @($source, "/Fo:$object", "/Fe:$binary", 'bcrypt.lib')
++            if ($kind -eq 'revocation') { $arguments += @($containerObject, 'advapi32.lib', 'ole32.lib', 'userenv.lib') }
++            & cl @arguments
++            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
++            if ($kind -in 'journal', 'marker', 'revocation') {
++              & $binary (Join-Path $ownerContractRoot ($kind + '-state'))
++            } else {
++              & $binary
++            }
++            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
++          }
++
 +      - name: Protected USB observation bounds, identity epochs and malformed metadata
 +        if: ${{ !cancelled() }}
 +        shell: cmd
@@ -425,7 +451,7 @@ index f9e6560..f2cc8bc 100644
        - name: Build native clipboard foreground actor before timed startup
          if: ${{ !cancelled() }}
          shell: cmd
-@@ -168,6 +511,72 @@ jobs:
+@@ -168,6 +537,72 @@ jobs:
          if: ${{ !cancelled() }}
          shell: bash
          run: python tools/test_storage_stats_scans.py --java-home "$JAVA_HOME"
@@ -498,7 +524,7 @@ index f9e6560..f2cc8bc 100644
        - name: Release updater and control panel contracts on Windows PowerShell 5.1
          if: ${{ !cancelled() }}
          shell: powershell
-@@ -178,23 +587,45 @@ jobs:
+@@ -178,23 +613,45 @@ jobs:
            tests/windows/shell/ControlPanelRefreshChecks.ps1
            tests/windows/shell/ControlPanelRecoveryChecks.ps1
            tests/windows/shell/ControlPanelIdleChecks.ps1
@@ -544,7 +570,7 @@ index f9e6560..f2cc8bc 100644
        - name: API 37 report gate failure and selection contracts
          if: ${{ !cancelled() }}
          shell: bash
-@@ -211,7 +642,8 @@ jobs:
+@@ -211,7 +668,8 @@ jobs:
            PYTHONIOENCODING: utf-8
          run: python tools/ci/run_api37_report_tests.py --profile windows
    api37-report-tests:
@@ -554,7 +580,7 @@ index f9e6560..f2cc8bc 100644
      runs-on: ubuntu-24.04
      timeout-minutes: 10
      env:
-@@ -236,18 +668,27 @@ jobs:
+@@ -236,18 +694,27 @@ jobs:
          shell: bash
          run: python tools/ci/run_api37_report_tests.py --profile linux
    union-tsf:
@@ -586,7 +612,7 @@ index f9e6560..f2cc8bc 100644
      runs-on: ubuntu-24.04
      steps:
        - uses: actions/checkout@v4
-@@ -255,20 +696,30 @@ jobs:
+@@ -255,20 +722,30 @@ jobs:
            fetch-depth: 0
        - name: Install media contract encoder and decoder tools
          run: |
@@ -619,7 +645,7 @@ index f9e6560..f2cc8bc 100644
          run: |
            python3 tools/ci/receipt_identity.py
            python3 -m unittest discover -s tools/ci -p test_source_identity.py
-@@ -290,6 +741,7 @@ jobs:
+@@ -290,6 +767,7 @@ jobs:
            python3 tools/surface/test-verified-artifact.py
 
        - name: Compatibility inventory parser tests
@@ -627,7 +653,7 @@ index f9e6560..f2cc8bc 100644
          run: |
            python3 -m unittest discover -s tools/tests -p 'test_compatibility_*.py'
            python3 -m unittest discover -s tools/tests -p 'test_*api_inventory.py'
-@@ -303,9 +755,15 @@ jobs:
+@@ -303,9 +781,15 @@ jobs:
            python3 tools/fonts/test-standalone-link.py
 
        - name: Notification image staging, cache, cancellation and encoder ownership
@@ -643,7 +669,7 @@ index f9e6560..f2cc8bc 100644
          run: |
            python3 tools/test_hwui_renderer_policy.py --sanitize
            python3 tools/test_egl_readback_layout.py --sanitize
-@@ -316,31 +774,42 @@ jobs:
+@@ -316,31 +800,42 @@ jobs:
            python3 tools/test_bionic_system_contracts.py --sanitize
            python3 tools/test_environment_contracts.py --sanitize
            python3 tools/test_environment_lookup_contracts.py
@@ -687,7 +713,7 @@ index f9e6560..f2cc8bc 100644
            python3 tools/test_pthread_clock_contracts.py --sanitize
            python3 tools/test_pthread_clock_contracts.py --linux-reference
            python3 tools/test_pthread_attribute_contracts.py --sanitize
-@@ -361,54 +830,78 @@ jobs:
+@@ -361,54 +856,78 @@ jobs:
            python3 tools/test_elf_tls_rollback.py --sanitize
            python3 tools/test_arm64_pending_rollback.py --sanitize
            python3 tools/test_arm64_native_rollback.py --sanitize
@@ -766,7 +792,7 @@ index f9e6560..f2cc8bc 100644
            python3 tools/test_binder_receive_views.py --sanitize
            python3 tools/test_camera_capture_allocations.py --sanitize
            python3 tools/test_layered_bitmap_cache.py --sanitize
-@@ -421,7 +914,9 @@ jobs:
+@@ -421,7 +940,9 @@ jobs:
            python3 tools/test_art_jni_dispatch.py --sanitize
            python3 tools/test_audio_mixer_allocations.py --sanitize
            python3 tools/test_audio_unity_rate.py --sanitize
@@ -776,7 +802,7 @@ index f9e6560..f2cc8bc 100644
            python3 tools/test_capture_stream_selection.py --sanitize
            python3 tools/test_audio_file_source.py --sanitize
            python3 tools/test_audio_rate_history.py --sanitize
-@@ -429,6 +924,7 @@ jobs:
+@@ -429,6 +950,7 @@ jobs:
            python3 tools/test_webview_owned_streams.py --sanitize
 
        - name: Host event loop, audio state and surface geometry contracts
@@ -784,7 +810,7 @@ index f9e6560..f2cc8bc 100644
          run: |
            python3 tools/test_host_event_loop_contracts.py --sanitize
            python3 tools/net-tcp-priority/test-vector-policy.py
-@@ -436,11 +932,13 @@ jobs:
+@@ -436,11 +958,13 @@ jobs:
              tests/native/event_loop_reference.c -o "$RUNNER_TEMP/event-loop-reference"
            "$RUNNER_TEMP/event-loop-reference"
            python3 tools/test_audio_state_contracts.py --sanitize
@@ -798,7 +824,7 @@ index f9e6560..f2cc8bc 100644
          run: |
            python3 tools/test_input_key_contracts.py --sanitize
            python3 tools/test_mouse_capture_contracts.py --sanitize
-@@ -452,6 +950,7 @@ jobs:
+@@ -452,6 +976,7 @@ jobs:
              python3 tools/test_futex_contracts.py --group guest --group concurrency
 
        - name: Temporary directory, UNC namespace and reserved file-name contracts
@@ -806,7 +832,7 @@ index f9e6560..f2cc8bc 100644
          run: |
            python3 tools/test_temp_directory.py
            c++ -std=c++17 -Wall -Wextra -Werror tests/paths/unc_paths_test.cc -o "$RUNNER_TEMP/gesher-unc-paths"
-@@ -460,6 +959,7 @@ jobs:
+@@ -460,6 +985,7 @@ jobs:
            "$RUNNER_TEMP/gesher-reserved-names"
 
        - name: Anonymous mapping zeroing and protection contracts
@@ -814,7 +840,7 @@ index f9e6560..f2cc8bc 100644
          run: |
            python3 tools/test_mman_zeroing_mappings.py --sanitize
            python3 tools/test_mmap_noreplace_contracts.py --sanitize
-@@ -467,7 +967,16 @@ jobs:
+@@ -467,7 +993,16 @@ jobs:
            "$RUNNER_TEMP/gesher-noreplace-holes"
            python3 tools/test_madvise_reference.py
 
@@ -831,7 +857,7 @@ index f9e6560..f2cc8bc 100644
          run: |
            python3 tools/test_file_timestamp_contracts.py --sanitize
            python3 tools/test_directory_rename_contracts.py --sanitize
-@@ -478,9 +987,13 @@ jobs:
+@@ -478,9 +1013,13 @@ jobs:
            python3 tools/test_media_callback_state.py --sanitize
            python3 tools/test_media_http_contracts.py --sanitize
            python3 tools/test_mf_encoder_input.py --sanitize
@@ -845,7 +871,7 @@ index f9e6560..f2cc8bc 100644
            cc -std=gnu11 -O1 -Wall -Wextra -Werror -DGESHER_FILESYSTEM_REFERENCE_MAIN \
              tests/native/filesystem_contract_guest.c -o "$RUNNER_TEMP/filesystem-metadata-reference"
            "$RUNNER_TEMP/filesystem-metadata-reference"
-@@ -491,79 +1004,144 @@ jobs:
+@@ -491,79 +1030,144 @@ jobs:
            java-version: 21
 
        - name: Package enabled-state storage limits and crash contracts
@@ -992,7 +1018,7 @@ index f9e6560..f2cc8bc 100644
      runs-on: ubuntu-24.04
      steps:
        - uses: actions/checkout@v4
-@@ -590,12 +1168,47 @@ jobs:
+@@ -590,12 +1194,47 @@ jobs:
 
        - name: Recorder lifecycle and complete-container size budgets
          run: |
@@ -1042,7 +1068,7 @@ index f9e6560..f2cc8bc 100644
 
        - name: libcore System.nanoTime shares Android awake-time domain
          run: python3 tools/test_system_nanotime.py --source third_party/aosp/libcore/ojluni/src/main/native/System.c
-@@ -608,6 +1221,12 @@ jobs:
+@@ -608,6 +1247,12 @@ jobs:
        - name: Build test apps
          run: tests/build-test-apps.sh out/test-apps
 
@@ -1055,7 +1081,7 @@ index f9e6560..f2cc8bc 100644
        - name: Build boot class path (core-oj, core-libart)
          run: tools/build-boot-jars.sh out/boot-jars
 
-@@ -617,7 +1236,13 @@ jobs:
+@@ -617,7 +1262,13 @@ jobs:
        - name: Collect framework assets
          run: |
            mkdir -p framework-assets
@@ -1069,7 +1095,7 @@ index f9e6560..f2cc8bc 100644
            # ICU's data, which the runtime maps from $ANDROID_I18N_ROOT/etc/icu.
            cp third_party/aosp/external/icu/icu4c/source/stubdata/icudt*l.dat framework-assets/
            # The system fonts and fonts.xml, for $ANDROID_ROOT (docs/fonts.md).
-@@ -636,7 +1261,8 @@ jobs:
+@@ -636,7 +1287,8 @@ jobs:
    # Everything is cross-compiled on Linux with llvm-mingw, then executed on
    # real Windows runners.
    build:
@@ -1079,7 +1105,7 @@ index f9e6560..f2cc8bc 100644
      runs-on: ubuntu-24.04
      env:
        GESHER_HOST_PTHREAD_SELECTION: ${{ (github.ref == 'refs/heads/wip/pthread-production-factory' || github.ref == 'refs/heads/wip/coherent-selected-tcp') && 'selected-minimum' || 'publisher-cancel' }}
-@@ -702,6 +1328,9 @@ jobs:
+@@ -702,6 +1354,9 @@ jobs:
            python3 tools/test_binder_reply_allocations.py --compile-only \
              --cxx "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang++" \
              --output out/binder_reply_allocations_test.exe
@@ -1089,7 +1115,7 @@ index f9e6560..f2cc8bc 100644
            python3 tools/test_binder_lifetime.py --compile-only --aosp-dir third_party/aosp \
              --cxx "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang++" \
              --output out/binder_lifetime_test.exe
-@@ -717,6 +1346,14 @@ jobs:
+@@ -717,6 +1372,14 @@ jobs:
            python3 tools/test_arm64_tls_lifecycle.py --compile-only \
              --cxx "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang++" \
              --output out/arm64_tls_lifecycle_test.exe
@@ -1104,7 +1130,7 @@ index f9e6560..f2cc8bc 100644
 
        - name: Build
          run: |
-@@ -745,9 +1382,10 @@ jobs:
+@@ -745,9 +1408,10 @@ jobs:
            ninja -C out CMakeFiles/gesher_bionic_unicode.dir/compat/bionic/unicode_width.cc.obj
            ninja -C out native3_unicode_test
            ninja -C out native3_cpu_clock_test clock_domains_windows_test boottime_resume_windows_test
@@ -1112,11 +1138,11 @@ index f9e6560..f2cc8bc 100644
            ninja -C out
            # Native fixtures are CI-only; none is installed by gesher.iss.
 -          ninja -C out install_pipe_test account_chooser_test window_promotion_test permission_dialog_test
-+          ninja -C out install_pipe_test account_chooser_test window_promotion_test permission_dialog_test binder_protected_admission_test loopback_relay_test loopback_relay_frames_test window_frame_test
++          ninja -C out install_pipe_test account_chooser_test window_promotion_test permission_dialog_test binder_protected_admission_test loopback_relay_test loopback_relay_frames_test canonical_file_name_test window_frame_test
            ninja -C out arm64_numeric_return_host arm64_numeric_fenv_test
            ninja -C out font_environment_test
 
-@@ -801,7 +1439,10 @@ jobs:
+@@ -801,7 +1465,10 @@ jobs:
            cp out/*.exe out/dalvikvm.map out/dex2oat.map dist/
            cp tools/package/licenses/BIONIC-GDTOA-NOTICES.txt dist/
            cp out/gesher_shellext.dll dist/
@@ -1127,7 +1153,7 @@ index f9e6560..f2cc8bc 100644
            cp out/libgesher_account_crypto.so dist/
            cp out/libgesher_install_pipe.so dist/
            cp out/libgesher_webview_bridge.so dist/
-@@ -903,7 +1544,8 @@ jobs:
+@@ -903,7 +1570,8 @@ jobs:
            if-no-files-found: error
 
    native3-locks-reference:
@@ -1137,7 +1163,7 @@ index f9e6560..f2cc8bc 100644
      runs-on: ubuntu-24.04
      timeout-minutes: 8
      steps:
-@@ -917,7 +1559,8 @@ jobs:
+@@ -917,7 +1585,8 @@ jobs:
            if-no-files-found: error
 
    native3-locks-regression:
@@ -1147,7 +1173,7 @@ index f9e6560..f2cc8bc 100644
      strategy:
        fail-fast: false
        matrix:
-@@ -969,7 +1612,8 @@ jobs:
+@@ -969,7 +1638,8 @@ jobs:
    # tools/framework/build.py): .github/workflows/framework.yml, which also
    # runs on its own (gh workflow run framework --ref <branch>).
    framework:
@@ -1157,7 +1183,7 @@ index f9e6560..f2cc8bc 100644
      # A local call runs the framework.yml of the commit under test, so a
      # framework.yml change takes effect in the same PR. Hosted build runners;
      # see docs/self-hosted-ci.md before routing it to the restricted group.
-@@ -980,63 +1624,73 @@ jobs:
+@@ -980,63 +1650,73 @@ jobs:
    # Phase 6 (native libraries): the Android NDK test .so files, built on the
    # Linux runner. .github/workflows/native-libs.yml, which also runs on its own.
    native-libs:
@@ -1241,7 +1267,7 @@ index f9e6560..f2cc8bc 100644
      uses: ./.github/workflows/webview.yml
      with:
        apk: true
-@@ -1044,24 +1698,28 @@ jobs:
+@@ -1044,24 +1724,28 @@ jobs:
    # Gesher's boot image (docs/boot-image.md): dex2oat.exe from the build job
    # compiles the boot class path on Windows: .github/workflows/boot-image.yml.
    boot-image:
@@ -1274,7 +1300,7 @@ index f9e6560..f2cc8bc 100644
      runs-on: ubuntu-24.04
      steps:
        - uses: actions/checkout@v4
-@@ -1097,7 +1755,8 @@ jobs:
+@@ -1097,7 +1781,8 @@ jobs:
    # The Windows installer (tools/package/gesher.iss), installed and tried on a
    # clean runner: Hello through the installed `gesher` command, then uninstall.
    package:
@@ -1284,7 +1310,7 @@ index f9e6560..f2cc8bc 100644
      runs-on: windows-2022
      env:
        GH_TOKEN: ${{ github.token }}
-@@ -1120,6 +1779,15 @@ jobs:
+@@ -1120,6 +1805,15 @@ jobs:
              .github/workflows
              tools/fonts
              tools/binder
@@ -1300,7 +1326,7 @@ index f9e6560..f2cc8bc 100644
 
        - name: Verify PowerShell UI translations
          shell: powershell
-@@ -1130,7 +1798,12 @@ jobs:
+@@ -1130,7 +1824,12 @@ jobs:
            tests/windows/shell/ControlPanelRefreshChecks.ps1
            tests/windows/shell/ControlPanelRecoveryChecks.ps1
            tests/windows/shell/ControlPanelIdleChecks.ps1
@@ -1313,7 +1339,7 @@ index f9e6560..f2cc8bc 100644
            tests/windows/shell/UpdateChecks.ps1
            tests/windows/shell/UpdateTransportChecks.ps1
            tests/windows/shell/ControlPanelUpdateChecks.ps1
-@@ -1165,6 +1838,7 @@ jobs:
+@@ -1165,6 +1864,7 @@ jobs:
            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
        - name: Build installer
@@ -1321,7 +1347,7 @@ index f9e6560..f2cc8bc 100644
          shell: pwsh
          run: |
            $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
-@@ -1181,6 +1855,11 @@ jobs:
+@@ -1181,6 +1881,11 @@ jobs:
            "$checksum  $($installer.Name)" | Set-Content -LiteralPath 'installer\SHA256SUMS.txt' -Encoding ascii
            Get-ChildItem installer
 
@@ -1333,7 +1359,7 @@ index f9e6560..f2cc8bc 100644
        # Uploaded before the checks below: the e2e job tests this installer even when one
        # of them fails.
        - name: Upload tested installer artifact
-@@ -1189,10 +1868,114 @@ jobs:
+@@ -1189,10 +1894,124 @@ jobs:
            name: gesher-setup
            path: |
              installer/*.exe
@@ -1410,6 +1436,16 @@ index f9e6560..f2cc8bc 100644
 +          & .\dist\gesher-exec.exe --elf "$PWD\exec-input\locale-info-x86_64" locale-info
 +          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 +
++      - name: Canonical file identity and case preservation
++        if: ${{ !cancelled() && steps.build_installer.outcome == 'success' }}
++        shell: pwsh
++        run: |
++          $canonicalRoot = Join-Path $env:RUNNER_TEMP ('gesher-canonical-' + [guid]::NewGuid().ToString('N'))
++          New-Item -ItemType Directory -Path $canonicalRoot -ErrorAction Stop | Out-Null
++          & .\dist\canonical_file_name_test.exe $canonicalRoot
++          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
++          Remove-Item -LiteralPath $canonicalRoot -ErrorAction Stop
++
 +      - name: Upstream filesystem programs on isolated broker-backed media
 +        if: ${{ !cancelled() && steps.build_installer.outcome == 'success' }}
 +        shell: pwsh
@@ -1448,7 +1484,7 @@ index f9e6560..f2cc8bc 100644
          run: |
            $setup = (Get-ChildItem installer\gesher-setup-*.exe).FullName
            # Every run of the installed Gesher below must load the installed boot
-@@ -1205,9 +1988,11 @@ jobs:
+@@ -1205,9 +2024,11 @@ jobs:
            if ($LASTEXITCODE -ne 0) { throw 'Crash dialog host/Windows checks failed' }
            python tools/test_app_crash_runtime.py --runtime "$app" --fixture dist/crashnotice.apk --output out/crash-notice-art
            if ($LASTEXITCODE -ne 0) { throw 'Crash notice Windows/ART checks failed' }
@@ -1461,7 +1497,7 @@ index f9e6560..f2cc8bc 100644
            . (Join-Path $app 'gesher-update.ps1')
            $installedVersion = Get-GesherInstalledVersion -InstallDirectory $app
            if ($installedVersion -cne $env:GESHER_PACKAGE_VERSION) {
-@@ -1220,6 +2005,9 @@ jobs:
+@@ -1220,6 +2041,9 @@ jobs:
              throw "Installer ProductVersion mismatch: expected '$env:GESHER_PACKAGE_VERSION', normalized '$installerVersion', raw '$rawProductVersion'"
            }
            'PASS  installer: updater, runtime synchronizer and exact release version are installed' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
@@ -1471,7 +1507,7 @@ index f9e6560..f2cc8bc 100644
            $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
            if (-not ($userPath -split ';' -contains $app)) { throw "PATH lacks $app" }
            $out = & "$app\gesher.cmd" "$app\hello.dex" gesher.Hello 2>&1 | Out-String
-@@ -1231,8 +2019,8 @@ jobs:
+@@ -1231,8 +2055,8 @@ jobs:
            if ($out -notmatch 'gesher: boot image loaded: 3 spaces') { throw 'The installed gesher did not load the installed boot image' }
            # gesher-app and the framework it runs on are installed, and the
            # installed copy takes the bundled app to onResume.
@@ -1482,7 +1518,7 @@ index f9e6560..f2cc8bc 100644
              if (-not (Test-Path "$app\$f")) { throw "The installer left out $f" }
            }
            $oatdumpOutput = & "$app\oatdump.exe" "--oat-file=$app/framework/x86_64/boot-framework.oat" --header-only --no-disassemble 2>&1 | Out-String
-@@ -1245,22 +2033,12 @@ jobs:
+@@ -1245,22 +2069,12 @@ jobs:
            foreach ($f in [regex]::Matches((Get-Content -Raw "$app\fonts\fonts.xml"), '[A-Za-z0-9_-]+\.ttf') | ForEach-Object Value | Sort-Object -Unique) {
              if (-not (Test-Path "$app\fonts\$f")) { throw "The installer left out fonts\$f, which fonts.xml names" }
            }
@@ -1508,7 +1544,7 @@ index f9e6560..f2cc8bc 100644
            $device = "$env:LOCALAPPDATA\Gesher\data\system\gesher-device"
            function DevicePids {
              if (-not (Test-Path $device)) { return @() }
-@@ -1275,13 +2053,17 @@ jobs:
+@@ -1275,13 +2089,17 @@ jobs:
            $env:GESHER_APP_WINDOW = 'headless'
            # The device's processes log how they execute (checked below, ADR 0081).
            $env:GESHER_LOG_EXECUTION = '1'
@@ -1528,7 +1564,7 @@ index f9e6560..f2cc8bc 100644
              Get-Content "$env:LOCALAPPDATA\Gesher\logs\*.log" -ErrorAction SilentlyContinue | Select-Object -Last 60 | Out-Host
              throw "The installed gesher-app did not run lifecycle.apk on the Gesher device (exit $code)"
            }
-@@ -1292,6 +2074,9 @@ jobs:
+@@ -1292,6 +2110,9 @@ jobs:
              throw "gesher-app list does not show the installed lifecycle.apk"
            }
            'PASS  installer: gesher-app installs lifecycle.apk and runs it on the Gesher device (a persistent system server); list shows it' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
@@ -1538,7 +1574,7 @@ index f9e6560..f2cc8bc 100644
            # The installed device compiled it at install with the installed dex2oat (ADR 0054).
            $dexopt = Get-Content "$env:LOCALAPPDATA\Gesher\logs\system_server.log" -ErrorAction SilentlyContinue | Select-String 'dexopt: com\.gesher\.lifecycle: verify \(reason install\)' | Select-Object -First 1
            if (-not $dexopt) {
-@@ -1322,6 +2107,19 @@ jobs:
+@@ -1322,6 +2143,19 @@ jobs:
            }
            if ($out -notmatch 'Windows AppUserModelID Gesher\.App\.com\.gesher\.lifecycle') { throw 'The app process did not set its AppUserModelID' }
            'PASS  installer: the first launch of lifecycle.apk makes its Start menu shortcut; its process sets the AppUserModelID Gesher.App.com.gesher.lifecycle' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
@@ -1558,7 +1594,7 @@ index f9e6560..f2cc8bc 100644
            $out = & "$app\gesher-app.cmd" uninstall com.gesher.lifecycle 2>&1 | Out-String
            $code = $LASTEXITCODE
            Write-Host $out
-@@ -1468,13 +2266,18 @@ jobs:
+@@ -1468,13 +2302,18 @@ jobs:
            $code = $LASTEXITCODE
            Write-Host "gesher-app lifecycle.apk --system-server (exit $code):"
            Write-Host (($out -split "`n" | Select-Object -Last 12) -join "`n")
@@ -1581,7 +1617,7 @@ index f9e6560..f2cc8bc 100644
            $cls = 'HKCU:\Software\Classes'
            $progId = (Get-ItemProperty "$cls\.apk" -ErrorAction SilentlyContinue).'(default)'
            if ($progId -ne 'Gesher.Apk') { throw ".apk's default ProgID is '$progId', not Gesher.Apk" }
-@@ -1482,20 +2285,251 @@ jobs:
+@@ -1482,20 +2321,251 @@ jobs:
            $open = (Get-ItemProperty "$cls\Gesher.Apk\shell\open\command").'(default)'
            Write-Host "Gesher.Apk open command: $open"
            if ($open -notmatch '^"([^"]+)"\s*(.*)$' -or $Matches[1] -ne "$app\gesher-launch.exe") { throw "Gesher.Apk's open command does not start gesher-launch.exe: $open" }
@@ -1632,7 +1668,8 @@ index f9e6560..f2cc8bc 100644
 +          if ($run.Process.ExitCode -ne 0 -or $out -notmatch 'gesher-app: done' -or $out -notmatch 'started the Gesher device' -or
 +              $out -notmatch 'launching the installed package com\.gesher\.lifecycle' -or $out -match 'installed com\.gesher\.lifecycle') {
 +            throw "The .apk open command did not launch the installed lifecycle.apk (the same version) on the Gesher device (exit $($run.Process.ExitCode))"
-+          }
+           }
+-          'PASS  installer: .apk opens with gesher-app through the registered command' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
 +          if ($seen.Count) { throw "Opening the installed version of lifecycle.apk showed a dialog: $($seen -join ', ')" }
 +          'PASS  installer: opening an APK whose version is installed launches the installed package through the registered command, with no dialog' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
 +          # Not installed: the confirmation dialog (the desktop shortcut box shown, unchecked).
@@ -1826,8 +1863,7 @@ index f9e6560..f2cc8bc 100644
 +          $out = Complete-ApkOpen $run 'gesher-launch with loose splits and dex metadata'
 +          if ($run.Process.ExitCode -ne 0 -or $answer.Problems.Count) {
 +            throw "confirmed loose APK install failed: $out $($answer.Problems -join '; ')"
-           }
--          'PASS  installer: .apk opens with gesher-app through the registered command' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
++          }
 +          $row = @(Get-Content -LiteralPath $registry | Where-Object { $_.StartsWith("$splitPackage`t") })
 +          if ($row.Count -ne 1) { throw 'confirmed loose APK did not publish an installed package' }
 +          $codeDir = (($row[0] -split "`t")[1] -split '[/\\]')[-1]
@@ -1846,7 +1882,7 @@ index f9e6560..f2cc8bc 100644
            # Gesher's toast activator (ADR 0051): a local server running gesher-app toast-activated.
            $activator = (Get-ItemProperty "$cls\CLSID\{C18D9445-A7F0-472E-985F-AC354EBEB660}\LocalServer32" -ErrorAction SilentlyContinue).'(default)'
            Write-Host "toast activator: $activator"
-@@ -1540,7 +2574,7 @@ jobs:
+@@ -1540,7 +2610,7 @@ jobs:
            # The device outlives the console that started it.
            $running = DevicePids
            if ($running.Count -ne 3) { throw "The Gesher device did not outlive the .apk open command's console: $running" }
@@ -1855,7 +1891,7 @@ index f9e6560..f2cc8bc 100644
            # An app's window on the device (docs/graphics.md, ADR 0029): the
            # installed gesher-app launches uiapp.apk with a hidden window; the
            # app process the system server starts draws its UI into a Win32
-@@ -1594,6 +2628,7 @@ jobs:
+@@ -1594,6 +2664,7 @@ jobs:
            }
            'PASS  installer: gesher-app runs uiapp.apk on the Gesher device in a Win32 window of its app process (hwui''s frame read back with PrintWindow; the Activity''s label, AppUserModelID Gesher.App.com.gesher.uiapp, its icon); closing it ends the app' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
            'PASS  installer: input reaches uiapp.apk''s views on the Gesher device (a click runs the Button''s onClick, keys and a WM_CHAR type into its EditText, the wheel scrolls, the resized window redraws at 600x700)' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
@@ -1863,7 +1899,7 @@ index f9e6560..f2cc8bc 100644
            # gesher-launch's splash (compat/shell/gesher_launch.cc, docs/installer.md):
            # `gesher-launch install` shows none; `gesher-launch launch com.gesher.uiapp`
            # (the shortcut's command, the app's window shown) shows a GesherSplash
-@@ -1825,6 +2860,16 @@ jobs:
+@@ -1825,6 +2896,16 @@ jobs:
            Set-Content $sentinel 'not Gesher''s'
            # An app id as the system server registers one for an app's toasts (ADR 0038), which uninstalling must remove.
            $null = New-Item 'HKCU:\Software\Classes\AppUserModelId\Gesher.App.com.gesher.ci' -Force
@@ -1880,7 +1916,7 @@ index f9e6560..f2cc8bc 100644
            Start-Process "$app\unins000.exe" -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES' -Wait
            # The uninstaller hands over to a copy of itself and returns at once.
            for ($i = 0; $i -lt 60 -and (Test-Path "$app\unins000.exe"); $i++) { Start-Sleep 1 }
-@@ -1832,6 +2877,10 @@ jobs:
+@@ -1832,6 +2913,10 @@ jobs:
            if ($left) { throw "Uninstall left the Gesher device's processes running: $left" }
            if (Test-Path "$env:LOCALAPPDATA\Gesher") { throw "Uninstall left $env:LOCALAPPDATA\Gesher" }
            'PASS  installer: uninstall stops the Gesher device and removes its data' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
@@ -1891,7 +1927,7 @@ index f9e6560..f2cc8bc 100644
            $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
            if ($userPath -split ';' -contains $app) { throw 'Uninstall left Gesher on PATH' }
            if (Test-Path "$app\dalvikvm.exe") { throw 'Uninstall left dalvikvm.exe' }
-@@ -1839,6 +2888,13 @@ jobs:
+@@ -1839,6 +2924,13 @@ jobs:
            if ((Get-ItemProperty "$cls\.apk" -ErrorAction SilentlyContinue).'(default)' -eq 'Gesher.Apk') { throw "Uninstall left .apk's default on Gesher.Apk" }
            if ($null -ne (Get-ItemProperty "$cls\.apk\OpenWithProgids" -ErrorAction SilentlyContinue).'Gesher.Apk') { throw 'Uninstall left Gesher.Apk in OpenWithProgids' }
            'PASS  installer: uninstall removes the .apk association' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
@@ -1905,7 +1941,7 @@ index f9e6560..f2cc8bc 100644
            if (Test-Path "$cls\CLSID\{C18D9445-A7F0-472E-985F-AC354EBEB660}") { throw 'Uninstall left the toast activator' }
            $appIds = @(Get-ChildItem "$cls\AppUserModelId" -ErrorAction SilentlyContinue | Where-Object PSChildName -like 'Gesher.App.*')
            if ($appIds) { throw "Uninstall left app ids: $($appIds.PSChildName -join ', ')" }
-@@ -1851,14 +2907,24 @@ jobs:
+@@ -1851,14 +2943,24 @@ jobs:
            'PASS  installer: uninstall removes the Gesher Apps Start menu folder with the apps'' shortcuts, and nothing else of the Start menu' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
            'PASS  installer: installs, runs Hello and gesher-app, uninstalls' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
 
@@ -1932,7 +1968,7 @@ index f9e6560..f2cc8bc 100644
      strategy:
        fail-fast: false
        matrix:
-@@ -1875,6 +2941,7 @@ jobs:
+@@ -1875,6 +2977,7 @@ jobs:
              tools/ci
              tools/surface
              tests/windows/graphics
@@ -1940,7 +1976,7 @@ index f9e6560..f2cc8bc 100644
 
        - name: Verify and assemble gesher-setup artifact
          shell: pwsh
-@@ -1916,9 +2983,22 @@ jobs:
+@@ -1916,9 +3019,22 @@ jobs:
            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
            $setup = (Get-ChildItem installer\gesher-setup-*.exe).FullName
            $env:GESHER_TRACE_MISSING_BOOT_CLASSES = '1'
@@ -1963,7 +1999,7 @@ index f9e6560..f2cc8bc 100644
        - name: Validate and publish real-app coverage
          if: always()
          shell: pwsh
-@@ -1942,7 +3022,8 @@ jobs:
+@@ -1942,7 +3058,8 @@ jobs:
    # (20 API requests each) with one bundle receipt per shard (7 requests).
    # The repository's GITHUB_TOKEN quota is shared by every concurrent run.
    core-suppliers:
@@ -1973,7 +2009,7 @@ index f9e6560..f2cc8bc 100644
      runs-on: ubuntu-24.04
      # Room for a reachable wait on the shared hourly API quota.
      timeout-minutes: 90
-@@ -1968,12 +3049,13 @@ jobs:
+@@ -1968,12 +3085,13 @@ jobs:
 
    test-shards:
      name: test-${{ matrix.shard }} (${{ matrix.os }})
@@ -1989,7 +2025,7 @@ index f9e6560..f2cc8bc 100644
      runs-on: ${{ matrix.os }}
      # A hung app or check fails the job instead of running for six hours.
      timeout-minutes: 120
-@@ -2025,6 +3107,11 @@ jobs:
+@@ -2025,6 +3143,11 @@ jobs:
            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
            & ./dist/binder_reply_allocations_test.exe gate
            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -2001,7 +2037,7 @@ index f9e6560..f2cc8bc 100644
            & ./dist/layered_bitmap_cache_test.exe gate
            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
            & ./dist/structured_logging_test.exe
-@@ -2042,6 +3129,14 @@ jobs:
+@@ -2042,6 +3165,14 @@ jobs:
            & ./dist/sqlite_path_test.exe
            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -2016,7 +2052,7 @@ index f9e6560..f2cc8bc 100644
        - name: Verify and assemble framework artifact
          shell: pwsh
          run: |
-@@ -2060,11 +3155,13 @@ jobs:
+@@ -2060,11 +3191,13 @@ jobs:
            python tools/surface/assemble-artifacts.py --source ci-suppliers/core/artifacts/arm64 --destination dist --ledger ci-owners.json --owner arm64
            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -2031,7 +2067,7 @@ index f9e6560..f2cc8bc 100644
            & ./dist/arm64_tls_lifecycle_test.exe gate ./dist/gesher_arm64.dll
            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-@@ -2154,6 +3251,7 @@ jobs:
+@@ -2154,6 +3287,7 @@ jobs:
 
        - name: Run tests
          env:
@@ -2039,7 +2075,7 @@ index f9e6560..f2cc8bc 100644
            GESHER_TRACE_TOAST_IDENTITY: ${{ matrix.shard == 'services' && '1' || '0' }}
            GESHER_FONT_REGRESSION_SCOPE: ${{ matrix.os == 'windows-2022' && 'functional-and-strict' || matrix.os == 'windows-2025' && 'functional' || 'unselected' }}
          shell: pwsh
-@@ -2215,6 +3313,8 @@ jobs:
+@@ -2215,6 +3349,8 @@ jobs:
            path: |
              results.txt
              ci-owners.json
@@ -2048,7 +2084,7 @@ index f9e6560..f2cc8bc 100644
              dist/realtime-signals-evidence/**/*.json
              ${{ runner.temp }}/gesher-root/devsvc-toast-*-projection.jsonl
              ${{ runner.temp }}/gesher-root/logs/system_server.log
-@@ -2224,8 +3324,8 @@ jobs:
+@@ -2224,8 +3360,8 @@ jobs:
 
    test:
      name: test (${{ matrix.os }})
@@ -2059,7 +2095,7 @@ index f9e6560..f2cc8bc 100644
      strategy:
        fail-fast: false
        matrix:
-@@ -2240,7 +3340,8 @@ jobs:
+@@ -2240,7 +3376,8 @@ jobs:
    # Extra isolated jobs execute the real regression in the SAME canonical
    # full. Only these jobs download the separately named hook artifact.
    web3-query-regression:
@@ -2069,7 +2105,7 @@ index f9e6560..f2cc8bc 100644
      strategy:
        fail-fast: false
        matrix:
-@@ -2301,11 +3402,13 @@ jobs:
+@@ -2301,11 +3438,13 @@ jobs:
    # Ordinary Binder scope is mandatory and separate from production installer
    # payload and query-hook runtime. No raw/public-prefix transport-loss gate.
    binder2-sg-fixtures:
@@ -2085,7 +2121,7 @@ index f9e6560..f2cc8bc 100644
      strategy:
        fail-fast: false
        matrix:
-@@ -2363,7 +3466,8 @@ jobs:
+@@ -2363,7 +3502,8 @@ jobs:
 
    # Current selected TCP role; historical canonical red remains separately preserved.
    compile:
@@ -2095,7 +2131,7 @@ index f9e6560..f2cc8bc 100644
      name: compile-${{ matrix.supplier }}
      strategy:
        fail-fast: false
-@@ -2508,7 +3612,8 @@ jobs:
+@@ -2508,7 +3648,8 @@ jobs:
            if-no-files-found: error
            retention-days: 14
    linux-reference:
@@ -2105,7 +2141,7 @@ index f9e6560..f2cc8bc 100644
      env:
        GH_TOKEN: ${{ github.token }}
        TCP_EVIDENCE_SCOPE: ${{ github.repository == 'gesher-runtime/gesher' && 'canonical' || 'fork-diagnostic' }}
-@@ -2533,7 +3638,8 @@ jobs:
+@@ -2533,7 +3674,8 @@ jobs:
            g++ -std=c++20 -Wall -Wextra -Werror -pthread tests/net-tcp-priority/contract.cc -o /tmp/tcp-priority-reference
            timeout 20 /tmp/tcp-priority-reference
    supplier-correlation:
@@ -2115,7 +2151,7 @@ index f9e6560..f2cc8bc 100644
      runs-on: ubuntu-24.04
      # +61 minutes: a quota-exhausted GitHub read may wait up to 61 minutes for the
      # published hourly reset instead of failing the job.
-@@ -2570,7 +3676,8 @@ jobs:
+@@ -2570,7 +3712,8 @@ jobs:
            if [[ "$TCP_EVIDENCE_SCOPE" == fork-diagnostic ]]; then args+=(--fork-diagnostic); fi
            python3 tools/toolchain/coherent_supplier_correlation.py "${args[@]}"
    windows:
@@ -2125,7 +2161,7 @@ index f9e6560..f2cc8bc 100644
      strategy:
        fail-fast: false
        matrix:
-@@ -2613,10 +3720,31 @@ jobs:
+@@ -2613,10 +3756,31 @@ jobs:
    ci-required:
      name: ci-required
      if: always()
@@ -3245,7 +3281,7 @@ index fcd68fd..4bb09c0 100644
       b'while (n > 0) {', 'scandir reverse endpoint'),
      ('public export', b'E("scandir", Scandir);', b'E("scandir", ScandirWrong);', 'scandir reverse endpoint'),
 diff --git a/tools/net-tcp-priority/test-selected-policy.py b/tools/net-tcp-priority/test-selected-policy.py
-index 5f0fff8..00fab84 100644
+index 5f0fff8..d9f60e2 100644
 --- a/tools/net-tcp-priority/test-selected-policy.py
 +++ b/tools/net-tcp-priority/test-selected-policy.py
 @@ -2,6 +2,9 @@
@@ -4026,7 +4062,7 @@ index 5f0fff8..00fab84 100644
   assert hashlib.sha256(current).hexdigest()==transition['after_sha256'][MEMRCHR_SOURCE],MEMRCHR_SOURCE
   baseline=subprocess.check_output(['git','-C',str(ROOT),'show',MEMRCHR_BASE+':'+MEMRCHR_SOURCE])
   assert hashlib.sha256(baseline).hexdigest()==transition['before_sha256'][MEMRCHR_SOURCE],MEMRCHR_SOURCE
-@@ -474,7 +1137,377 @@ def preceding_memrchr_source(qualification):
+@@ -474,7 +1137,379 @@ def preceding_memrchr_source(qualification):
    assert (work/MEMRCHR_SOURCE).read_bytes()==current,'memrchr forward endpoint'
   return baseline
 
@@ -4155,10 +4191,10 @@ index 5f0fff8..00fab84 100644
 +# ends of each changed file are exact, and no runtime pass is granted here.
 +APPCONTAINER_INTEGRATION_BASE = 'ff2c1870053c9d0332e6abef07a25fc282d384b5'
 +# Independent historical endpoint pin remains fixed when the live side is refreshed.
-+APPCONTAINER_INTEGRATION_PREVIOUS_SHA256 = '943a2512b7a2b09c640bb050db5faae12419946a70b7f20de47165fbd5244f09'
++APPCONTAINER_INTEGRATION_PREVIOUS_SHA256 = 'edf0d8bc5b3adca9d83f9dd608a5cf897c5b6877b7cbeeec98c923538caab5cc'
 +APPCONTAINER_INTEGRATION_PATCH = 'tools/net-tcp-priority/qualified/appcontainer-integration-source.patch'
 +APPCONTAINER_INTEGRATION_QUALIFICATION = 'tools/net-tcp-priority/qualified/appcontainer-integration-source.json'
-+APPCONTAINER_INTEGRATION_QUALIFICATION_SHA256 = 'a4d9f7a4facb41c2315c5b8029891f173304da1201d8d8cffaa6198cac6b9e66'
++APPCONTAINER_INTEGRATION_QUALIFICATION_SHA256 = 'a3d6b4a0291fc3cebbd16ca3f74a082187ad6f644caaae012be42f6b99aec9ee'
 +# In addition to the donor identity surface, the merged startup/fork path
 +# intersects the exact USB and child-wait source qualification.
 +APPCONTAINER_INTEGRATION_PATHS = sorted(APPCONTAINER_IDENTITY_SOURCE_SHA256.keys() | {
@@ -4179,6 +4215,8 @@ index 5f0fff8..00fab84 100644
 + 'compat/usb_storage/binder_authority_control.cc', 'compat/usb_storage/binder_authority_control.h',
 + # Preserve the exact pre-change station initialization before the USB proof.
 + 'compat/usb_storage/protected_identity.cc',
++ # Reconstruct the exact owner-unaware profile names for the historical USB proof.
++ 'compat/usb_storage/protected_profile_name.h',
 +})
 +
 +def preceding_appcontainer_integration_sources(receipt_sha256):
@@ -4405,7 +4443,7 @@ index 5f0fff8..00fab84 100644
   folder=ROOT/'tools/net-tcp-priority/qualified'
   raw=(folder/'ofd-stream-source.json').read_bytes()
   assert hashlib.sha256(raw).hexdigest()==OFD_QUALIFICATION_SHA256,'OFD source qualification changed'
-@@ -485,42 +1518,89 @@ def preceding_ofd_sources():
+@@ -485,42 +1520,89 @@ def preceding_ofd_sources():
          'compat/posix/src/system.cc','compat/posix/src/winsock.cc']
   assert qualification['paths']==paths
   assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==paths
@@ -4511,7 +4549,7 @@ index 5f0fff8..00fab84 100644
  # AF_UNIX credentials and descriptor passing (ADR 0088) and memfd seals change
  # these selected sources after REVIEWED_CHECKPOINT, a commit on main. The
  # pinned REVIEWED_PATCH lists each changed line as an exact hunk at its line in
-@@ -529,7 +1609,9 @@ def preceding_ofd_sources():
+@@ -529,7 +1611,9 @@ def preceding_ofd_sources():
  # checkpoint's bytes. Any other change fails here as before.
  REVIEWED_CHECKPOINT='7a45c2468c270bfe68ee5f854aa9d4feaf2208b3'
  REVIEWED_PATCH='tools/net-tcp-priority/reviewed-adr0088-memfd-seals.json'
@@ -4522,7 +4560,7 @@ index 5f0fff8..00fab84 100644
  def reviewed(path,actual):
   raw=(ROOT/REVIEWED_PATCH).read_bytes()
   assert hashlib.sha256(raw).hexdigest()==REVIEWED_PATCH_SHA256,REVIEWED_PATCH
-@@ -555,12 +1637,68 @@ NDK_ARCHIVE_SHARING={
+@@ -555,12 +1639,68 @@ NDK_ARCHIVE_SHARING={
    b"archive = Path('tcp-ndk-archive/android-ndk-r27c-linux.zip')\narchive.parent.mkdir(exist_ok=True)\n",
    b"# Shares native2's publisher-archive cache entry (same path and key), so one copy is kept.\narchive = Path('dns-ndk.zip')\n"),
  }
@@ -4595,7 +4633,7 @@ index 5f0fff8..00fab84 100644
   paths=subprocess.check_output(['git','-C',str(ROOT),'diff','1745e99d7f2849ba81784545e07d60cb2b7800c3^','1745e99d7f2849ba81784545e07d60cb2b7800c3','--name-only'],text=True).splitlines()
   paths+=['.github/workflows/net-tcp-coherent-component.yml','tests/net-tcp-priority/contract.cc','tests/net-tcp-priority/native_udp_control.cc','tests/native2/net_udp_trunc.cpp','tests/native2/net_udp_fault_observer.c','tools/net-tcp-priority/qualified/TsfJobSupervisor.cs','tools/windows4/TsfJobSupervisor.cs','tools/windows4/TsfJobWorker.cs','tools/windows4/test-tsf-job-supervisor.ps1','tools/ci/receipt-diagnostics.ps1','tools/net-tcp-priority/import-policy.json','tools/net-tcp-priority/import_policy.py','tools/net-tcp-priority/build-guests.py','tools/net-tcp-priority/prepare-ndk.py']
   for path in paths:
-@@ -569,7 +1707,10 @@ def check():
+@@ -569,7 +1709,10 @@ def check():
           WINSOCK_BASE if path=='compat/posix/src/winsock.cc' else
           CONTROL_BASE if path=='tools/windows4/test-tsf-job-supervisor.ps1' else BASE)
    expected=subprocess.check_output(['git','-C',str(ROOT),'show',epoch+':'+path])
@@ -4607,7 +4645,7 @@ index 5f0fff8..00fab84 100644
    if path=='compat/posix/src/winsock.cc':
     assert actual.count(TCP_PRIORITY_WAKE_AFTER)==1 and TCP_PRIORITY_WAKE_BEFORE not in actual,path
     actual=actual.replace(TCP_PRIORITY_WAKE_AFTER,TCP_PRIORITY_WAKE_BEFORE,1)
-@@ -663,11 +1804,159 @@ def check():
+@@ -663,11 +1806,159 @@ def check():
   assert pin['ordered_patch_sha256']=={'minimum-detached-retirement.patch':'ebc5aac990c6ec075431d0c25a9b74ecadc0940da1bdad9503f358d4fe3431ad','minimum-noattach-join.patch':'c4f47903af720542a584fa743932316d86c45683da70a4c8620d7a71d3eb7f96'}
   for name,digest in pin['ordered_patch_sha256'].items():assert hashlib.sha256((ROOT/'tools/host-pthread-authority'/name).read_bytes()).hexdigest()==digest
   for path in ['tools/net-tcp-priority/manifest.py','tools/host-pthread-authority/minimum_receipt.py']:ast.parse((ROOT/path).read_text(encoding='utf-8'))
@@ -4768,7 +4806,7 @@ index 5f0fff8..00fab84 100644
    ('compat/posix/src/fd.cc',b'--state->description->descriptor_refs == 0',b'--state->description->descriptor_refs == 1'),
    ('compat/posix/src/fd.cc',b'return TransferPipe(snapshot, bytes, count, false);',b'return 0;'),
    ('compat/posix/src/system.cc',b'gesher::ws::RecvOwned(state.socket,',b'gesher::ws::SendOwned(state.socket,'),
-@@ -675,6 +1964,9 @@ def transition_negative_controls():
+@@ -675,6 +1966,9 @@ def transition_negative_controls():
    ('compat/posix/src/ofd.cc',b'InterlockedCompareExchange(&shared->flags,',b'InterlockedExchange(&shared->flags,'),
    ('compat/elf/exec/shell_execute.inc',b'gesher::ReadPipeDescriptionInterruptible(description, value, 1, interrupted)',b'gesher::ReadFileDescription(description, value, 1)'),
    ('tools/net-tcp-priority/qualified/ofd-stream-source.patch',b'@@',b'@x'),
@@ -4778,7 +4816,7 @@ index 5f0fff8..00fab84 100644
    ('compat/posix/src/fd.cc',b'if (result < 0) return -1;',b'if (result < 0) return 0;'),
    ('compat/posix/src/fd.cc',b'SocketRegistry& socket_registry = *new (socket_registry_storage) SocketRegistry;',b'SocketRegistry socket_registry;'),
    ('compat/posix/src/stdio_output.cc',b'if (locked_stream_) _lock_file(locked_stream_);',b'if (locked_stream_) {}'),
-@@ -689,6 +1981,11 @@ def transition_negative_controls():
+@@ -689,6 +1983,11 @@ def transition_negative_controls():
    ('compat/posix/src/system_properties.cc',b'SetWideEnvironment(L"GESHER_PROPERTY_ROOT", root.c_str())',b'_wputenv_s(L"GESHER_PROPERTY_ROOT", root.c_str())'),
    ('compat/posix/include/gesher/system_properties.h',b'uint32_t generation = 0;',b'uint64_t generation = 0;'),
    ('tools/net-tcp-priority/qualified/native13-property-source.patch',b'@@',b'@x'),
@@ -4790,7 +4828,7 @@ index 5f0fff8..00fab84 100644
    # The memmem normalization admits its exact reviewed delta only. The old
    # whole-file digest must still reject any unrelated shim change afterwards.
    ('compat/bionic/shim.cc',b'size_t n = std::strlen(s) + 1;',b'size_t n = std::strlen(s) + 2;'),
-@@ -696,6 +1993,40 @@ def transition_negative_controls():
+@@ -696,6 +1995,40 @@ def transition_negative_controls():
    ('compat/bionic/shim.cc',b'#include "memmem_search.h"\n',b''),
    ('compat/bionic/shim.cc',b'#include "memmem_search.h"\n',b'#include "memmem_search.h"\n#include "memmem_search.h"\n'),
    (MEMMEM_HEADER,b'if (needle_size == 0) return haystack_data;',b'if (needle_size == 0) return nullptr;'),
@@ -4831,7 +4869,7 @@ index 5f0fff8..00fab84 100644
   ]
   for name,before,after in cases:
    target=ROOT/name
-@@ -703,22 +2034,217 @@ def transition_negative_controls():
+@@ -703,22 +2036,217 @@ def transition_negative_controls():
    def changed(path):
     raw=original(path)
     return raw.replace(before,after,1) if path==target else raw

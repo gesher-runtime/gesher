@@ -4981,10 +4981,18 @@ index 406ce51..4389a91 100644
    Area* area = Current();
    if (!area || area->read_only) return false;
 diff --git a/compat/posix/src/unistd.cc b/compat/posix/src/unistd.cc
-index 2497370..de1ce71 100644
+index 2497370..b31d30f 100644
 --- a/compat/posix/src/unistd.cc
 +++ b/compat/posix/src/unistd.cc
-@@ -23,6 +23,8 @@
+@@ -16,6 +16,7 @@
+ #include <gesher/font_environment.h>
+ #include <gesher/environment.h>
+ #include <gesher/file_description.h>
++#include <gesher/canonical_file_name.h>
+
+ #include <atomic>
+ #include <mutex>
+@@ -23,6 +24,8 @@
  #include <utility>
  #include <vector>
 
@@ -4993,7 +5001,7 @@ index 2497370..de1ce71 100644
  #include "internal.h"
  #include "ofd_internal.h"
  #include "usb_block_internal.h"
-@@ -35,6 +37,7 @@
+@@ -35,6 +38,7 @@
  #include "pipe_io.h"
  #include "system_linker.h"
  #include "storage_policy.h"
@@ -5001,7 +5009,7 @@ index 2497370..de1ce71 100644
 
  namespace {
 
-@@ -43,6 +46,8 @@ namespace {
+@@ -43,6 +47,8 @@ namespace {
  // process's uid does not change).
  uid_t AppUid() {
    static const uid_t uid = [] {
@@ -5010,10 +5018,12 @@ index 2497370..de1ce71 100644
      const char* env = getenv("GESHER_UID");
      char* end = nullptr;
      unsigned long value = env != nullptr ? strtoul(env, &end, 10) : 0;
-@@ -69,6 +74,10 @@ std::atomic<unsigned long long> rand_state{0x853c49e6748fea9bULL};
+@@ -68,10 +74,22 @@ std::atomic<unsigned long long> rand_state{0x853c49e6748fea9bULL};
+
  // The file open on a handle, as a Linux path (LinuxPath). False with errno
  // set if it has no file name (a pipe, a console, NUL).
- bool FinalPath(HANDLE h, std::string* out) {
+-bool FinalPath(HANDLE h, std::string* out) {
++bool FinalPath(HANDLE h, std::string* out, const std::wstring* original = nullptr) {
 +  if (const auto scoped = gesher::storage_root::DescriptorPath(h); !scoped.empty()) {
 +    *out = gesher::LinuxPath(scoped.c_str());
 +    return true;
@@ -5021,7 +5031,18 @@ index 2497370..de1ce71 100644
    wchar_t buf[32768];
    DWORD n = GetFinalPathNameByHandleW(h, buf, 32768, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
    if (n == 0) {
-@@ -900,20 +909,35 @@ char* realpath(const char* path, char* resolved_path) {
++    const DWORD error = GetLastError();
++    std::wstring canonical;
++    if (error == ERROR_ACCESS_DENIED && original &&
++        gesher::canonical_file_name::RevalidatedDosName(h, *original, &canonical)) {
++      *out = gesher::LinuxPath(canonical.c_str());
++      return true;
++    }
++    SetLastError(error);
+     gesher::FailWithLastError();
+     return false;
+   }
+@@ -900,20 +918,35 @@ char* realpath(const char* path, char* resolved_path) {
    }
    if (kind == gesher::PathKind::kFile) {
      if (!gesher::CheckExternalStorageAccess(wpath, gesher::AccessKind::kStat)) return nullptr;
@@ -5057,7 +5078,7 @@ index 2497370..de1ce71 100644
 +      out = gesher::system_linker::kPath;
 +      ok = true;
 +    } else {
-+      ok = FinalPath(h, &out);
++      ok = FinalPath(h, &out, &wpath);
 +    }
      CloseHandle(h);
      if (!ok) return nullptr;
@@ -5795,8 +5816,92 @@ index b90ad3a..7f1353b 100644
    constexpr ACCESS_MASK desktop = DESKTOP_CREATEMENU | DESKTOP_CREATEWINDOW |
        DESKTOP_ENUMERATE | DESKTOP_READOBJECTS | DESKTOP_WRITEOBJECTS;
    for (PSID sid : {user, capability}) {
+diff --git a/compat/usb_storage/protected_profile_name.h b/compat/usb_storage/protected_profile_name.h
+index de900cf..8bf4723 100644
+--- a/compat/usb_storage/protected_profile_name.h
++++ b/compat/usb_storage/protected_profile_name.h
+@@ -1,6 +1,7 @@
+ // Copyright (C) 2026 The Gesher Authors
+ // SPDX-License-Identifier: Apache-2.0
+ #pragma once
++#include "protected_runtime_wire.h"
+
+ #include <windows.h>
+ #include <bcrypt.h>
+@@ -88,19 +89,26 @@ inline bool HashField(BCRYPT_HASH_HANDLE hash, std::wstring_view field) {
+
+ }  // namespace protected_profile_name_detail
+
+-// Reuse one Windows profile per desktop account and verified package/signer
+-// identity. A launch/session ID or recyclable Android UID is not an input.
++inline bool ValidInstallationOwner(std::wstring_view owner) {
++  return runtime_wire::ValidInstallationOwner(owner);
++}
++
++// Applications retain their profile across an update of the same installation,
++// never across uninstall/reinstall. The owner is trusted installer metadata;
++// neither a launch/session ID nor a recyclable Android UID is an identity.
+ // Both empty package and signer select the system-server profile; applications
+ // require a valid package and the verified 64-character lowercase signer hash.
+ // Success writes 61 ASCII characters; failure clears a non-null result.
+-inline uint32_t ProtectedProfileName(std::wstring_view desktop_sid, std::wstring_view package,
+-                                     std::wstring_view signer, std::wstring* result) {
++inline uint32_t ProtectedProfileNameHash(std::wstring_view desktop_sid, std::wstring_view package,
++    std::wstring_view signer, std::wstring_view installation, bool legacy, std::wstring* result) {
+   if (!result) return ERROR_INVALID_PARAMETER;
+   const auto fail = [result](uint32_t error) { result->clear(); return error; };
+   const bool server = package.empty() && signer.empty();
+   if (!protected_profile_name_detail::DesktopSid(desktop_sid) ||
++      (server && !installation.empty()) ||
+       (!server && (!protected_profile_name_detail::Package(package) || signer.size() != 64 ||
+-                   signer.find_first_not_of(L"0123456789abcdef") != std::wstring_view::npos))) {
++                   signer.find_first_not_of(L"0123456789abcdef") != std::wstring_view::npos ||
++                   (!legacy && !ValidInstallationOwner(installation))))) {
+     return fail(ERROR_INVALID_PARAMETER);
+   }
+   BCRYPT_ALG_HANDLE algorithm = nullptr;
+@@ -117,9 +125,12 @@ inline uint32_t ProtectedProfileName(std::wstring_view desktop_sid, std::wstring
+     BCRYPT_HASH_HANDLE value;
+     ~HashOwner() { BCryptDestroyHash(value); }
+   } hash_owner{hash};
+-  for (const auto field : {std::wstring_view(L"Gesher.ProtectedProfile.v1"), desktop_sid, package, signer}) {
++  const std::wstring_view domain = server || legacy ? L"Gesher.ProtectedProfile.v1" : L"Gesher.ProtectedProfile.v2";
++  for (const auto field : {domain, desktop_sid, package, signer}) {
+     if (!protected_profile_name_detail::HashField(hash, field)) return fail(ERROR_GEN_FAILURE);
+   }
++  if (!server && !legacy && !protected_profile_name_detail::HashField(hash, installation))
++    return fail(ERROR_GEN_FAILURE);
+   std::array<UCHAR, 32> digest{};
+   if (BCryptFinishHash(hash, digest.data(), static_cast<ULONG>(digest.size()), 0) < 0) {
+     return fail(ERROR_GEN_FAILURE);
+@@ -146,4 +157,25 @@ inline uint32_t ProtectedProfileName(std::wstring_view desktop_sid, std::wstring
+   return ERROR_SUCCESS;
+ }
+
++inline uint32_t ProtectedProfileName(std::wstring_view desktop, std::wstring_view package,
++    std::wstring_view signer, std::wstring_view installation, std::wstring* result) {
++  return ProtectedProfileNameHash(desktop, package, signer, installation, false, result);
++}
++
++// The old signature remains valid only for the stable system-server identity.
++inline uint32_t ProtectedProfileName(std::wstring_view desktop, std::wstring_view package,
++    std::wstring_view signer, std::wstring* result) {
++  return ProtectedProfileName(desktop, package, signer, {}, result);
++}
++
++// Migration only: identify obsolete ACEs. Never use this identity to launch an app.
++inline uint32_t LegacyProtectedApplicationProfileName(std::wstring_view desktop,
++    std::wstring_view package, std::wstring_view signer, std::wstring* result) {
++  if (package.empty()) {
++    if (result) result->clear();
++    return ERROR_INVALID_PARAMETER;
++  }
++  return ProtectedProfileNameHash(desktop, package, signer, {}, true, result);
++}
++
+ }  // namespace gesher::usb_storage
 diff --git a/compat/usb_storage/protected_runtime_client.cc b/compat/usb_storage/protected_runtime_client.cc
-index d3ebcfd..a583f75 100644
+index d3ebcfd..eba1dc4 100644
 --- a/compat/usb_storage/protected_runtime_client.cc
 +++ b/compat/usb_storage/protected_runtime_client.cc
 @@ -288,6 +288,22 @@ uint32_t ProtectedLogMutex(uint64_t* handle) {
@@ -5822,8 +5927,24 @@ index d3ebcfd..a583f75 100644
  uint32_t ProtectedUsbObservation(UsbObservationKind kind, std::wstring_view path,
      std::vector<std::byte>* output) try {
    if (!output || !output->empty()) return ERROR_INVALID_PARAMETER;
+@@ -375,12 +391,13 @@ uint32_t StartProtectedRuntime(const std::u16string& apk_path) {
+ }
+
+ uint32_t ProtectedSpawn(const ProtectedSpawnSpec& spec, ProtectedChild* child) try {
+-  if (!child || child->pid || child->start_time || spec.environment.size() > 32) {
++  if (!child || child->pid || child->start_time || spec.environment.size() > 32 ||
++      !wire::ValidInstallationOwner(std::u16string_view(spec.installation_owner))) {
+     return ERROR_INVALID_PARAMETER;
+   }
+   std::vector<std::byte> payload;
+   for (const auto* value : {&spec.package_name, &spec.process_name, &spec.apk_path,
+-                            &spec.apk_sha256, &spec.signer_sha256}) {
++                            &spec.apk_sha256, &spec.signer_sha256, &spec.installation_owner}) {
+     if (!wire::Append(&payload, *value)) return ERROR_INVALID_PARAMETER;
+   }
+   for (const auto& entry : spec.environment) {
 diff --git a/compat/usb_storage/protected_runtime_client.h b/compat/usb_storage/protected_runtime_client.h
-index 566cd0b..ec09fa9 100644
+index 566cd0b..6ef7346 100644
 --- a/compat/usb_storage/protected_runtime_client.h
 +++ b/compat/usb_storage/protected_runtime_client.h
 @@ -25,6 +25,11 @@ uint32_t ProtectedPropertyMutex(uint64_t* handle);
@@ -5838,8 +5959,17 @@ index 566cd0b..ec09fa9 100644
  enum class UsbObservationKind : uint32_t;
  // Copies one bounded, read-only descriptor snapshot from the authority. Only
  // authenticated system_server can call this; device handles never cross it.
+@@ -57,6 +62,8 @@ struct ProtectedSpawnSpec {
+   // Android APK signature verification, never an application-supplied claim.
+   std::u16string apk_sha256;
+   std::u16string signer_sha256;
++  // Canonical UUID from the trusted installer's persistent owner record.
++  std::u16string installation_owner;
+   uint32_t uid = 0;
+   uint32_t target_sdk = 0;
+   uint64_t start_sequence = 0;
 diff --git a/compat/usb_storage/protected_runtime_session.cc b/compat/usb_storage/protected_runtime_session.cc
-index 77392f4..230e50a 100644
+index 77392f4..d32355d 100644
 --- a/compat/usb_storage/protected_runtime_session.cc
 +++ b/compat/usb_storage/protected_runtime_session.cc
 @@ -5,6 +5,7 @@
@@ -5850,7 +5980,14 @@ index 77392f4..230e50a 100644
  #include "protected_identity.h"
  #include "authority_launch.h"
  #include "authority_peer.h"
-@@ -17,6 +18,7 @@
+@@ -13,10 +14,14 @@
+ #include "block_session.h"
+ #include "protected_signal.h"
+ #include "protected_profile_name.h"
++#include "protected_owner_journal.h"
++#include "protected_owner_marker.h"
++#include "protected_owner_jobs.h"
+ #include "protected_storage_policy.h"
  #include "protected_tool_paths.h"
  #include "protected_usb_observation.h"
  #include "../framework/app_container.h"
@@ -5858,7 +5995,15 @@ index 77392f4..230e50a 100644
 
  #include <aclapi.h>
  #include <bcrypt.h>
-@@ -36,6 +38,7 @@
+@@ -25,6 +30,7 @@
+ #include <shlobj.h>
+ #include <winternl.h>
+ #include <wtsapi32.h>
++#include <tlhelp32.h>
+
+ #include <algorithm>
+ #include <array>
+@@ -36,6 +42,7 @@
  #include <map>
  #include <mutex>
  #include <new>
@@ -5866,7 +6011,24 @@ index 77392f4..230e50a 100644
  #include <string_view>
  #include <system_error>
  #include <thread>
-@@ -197,7 +200,8 @@ DWORD PrivateDirectory(const std::wstring& path, PSID runtime_user = nullptr) {
+@@ -146,7 +153,7 @@ DWORD Hash(HANDLE file, std::wstring* digest) {
+   return SetFilePointerEx(file, zero, nullptr, FILE_BEGIN) ? ERROR_SUCCESS : GetLastError();
+ }
+
+-DWORD PrivateDirectory(const std::wstring& path, PSID runtime_user = nullptr) {
++DWORD PrivateDirectory(const std::wstring& path, PSID runtime_user = nullptr, bool allow_packages = true) {
+   PSECURITY_DESCRIPTOR raw = nullptr;
+   if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
+       L"O:SYG:SYD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)S:(ML;OICI;NW;;;LW)",
+@@ -180,6 +187,7 @@ DWORD PrivateDirectory(const std::wstring& path, PSID runtime_user = nullptr) {
+     PSID principal = const_cast<DWORD*>(&ace->SidStart);
+     if (IsWellKnownSid(principal, WinLocalSystemSid) || IsWellKnownSid(principal, WinBuiltinAdministratorsSid) ||
+         (runtime_user && EqualSid(principal, runtime_user))) continue;
++    if (!allow_packages) return ERROR_ACCESS_DENIED;
+     // Previously enrolled exact lowbox packages may own their access. No
+     // ordinary desktop user/group ACE is accepted on the protected root.
+     constexpr SID_IDENTIFIER_AUTHORITY package = SECURITY_APP_PACKAGE_AUTHORITY;
+@@ -197,7 +205,8 @@ DWORD PrivateDirectory(const std::wstring& path, PSID runtime_user = nullptr) {
  // Do not accept a caller-selected filename, export resources, or change the
  // actual startup result if writing diagnostics fails.
  void RecordStartup(const std::wstring& directory, const char* stage, DWORD status,
@@ -5876,7 +6038,7 @@ index 77392f4..230e50a 100644
    struct PreserveError {
      DWORD value = GetLastError();
      ~PreserveError() { SetLastError(value); }
-@@ -233,11 +237,16 @@ void RecordStartup(const std::wstring& directory, const char* stage, DWORD statu
+@@ -233,11 +242,16 @@ void RecordStartup(const std::wstring& directory, const char* stage, DWORD statu
        if (!IsWellKnownSid(principal, WinLocalSystemSid) &&
            !IsWellKnownSid(principal, WinBuiltinAdministratorsSid)) return;
      }
@@ -5896,7 +6058,64 @@ index 77392f4..230e50a 100644
      if (length <= 0 || static_cast<size_t>(length) >= sizeof(record)) return;
      LARGE_INTEGER zero{};
      if (!SetFilePointerEx(file.get(), zero, nullptr, FILE_BEGIN) || !SetEndOfFile(file.get())) return;
-@@ -421,6 +430,7 @@ class Session {
+@@ -355,7 +369,7 @@ struct Entry {
+   bool exit_observed = false;
+   bool selected_initial = false;
+   std::atomic<bool> finished{false};
+-  std::wstring package, digest, signer, apk;
++  std::wstring package, digest, signer, apk, installation;
+   Handle apk_pin;
+   std::array<Handle, 3> standard;
+   std::shared_ptr<void> log_mutex;
+@@ -370,6 +384,17 @@ struct UsbQuery {
+   std::wstring path;
+ };
+
++DWORD CreateOwnedJob(Handle* output) {
++  HANDLE raw = nullptr;
++  const DWORD status = CreateProtectedOwnerJob(&raw);
++  if (status == ERROR_SUCCESS) output->reset(raw);
++  return status;
++}
++
++DWORD StopOwnedJob(HANDLE job, DWORD milliseconds = 5000) {
++  return StopProtectedOwnerJob(job, milliseconds);
++}
++
+ class Session {
+  public:
+   Session(std::wstring directory, const ProtectedSessionOptions& options, HANDLE stop,
+@@ -378,6 +403,7 @@ class Session {
+   ~Session() {
+     SetEvent(stop_);
+     DWORD users_stopped = ERROR_SUCCESS;
++    const ULONGLONG job_deadline = GetTickCount64() + 15000;
+     const auto terminate = [&users_stopped](const AuthorityLaunch* launch) {
+       if (!launch || WaitForSingleObject(launch->process(), 0) == WAIT_OBJECT_0) return;
+       if (!TerminateProcess(launch->process(), ERROR_OPERATION_ABORTED)) {
+@@ -389,6 +415,13 @@ class Session {
+     };
+     {
+       std::lock_guard lock(mutex_);
++      const auto stop_job = [&](HANDLE job) {
++        const ULONGLONG now = GetTickCount64();
++        const DWORD status = StopOwnedJob(job, now < job_deadline ? static_cast<DWORD>(job_deadline - now) : 0);
++        if (status != ERROR_SUCCESS) users_stopped = status;
++      };
++      for (const auto& [owner, job] : installation_jobs_) stop_job(job.get());
++      stop_job(system_job_.get());
+       for (auto& [id, entry] : processes_) terminate(entry->launch.get());
+     }
+     terminate(manager_.get());
+@@ -410,6 +443,7 @@ class Session {
+     wait_stopped(manager_.get());
+     wait_stopped(broker_.get());
+     processes_.clear();
++    CleanupOwners(true);
+     manager_.reset();
+     broker_.reset();
+     factory_.reset();
+@@ -421,6 +455,7 @@ class Session {
    DWORD Run(const std::wstring& executable, std::unique_ptr<HostDisk> selected);
    const char* startup_stage() const { return startup_stage_; }
    const char* launch_stage() const { return launch_stage_; }
@@ -5904,7 +6123,7 @@ index 77392f4..230e50a 100644
   private:
    DWORD PrepareData(HANDLE desktop, const std::wstring& executable);
    DWORD CreateProfile(const std::wstring& name, std::shared_ptr<Profile>* profile);
-@@ -430,6 +440,7 @@ class Session {
+@@ -430,6 +465,7 @@ class Session {
    void Reap();
    DWORD TerminateTree(Entry& entry, DWORD code);
    DWORD Dispatch(Entry& entry, const wire::Request& request, const std::vector<std::byte>& payload, wire::Reply* reply);
@@ -5912,7 +6131,45 @@ index 77392f4..230e50a 100644
    DWORD Spawn(Entry& requester, const wire::Request& request, const std::vector<std::byte>& payload, wire::Reply* reply);
    DWORD SpawnCommand(Entry& requester, const wire::Request& request, const std::vector<std::byte>& payload, wire::Reply* reply);
    DWORD Initialize(Entry& entry, wire::Reply* reply);
-@@ -472,6 +483,7 @@ class Session {
+@@ -437,20 +473,31 @@ class Session {
+                               const std::vector<std::byte>& payload, UsbQuery* query);
+   DWORD ObserveUsb(const Entry& entry, const UsbQuery& query, wire::Reply* reply);
+   DWORD PinApk(const std::wstring& path, const std::wstring& digest, Handle* file);
++  DWORD PinOwner(const Entry& entry, Handle* marker);
++  DWORD PrepareOwner(Entry& entry, ProtectedOwnerJournal& journal);
++  DWORD PrepareOwnerDirectory(const std::wstring& package, std::wstring* directory);
++  DWORD InstallationJob(const Entry& entry, HANDLE* job);
++  DWORD StopLegacyProfile(PSID profile);
++  void CleanupOwners(bool stopping = false);
+   DWORD GrantAppFiles(Entry& entry);
+   DWORD MakeLogs(Entry& entry);
+   std::wstring Environment(uint32_t uid, const std::vector<std::wstring>& additions, const std::wstring& temporary);
++  std::wstring Temporary(const Entry& entry) const {
++    return root_ + L"\\tmp\\" + (entry.system_server ? L"server" : entry.package + L"." + entry.installation);
++  }
+   std::wstring VmOptions() const;
+   bool AllowedEnvironment(const std::wstring& entry, bool command = false) const;
+   Entry* Find(uint32_t pid, uint64_t start_time);
+   Entry* Root(Entry& entry);
+
+-  std::wstring directory_, runtime_, root_, data_, stage_, base_environment_, binder_data_, desktop_sid_;
++  std::wstring directory_, runtime_, root_, data_, stage_, base_environment_, binder_data_, desktop_sid_, owner_state_;
+   ProtectedSessionOptions options_;
+   HANDLE stop_;
+   ProtectedIdentityCleanup& cleanup_;
+   Handle ready_;
+   Handle staged_apk_;
++  Handle system_job_;
++  std::map<std::pair<std::wstring, std::wstring>, Handle> installation_jobs_;
+   std::wstring staged_path_;
+   std::unique_ptr<ProtectedIdentity> identity_;
+   container::Sid runtime_capability_;
+@@ -469,9 +516,12 @@ class Session {
+   };
+   std::map<uint64_t, Exit> exits_;
+   std::map<std::wstring, std::weak_ptr<void>> log_mutexes_;
++  std::vector<std::wstring> retired_profiles_;
++  ULONGLONG next_owner_cleanup_ = 0;
    std::unique_ptr<HostDisk> selected_;
    uint64_t next_id_ = 3;
    bool application_started_ = false;
@@ -5920,7 +6177,317 @@ index 77392f4..230e50a 100644
    const char* startup_stage_ = "runtime.begin";
    const char* launch_stage_ = "none";
  };
-@@ -1011,6 +1023,42 @@ DWORD Session::Dispatch(Entry& entry, const wire::Request& request,
+@@ -541,6 +591,12 @@ DWORD Session::PrepareData(HANDLE desktop, const std::wstring& executable) {
+   if (!GetTokenInformation(desktop, TokenUser, user, sizeof(user), &bytes)) return GetLastError();
+   desktop_sid_ = SidText(reinterpret_cast<TOKEN_USER*>(user)->User.Sid);
+   if (desktop_sid_.empty()) return ERROR_INVALID_SID;
++  owner_state_ = directory_ + L"\\installation-state";
++  status = PrivateDirectory(owner_state_, nullptr, false);
++  if (status != ERROR_SUCCESS) return status;
++  owner_state_ += L"\\" + desktop_sid_;
++  status = PrivateDirectory(owner_state_, nullptr, false);
++  if (status != ERROR_SUCCESS) return status;
+   root_ = parent + L"\\" + desktop_sid_;
+   startup_stage_ = "data.desktop-private-root";
+   status = PrivateDirectory(root_, identity_->sid());
+@@ -672,7 +728,7 @@ DWORD Session::PrepareData(HANDLE desktop, const std::wstring& executable) {
+
+ DWORD Session::MakeLogs(Entry& entry) {
+   std::erase_if(log_mutexes_, [](const auto& item) { return item.second.expired(); });
+-  const std::wstring key = entry.system_server ? L"system" : L"app:" + entry.package;
++  const std::wstring key = entry.system_server ? L"system" : L"app:" + entry.package + L":" + entry.installation;
+   auto& shared = log_mutexes_[key];
+   entry.log_mutex = shared.lock();
+   if (!entry.log_mutex) {
+@@ -684,7 +740,7 @@ DWORD Session::MakeLogs(Entry& entry) {
+   entry.standard[0].reset(CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+       nullptr, OPEN_EXISTING, 0, nullptr));
+   if (entry.standard[0].get() == INVALID_HANDLE_VALUE) return GetLastError();
+-  const std::wstring name = entry.system_server ? L"system_server" : entry.package;
++  const std::wstring name = entry.system_server ? L"system_server" : entry.package + L"." + entry.installation;
+   const std::wstring path = root_ + L"\\logs\\" + name + L".log";
+   entry.standard[1].reset(CreateFileW(path.c_str(), FILE_APPEND_DATA | SYNCHRONIZE,
+       FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr));
+@@ -714,12 +770,12 @@ DWORD Session::StartEntry(std::unique_ptr<Entry> entry, const std::wstring& bina
+   arguments = L"--gesher-protected-services " + binder_data_ + L" " + std::to_wstring(GetCurrentProcessId()) + L" " +
+       std::to_wstring(options_.desktop_session) + L" --gesher-protected-runtime " + locator + L" " +
+       std::to_wstring(GetCurrentProcessId()) + L" " + std::to_wstring(options_.desktop_session) + L" " + arguments;
+-  const std::wstring temporary = root_ + L"\\tmp\\" + (entry->system_server ? L"server" : entry->package);
++  const std::wstring temporary = Temporary(*entry);
+   if (!CreateDirectoryW(temporary.c_str(), nullptr) && GetLastError() != ERROR_ALREADY_EXISTS) return GetLastError();
+   status = container::Grant(temporary, entry->profile->sid.value, FILE_ALL_ACCESS, true);
+   if (status != ERROR_SUCCESS) return status;
+   additions.push_back(L"GESHER_LOG_FILE=" + root_ + L"\\logs\\" +
+-      (entry->system_server ? L"system_server" : entry->package) + L".logcat");
++      (entry->system_server ? L"system_server" : entry->package + L"." + entry->installation) + L".logcat");
+   // Freeze scoped-storage identity before any guest constructors run. The
+   // sealed process record also supplies this for every shell descendant;
+   // neither spawn RPC permits clients to override it through environment data.
+@@ -736,8 +792,11 @@ DWORD Session::StartEntry(std::unique_ptr<Entry> entry, const std::wstring& bina
+   }
+   const SECURITY_CAPABILITIES capabilities{entry->profile->sid.value, caps.data(), static_cast<DWORD>(caps.size()), 0};
+   const std::wstring& working = entry->working_directory.empty() ? runtime_ : entry->working_directory;
++  HANDLE job = nullptr;
++  status = InstallationJob(*entry, &job);
++  if (status != ERROR_SUCCESS) return status;
+   const AuthorityLaunchSpec spec{binary.c_str(), working.c_str(), arguments, environment,
+-      capabilities, identity_->sid(), identity_->session(), &cleanup_.profile_error, nullptr,
++      capabilities, identity_->sid(), identity_->session(), &cleanup_.profile_error, job,
+       identity_->session_objects(), identity_->app_container_objects(), entry->profile->package_objects.get()};
+   status = AuthorityLaunch::Create(identity_->token(), spec, &entry->launch, launch_stage);
+   if (status == ERROR_SUCCESS) {
+@@ -807,6 +866,202 @@ DWORD Session::PinApk(const std::wstring& path, const std::wstring& digest, Hand
+   return status == ERROR_SUCCESS && actual != digest ? ERROR_FILE_INVALID : status;
+ }
+
++DWORD Session::InstallationJob(const Entry& entry, HANDLE* job) {
++  if (entry.system_server) { *job = system_job_.get(); return *job ? ERROR_SUCCESS : ERROR_NOT_READY; }
++  if (!ValidInstallationOwner(entry.installation)) return ERROR_INVALID_PARAMETER;
++  const auto key = std::make_pair(entry.package, entry.installation);
++  auto found = installation_jobs_.find(key);
++  if (found == installation_jobs_.end()) {
++    if (installation_jobs_.size() >= 128) return ERROR_NOT_ENOUGH_QUOTA;
++    Handle owned;
++    const DWORD status = CreateOwnedJob(&owned);
++    if (status != ERROR_SUCCESS) return status;
++    found = installation_jobs_.emplace(key, std::move(owned)).first;
++  }
++  *job = found->second.get();
++  return ERROR_SUCCESS;
++}
++
++DWORD Session::PinOwner(const Entry& entry, Handle* marker) {
++  HANDLE raw = nullptr;
++  const DWORD status = PinProtectedOwnerMarker(data_, entry.package, entry.installation, &raw);
++  if (status == ERROR_SUCCESS) marker->reset(raw);
++  return status;
++}
++
++DWORD Session::PrepareOwnerDirectory(const std::wstring& package, std::wstring* directory) {
++  // This is a file key only, never an AppContainer identity used for launch.
++  std::wstring key;
++  DWORD status = LegacyProtectedApplicationProfileName(desktop_sid_, package, std::wstring(64, L'0'), &key);
++  if (status != ERROR_SUCCESS) return status;
++  *directory = owner_state_ + L"\\" + key;
++  return PrivateDirectory(*directory, nullptr, false);
++}
++
++DWORD Session::StopLegacyProfile(PSID profile) {
++  // Older machine-authority profiles did not include an installation owner.
++  // Retire matching processes under the authority's own private user before
++  // removing their current-tree grants. PPL/system processes that cannot be
++  // opened are not processes this non-PPL lowbox launcher can have created.
++  Handle snapshot(CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0));
++  if (snapshot.get() == INVALID_HANDLE_VALUE) return GetLastError();
++  PROCESSENTRY32W item{}; item.dwSize = sizeof(item);
++  if (!Process32FirstW(snapshot.get(), &item)) return GetLastError();
++  do {
++    if (!item.th32ProcessID || item.th32ProcessID == GetCurrentProcessId()) continue;
++    Handle process(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE | SYNCHRONIZE, FALSE, item.th32ProcessID));
++    if (!process || WaitForSingleObject(process.get(), 0) != WAIT_TIMEOUT) continue;
++    HANDLE raw_token = nullptr;
++    if (!OpenProcessToken(process.get(), TOKEN_QUERY, &raw_token)) continue;
++    Handle token(raw_token);
++    alignas(TOKEN_USER) BYTE user[sizeof(TOKEN_USER) + SECURITY_MAX_SID_SIZE]{};
++    alignas(TOKEN_APPCONTAINER_INFORMATION) BYTE app[sizeof(TOKEN_APPCONTAINER_INFORMATION) + SECURITY_MAX_SID_SIZE]{};
++    DWORD size = 0;
++    if (!GetTokenInformation(token.get(), TokenUser, user, sizeof(user), &size) ||
++        !EqualSid(reinterpret_cast<TOKEN_USER*>(user)->User.Sid, identity_->sid())) continue;
++    if (!GetTokenInformation(token.get(), TokenAppContainerSid, app, sizeof(app), &size)) return GetLastError();
++    PSID actual = reinterpret_cast<TOKEN_APPCONTAINER_INFORMATION*>(app)->TokenAppContainer;
++    if (!actual || !EqualSid(actual, profile)) continue;
++    if (!TerminateProcess(process.get(), ERROR_OPERATION_ABORTED) &&
++        WaitForSingleObject(process.get(), 0) != WAIT_OBJECT_0) return GetLastError();
++    if (WaitForSingleObject(process.get(), 5000) != WAIT_OBJECT_0) return ERROR_TIMEOUT;
++  } while (Process32NextW(snapshot.get(), &item));
++  return GetLastError() == ERROR_NO_MORE_FILES ? ERROR_SUCCESS : GetLastError();
++}
++
++DWORD Session::PrepareOwner(Entry& entry, ProtectedOwnerJournal& journal) {
++  bool retired = false;
++  DWORD status = journal.Retired(entry.installation, &retired);
++  if (status != ERROR_SUCCESS || retired) return status != ERROR_SUCCESS ? status : ERROR_ACCESS_DENIED;
++  ProtectedOwnerRecord previous{}; bool exists = false;
++  status = journal.Current(&previous, &exists);
++  if (status != ERROR_SUCCESS) return status;
++  // This one-run route has no installed signing-lineage transaction. A package
++  // spelling and retained owner marker cannot authorize a different signer.
++  if (exists && entry.installation == previous.installation && entry.signer != previous.signer)
++    return ERROR_ACCESS_DENIED;
++  const bool changed = !exists || entry.installation != previous.installation;
++  if (exists && changed) {
++    // Persist the fence before killing anything or changing a new owner's ACLs.
++    status = journal.Retire(previous);
++    if (status != ERROR_SUCCESS) return status;
++    auto job = installation_jobs_.find(std::make_pair(entry.package, std::wstring(previous.installation)));
++    if (job != installation_jobs_.end()) {
++      status = StopOwnedJob(job->second.get());
++      if (status != ERROR_SUCCESS) return status;
++      installation_jobs_.erase(job);
++    }
++    std::vector<ProtectedOwnerRecord> old_profiles;
++    status = journal.Profiles(previous.installation, &old_profiles);
++    if (status != ERROR_SUCCESS) return status;
++    // The verified head itself remains authority even if an immutable history
++    // file was lost. Missing history must not skip its active-tree checks.
++    if (std::none_of(old_profiles.begin(), old_profiles.end(), [&](const auto& record) {
++          return std::wstring_view(record.signer) == previous.signer;
++        })) old_profiles.push_back(previous);
++    for (const auto& old : old_profiles) {
++      std::wstring profile;
++      status = ProtectedProfileName(desktop_sid_, entry.package, old.signer, old.installation, &profile);
++      if (status != ERROR_SUCCESS) return status;
++      container::Sid retired;
++      status = container::ContainerSid(profile, &retired);
++      if (status == ERROR_SUCCESS) status = StopLegacyProfile(retired.value);
++      if (status != ERROR_SUCCESS) return status;
++      for (const auto& path : {data_ + L"\\data\\" + entry.package,
++           data_ + L"\\user_de\\0\\" + entry.package}) {
++        if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES) {
++          const DWORD error = GetLastError();
++          if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) continue;
++          return error;
++        }
++        // A recreated marker is not proof that existing userdata is fresh.
++        // Retain old contents and fail instead of regranting them to a new SID.
++        status = container::RequireNoGrantTree(path, retired.value);
++        if (status != ERROR_SUCCESS) return status;
++      }
++      if (std::find(retired_profiles_.begin(), retired_profiles_.end(), profile) == retired_profiles_.end()) {
++        if (retired_profiles_.size() >= 256) return ERROR_NOT_ENOUGH_QUOTA;
++        retired_profiles_.push_back(std::move(profile));
++      }
++    }
++    for (auto& [id, old] : processes_) {
++      if (old->installation != previous.installation || old->package != entry.package) continue;
++      status = TerminateTree(*old, ERROR_OPERATION_ABORTED);
++      if (status != ERROR_SUCCESS) return status;
++      old->apk_pin.reset();
++    }
++  }
++  if (changed) {
++    std::wstring legacy_name;
++    status = LegacyProtectedApplicationProfileName(desktop_sid_, entry.package, entry.signer, &legacy_name);
++    container::Sid legacy;
++    if (status == ERROR_SUCCESS) status = container::ContainerSid(legacy_name, &legacy);
++    if (status == ERROR_SUCCESS) status = StopLegacyProfile(legacy.value);
++    if (status != ERROR_SUCCESS) return status;
++    // These are verified CURRENT paths only. An unsupported descendant prevents
++    // admission; no archive or trash tree is visited or given the new SID.
++    for (const auto& path : {entry.apk.substr(0, entry.apk.find_last_of(L'\\')),
++         data_ + L"\\data\\" + entry.package, data_ + L"\\user_de\\0\\" + entry.package,
++         data_ + L"\\system\\storage-policy\\" + entry.package}) {
++      if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES) {
++        if (GetLastError() == ERROR_FILE_NOT_FOUND || GetLastError() == ERROR_PATH_NOT_FOUND) continue;
++        return GetLastError();
++      }
++      if (!exists && (path == data_ + L"\\data\\" + entry.package ||
++          path == data_ + L"\\user_de\\0\\" + entry.package)) {
++        status = container::RequireAppTrusteesTree(path, {legacy.value, service_profile_->sid.value});
++        if (status != ERROR_SUCCESS) return status;
++      }
++      status = container::RevokeTree(path, legacy.value);
++      if (status != ERROR_SUCCESS) return status;
++    }
++    const std::wstring profile = data_ + L"\\misc\\profiles\\cur\\0\\" + entry.package;
++    if (GetFileAttributesW(profile.c_str()) != INVALID_FILE_ATTRIBUTES) {
++      const std::wstring archive = root_ + L"\\retired-app-state";
++      status = PrivateDirectory(archive, nullptr, false);
++      if (status != ERROR_SUCCESS) return status;
++      GUID nonce{};
++      if (CoCreateGuid(&nonce) != S_OK) return ERROR_GEN_FAILURE;
++      wchar_t suffix[40]{};
++      if (!StringFromGUID2(nonce, suffix, 40)) return ERROR_GEN_FAILURE;
++      if (!MoveFileExW(profile.c_str(), (archive + L"\\profile-" + suffix).c_str(), MOVEFILE_WRITE_THROUGH)) return GetLastError();
++      if (!CreateDirectoryW(profile.c_str(), nullptr)) return GetLastError();
++      status = container::Grant(profile, service_profile_->sid.value, FILE_ALL_ACCESS, true);
++      if (status != ERROR_SUCCESS) return status;
++    } else if (GetLastError() != ERROR_FILE_NOT_FOUND && GetLastError() != ERROR_PATH_NOT_FOUND) return GetLastError();
++  }
++  ProtectedOwnerRecord current{};
++  std::copy(entry.installation.begin(), entry.installation.end(), current.installation);
++  std::copy(entry.signer.begin(), entry.signer.end(), current.signer);
++  return journal.Publish(current);
++}
++
++void Session::CleanupOwners(bool stopping) {
++  const ULONGLONG now = GetTickCount64();
++  if (!stopping && now < next_owner_cleanup_) return;
++  next_owner_cleanup_ = now + 5000;
++  unsigned visited = 0;
++  for (auto at = retired_profiles_.begin(); at != retired_profiles_.end() && visited < 8;) {
++    ++visited;
++    const bool retained = std::any_of(processes_.begin(), processes_.end(),
++        [&](const auto& item) { return item.second->profile && item.second->profile->name == *at; });
++    if (retained) { ++at; continue; }
++    DWORD status = ERROR_SUCCESS;
++    if (!ImpersonateLoggedOnUser(identity_->token())) status = GetLastError();
++    else {
++      status = container::DeleteContainerProfile(*at);
++      if (!RevertToSelf()) std::abort();
++    }
++    if (status == ERROR_SUCCESS) at = retired_profiles_.erase(at);
++    else {
++      // Keep the exact queued identity and immutable journal; a failed cleanup
++      // never removes its retirement fence or claims profile deletion.
++      RecordStartup(directory_, "profile.retired-cleanup", status);
++      ++at;
++    }
++  }
++}
++
+ DWORD Session::GrantAppFiles(Entry& entry) {
+   const std::wstring code = entry.apk.substr(0, entry.apk.find_last_of(L'\\'));
+   DWORD status = container::Grant(code, entry.profile->sid.value, FILE_GENERIC_READ | FILE_GENERIC_EXECUTE, true);
+@@ -839,13 +1094,15 @@ DWORD Session::Spawn(Entry& requester, const wire::Request& request,
+   // admitted. Command exits have a separate bounded short-lived history.
+   if (applications >= 64) return ERROR_NOT_ENOUGH_QUOTA;
+   wire::Reader reader(payload);
+-  std::u16string package, process, apk, digest, signer;
+-  if (!reader.Read(&package) || !reader.Read(&process) || !reader.Read(&apk) ||
+-      !reader.Read(&digest) || !reader.Read(&signer)) return ERROR_INVALID_DATA;
++  wire::SpawnIdentity identity;
++  if (!wire::ReadSpawnIdentity(reader, &identity)) return ERROR_INVALID_DATA;
+   auto entry = std::make_unique<Entry>();
+-  entry->package = Wide(package); entry->apk = Wide(apk); entry->digest = Wide(digest); entry->signer = Wide(signer);
+-  const std::wstring process_name = Wide(process);
++  entry->package = Wide(identity.package); entry->apk = Wide(identity.apk);
++  entry->digest = Wide(identity.digest); entry->signer = Wide(identity.signer);
++  entry->installation = Wide(identity.installation);
++  const std::wstring process_name = Wide(identity.process);
+   if (!PackageName(entry->package) || !HexDigest(entry->digest) || !HexDigest(entry->signer) ||
++      !ValidInstallationOwner(entry->installation) ||
+       (process_name != entry->package && !process_name.starts_with(entry->package + L":"))) return ERROR_INVALID_PARAMETER;
+   std::vector<std::wstring> environment;
+   std::map<std::wstring, bool> keys;
+@@ -858,13 +1115,25 @@ DWORD Session::Spawn(Entry& requester, const wire::Request& request,
+   }
+   DWORD status = PinApk(entry->apk, entry->digest, &entry->apk_pin);
+   if (status != ERROR_SUCCESS) return status;
++  // The protected marker is the installer's durable authority, not a caller's
++  // UUID assertion. Keep the exact marker pinned without DELETE sharing until
++  // all ACL work, enrollment and the suspended child's resume have completed.
++  Handle owner_marker;
++  status = PinOwner(*entry, &owner_marker);
++  if (status != ERROR_SUCCESS) return status;
++  std::wstring owner_directory;
++  status = PrepareOwnerDirectory(entry->package, &owner_directory);
++  ProtectedOwnerJournal owner_journal;
++  if (status == ERROR_SUCCESS) status = owner_journal.Open(owner_directory);
++  if (status == ERROR_SUCCESS) status = PrepareOwner(*entry, owner_journal);
++  if (status != ERROR_SUCCESS) return status;
+   entry->uid = request.uid;
+   entry->internet = std::find(environment.begin(), environment.end(), L"GESHER_INET=0") == environment.end();
+   entry->app_environment = environment;
+   entry->parent = requester.registration;
+   entry->root_app = entry->registration = next_id_++;
+   std::wstring profile_name;
+-  status = ProtectedProfileName(desktop_sid_, entry->package, entry->signer, &profile_name);
++  status = ProtectedProfileName(desktop_sid_, entry->package, entry->signer, entry->installation, &profile_name);
+   if (status == ERROR_SUCCESS) status = CreateProfile(profile_name, &entry->profile);
+   if (status == ERROR_SUCCESS) status = GrantAppFiles(*entry);
+   if (status == ERROR_SUCCESS) status = MakeLogs(*entry);
+@@ -1011,6 +1280,42 @@ DWORD Session::Dispatch(Entry& entry, const wire::Request& request,
    }
  }
 
@@ -5963,7 +6530,7 @@ index 77392f4..230e50a 100644
  DWORD Session::ValidateUsbObservation(const Entry& entry, const wire::Request& request,
      const std::vector<std::byte>& payload, UsbQuery* query) try {
    if (WaitForSingleObject(stop_, 0) != WAIT_TIMEOUT) return ERROR_OPERATION_ABORTED;
-@@ -1116,6 +1164,8 @@ void Session::Serve(Entry& entry) {
+@@ -1116,6 +1421,8 @@ void Session::Serve(Entry& entry) {
          reply.status = ValidateUsbObservation(entry, request, payload, &query);
        }
        if (reply.status == ERROR_SUCCESS) reply.status = ObserveUsb(entry, query, &reply);
@@ -5972,7 +6539,36 @@ index 77392f4..230e50a 100644
      } else {
        std::lock_guard lock(mutex_);
        reply.status = Dispatch(entry, request, payload, &reply);
-@@ -1264,7 +1314,8 @@ DWORD Session::Run(const std::wstring& executable, std::unique_ptr<HostDisk> sel
+@@ -1200,12 +1507,19 @@ void Session::Reap() {
+     // The workers and media brokers can finish while acquiring their own
+     // locks. Never join or destroy those owners while holding mutex_.
+     for (auto& entry : completed) if (entry->worker.joinable()) entry->worker.join();
++    completed.clear();
++    {
++      std::lock_guard lock(mutex_);
++      CleanupOwners();
++    }
+   }
+ }
+
+ DWORD Session::Run(const std::wstring& executable, std::unique_ptr<HostDisk> selected) {
+   selected_ = std::move(selected);
+   runtime_ = directory_ + L"\\runtime";
++  const DWORD job_status = CreateOwnedJob(&system_job_);
++  if (job_status != ERROR_SUCCESS) return job_status;
+   HANDLE desktop_raw = nullptr;
+   startup_stage_ = "runtime.wts-desktop-token";
+   if (!WTSQueryUserToken(options_.desktop_session, &desktop_raw)) return GetLastError();
+@@ -1249,7 +1563,7 @@ DWORD Session::Run(const std::wstring& executable, std::unique_ptr<HostDisk> sel
+   const std::wstring broker_image = runtime_ + L"\\binderd.exe";
+   const std::wstring broker_arguments = L"--gesher-protected-binder " + registration + L" " + listeners + L" " + binder_data_;
+   const AuthorityLaunchSpec broker_spec{broker_image.c_str(), runtime_.c_str(), broker_arguments,
+-      environment, capabilities, identity_->sid(), identity_->session(), &cleanup_.profile_error, nullptr,
++      environment, capabilities, identity_->sid(), identity_->session(), &cleanup_.profile_error, system_job_.get(),
+       identity_->session_objects(), identity_->app_container_objects(), service_profile_->package_objects.get()};
+   startup_stage_ = "runtime.create-binder-broker";
+   status = AuthorityLaunch::Create(identity_->token(), broker_spec, &broker_, &launch_stage_);
+@@ -1264,14 +1578,15 @@ DWORD Session::Run(const std::wstring& executable, std::unique_ptr<HostDisk> sel
    status = BinderListenerFactory::Create(*broker_, binder_data_, packages, &factory_);
    if (status != ERROR_SUCCESS) return status;
    startup_stage_ = "runtime.binder-authority-connect";
@@ -5982,7 +6578,30 @@ index 77392f4..230e50a 100644
    if (status != ERROR_SUCCESS) return status;
    listener_worker_ = std::thread([this] { listeners_->ServeListeners(*factory_); SetEvent(stop_); });
    const std::wstring manager_image = runtime_ + L"\\servicemanager.exe";
-@@ -1598,6 +1649,7 @@ DWORD RunProtectedAndroid(const std::wstring& directory, const std::wstring& exe
+   const std::wstring manager_arguments = L"--gesher-protected-services " + binder_data_ + L" " +
+       std::to_wstring(GetCurrentProcessId()) + L" " + std::to_wstring(options_.desktop_session);
+   const AuthorityLaunchSpec manager_spec{manager_image.c_str(), runtime_.c_str(), manager_arguments,
+-      environment, capabilities, identity_->sid(), identity_->session(), &cleanup_.profile_error, nullptr,
++      environment, capabilities, identity_->sid(), identity_->session(), &cleanup_.profile_error, system_job_.get(),
+       identity_->session_objects(), identity_->app_container_objects(), service_profile_->package_objects.get()};
+   startup_stage_ = "runtime.create-service-manager";
+   status = AuthorityLaunch::Create(identity_->token(), manager_spec, &manager_, &launch_stage_);
+@@ -1423,12 +1738,13 @@ DWORD Session::SpawnCommand(Entry& requester, const wire::Request& request,
+   child->package = root->package;
+   child->digest = root->digest;
+   child->signer = root->signer;
++  child->installation = root->installation;
+   child->apk = root->apk;
+   child->working_directory = Wide(working);
+   if (!child->working_directory.empty()) {
+     if (!LocalPath(child->working_directory)) return ERROR_INVALID_PARAMETER;
+     const std::array<std::wstring, 4> permitted = {runtime_, data_ + L"\\data\\" + root->package,
+-        data_ + L"\\user_de\\0\\" + root->package, root_ + L"\\tmp\\" + root->package};
++        data_ + L"\\user_de\\0\\" + root->package, Temporary(*root)};
+     bool allowed = false;
+     for (const auto& path : permitted) {
+       if (Same(child->working_directory, path) || (child->working_directory.size() > path.size() &&
+@@ -1598,6 +1914,7 @@ DWORD RunProtectedAndroid(const std::wstring& directory, const std::wstring& exe
    ProtectedIdentityCleanup cleanup;
    const char* stage = "runtime.import-selection";
    const char* launch_stage = "none";
@@ -5990,7 +6609,7 @@ index 77392f4..230e50a 100644
    DWORD status = ERROR_SUCCESS;
    try {
      std::unique_ptr<HostDisk> selected;
-@@ -1607,6 +1659,7 @@ DWORD RunProtectedAndroid(const std::wstring& directory, const std::wstring& exe
+@@ -1607,6 +1924,7 @@ DWORD RunProtectedAndroid(const std::wstring& directory, const std::wstring& exe
        status = session.Run(executable, std::move(selected));
        stage = session.startup_stage();
        launch_stage = session.launch_stage();
@@ -5998,7 +6617,7 @@ index 77392f4..230e50a 100644
      }  // Guest teardown and profile unload finish before reporting the status.
    } catch (const std::bad_alloc&) {
      stage = "runtime.allocation-failure";
-@@ -1616,7 +1669,9 @@ DWORD RunProtectedAndroid(const std::wstring& directory, const std::wstring& exe
+@@ -1616,7 +1934,9 @@ DWORD RunProtectedAndroid(const std::wstring& directory, const std::wstring& exe
      status = ERROR_NOT_READY;
    }
    if (status != ERROR_SUCCESS || cleanup.profile_error.load() != ERROR_SUCCESS ||
@@ -6010,11 +6629,30 @@ index 77392f4..230e50a 100644
    const DWORD profile_error = cleanup.profile_error.load();
    return profile_error != ERROR_SUCCESS ? profile_error : cleanup.privilege_restore_error;
 diff --git a/compat/usb_storage/protected_runtime_wire.h b/compat/usb_storage/protected_runtime_wire.h
-index dcede62..6581ec0 100644
+index dcede62..f9d70bc 100644
 --- a/compat/usb_storage/protected_runtime_wire.h
 +++ b/compat/usb_storage/protected_runtime_wire.h
-@@ -16,7 +16,7 @@ inline constexpr uint32_t kVersion = 3;
+@@ -12,11 +12,25 @@
+
+ namespace gesher::usb_storage::runtime_wire {
+ inline constexpr uint32_t kMagic = 0x47525054;
+-inline constexpr uint32_t kVersion = 3;
++inline constexpr uint32_t kVersion = 4;
  inline constexpr uint32_t kMaximumPayload = 64 * 1024;
++template <class Character>
++inline bool ValidInstallationOwner(std::basic_string_view<Character> owner) {
++  if (owner.size() != 36) return false;
++  bool nonzero = false;
++  for (size_t i = 0; i < owner.size(); ++i) {
++    if (i == 8 || i == 13 || i == 18 || i == 23) {
++      if (owner[i] != '-') return false;
++    } else {
++      if ((owner[i] < '0' || owner[i] > '9') && (owner[i] < 'a' || owner[i] > 'f')) return false;
++      nonzero |= owner[i] != '0';
++    }
++  }
++  return nonzero;
++}
  enum class Operation : uint32_t {
    kSpawn = 1, kStatus, kKill, kGrantBlock, kRevokeBlock, kInitialize, kSpawnCommand, kSignal,
 -  kUsbObservation
@@ -6022,6 +6660,20 @@ index dcede62..6581ec0 100644
  };
  struct Request {
    uint32_t magic = kMagic;
+@@ -98,4 +112,13 @@ class Reader {
+   const std::vector<std::byte>& data_;
+   size_t offset_ = 0;
+ };
++
++struct SpawnIdentity {
++  std::u16string package, process, apk, digest, signer, installation;
++};
++inline bool ReadSpawnIdentity(Reader& reader, SpawnIdentity* identity) {
++  return identity && reader.Read(&identity->package) && reader.Read(&identity->process) &&
++      reader.Read(&identity->apk) && reader.Read(&identity->digest) && reader.Read(&identity->signer) &&
++      reader.Read(&identity->installation) && ValidInstallationOwner(std::u16string_view(identity->installation));
++}
+ }  // namespace gesher::usb_storage::runtime_wire
 diff --git a/tests/native/ofd_transfer_host_test.cc.in b/tests/native/ofd_transfer_host_test.cc.in
 index 5b20c7c..e2ba05f 100644
 --- a/tests/native/ofd_transfer_host_test.cc.in
