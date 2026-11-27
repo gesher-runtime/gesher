@@ -41,6 +41,7 @@
 #include "../posix/src/standalone_input.h"
 #include "../posix/src/internal.h"
 #include "../posix/src/ofd_internal.h"
+#include "../posix/src/system_linker.h"
 #include "rooted_storage_server.h"
 #include "services_zygote.h"
 #include "legacy_keystore_archive.h"
@@ -341,6 +342,13 @@ static jint Zygote_grantToCapability(JNIEnv* env, jclass, jstring path, jstring 
     return static_cast<jint>(gesher::zygote::GrantToCapability(
         ZygoteString(env, path), ZygoteString(env, capability), static_cast<uint32_t>(access),
         inherit == JNI_TRUE));
+}
+
+static jint Zygote_prepareSystemLinker(JNIEnv*, jclass) {
+    const auto& path = gesher::system_linker::Publish();
+    if (path.empty()) return ERROR_FILE_NOT_FOUND;
+    return static_cast<jint>(gesher::zygote::GrantToCapability(
+        std::u16string(path.begin(), path.end()), u"gesherRuntimeFiles", FILE_GENERIC_READ, false));
 }
 
 static jint Zygote_grantPropertyAreaRead(JNIEnv* env, jclass, jstring name) {
@@ -1065,6 +1073,7 @@ static const JNINativeMethod gZygoteMethods[] = {
      GESHER_JNI(Zygote_protectPrivateStorage)},
     {"nativeGrantToCapability", "(Ljava/lang/String;Ljava/lang/String;IZ)I",
      GESHER_JNI(Zygote_grantToCapability)},
+    {"nativePrepareSystemLinker", "()I", GESHER_JNI(Zygote_prepareSystemLinker)},
     {"nativeGrantPropertyAreaRead", "(Ljava/lang/String;)I", GESHER_JNI(Zygote_grantPropertyAreaRead)},
     {"nativeDeleteAppContainer", "(Ljava/lang/String;)I", GESHER_JNI(Zygote_deleteAppContainer)},
     {"nativeSpawnCompiler", "(Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;II)I",

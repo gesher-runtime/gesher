@@ -651,6 +651,8 @@ int remove(const char* path) {
 
 int unlinkat(int dirfd, const char* path, int flags) {
   if ((flags & ~AT_REMOVEDIR) != 0) return errno = EINVAL, -1;
+  int result;
+  if (gesher::DeleteAtObject(dirfd, path, (flags & AT_REMOVEDIR) != 0, &result)) return result;
   std::string resolved;
   if (!gesher::ResolveAt(dirfd, path, &resolved)) return -1;
   return (flags & AT_REMOVEDIR) != 0 ? rmdir(resolved.c_str()) : unlink(resolved.c_str());

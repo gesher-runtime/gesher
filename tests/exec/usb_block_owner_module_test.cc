@@ -11,6 +11,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <string>
 
 extern "C" __declspec(dllexport)
 int UsbOwnerAttach(HANDLE pipe, HANDLE gate, HANDLE revoked) {
@@ -39,14 +40,37 @@ extern "C" __declspec(dllexport) int UsbOwnerQuery() {
   const int offset = openat(directory, "start", O_RDONLY);
   if (offset < 0 || read(offset, value, sizeof(value)) != 2 || std::memcmp(value, "1\n", 2)) return -8;
   close(offset);
+  if (lseek(directory, 1, SEEK_SET) != 1) return -9;
   DIR* entries = fdopendir(dup(directory));
   if (!entries) return -9;
+  bool cursor_valid = telldir(entries) == 1;
+  const dirent* advanced = readdir(entries);
+  cursor_valid &= advanced && std::strcmp(advanced->d_name, ".") != 0 && telldir(entries) > 1;
+  const long cookie = telldir(entries);
+  advanced = readdir(entries);
+  const std::string next = advanced ? advanced->d_name : "";
+  seekdir(entries, cookie);
+  advanced = readdir(entries);
+  cursor_valid &= advanced && next == advanced->d_name;
+  rewinddir(entries);
+  advanced = readdir(entries);
+  cursor_valid &= advanced && std::strcmp(advanced->d_name, ".") == 0;
   bool partition_seen = false;
   while (const dirent* item = readdir(entries)) partition_seen |= std::strcmp(item->d_name, "partition") == 0;
   closedir(entries);
-  const bool no_file_read = read(directory, value, 1) == -1 && errno == EISDIR;
+  bool directory_mode_errors = true;
+  const int path_only = open("/sys/dev/block/8:17", O_PATH | O_DIRECTORY);
+  for (unsigned length = 0; length <= 1; ++length) {
+    directory_mode_errors &= read(directory, value, length) == -1 && errno == EISDIR;
+    directory_mode_errors &= write(directory, value, length) == -1 && errno == EBADF;
+    if (path_only >= 0) {
+      directory_mode_errors &= read(path_only, value, length) == -1 && errno == EBADF;
+      directory_mode_errors &= write(path_only, value, length) == -1 && errno == EBADF;
+    }
+  }
   close(directory);
-  if (!partition_seen || !no_file_read) return -10;
+  if (path_only >= 0) close(path_only);
+  if (!partition_seen || path_only < 0 || !directory_mode_errors || !cursor_valid) return -10;
   if (lstat("/sys/dev/block/8:16", &info) || !S_ISLNK(info.st_mode)) return -11;
   if (lstat("/sys/block/sdb/device", &info) || !S_ISLNK(info.st_mode)) return -12;
   return 1;

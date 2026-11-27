@@ -21,8 +21,11 @@ ARCHIVE_VERIFIER_SHA256 = '8e62fae9c0b12f9cfa14665b4baab386270e95d69456f6e8b086e
 MANIFEST = 'tools/net-tcp-priority/qualified/scandir-consolidation-source.json'
 PATCH = 'tools/net-tcp-priority/qualified/scandir-consolidation-source.patch'
 ADAPTER = 'tools/scandir_consolidation.py'
-MANIFEST_SHA256 = '9aeb76e1b306b8e75793591b4e5fb909ab3dbcf7d76cda41d3a64de81490af80'
+MANIFEST_SHA256 = '8fa28b50af4a4f0de3f1efea45b96cd41c334cbbf8cd672df2b9bb50bc4d0d14'
 ORIGINAL_ADAPTER_SHA256 = 'f6bfd6c916300cbf95b31a6de4ad394b3c6da13cdd189339c0fc823a167481cd'
+NATIVE2_ADAPTER = 'tools/scandir_native2_projection.py'
+NATIVE2_ADAPTER_SHA256 = '00fdced959bf7b4783b1dcd0aa6384ed9e4d9bdf48cf54a984415243a756161b'
+
 
 
 def sha(data):
@@ -189,7 +192,22 @@ def negative_controls(report, current, baseline, archived, helper, expected_help
 
 
 def historical_sources(root, report, members, expected_helper):
-    current = {path: (root / path).read_bytes() for path in report['sources']}
+    live_current = {path: (root / path).read_bytes() for path in report['sources']}
+    # Native2 repairs descriptor ownership/relative operations. Its source-only
+    # projection restores the exact qualified endpoint before the unchanged
+    # whole-directory equality, archive proof and original controls below.
+    adapter_source = (root / NATIVE2_ADAPTER).read_bytes()
+    require(sha(adapter_source) == NATIVE2_ADAPTER_SHA256,
+            'pinned Native2 compatibility adapter')
+    # Bind execution to those exact bytes, including during local repinning.
+    import types
+    native2 = types.ModuleType('scandir_native2_projection')
+    exec(compile(adapter_source, str(root / NATIVE2_ADAPTER), 'exec'), native2.__dict__)
+    native2_manifest = (root / native2.MANIFEST).read_bytes()
+    native2_patch = (root / native2.PATCH).read_bytes()
+    native2_baseline = native2.baseline_source(root, live_current, native2_manifest, native2_patch)
+    current = native2.project(live_current, native2_baseline, native2_manifest, native2_patch)
+    native2.negative_controls(live_current, native2_baseline, native2_manifest, native2_patch)
     baseline = {path: subprocess.check_output(['git', '-C', str(root), 'show', BASELINE + ':' + path])
                 for path in report['sources']}
     archived = {path: members['repo/' + path] for path in (original.CI, original.VERIFIER)}

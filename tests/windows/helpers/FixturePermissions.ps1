@@ -34,8 +34,9 @@ function Grant-FixturePermissions([string] $Exe, [string[]] $VmArguments,
   }
   $arguments = $VmArguments + @('-cp', $TestDex,
     'gesher.services.FixturePermissionSetup') + $identity + $Permissions
+  $operatorUid = if ($Installed) { '2000' } else { '1000' }
   $out = Invoke-FixtureProcess $Exe $arguments 90 @{
-    GESHER_UID = '1000'; GESHER_BINDER_UID = '1000'
+    GESHER_UID = $operatorUid; GESHER_BINDER_UID = $operatorUid
   }
   $code = $LASTEXITCODE
   if ($Installed) {

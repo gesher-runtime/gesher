@@ -213,8 +213,13 @@ $env:GESHER_LOGS = NoDrive "$root/logs-windows4"
 $env:GESHER_SHORTCUTS = '0'
 New-Item -ItemType Directory -Force "$root/data-windows4" | Out-Null
 W3SeparateWindows windows4 com.gesher.winapp "$root/data-windows4"
+$w4DeviceService = Join-Path $root 'system/etc/windows4_tsf_service.dll'
 try {
-  $env:GESHER_TSF_TEST_SERVICE = [IO.Path]::GetFullPath("$Dir/windows4_tsf_service.dll")
+  # Give the isolated app read/execute access to the exact test service via
+  # ANDROID_ROOT. Its build directory is outside the app's runtime grant.
+  New-Item -ItemType Directory -Force (Split-Path -Parent $w4DeviceService) | Out-Null
+  Copy-Item -LiteralPath "$Dir/windows4_tsf_service.dll" -Destination $w4DeviceService
+  $env:GESHER_TSF_TEST_SERVICE = [IO.Path]::GetFullPath($w4DeviceService)
   W4Run 'device, TSF' @('com.gesher.app.Launcher', 'launch', $w4Apk, '--window', '--activity', 'com.gesher.winapp.TsfActivity') {
     param($window, $read)
     W4Tsf device $window $read
@@ -266,6 +271,7 @@ try {
   $shutdown.CreateNoWindow = $true
   $stop = [Diagnostics.Process]::Start($shutdown)
   if (-not $stop.WaitForExit(120000)) { $stop.Kill($true); Write-Host 'FAIL  windows4: device shutdown timed out'; $script:failed++ }
+  Remove-Item -LiteralPath $w4DeviceService -ErrorAction SilentlyContinue
   $env:ANDROID_DATA = $w4Data
   if ($w4Logs) { $env:GESHER_LOGS = $w4Logs } else { Remove-Item Env:GESHER_LOGS -ErrorAction SilentlyContinue }
   if ($w4Shortcuts) { $env:GESHER_SHORTCUTS = $w4Shortcuts } else { Remove-Item Env:GESHER_SHORTCUTS -ErrorAction SilentlyContinue }

@@ -76,6 +76,7 @@ public final class Zygote {
     static native int nativeProtectPrivateStorage(String path);
     static native int nativeGrantToCapability(String path, String capability, int access,
             boolean inherit);
+    static native int nativePrepareSystemLinker();
     static native int nativeGrantPropertyAreaRead(String container);
     static native int nativeDeleteAppContainer(String container);
     static native int nativeSpawnCompiler(String commandLine, String[] setEnv, String[] unsetEnv,

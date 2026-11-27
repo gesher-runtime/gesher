@@ -22,9 +22,13 @@ std::string Image();
 // The Windows path of the file on disk holding Image(), under
 // $ANDROID_DATA/system/gesher-linker/<hash of the bytes>/linker64, written
 // once (image directories unused for a week and dead processes' temporary
-// files are pruned); empty when it cannot be written. Final
-// (GetFinalPathNameByHandleW) form, without a \\?\ prefix.
+// files are pruned by the host). Contained processes only read and verify the
+// image the desktop supervisor published. Empty when the image is unavailable.
 const std::wstring& File();
+
+// Host-only publication entry point. The host grants read-only access to the
+// returned file before starting a contained process.
+const std::wstring& Publish();
 
 // Whether the Linux path `path` names kPath: absolute, with empty and "."
 // components dropped and ".." resolved, no trailing slash.
@@ -41,6 +45,9 @@ int RefuseChange(const char* path);
 // kPath. A process that has not used the name compares with the file where
 // File() puts it, if it exists, without writing it.
 bool IsFile(const std::wstring& windows);
+
+// Compare the kernel mapping's NT path without opening a DOS drive namespace.
+bool IsMappedNtName(const std::wstring& name);
 
 // The same by file identity (FileIdInfo: 64-bit volume serial number and
 // 128-bit file ID), whatever name or fd reached the file: a symbolic or hard

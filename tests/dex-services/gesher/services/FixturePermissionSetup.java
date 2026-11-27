@@ -16,6 +16,7 @@ import com.gesher.server.CallerIdentity;
 import com.gesher.server.Device;
 import com.gesher.server.PackageManagerService;
 import com.gesher.server.PermissionPolicy;
+import com.gesher.server.Zygote;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.List;
@@ -39,10 +40,16 @@ public final class FixturePermissionSetup {
         }
         String root = System.getenv("ANDROID_ROOT");
         Main.bootstrap("fixture-permissions", root + "/build.prop", root + "/framework/framework-res.apk");
-        if (Process.myUid() != Process.SYSTEM_UID) throw new SecurityException("Test operator requires system UID");
+        int operatorUid = remote ? Process.SHELL_UID : Process.SYSTEM_UID;
+        if (Process.myUid() != operatorUid) throw new SecurityException("Permission fixture has the wrong operator UID");
         if (remote) {
             if (!Device.alive(state, Device.SYSTEM_SERVER) || !Device.alive(state, Device.BINDERD)) {
                 throw new IllegalStateException("Installed fixture device identity is stale");
+            }
+            if ("true".equals(state.getProperty(Device.STATE_PROTECTED))
+                    && !Zygote.nativePrepareProtectedOperator(Device.pid(state, Device.BINDERD),
+                            Device.startTime(state, Device.BINDERD))) {
+                throw new SecurityException("Protected permission operator admission failed");
             }
             grantInstalled(args);
             System.out.flush();

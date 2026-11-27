@@ -223,6 +223,11 @@ function Regions($px, $regions, [switch] $Quiet) {
   $out = @()
   foreach ($r in $regions) {
     $share = if ($r.Count -gt 6) { $r[6] } else { 0.98 }
+    if ($r.Count -lt 6 -or $r[1] -lt 0 -or $r[2] -lt 0 -or $r[3] -gt $px[0] -or $r[4] -gt $px[1] -or
+        $r[3] -le $r[1] -or $r[4] -le $r[2]) {
+      $out += "$($r[0]): invalid region bounds"
+      continue
+    }
     $area = ($r[3] - $r[1]) * ($r[4] - $r[2])
     $n = [GesherWin32]::Count($px, $r[1], $r[2], $r[3], $r[4], $r[5], 40)
     if (-not $Quiet) { Write-Host "INFO  $($r[0]): $n of $area pixels" }

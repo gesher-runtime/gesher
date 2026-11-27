@@ -38,6 +38,7 @@
 #include <map>
 #include <mutex>
 #include <new>
+#include <optional>
 #include <string_view>
 #include <system_error>
 #include <thread>
@@ -199,7 +200,8 @@ DWORD PrivateDirectory(const std::wstring& path, PSID runtime_user = nullptr) {
 // Do not accept a caller-selected filename, export resources, or change the
 // actual startup result if writing diagnostics fails.
 void RecordStartup(const std::wstring& directory, const char* stage, DWORD status,
-                   const ProtectedIdentityCleanup& cleanup = {}, const char* launch_stage = "none") noexcept {
+                   const ProtectedIdentityCleanup& cleanup = {}, const char* launch_stage = "none",
+                   std::optional<DWORD> broker_exit = std::nullopt) noexcept {
   struct PreserveError {
     DWORD value = GetLastError();
     ~PreserveError() { SetLastError(value); }
@@ -235,11 +237,16 @@ void RecordStartup(const std::wstring& directory, const char* stage, DWORD statu
       if (!IsWellKnownSid(principal, WinLocalSystemSid) &&
           !IsWellKnownSid(principal, WinBuiltinAdministratorsSid)) return;
     }
-    char record[256]{};
+    char broker[32]{};
+    if (broker_exit) {
+      std::snprintf(broker, sizeof(broker), " broker_exit=0x%08lx",
+                    static_cast<unsigned long>(*broker_exit));
+    }
+    char record[320]{};
     const int length = std::snprintf(record, sizeof(record),
-        "Gesher protected startup: stage=%s win32=%lu profile_cleanup_win32=%lu privilege_restore_win32=%lu launch_stage=%s\r\n",
+        "Gesher protected startup: stage=%s win32=%lu profile_cleanup_win32=%lu privilege_restore_win32=%lu launch_stage=%s%s\r\n",
         stage, static_cast<unsigned long>(status), static_cast<unsigned long>(cleanup.profile_error.load()),
-        static_cast<unsigned long>(cleanup.privilege_restore_error), launch_stage);
+        static_cast<unsigned long>(cleanup.privilege_restore_error), launch_stage, broker);
     if (length <= 0 || static_cast<size_t>(length) >= sizeof(record)) return;
     LARGE_INTEGER zero{};
     if (!SetFilePointerEx(file.get(), zero, nullptr, FILE_BEGIN) || !SetEndOfFile(file.get())) return;
@@ -423,6 +430,7 @@ class Session {
   DWORD Run(const std::wstring& executable, std::unique_ptr<HostDisk> selected);
   const char* startup_stage() const { return startup_stage_; }
   const char* launch_stage() const { return launch_stage_; }
+  std::optional<DWORD> broker_exit() const { return broker_exit_; }
  private:
   DWORD PrepareData(HANDLE desktop, const std::wstring& executable);
   DWORD CreateProfile(const std::wstring& name, std::shared_ptr<Profile>* profile);
@@ -475,6 +483,7 @@ class Session {
   std::unique_ptr<HostDisk> selected_;
   uint64_t next_id_ = 3;
   bool application_started_ = false;
+  std::optional<DWORD> broker_exit_;
   const char* startup_stage_ = "runtime.begin";
   const char* launch_stage_ = "none";
 };
@@ -1305,7 +1314,8 @@ DWORD Session::Run(const std::wstring& executable, std::unique_ptr<HostDisk> sel
   status = BinderListenerFactory::Create(*broker_, binder_data_, packages, &factory_);
   if (status != ERROR_SUCCESS) return status;
   startup_stage_ = "runtime.binder-authority-connect";
-  status = BinderAuthorityControl::Connect(*broker_, registration, listeners, stop_, &registration_, &listeners_);
+  status = BinderAuthorityControl::Connect(*broker_, registration, listeners, stop_, &registration_,
+                                            &listeners_, &broker_exit_);
   if (status != ERROR_SUCCESS) return status;
   listener_worker_ = std::thread([this] { listeners_->ServeListeners(*factory_); SetEvent(stop_); });
   const std::wstring manager_image = runtime_ + L"\\servicemanager.exe";
@@ -1639,6 +1649,7 @@ DWORD RunProtectedAndroid(const std::wstring& directory, const std::wstring& exe
   ProtectedIdentityCleanup cleanup;
   const char* stage = "runtime.import-selection";
   const char* launch_stage = "none";
+  std::optional<DWORD> broker_exit;
   DWORD status = ERROR_SUCCESS;
   try {
     std::unique_ptr<HostDisk> selected;
@@ -1648,6 +1659,7 @@ DWORD RunProtectedAndroid(const std::wstring& directory, const std::wstring& exe
       status = session.Run(executable, std::move(selected));
       stage = session.startup_stage();
       launch_stage = session.launch_stage();
+      broker_exit = session.broker_exit();
     }  // Guest teardown and profile unload finish before reporting the status.
   } catch (const std::bad_alloc&) {
     stage = "runtime.allocation-failure";
@@ -1657,7 +1669,9 @@ DWORD RunProtectedAndroid(const std::wstring& directory, const std::wstring& exe
     status = ERROR_NOT_READY;
   }
   if (status != ERROR_SUCCESS || cleanup.profile_error.load() != ERROR_SUCCESS ||
-      cleanup.privilege_restore_error != ERROR_SUCCESS) RecordStartup(directory, stage, status, cleanup, launch_stage);
+      cleanup.privilege_restore_error != ERROR_SUCCESS) {
+    RecordStartup(directory, stage, status, cleanup, launch_stage, broker_exit);
+  }
   if (status != ERROR_SUCCESS) return status;
   const DWORD profile_error = cleanup.profile_error.load();
   return profile_error != ERROR_SUCCESS ? profile_error : cleanup.privilege_restore_error;

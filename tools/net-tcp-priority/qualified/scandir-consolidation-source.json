@@ -1,6 +1,6 @@
 {
   "after_sha256": {
-    ".github/workflows/ci.yml": "af7dd96e126aa497bd93eb998eed5f49cf7580080d3bcd1418f6f1819b1c28c4",
+    ".github/workflows/ci.yml": "09d888d18fdfb102db0bf5262a0e3175097149e45ab19ea3f318aa7d35c26e16",
     "compat/bionic/posix_bionic.cc": "9ba77321ff4a4fedd64b9dfc433a5c93349daf6eef90552bda95763b0ef3a531",
     "compat/bionic/shim_internal.h": "d589c64826a3cde8522c58cf5aa18ab6c7a4ef51ae96e00f1d467d5a90831275",
     "tests/native/directory_contract_host_test.cc.in": "6cd6730ccfc054cfef011fb2e5210d1db06d2686a86a3ce464d6cbd6f8d06dfc",
@@ -18,7 +18,7 @@
     "tools/net-tcp-priority/qualified/shared-stdio-source.patch": "ea01987859d3f53e6168db8a40c1e3ed726bdfe3d3e2209eaf00e0d9ab0a4ff0",
     "tools/net-tcp-priority/test-memrchr-policy.py": "f05739ff79cc4c6ea6ddda9703819773ba5407bcd60022bd906080ec6700206b",
     "tools/net-tcp-priority/test-scandir-policy.py": "8a0bc5f04ce128f85c5a9cd439fd4d21bcfc3e8d96f743220813e9373d43c174",
-    "tools/net-tcp-priority/test-selected-policy.py": "2f9b69c933cb23cc8b2898f0bb5c416dc0997000aa02cb0993eb353e159af45f",
+    "tools/net-tcp-priority/test-selected-policy.py": "0dedfe3eba2035bbeb9ab010256e935fdc7ef4be5c5475801b4689ceb8684ce4",
     "tools/test_memrchr_report.py": "9556ec1b47ac82094a55324f512bbda938e687b0578d42a26f52f3048aadaedf",
     "tools/test_scandir_sort.py": "1803419db9667a88427a33735310eb555cec71250cf8d895c2194b67f66ed07a"
   },
@@ -47,7 +47,7 @@
     "tools/test_scandir_sort.py": "1803419db9667a88427a33735310eb555cec71250cf8d895c2194b67f66ed07a"
   },
   "native_runtime_approval": false,
-  "patch_sha256": "e4ff9b9638cf8ec438e5cbe4a064525921b32b894c4325de0284322e2671f160",
+  "patch_sha256": "bec547927d3d6c53e7fc0930c9d09dada52bc919887f0fe81e09aeb956a15703",
   "paths": [
     ".github/workflows/ci.yml",
     "compat/bionic/posix_bionic.cc",

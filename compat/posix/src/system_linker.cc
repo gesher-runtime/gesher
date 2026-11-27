@@ -148,6 +148,16 @@ std::wstring Environment(const wchar_t* name) {
   return value;
 }
 
+bool CanPublish() {
+  HANDLE token = nullptr;
+  if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return false;
+  DWORD contained = 0, size = 0;
+  const bool queried = GetTokenInformation(token, TokenIsAppContainer, &contained,
+                                           sizeof(contained), &size) != FALSE;
+  CloseHandle(token);
+  return queried && contained == 0;
+}
+
 // $ANDROID_DATA (a Windows or a Linux path), else %LOCALAPPDATA%\Gesher\data
 // as the launcher's default.
 std::wstring DataDirectory() {
@@ -348,6 +358,7 @@ std::wstring HashName() {
 struct Identity {
   bool known = false;
   std::wstring path;
+  std::wstring nt_path;
   FILE_ID_INFO id = {};
 };
 
@@ -398,6 +409,13 @@ void LearnLocked(const std::wstring& path) {
       final.resize(n);
       g_identity.path = StripPrefix(final);
     }
+    final.resize(32768);
+    n = GetFinalPathNameByHandleW(h, final.data(), static_cast<DWORD>(final.size()),
+                                  FILE_NAME_NORMALIZED | VOLUME_NAME_NT);
+    if (n != 0 && n < final.size()) {
+      final.resize(n);
+      g_identity.nt_path = std::move(final);
+    }
   }
   CloseHandle(h);
 }
@@ -443,9 +461,21 @@ const std::wstring& File() {
       const std::wstring name = HashName();
       const std::wstring root = data + L"\\system\\gesher-linker";
       const std::wstring dir = root + L"\\" + name;
+      const std::wstring path = dir + L"\\linker64";
+      if (!CanPublish()) {
+        // The desktop supervisor prepares this exact image and grants only
+        // read access. Never place, touch or prune files from a guest.
+        std::string existing;
+        if (ReadAll(path, &existing) && existing == image) {
+          g_file = path;
+          std::lock_guard<std::mutex> lock(g_identity_mutex);
+          g_identity_probed = true;
+          LearnLocked(path);
+        }
+        return;
+      }
       MakeDirectories(dir);
       MarkUsed(dir);
-      const std::wstring path = dir + L"\\linker64";
       if (Place(path, image)) {
         g_file = FinalPath(path);
         // Held for the process's life without sharing write access: while a
@@ -463,6 +493,11 @@ const std::wstring& File() {
   }();
   g_file_ready.store(true, std::memory_order_release);
   return g_file;
+}
+
+const std::wstring& Publish() {
+  static const std::wstring unavailable;
+  return CanPublish() ? File() : unavailable;
 }
 
 bool IsName(const char* path) {
@@ -503,6 +538,12 @@ bool IsFile(const std::wstring& windows) {
   const std::wstring path = StripPrefix(windows);
   return WithIdentity([&](const Identity& id) {
     return !id.path.empty() && _wcsicmp(path.c_str(), id.path.c_str()) == 0;
+  });
+}
+
+bool IsMappedNtName(const std::wstring& name) {
+  return WithIdentity([&](const Identity& id) {
+    return !id.nt_path.empty() && id.nt_path == name;
   });
 }
 

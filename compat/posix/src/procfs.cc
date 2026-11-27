@@ -461,6 +461,7 @@ std::string MappedFile(void* address) {
   DWORD n = GetMappedFileNameW(GetCurrentProcess(), address, device_path, MAX_PATH * 4);
   if (n == 0) return "";
   std::wstring path(device_path, n);
+  if (system_linker::IsMappedNtName(path)) return system_linker::kPath;
   // \Device\HarddiskVolumeN\... to a drive letter.
   struct DriveMapping {
     std::wstring target;
@@ -1312,6 +1313,10 @@ bool FdTarget(int fd, std::string* target) {
     case FILE_TYPE_DISK: {
       unsigned type, mode;
       if (DescribeHandle(h, &type, target, &mode)) return true;  // "/proc/<pid>/maps"
+      if (system_linker::IsFileHandle(h)) {
+        *target = system_linker::kPath;
+        return true;
+      }
       wchar_t buf[32768];
       DWORD n = GetFinalPathNameByHandleW(h, buf, 32768, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
       if (n == 0) return FailWithLastError(), false;

@@ -331,6 +331,7 @@ final class AppSandbox {
     }
 
     static void prepareStandaloneRuntime() {
+        ensureGrant(Zygote.nativePrepareSystemLinker(), RUNTIME_FILES, "/system/bin/linker64");
         String exeDir = exeDirectory();
         if (exeDir == null) throw new IllegalStateException("The contained runtime is unavailable");
         String runtime = Zygote.fromWindowsPath(exeDir);

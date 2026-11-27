@@ -302,7 +302,10 @@ $dvmApp = @("-Xbootclasspath:$bcpApp", "-Ximage:$(NoDrive "$root/system")/framew
 function SettingsFixtureSetup([string[]] $Arguments) {
   $savedUid = $env:GESHER_UID; $savedBinderUid = $env:GESHER_BINDER_UID
   try {
-    $env:GESHER_UID = '1000'; $env:GESHER_BINDER_UID = '1000'
+    # Local setup owns stand-in services. Remote setup is a genuine shell
+    # operator admitted through the protected broker's actual kernel peer.
+    $uid = if ($Arguments.Count -gt 0 -and $Arguments[0] -eq '--remote') { '2000' } else { '1000' }
+    $env:GESHER_UID = $uid; $env:GESHER_BINDER_UID = $uid
     RunTimed "$Dir/dalvikvm.exe" ($dvmApp + '-cp', (NoDrive "$Dir/services-tests.dex"),
       'gesher.services.FixtureSettingsSetup' + $Arguments) 90
   } finally {

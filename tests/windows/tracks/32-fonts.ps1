@@ -4,8 +4,8 @@
 #
 # The build's fonts/ (tools/fonts/collect-fonts.sh) installed as Android keeps
 # them: the font files in $ANDROID_ROOT/fonts, fonts.xml in $ANDROID_ROOT/etc.
-# Checks after this one (gesher-app runs) find the fonts there too, and Windows'
-# own fonts through $GESHER_WINDOWS_FONTS.
+# Checks after this one (gesher-app runs) find the fonts there too, and use
+# Windows' own fonts through the runtime's Windows font discovery.
 $fontsDir = Join-Path $Dir 'fonts'
 if (-not (Test-Path (Join-Path $fontsDir 'fonts.xml'))) {
   Write-Host "FAIL  fonts: $fontsDir/fonts.xml is missing from the build"
@@ -17,19 +17,12 @@ if (-not (Test-Path (Join-Path $fontsDir 'fonts.xml'))) {
   foreach ($d in 'system/fonts', 'system/etc') { New-Item -ItemType Directory -Force (Join-Path $root $d) | Out-Null }
   Copy-Item (Join-Path $fontsDir '*.ttf') (Join-Path $root 'system/fonts')
   Copy-Item (Join-Path $fontsDir 'fonts.xml') (Join-Path $root 'system/etc/fonts.xml')
-  # Windows' own fonts, used in place (windows-fonts.xml; ADR 0044). The framework keeps
-  # drive-less paths (ADR 0010), so a font folder on another drive than the test root's
-  # (C:\Windows\Fonts, the root on D:) is reached through a junction on this drive, named
-  # by $GESHER_WINDOWS_FONTS; on Windows' drive (an installed Gesher) none is needed.
+  # Windows' own fonts are used in place (ADR 0044), including when the test
+  # root is on another drive (ADR 0045).
   if (Test-Path (Join-Path $fontsDir 'windows-fonts.xml')) {
     Copy-Item (Join-Path $fontsDir 'windows-fonts.xml') (Join-Path $root 'system/etc/windows-fonts.xml')
   }
   $windowsFonts = Join-Path $env:WINDIR 'Fonts'
-  if ((Split-Path -Qualifier $windowsFonts) -ne (Split-Path -Qualifier $root)) {
-    $link = Join-Path $root 'windows-fonts'
-    if (-not (Test-Path $link)) { New-Item -ItemType Junction -Path $link -Target $windowsFonts | Out-Null }
-    $env:GESHER_WINDOWS_FONTS = NoDrive $link
-  }
   $cjk = @('msyh.ttc', 'msjh.ttc', 'YuGothR.ttc', 'malgun.ttf', 'seguiemj.ttf', 'seguisym.ttf', 'Nirmala.ttc', 'Nirmala.ttf') |
     ForEach-Object { "$_ $(if (Test-Path (Join-Path $windowsFonts $_)) { 'yes' } else { 'no' })" }
   Write-Host "INFO  fonts: Windows' fonts in $windowsFonts ($((Get-ChildItem $windowsFonts -File).Count) files): $($cjk -join ', ')"

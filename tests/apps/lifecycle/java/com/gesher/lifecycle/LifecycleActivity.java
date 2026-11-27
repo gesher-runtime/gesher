@@ -97,6 +97,47 @@ public class LifecycleActivity extends Activity {
         if (getIntent().getBooleanExtra("com.gesher.lifecycle.CHECK_ANDROID_DATA", false)) {
             checkAndroidDataCapacity();
         }
+        if (getIntent().getBooleanExtra("com.gesher.lifecycle.CHECK_SYSTEM_LINKER", false)) {
+            checkSystemLinker();
+        }
+    }
+
+    private void checkSystemLinker() {
+        String path = "/system/bin/linker64";
+        try {
+            FileDescriptor fd = Os.open(path, OsConstants.O_RDONLY, 0);
+            android.system.StructStat stat;
+            try {
+                byte[] elf = new byte[64];
+                stat = Os.fstat(fd);
+                String name = Os.readlink("/proc/self/fd/" + fd.getInt$());
+                if (Os.read(fd, elf, 0, elf.length) != elf.length || stat.st_size < elf.length
+                        || !path.equals(name) || elf[0] != 127 || elf[1] != 'E' || elf[2] != 'L'
+                        || elf[3] != 'F' || elf[4] != 2 || elf[5] != 1 || elf[18] != 62 || elf[19] != 0) {
+                    throw new AssertionError("Wrong x86-64 system linker identity");
+                }
+            } finally { Os.close(fd); }
+            int maps = 0;
+            for (String line : java.nio.file.Files.readAllLines(java.nio.file.Path.of("/proc/self/maps"))) {
+                if (line.endsWith(" " + path)) {
+                    String[] fields = line.split("\\s+", 6);
+                    if (Long.parseUnsignedLong(fields[4]) != stat.st_ino || fields[1].charAt(1) == 'w') {
+                        throw new AssertionError("System linker mapping does not match the read-only file");
+                    }
+                    ++maps;
+                }
+            }
+            if (maps != 1) throw new AssertionError("Expected one system linker mapping, found " + maps);
+            try {
+                Os.close(Os.open(path, OsConstants.O_WRONLY, 0));
+                throw new AssertionError("Opened the system linker for writing");
+            } catch (ErrnoException denied) {
+                if (denied.errno != OsConstants.EROFS) throw denied;
+            }
+            report("LifecycleActivity verified the read-only x86-64 system linker file and mapping");
+        } catch (IOException | ErrnoException failure) {
+            throw new AssertionError("System linker identity unavailable", failure);
+        }
     }
 
     private void checkAndroidDataCapacity() {

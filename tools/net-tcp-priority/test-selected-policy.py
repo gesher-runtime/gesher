@@ -822,7 +822,7 @@ def qualified_usb_main513_endpoints():
  delta=(ROOT/USB_MAIN513_PATCH).read_bytes()
  assert hashlib.sha256(delta).hexdigest()==transition['patch_sha256'],'USB main513 patch changed'
  assert [line.decode().split(' b/',1)[1] for line in delta.splitlines() if line.startswith(b'diff --git ')]==USB_MAIN513_PATHS
- before={p:subprocess.check_output(['git','-C',str(ROOT),'show',USB_BLOCK_PATH_BASES.get(p,USB_BLOCK_BASE)+':'+p])
+ before={p:usb_historical_source(USB_BLOCK_PATH_BASES.get(p,USB_BLOCK_BASE),p)
          for p in USB_MAIN513_PATHS}
  after={p:subprocess.check_output(['git','-C',str(ROOT),'show',USB_MAIN513_COMMIT+':'+p])
         for p in USB_MAIN513_PATHS}
@@ -919,8 +919,7 @@ def preceding_usb_block_sources(folder,read_source=live_source):
    preceding[path] = (work/path).read_bytes()
    base = USB_NETLINK_MAIN if path in USB_NETLINK_PATHS else USB_BLOCK_PATH_BASES.get(path, USB_BLOCK_BASE)
    if path==CHILD_WAIT_PATH:base=CHILD_WAIT_MAIN
-   historical = main513[path] if path in main513 else subprocess.check_output(
-       ['git','-C',str(ROOT),'show',base+':'+path])
+   historical = main513[path] if path in main513 else usb_historical_source(base,path)
    assert preceding[path] == historical, path
   subprocess.run(['git','apply','--unidiff-zero','--check','-'],input=delta,cwd=work,check=True,capture_output=True)
   subprocess.run(['git','apply','--unidiff-zero','-'],input=delta,cwd=work,check=True,capture_output=True)
@@ -1184,12 +1183,59 @@ APPCONTAINER_PROPERTY_SOURCE_SHA256 = {
  'compat/posix/src/system_properties.cc': '561b60eb0bf874438ba65fa8e3b9d5a8bcf3af67589c5a46105c0375fb1bb42b',
 }
 
+# Exact historical feature sources survive squash and deletion of donor branches.
+# This archive contains source bytes only, not runtime or performance evidence.
+FEATURE_SOURCE_ARCHIVE = 'tools/net-tcp-priority/qualified/feature-source-snapshots.zip'
+FEATURE_SOURCE_ARCHIVE_SHA256 = '74fdf84140949bf70e17781ebfe98528b9c68898f44d13445dc4067cb682e94c'
+FEATURE_SOURCE_ADDITIONAL_SHA256 = {'82bb674a00ed50fcfa5c234fcd7f9830d08d443e': {'compat/posix/include/gesher/file_description.h': '3d5b11cf3e48c49944cea84cb1f2b94473fa5912bf806f38b4fffb8cda7b6be8'},
+ 'af2a394d0f5399f954aa00aeaf37011d42b96623': {'compat/bionic/process_bionic.cc': 'b4c2aef76253e3ffde86f6d2b72c6a7fb5c92d0d89c0d734a912bafa432d18e3',
+                                              'compat/elf/exec/gesher_exec.cc': '6c86da7c77affc2f18871d4e83adc3175552925c10bdeda3f40523e6e1b2199f',
+                                              'compat/posix/src/binder_file_descriptions.h': '1935913dfac9fba05a2dffebe13ecb294de72b5a0641dbe2bd23521ce97bdf2e',
+                                              'compat/posix/src/binder_wire.h': '2ebecdafba377c08f6ca2c71604bdfd5ee7fd794169ba1da61e782342a22dae6',
+                                              'tests/native/ofd_transfer_host_test.cc.in': 'fc3910b11ad3834f83173a47c71fa3d1a3c67b92cf5a6aaa2af808289017de98',
+                                              'tools/test_environment_lookup_contracts.py': 'a367388aa45f6aeb60a01ec9d3e32dd2323878c07452741d845da87a41119229'},
+ 'd80a204d897ebda23575e30080f8760cbdcb0d56': {'compat/posix/include/gesher/system_properties.h': '9832b7d1282efb24bf0cf621b3dc8cb1c1279e0988b7895add146e3193364ac3',
+                                              'compat/posix/src/system_properties.cc': 'fc2e4d97ee02d1f32e49aeccd648ee386cd44debf9092b4eef48b0c7e2f1499a'}}
+
+
+def feature_snapshot_sources(raw=None, archive_pin=FEATURE_SOURCE_ARCHIVE_SHA256):
+ import io,zipfile
+ if raw is None:raw=live_source(FEATURE_SOURCE_ARCHIVE)
+ assert len(raw)<=2*1024*1024 and hashlib.sha256(raw).hexdigest()==archive_pin,'feature source archive digest'
+ expected={APPCONTAINER_IDENTITY_DONOR:APPCONTAINER_IDENTITY_SOURCE_SHA256,
+           APPCONTAINER_PROPERTY_DONOR:APPCONTAINER_PROPERTY_SOURCE_SHA256,**FEATURE_SOURCE_ADDITIONAL_SHA256}
+ pins={revision+'/'+path:digest for revision,paths in expected.items() for path,digest in paths.items()}
+ with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+  members=archive.infolist()
+  assert len(members)==len(pins) and sorted(m.filename for m in members)==sorted(pins),'feature source archive exact members'
+  assert all(not m.is_dir() and m.file_size<=1024*1024 and m.compress_type==zipfile.ZIP_DEFLATED for m in members),'feature source archive member bounds'
+  assert sum(m.file_size for m in members)<=8*1024*1024,'feature source archive total bounds'
+  sources={name:archive.read(name) for name in pins}
+  for name,source in sources.items():
+   assert hashlib.sha256(source).hexdigest()==pins[name],('feature source archive bytes',name)
+ return sources
+
+
+def feature_source(revision,path):
+ source=feature_snapshot_sources()[revision+'/'+path]
+ available=subprocess.run(['git','-C',str(ROOT),'cat-file','-e',revision+'^{commit}'],capture_output=True).returncode==0
+ if available:
+  historical=subprocess.check_output(['git','-C',str(ROOT),'show',revision+':'+path])
+  assert source==historical,('feature source Git cross-check',revision,path)
+ return source
+
+
+def usb_historical_source(revision,path):
+ if revision in FEATURE_SOURCE_ADDITIONAL_SHA256:return feature_source(revision,path)
+ return subprocess.check_output(['git','-C',str(ROOT),'show',revision+':'+path])
+
+
 def appcontainer_donor_predecessor(name, revision, expected_patch, expected_sources):
  patch=(ROOT/'tools/net-tcp-priority/qualified'/f'appcontainer-{name}-source.patch').read_bytes()
  assert hashlib.sha256(patch).hexdigest()==expected_patch,('AppContainer donor transition changed',name)
  paths=list(expected_sources)
  assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==paths
- current={path:subprocess.check_output(['git','-C',str(ROOT),'show',revision+':'+path]) for path in paths}
+ current={path:feature_source(revision,path) for path in paths}
  with tempfile.TemporaryDirectory(prefix='gesher-appcontainer-donor-qualification-') as temporary:
   work=Path(temporary)
   for path,source in current.items():
@@ -1207,16 +1253,18 @@ def check_appcontainer_donor_receipts():
  identity=appcontainer_donor_predecessor('identity',APPCONTAINER_IDENTITY_DONOR,APPCONTAINER_IDENTITY_PATCH_SHA256,APPCONTAINER_IDENTITY_SOURCE_SHA256)
  property_area=appcontainer_donor_predecessor('property',APPCONTAINER_PROPERTY_DONOR,APPCONTAINER_PROPERTY_PATCH_SHA256,APPCONTAINER_PROPERTY_SOURCE_SHA256)
  for path,source in property_area.items():
-  expected=subprocess.check_output(['git','-C',str(ROOT),'show',APPCONTAINER_PROPERTY_DONOR_BASE+':'+path])
+  expected=feature_source(APPCONTAINER_PROPERTY_DONOR_BASE,path)
   assert source==expected and identity[path]==expected,('AppContainer donor property predecessor',path)
 
 # Restore only the independently reviewed AppContainer integration delta before
 # replaying the existing TCP/OFD, USB, and main feature qualifications. Both
 # ends of each changed file are exact, and no runtime pass is granted here.
 APPCONTAINER_INTEGRATION_BASE = 'ff2c1870053c9d0332e6abef07a25fc282d384b5'
+# Independent historical endpoint pin remains fixed when the live side is refreshed.
+APPCONTAINER_INTEGRATION_PREVIOUS_SHA256 = '685804f7733ddf9a0f51ee9b2c0fbea026a802532141e08c3f9cbdb1bf41150c'
 APPCONTAINER_INTEGRATION_PATCH = 'tools/net-tcp-priority/qualified/appcontainer-integration-source.patch'
 APPCONTAINER_INTEGRATION_QUALIFICATION = 'tools/net-tcp-priority/qualified/appcontainer-integration-source.json'
-APPCONTAINER_INTEGRATION_QUALIFICATION_SHA256 = '3d5813b92bd74a796d391a48cd9ef29d78453ee246656fc05ccff3471389e22d'
+APPCONTAINER_INTEGRATION_QUALIFICATION_SHA256 = '3edcbb7867be4e41e77d9b65c5302d387d8942f1ad3cbfce311d39928e7b8473'
 # In addition to the donor identity surface, the merged startup/fork path
 # intersects the exact USB and child-wait source qualification.
 APPCONTAINER_INTEGRATION_PATHS = sorted(APPCONTAINER_IDENTITY_SOURCE_SHA256.keys() | {
@@ -1229,6 +1277,8 @@ APPCONTAINER_INTEGRATION_PATHS = sorted(APPCONTAINER_IDENTITY_SOURCE_SHA256.keys
  'compat/usb_storage/CMakeLists.txt', 'compat/usb_storage/protected_runtime_client.cc',
  'compat/usb_storage/protected_runtime_client.h', 'compat/usb_storage/protected_runtime_session.cc',
  'compat/usb_storage/protected_runtime_wire.h',
+ # Preserve the original broker admission/error path before replaying its proof.
+ 'compat/usb_storage/binder_authority_control.cc', 'compat/usb_storage/binder_authority_control.h',
 })
 
 def preceding_appcontainer_integration_sources(receipt_sha256):
@@ -1237,6 +1287,7 @@ def preceding_appcontainer_integration_sources(receipt_sha256):
  qualification=json.loads(raw)
  assert set(qualification)=={'baseline','paths','previous_sha256','source_sha256','patch_sha256','native_runtime_approval'}
  assert qualification['baseline']==APPCONTAINER_INTEGRATION_BASE and qualification['native_runtime_approval'] is False
+ assert hashlib.sha256(json.dumps(qualification['previous_sha256'],sort_keys=True,separators=(',',':')).encode()).hexdigest()==APPCONTAINER_INTEGRATION_PREVIOUS_SHA256,'AppContainer integration immutable predecessor map'
  paths=qualification['paths']
  assert paths==APPCONTAINER_INTEGRATION_PATHS==sorted(qualification['source_sha256'])==sorted(qualification['previous_sha256'])
  patch=live_source(APPCONTAINER_INTEGRATION_PATCH)
@@ -1244,19 +1295,25 @@ def preceding_appcontainer_integration_sources(receipt_sha256):
  assert [line for line in patch.splitlines() if line.startswith(b'diff --git ')]==[
      ('diff --git a/'+path+' b/'+path).encode() for path in paths]
  current={path:live_source(path) for path in paths}
- previous={path:subprocess.check_output(['git','-C',str(ROOT),'show',APPCONTAINER_INTEGRATION_BASE+':'+path]) for path in paths}
+ # Original feature objects can disappear after squash/branch deletion.
+ # The exact reverse endpoint remains independently pinned in this receipt.
+ available=subprocess.run(['git','-C',str(ROOT),'cat-file','-e',APPCONTAINER_INTEGRATION_BASE+'^{commit}'],capture_output=True).returncode==0
+ previous={}
  apply=['git','-c','core.autocrlf=false','apply','--unidiff-zero']
  with tempfile.TemporaryDirectory(prefix='gesher-appcontainer-integration-qualification-') as temporary:
   work=Path(temporary)
   for path in paths:
    assert hashlib.sha256(current[path]).hexdigest()==qualification['source_sha256'][path],path
-   assert hashlib.sha256(previous[path]).hexdigest()==qualification['previous_sha256'][path],('AppContainer integration baseline digest',path)
-   assert current[path]!=previous[path],('empty AppContainer integration delta',path)
    (work/path).parent.mkdir(parents=True,exist_ok=True)
    (work/path).write_bytes(current[path])
   subprocess.run([*apply,'--reverse','-'],input=patch,cwd=work,check=True,capture_output=True)
   for path in paths:
-   assert (work/path).read_bytes()==previous[path],('AppContainer integration reverse endpoint',path)
+   previous[path]=(work/path).read_bytes()
+   assert hashlib.sha256(previous[path]).hexdigest()==qualification['previous_sha256'][path],('AppContainer integration reverse endpoint',path)
+   assert current[path]!=previous[path],('empty AppContainer integration delta',path)
+   if available:
+    historical=subprocess.check_output(['git','-C',str(ROOT),'show',APPCONTAINER_INTEGRATION_BASE+':'+path])
+    assert historical==previous[path],('AppContainer integration Git baseline cross-check',path)
   subprocess.run([*apply,'-'],input=patch,cwd=work,check=True,capture_output=True)
   for path in paths:
    assert (work/path).read_bytes()==current[path],('AppContainer integration forward endpoint',path)
@@ -1285,6 +1342,8 @@ def appcontainer_integration_negative_controls(receipt_sha256):
  cases.append(({patch_path:malformed},receipt_sha256,'AppContainer integration patch changed'))
  cases.append(({}, {**qualification,'native_runtime_approval':True}, None))
  cases.append(({}, {**qualification,'baseline':'0'*40}, None))
+ repinned_previous={**qualification,'previous_sha256':{**qualification['previous_sha256'],path:'0'*64}}
+ cases.append(({},repinned_previous,'AppContainer integration immutable predecessor map'))
  for overrides,receipt,expected in cases:
   if isinstance(receipt,dict):
    raw=(json.dumps(receipt,indent=2,sort_keys=True)+'\n').encode()
@@ -1984,15 +2043,40 @@ def transition_negative_controls():
    except (AssertionError,subprocess.CalledProcessError):rejected=True
   assert rejected,'repinned composed Binder mutation accepted: '+before.decode()
  print('TCP_SELECTED_TRANSITION_NEGATIVE_CONTROLS_PASS cases='+str(len(cases))+' repinned_property_controls=5 repinned_memfd_lease_controls='+str(repinned_memfd_lease)+' repinned_binder_output_controls=6 repinned_composed_binder_controls='+str(len(composed_cases)))
+NATIVE2_PROJECTION_ADAPTER = 'tools/scandir_native2_projection.py'
+NATIVE2_PROJECTION_ADAPTER_SHA256 = '00fdced959bf7b4783b1dcd0aa6384ed9e4d9bdf48cf54a984415243a756161b'
+
+def native2_projection():
+ # Keep the qualified historical Bionic endpoint exact while independently
+ # binding the reviewed live ownership/relative-filesystem compatibility delta.
+ import types
+ adapter=ROOT/NATIVE2_PROJECTION_ADAPTER
+ adapter_source=live_source(NATIVE2_PROJECTION_ADAPTER)
+ assert hashlib.sha256(adapter_source).hexdigest()==NATIVE2_PROJECTION_ADAPTER_SHA256,'Native2 projection adapter changed'
+ # Execute exactly the hash-checked bytes, not a timestamp/size-matched pyc.
+ native2=types.ModuleType('selected_native2_projection')
+ exec(compile(adapter_source,str(adapter),'exec'),native2.__dict__)
+ current={native2.PATH:live_source(native2.PATH)}
+ manifest=live_source(native2.MANIFEST);delta=live_source(native2.PATCH)
+ baseline=native2.baseline_source(ROOT,current,manifest,delta)
+ previous=native2.project(current,baseline,manifest,delta)
+ return previous,native2,current,baseline,manifest,delta
+
 def check_live():
  check_appcontainer_donor_receipts()
  previous=preceding_appcontainer_integration_sources(APPCONTAINER_INTEGRATION_QUALIFICATION_SHA256)
+ native2_previous,*_=native2_projection()
+ previous.update(native2_previous)
  check_appcontainer_property_filter(live_source(APPCONTAINER_PROPERTY_SOURCE))
  check(lambda path:previous[path] if path in previous else live_source(path))
  return previous
 
 def selftest(previous):
+ import sys
+ subprocess.run([sys.executable,str(ROOT/'tools/test_source_projection_durability.py')],check=True)
  from unittest.mock import patch
+ _,native2,current,baseline,manifest,delta=native2_projection()
+ native2.negative_controls(current,baseline,manifest,delta)
  appcontainer_integration_negative_controls(APPCONTAINER_INTEGRATION_QUALIFICATION_SHA256)
  # Independently reject the protected loader taking an unserved GLES value.
  source=live_source(APPCONTAINER_PROPERTY_SOURCE)

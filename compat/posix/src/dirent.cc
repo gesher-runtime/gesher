@@ -209,13 +209,6 @@ bool DirectoryOfHandle(HANDLE h, std::string* path, bool* on_disk) {
   return true;
 }
 
-bool DirectoryOfFd(int fd, std::string* path) {
-  HANDLE h = gesher::HandleFromFd(fd);
-  if (h == INVALID_HANDLE_VALUE) return errno = EBADF, false;
-  bool on_disk;
-  return DirectoryOfHandle(h, path, &on_disk);
-}
-
 // A directory entry's d_type, from its attributes and reparse tag.
 unsigned char EntryType(DWORD attributes, DWORD reparse_tag) {
   if ((attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0 &&
@@ -608,24 +601,25 @@ DIR* fdopendir(int fd) {
   if (!snapshot) return nullptr;
   if (gesher::FileDescriptionFlags(snapshot) & O_PATH) return errno = EBADF, nullptr;
   if (snapshot->description && !snapshot->description->virtual_directory.empty()) {
-    const std::string name = gesher::procfs::LinuxName(snapshot->description->virtual_directory);
-    return Open(name.c_str(), fd);
+    if (gesher::procfs::Type(snapshot->description->virtual_directory) != S_IFDIR)
+      return errno = ENOENT, nullptr;
+  } else {
+    std::string path;
+    bool on_disk;
+    if (!DirectoryOfHandle(snapshot->handle, &path, &on_disk)) return nullptr;
+    // Guest enumeration reopens only the already-held capability through its
+    // authenticated authority. Ordinary app callers retain the permission
+    // check previously performed by Open(path), against this actual object.
+    if (on_disk && !gesher::binder_endpoint::Current().IsGuest() &&
+        !gesher::CheckExternalStorageHandle(snapshot->handle, gesher::AccessKind::kRead)) return nullptr;
   }
-  if (gesher::binder_endpoint::Current().IsGuest()) {
-    BY_HANDLE_FILE_INFORMATION info{};
-    if (!GetFileInformationByHandle(snapshot->handle, &info) ||
-        !(info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) return errno = ENOTDIR, nullptr;
-    auto dir = std::make_unique<gesher_DIR>();
-    dir->rooted = std::make_unique<gesher_DIR::RootedScan>();
-    dir->fd = fd;
-    return dir.release();
-  }
-  auto scoped = gesher::DropDescriptorPath(snapshot);
-  if (scoped.empty()) scoped = gesher::storage_root::DescriptorPath(snapshot->handle);
-  if (!scoped.empty()) return Open(gesher::LinuxPath(scoped.c_str()).c_str(), fd);
-  std::string path;
-  if (!DirectoryOfFd(fd, &path)) return nullptr;
-  return Open(path.c_str(), fd);
+  const auto position = lseek(fd, 0, SEEK_CUR);
+  if (position < 0) return nullptr;  // Failure does not consume the caller's fd.
+  auto dir = std::make_unique<gesher_DIR>();
+  dir->rooted = std::make_unique<gesher_DIR::RootedScan>();
+  dir->fd = fd;
+  dir->position = position;
+  return dir.release();
 }
 
 ssize_t getdents64(int fd, void* buffer, size_t size) {
