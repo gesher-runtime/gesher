@@ -23,6 +23,9 @@ try {
   Check 'sandbox: AppContainer isolation, Binder identity and live storage ACL lifecycle' {
     & "$Dir/appcontainer_probe.exe" $sandboxDevice
   } @('all passed')
+  Check 'sandbox: real AppContainer reads live broker properties with write access denied' {
+    & "$Dir/appcontainer_property_probe.exe" (Join-Path $root 'sandbox-property')
+  } @('property-area probe all passed')
 } finally {
   if ($null -eq $sandboxSaved) { Remove-Item Env:GESHER_SANDBOX -ErrorAction SilentlyContinue }
   else { $env:GESHER_SANDBOX = $sandboxSaved }

@@ -6,6 +6,7 @@
 #include <gesher/system_properties.h>
 #include <gesher/environment.h>
 #include <gesher/gles_version_property.h>
+#include <gesher/cohost_bootstrap.h>
 
 #include <windows.h>
 
@@ -22,6 +23,7 @@
 #include <vector>
 
 #include <gesher/device_identity.h>
+#include "rooted_storage_client.h"
 
 namespace gesher::properties {
 namespace {
@@ -95,15 +97,24 @@ struct Area {
   bool read_only = false;
   uint32_t cached_generation = 0;
   Snapshot values;
-  std::wstring root, persistent;
+  Snapshot overrides;
+  std::wstring root, path, persistent;
+  bool writable = false;
   ~Area() { if (view) UnmapViewOfFile(view); }
 };
 bool Valid(const std::string& name, const std::string& value);
 
-bool InAppContainer() {
-  DWORD contained = 0, size = 0;
-  return GetTokenInformation(GetCurrentProcessToken(), TokenIsAppContainer,
-                             &contained, sizeof(contained), &size) && contained != 0;
+bool WritableProcess() {
+  // Use the primary Windows token even when a thread is impersonating a client.
+  static const bool writable = [] {
+    Handle token;
+    DWORD contained = 0, size = 0;
+    if (ProtectedSystemServer()) return true;
+    return OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token.value) &&
+           GetTokenInformation(token.value, TokenIsAppContainer, &contained,
+                               sizeof(contained), &size) && !contained;
+  }();
+  return writable;
 }
 
 // Deliberately leaked: property callbacks can run during static destruction.
@@ -228,17 +239,20 @@ bool Decode(const std::string& data, Snapshot* values) {
   *values = std::move(parsed);
   return true;
 }
+bool ReadContents(HANDLE file, std::string* data) {
+  LARGE_INTEGER size;
+  if (!GetFileSizeEx(file, &size) || size.QuadPart > kCapacity || size.QuadPart < 0) return false;
+  data->resize(static_cast<size_t>(size.QuadPart));
+  DWORD count = 0;
+  return ReadFile(file, data->data(), static_cast<DWORD>(data->size()), &count, nullptr) &&
+         count == data->size();
+}
 bool Read(const std::wstring& path, std::string* data, bool optional) {
   Handle file;
   file.value = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                           nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+                          nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
   if (file.value == INVALID_HANDLE_VALUE) return optional && GetLastError() == ERROR_FILE_NOT_FOUND;
-  LARGE_INTEGER size;
-  if (!GetFileSizeEx(file.value, &size) || size.QuadPart > kCapacity || size.QuadPart < 0) return false;
-  data->resize(static_cast<size_t>(size.QuadPart));
-  DWORD count = 0;
-  return ReadFile(file.value, data->data(), static_cast<DWORD>(data->size()), &count, nullptr) &&
-         count == data->size();
+  return ReadContents(file.value, data);
 }
 bool WritePersistent(const std::wstring& path, const Snapshot& values) {
   std::string data = Encode(values);
@@ -332,31 +346,63 @@ Snapshot Initial() {
   pc_identity();
   return values;
 }
+
+bool LoadBootstrapOverrides(Area* area) {
+  if (area->writable) return true;
+  const auto& scope = cohost_bootstrap::Current();
+  if (!scope || scope.build_prop.empty()) return true;
+  Handle file;
+  if (storage_root::OpenBootstrap(rooted_storage_wire::Op::kOpenBuildProp, &file.value) != 0) return false;
+  std::string data;
+  if (!ReadContents(file.value, &data)) return false;
+  for (size_t start = 0; start < data.size();) {
+    const size_t end = data.find('\n', start);
+    const std::string line = Trim(data.substr(start, end == std::string::npos ? end : end - start));
+    start = end == std::string::npos ? data.size() : end + 1;
+    if (line.empty() || line.front() == '#') continue;
+    const size_t equal = line.find('=');
+    if (equal == 0 || equal == std::string::npos) continue;
+    std::string name = Trim(line.substr(0, equal));
+    if (!name.empty() && name.back() == '?') name = Trim(name.substr(0, name.size() - 1));
+    std::string text = Trim(line.substr(equal + 1));
+    if (!Valid(name, text)) continue;
+    const auto existing = area->values.find(name);
+    const bool present = existing != area->values.end();
+    // Match the standalone Java loader. Existing ro.* properties stay
+    // immutable, and an assignment of the existing value changes no serial.
+    if (present && (name.starts_with("ro.") || existing->second.text == text)) continue;
+    Value update{text, Serial(name, text, present ? existing->second.serial : 0, present)};
+    area->values[name] = update;
+    area->overrides[name] = std::move(update);
+  }
+  return true;
+}
+
 bool Refresh(Area* area) {
-  const auto* layout = static_cast<const AreaLayout*>(area->view);
-  const Header* header = &layout->header;
-  // Writers serialize in the existing mutex. A read-only process reads the
-  // published bank without being able to block a writer. A second publication
-  // can reuse our bank, so verify the generation after copying it.
-  for (int attempt = 0; attempt < 16; ++attempt) {
-    const uint32_t generation = __atomic_load_n(&header->generation, __ATOMIC_ACQUIRE);
-    if (generation == 0 || header->magic != kMagic || header->version != kVersion) return false;
+  const auto* header = static_cast<const Header*>(area->view);
+  for (int attempt = 0; attempt < 8; ++attempt) {
+    uint32_t generation = __atomic_load_n(&header->generation, __ATOMIC_ACQUIRE);
+    if (!generation || header->magic != kMagic || header->version != kVersion) return false;
     if (generation == area->cached_generation) return true;
-    const unsigned bank = generation & 1u;
-    const uint32_t used = __atomic_load_n(&header->used[bank], __ATOMIC_RELAXED);
-    if (used > kPayloadCapacity) return false;
-    std::string data(layout->banks[bank], used);
-    __atomic_thread_fence(__ATOMIC_ACQ_REL);
+    uint32_t slot = generation & 1;
+    uint32_t used = __atomic_load_n(&header->used[slot], __ATOMIC_RELAXED);
+    std::string data;
+    if (used <= kPayloadCapacity) data.assign(static_cast<const AreaLayout*>(area->view)->banks[slot], used);
+    // The writer publishes the other slot first. If it has published again
+    // while we copied, this slot might have been reused and must be discarded.
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
     if (generation != __atomic_load_n(&header->generation, __ATOMIC_ACQUIRE)) continue;
-    if (!Decode(data, &area->values)) return false;
+    if (used > kPayloadCapacity || !Decode(data, &area->values)) return false;
+    for (const auto& [name, value] : area->overrides) area->values[name] = value;
     area->cached_generation = generation;
     return true;
   }
-  // A writer can publish repeatedly while the reader is copying a snapshot.
-  // Keep the last coherent values, and retry the new generation on next use.
+  // During sustained writes, keep the last coherent snapshot. Wait callers
+  // will poll again until the property changes or their timeout expires.
   return area->cached_generation != 0;
 }
 bool Publish(Area* area, Snapshot values) {
+  if (!area->writable) return false;
   std::string data = Encode(values);
   if (data.size() > kPayloadCapacity) return false;
   auto* layout = static_cast<AreaLayout*>(area->view);
@@ -448,7 +494,9 @@ Area* Current() { // LocalMutex is held by every caller.
   std::wstring path = dir + L"\\" + Key(session + L"/3") + L".area";
   auto area = std::make_unique<Area>();
   area->root = data;
-  area->read_only = InAppContainer() && !ProtectedSystemServer();
+  area->path = path;
+  area->writable = WritableProcess();
+  area->read_only = !area->writable;
   area->persistent = data + L"\\property\\persistent_properties";
   if (!area->read_only) {
     if (!Directories(dir) || !Directories(data + L"\\property")) return nullptr;
@@ -474,9 +522,11 @@ Area* Current() { // LocalMutex is held by every caller.
     Snapshot initial = Initial();
     if (!Persist(area->persistent, nullptr, nullptr, &initial)) return nullptr;
     for (auto& [name, value] : initial) value.serial = Serial(name, value.text);
+    header->magic = kMagic;
+    header->version = kVersion;
     if (!Publish(area.get(), std::move(initial))) return nullptr;
   }
-  if (!Refresh(area.get()) || !InheritRoot(session, data)) return nullptr;
+  if (!Refresh(area.get()) || !LoadBootstrapOverrides(area.get()) || !InheritRoot(session, data)) return nullptr;
   Area* result = area.get();
   auto inserted = cached.emplace(session, std::move(area));
   last_session = &inserted.first->first;
@@ -520,6 +570,14 @@ bool Initialize() {
   std::lock_guard lock(LocalMutex());
   return Current() != nullptr;
 }
+
+std::wstring ReadOnlyAreaPath() {
+  if (!WritableProcess()) return {};
+  std::lock_guard lock(LocalMutex());
+  Area* area = Current();
+  return area ? area->path : std::wstring{};
+}
+
 namespace {
 // The area, its values current (LocalMutex is held). Every log line reads a
 // few properties (log.tag.*). Refresh uses the unlocked generation fast path
@@ -563,7 +621,7 @@ bool Get(const std::string& name, std::string* value, uint32_t* serial) {
   return true;
 }
 bool Set(const std::string& name, const std::string& value) {
-  if (!Valid(name, value)) return false;
+  if (!WritableProcess() || !Valid(name, value)) return false;
   std::lock_guard local(LocalMutex());
   Area* area = Current();
   if (!area || area->read_only) return false;

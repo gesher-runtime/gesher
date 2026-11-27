@@ -18,6 +18,7 @@ set_source_files_properties(
   ${CMAKE_SOURCE_DIR}/compat/binder/protected_peers.cc
   ${CMAKE_SOURCE_DIR}/compat/binder/protected_shared_memory.cc
   PROPERTIES COMPILE_OPTIONS "-fexceptions")
+target_compile_definitions(binderd PRIVATE GESHER_RECORD_LOCK_BROKER=1)
 target_compile_options(binderd PRIVATE -Wall -Wextra -Werror "SHELL:-idirafter ${_uapi}")
 # The descriptor broker's tokens (ADR 0088) come from BCryptGenRandom; the
 # sandboxed pipe's security descriptor (ADR 0090) from app_container.cc.

@@ -3,6 +3,7 @@
 #include <cerrno>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <cwchar>
 #include <string>
@@ -73,8 +74,9 @@ namespace gesher {
 enum class AccessKind { kStat, kRead, kWrite };
 static bool CheckExternalStorageAccess(const std::wstring&, AccessKind) { return true; }
 static bool CheckExternalStorageHandle(HANDLE, AccessKind) { return true; }
+#include "uncontained_storage_fixture.h"
 static int FailWithLastError() { errno = last_error; return -1; }
-static bool DiskPath(const char* path, std::wstring* result, int) {
+static bool DiskPath(const char* path, std::wstring* result, int, bool = false) {
   if (!path) { errno = EFAULT; return false; }
   result->assign(path, path + std::strlen(path)); return true;
 }

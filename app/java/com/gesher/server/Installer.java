@@ -1012,10 +1012,11 @@ final class Installer {
         if (e == null) return false;
         ApkPackage target = mPm.get(packageName);
         if (!ordinaryInstalled(target)) throw new SecurityException("System or nonpersistent package");
+        String container = AppSandbox.installationContainer(target);
         PackageRemovalStorage quarantine = new PackageRemovalStorage(packageName, e.codePath);
         mPm.beginPackageRemoval(target);
         mRemovalActive = true;
-        boolean committed = false, restored = false;
+        boolean committed = false, restored = false, nativeRevoked = false;
         Attribution metadata = mAttributions.get(packageName);
         try {
             Dexopt.packageChanging(packageName);
@@ -1030,6 +1031,12 @@ final class Installer {
             if (notifications != null) notifications.packageRemoved(packageName);
             // Retire any background start already queued while capabilities were canceled.
             mAtm.forceStopPackage(packageName);
+            if (SystemServer.isProtectedDevice()) {
+                nativeRevoked = Zygote.changeProtectedInstallation(target, true);
+                if (!nativeRevoked) {
+                    throw new IOException("Could not revoke native process identity for " + packageName);
+                }
+            }
             try (PackageUids.Admission identity = PackageUids.prepareRetire(target)) {
                 quarantine.stage();
                 identity.commit();
@@ -1044,7 +1051,14 @@ final class Installer {
             if (!committed) {
                 mEntries.put(packageName, e);
                 if (metadata != null) mAttributions.put(packageName, metadata);
-                try { quarantine.rollback(); restored = true; }
+                try {
+                    quarantine.rollback();
+                    restored = true;
+                    if (nativeRevoked && !Zygote.changeProtectedInstallation(target, false)) {
+                        failure.addSuppressed(new IOException("Could not restore native process identity"
+                                + " for " + packageName));
+                    }
+                }
                 catch (IOException restore) { failure.addSuppressed(restore); }
             }
             throw failure;
@@ -1058,7 +1072,7 @@ final class Installer {
         }
         quarantine.discard(); // Locked remnants stay private and are reaped at next boot.
         Dexopt.deleteProfiles(packageName);
-        AppSandbox.deleteContainer(packageName);
+        AppSandbox.deleteContainer(packageName, container);
         mPm.packageRemoved(target, this);
         SystemServer.log("uninstalled " + packageName + " (" + e.codePath + ")");
         return true;

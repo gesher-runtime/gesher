@@ -16,9 +16,11 @@ import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiPredicate;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.ToIntBiFunction;
 
@@ -223,6 +225,77 @@ public final class PermissionRequestsTest {
                 "replacement inherited an in-flight consent grant");
         background(pm, pmClass, apkClass, method(pmClass, "get", String.class).invoke(pm, pkg), pkg, policy);
         review(pm, pmClass, apkClass, policy);
+
+        // The permission contract uses the same live host PM and decisions. Isolate
+        // this test from Windows admission by controlling only the process lifetime.
+        Class<?> scopeType = Class.forName("com.gesher.server.PermissionPolicy$ScopedOwner");
+        Class<?> inputType = Class.forName("com.gesher.server.Zygote$StandaloneInput");
+        Constructor<?> pin = inputType.getDeclaredConstructor(String.class);
+        pin.setAccessible(true);
+        Constructor<?> scoped = scopeType.getDeclaredConstructor(policy.getClass(),
+                inputType, apkClass, apkClass, BooleanSupplier.class);
+        scoped.setAccessible(true);
+        AtomicBoolean live = new AtomicBoolean(true);
+        try (AutoCloseable owner = (AutoCloseable) scoped.newInstance(policy, pin.newInstance(args[0]), apk,
+                replacement, (BooleanSupplier) live::get)) {
+            Object lostProcess = controller(pm, pmClass, Runnable::run, (name, description) -> {
+                live.set(false);
+                return true;
+            });
+            reply.set(null);
+            Consumer<Intent> completed = reply::set;
+            Method requestScoped = method(lostProcess.getClass(), "requestScoped",
+                    scopeType, String[].class, Consumer.class);
+            requestScoped.invoke(lostProcess, owner, new String[]{LOCATION}, completed);
+            require(reply.get().getIntArrayExtra(PackageManager.EXTRA_REQUEST_PERMISSIONS_RESULTS)[0]
+                            == PackageManager.PERMISSION_DENIED
+                            && grant(policy, pkg, LOCATION) == PackageManager.PERMISSION_DENIED,
+                    "retired scoped process inherited consent");
+        }
+        try (AutoCloseable owner = (AutoCloseable) scoped.newInstance(policy, pin.newInstance(args[0]), apk,
+                replacement, (BooleanSupplier) () -> true)) {
+            reply.set(null);
+            Object hostConsent = controller(pm, pmClass, Runnable::run, (name, description) -> {
+                require(pkg.equals(name) && description.contains(LOCATION), "scoped consent owner");
+                return true;
+            });
+            Consumer<Intent> completed = reply::set;
+            method(hostConsent.getClass(), "requestScoped", scopeType, String[].class, Consumer.class)
+                    .invoke(hostConsent, owner, new String[]{LOCATION, PRIVILEGED}, completed);
+            int[] scopedGrants = reply.get().getIntArrayExtra(PackageManager.EXTRA_REQUEST_PERMISSIONS_RESULTS);
+            require(scopedGrants[0] == PackageManager.PERMISSION_GRANTED
+                            && scopedGrants[1] == PackageManager.PERMISSION_DENIED
+                            && grant(policy, pkg, LOCATION) == PackageManager.PERMISSION_GRANTED
+                            && method(pmClass, "get", String.class).invoke(pm, pkg) == replacement,
+                    "scoped consent did not use the host's existing permission state and publication");
+        }
+        Object legacyCohost = legacyPackage(apkClass, "fixture.permission.requests.legacy.cohost", 19883);
+        AtomicBoolean launchLive = new AtomicBoolean(true);
+        try (AutoCloseable owner = (AutoCloseable) scoped.newInstance(policy, pin.newInstance(args[0]),
+                legacyCohost, null, (BooleanSupplier) () -> false)) {
+            AtomicInteger prompts = new AtomicInteger();
+            Object reviewController = controller(pm, pmClass, Runnable::run, (o, n) -> false,
+                    (o, n) -> DENIED, (o, groups, enabled) -> {
+                        require(groups.length == 2, "cohost legacy review omitted runtime permissions");
+                        if (prompts.incrementAndGet() == 1) launchLive.set(false);
+                        return ALLOWED;
+                    });
+            Method reviewScoped = method(reviewController.getClass(), "reviewScopedPermissions",
+                    scopeType, BooleanSupplier.class);
+            require(!((CompletableFuture<?>) reviewScoped.invoke(reviewController, owner,
+                            (BooleanSupplier) launchLive::get)).get().equals(Boolean.TRUE),
+                    "a disconnected cohost launch committed a legacy review");
+            launchLive.set(true);
+            require(((CompletableFuture<?>) reviewScoped.invoke(reviewController, owner,
+                            (BooleanSupplier) launchLive::get)).get().equals(Boolean.TRUE)
+                            && prompts.get() == 2,
+                    "a fresh cohost launch did not receive and commit its own legacy review");
+            require(((CompletableFuture<?>) reviewScoped.invoke(reviewController, owner,
+                            (BooleanSupplier) launchLive::get)).get().equals(Boolean.TRUE)
+                            && prompts.get() == 2,
+                    "confirmed cohost review was shown again for the same admission");
+        }
+        System.out.println("PermissionRequestsTest: scoped consent shares the host decisions and drops expired owners");
         System.out.println("PermissionRequestsTest: async grant/deny, result mapping and replacement race passed");
     }
 

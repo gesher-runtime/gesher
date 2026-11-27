@@ -12,6 +12,7 @@
 #include <userenv.h>
 
 #include <cstring>
+#include <algorithm>
 #include <mutex>
 
 namespace gesher {
@@ -269,37 +270,168 @@ DWORD FolderPath(PSID container, std::wstring* path) {
   return ERROR_SUCCESS;
 }
 
-DWORD Grant(const std::wstring& path, PSID trustee, DWORD access, bool inherit) {
-  if (path.empty() || trustee == nullptr || access == 0) return ERROR_INVALID_PARAMETER;
-  std::lock_guard<std::mutex> lock(g_acl_lock);
-  PACL dacl = nullptr;
-  PSECURITY_DESCRIPTOR descriptor = nullptr;
-  DWORD error = GetNamedSecurityInfoW(path.c_str(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
-                                      nullptr, nullptr, &dacl, nullptr, &descriptor);
-  if (error != ERROR_SUCCESS) return error;
-  const BYTE flags = inherit ? (OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE) : 0;
-  if (HasExplicitAce(dacl, trustee, access, flags)) {
-    LocalFree(descriptor);
-    return ERROR_SUCCESS;
+DWORD LocalAppDataPath(std::wstring* path) {
+  using KnownFolderFn = HRESULT(WINAPI*)(const GUID*, DWORD, HANDLE, PWSTR*);
+  static const auto get = Resolve<KnownFolderFn>(L"shell32.dll", "SHGetKnownFolderPath");
+  static constexpr GUID kLocalAppData{0xf1b32785, 0x6fba, 0x4fcf,
+                                      {0x9d, 0x55, 0x7b, 0x8e, 0x7f, 0x15, 0x70, 0x91}};
+  PWSTR local = nullptr;
+  const HRESULT status = get ? get(&kLocalAppData, 0, nullptr, &local) : kMissing;
+  if (FAILED(status)) return HRESULT_CODE(status);
+  if (!local) return ERROR_PATH_NOT_FOUND;
+  *path = local;
+  CoTaskMemFree(local);
+  return ERROR_SUCCESS;
+}
+
+namespace {
+
+struct HeldFile {
+  HANDLE handle = nullptr;
+  ~HeldFile() { if (handle != nullptr) CloseHandle(handle); }
+};
+
+DWORD OpenGrantTarget(const std::wstring& path, DWORD share, bool descendant,
+                      HeldFile* open, bool* directory) {
+  if (path.empty()) return ERROR_INVALID_PARAMETER;
+  const HANDLE file = CreateFileW(path.c_str(), READ_CONTROL | WRITE_DAC | FILE_READ_ATTRIBUTES,
+      share, nullptr, OPEN_EXISTING,
+      FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+  if (file == INVALID_HANDLE_VALUE) return GetLastError();
+  HeldFile held{file};
+  BY_HANDLE_FILE_INFORMATION info{};
+  if (!GetFileInformationByHandle(file, &info)) return GetLastError();
+  if (GetFileType(file) != FILE_TYPE_DISK) return ERROR_ACCESS_DENIED;
+  *directory = (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+  if ((info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0 ||
+      (!*directory && info.nNumberOfLinks != 1)) {
+    if (descendant) return ERROR_SUCCESS;
+    return ERROR_ACCESS_DENIED;
   }
+
+  // The final component was opened without following a reparse point.
+  // Compare the held object's normalized name with the lexical request to
+  // detect redirected parent directories, then change only the held object.
+  std::wstring opened(32768, L'\0'), expected(32768, L'\0'), long_path(32768, L'\0');
+  DWORD count = GetFinalPathNameByHandleW(file, opened.data(), static_cast<DWORD>(opened.size()),
+                                          FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+  if (count == 0 || count >= opened.size()) return ERROR_ACCESS_DENIED;
+  opened.resize(count);
+  count = GetFullPathNameW(path.c_str(), static_cast<DWORD>(expected.size()), expected.data(), nullptr);
+  if (count == 0 || count >= expected.size()) return ERROR_ACCESS_DENIED;
+  expected.resize(count);
+  count = GetLongPathNameW(expected.c_str(), long_path.data(), static_cast<DWORD>(long_path.size()));
+  if (count != 0 && count < long_path.size()) expected.assign(long_path.data(), count);
+  const auto normalize = [](std::wstring value) {
+    std::replace(value.begin(), value.end(), L'/', L'\\');
+    if (value.compare(0, 8, L"\\\\?\\UNC\\") == 0) value = L"\\\\" + value.substr(8);
+    else if (value.compare(0, 4, L"\\\\?\\") == 0) value.erase(0, 4);
+    while (value.size() > 3 && value.back() == L'\\') value.pop_back();
+    return value;
+  };
+  opened = normalize(std::move(opened));
+  expected = normalize(std::move(expected));
+  if (expected.size() <= 3 ||
+      (expected.compare(0, 2, L"\\\\") == 0 &&
+       std::count(expected.begin(), expected.end(), L'\\') < 4) ||
+      CompareStringOrdinal(opened.c_str(), -1, expected.c_str(), -1, TRUE) != CSTR_EQUAL) {
+    return ERROR_ACCESS_DENIED;
+  }
+  open->handle = held.handle;
+  held.handle = nullptr;
+  return ERROR_SUCCESS;
+}
+
+DWORD ApplyDacl(HANDLE file, PSECURITY_DESCRIPTOR current, PACL dacl, PSID trustee, DWORD access,
+                ACCESS_MODE mode, bool inheritable) {
   EXPLICIT_ACCESS_W entry{};
   entry.grfAccessPermissions = access;
-  entry.grfAccessMode = GRANT_ACCESS;
-  entry.grfInheritance = inherit ? SUB_CONTAINERS_AND_OBJECTS_INHERIT : NO_INHERITANCE;
+  entry.grfAccessMode = mode;
+  entry.grfInheritance = inheritable ? SUB_CONTAINERS_AND_OBJECTS_INHERIT : NO_INHERITANCE;
   entry.Trustee.TrusteeForm = TRUSTEE_IS_SID;
   entry.Trustee.TrusteeType = TRUSTEE_IS_UNKNOWN;
   entry.Trustee.ptstrName = static_cast<LPWSTR>(trustee);
   PACL updated = nullptr;
-  error = SetEntriesInAclW(1, &entry, dacl, &updated);
-  if (error == ERROR_SUCCESS) {
-    // A copy: SetNamedSecurityInfoW takes a non-const path.
-    std::wstring target = path;
-    error = SetNamedSecurityInfoW(target.data(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
-                                  nullptr, nullptr, updated, nullptr);
+  DWORD result = SetEntriesInAclW(1, &entry, dacl, &updated);
+  if (result == ERROR_SUCCESS) {
+    // Touch only the pinned object. New children inherit the ACE and existing
+    // children are visited explicitly so reparse targets aren't traversed.
+    SECURITY_DESCRIPTOR replacement{};
+    SECURITY_DESCRIPTOR_CONTROL control = 0;
+    DWORD revision = 0;
+    constexpr SECURITY_DESCRIPTOR_CONTROL preserved = SE_DACL_AUTO_INHERITED | SE_DACL_PROTECTED;
+    if (!GetSecurityDescriptorControl(current, &control, &revision) ||
+        !InitializeSecurityDescriptor(&replacement, SECURITY_DESCRIPTOR_REVISION) ||
+        !SetSecurityDescriptorDacl(&replacement, TRUE, updated, (control & SE_DACL_DEFAULTED) != 0) ||
+        !SetSecurityDescriptorControl(&replacement, preserved, control & preserved) ||
+        !SetKernelObjectSecurity(file, DACL_SECURITY_INFORMATION, &replacement)) {
+      result = GetLastError();
+    }
     LocalFree(updated);
   }
+  return result;
+}
+
+DWORD GrantExact(const std::wstring& path, PSID trustee, DWORD access, bool inherit,
+                 bool descendant) {
+  if (trustee == nullptr || access == 0) return ERROR_INVALID_PARAMETER;
+  HeldFile held;
+  bool directory = false;
+  DWORD error = OpenGrantTarget(path, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                 descendant, &held, &directory);
+  if (error != ERROR_SUCCESS || held.handle == nullptr) return error;
+  HANDLE file = held.handle;
+  PACL dacl = nullptr;
+  PSECURITY_DESCRIPTOR descriptor = nullptr;
+  error = GetSecurityInfo(file, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, nullptr, nullptr,
+                          &dacl, nullptr, &descriptor);
+  if (error != ERROR_SUCCESS) return error;
+  if (dacl == nullptr) {
+    LocalFree(descriptor);
+    return ERROR_ACCESS_DENIED;
+  }
+  const bool inheritable = inherit && directory;
+  const BYTE flags = inheritable ? (OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE) : 0;
+  if (HasExplicitAce(dacl, trustee, access, flags)) {
+    LocalFree(descriptor);
+    return ERROR_SUCCESS;
+  }
+  if (inheritable) {
+    // Existing files may contain hard links or directory reparse points. The
+    // broker must evaluate exact objects itself before an access grant.
+    WIN32_FIND_DATAW entry{};
+    const std::wstring prefix = path.back() == L'\\' ? path : path + L'\\';
+    const HANDLE search = FindFirstFileW((prefix + L"*").c_str(), &entry);
+    if (search == INVALID_HANDLE_VALUE) {
+      error = GetLastError();
+      if (error == ERROR_FILE_NOT_FOUND) error = ERROR_SUCCESS;
+    } else {
+      do {
+        const std::wstring name(entry.cFileName);
+        if (name != L"." && name != L".." &&
+            (entry.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0) {
+          error = GrantExact(prefix + name, trustee, access, true, true);
+        }
+        if (error != ERROR_SUCCESS) break;
+      } while (FindNextFileW(search, &entry));
+      if (error == ERROR_SUCCESS && GetLastError() != ERROR_NO_MORE_FILES) error = GetLastError();
+      FindClose(search);
+    }
+    if (error != ERROR_SUCCESS) {
+      LocalFree(descriptor);
+      return error;
+    }
+  }
+  error = ApplyDacl(file, descriptor, dacl, trustee, access, GRANT_ACCESS, inheritable);
   LocalFree(descriptor);
   return error;
+}
+
+}  // namespace
+
+DWORD Grant(const std::wstring& path, PSID trustee, DWORD access, bool inherit) {
+  std::lock_guard<std::mutex> lock(g_acl_lock);
+  return GrantExact(path, trustee, access, inherit, false);
 }
 
 DWORD Revoke(const std::wstring& path, PSID trustee) {
@@ -400,7 +532,14 @@ DWORD ProtectPrivateStorage(const std::wstring& path) {
 }
 
 DWORD BinderPipeSecurity(PSECURITY_DESCRIPTOR* descriptor) {
+  Sid capability;
+  const DWORD error = CapabilitySid(kBinderClientCapability, &capability);
+  return error != ERROR_SUCCESS ? error : AppContainerPipeSecurity(descriptor, capability.value);
+}
+
+DWORD AppContainerPipeSecurity(PSECURITY_DESCRIPTOR* descriptor, PSID trustee) {
   if (descriptor == nullptr) return ERROR_INVALID_PARAMETER;
+  if (!trustee || !IsValidSid(trustee)) return ERROR_INVALID_SID;
   HANDLE token = nullptr;
   if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return GetLastError();
   alignas(TOKEN_USER) BYTE buffer[sizeof(TOKEN_USER) + SECURITY_MAX_SID_SIZE];
@@ -410,13 +549,10 @@ DWORD BinderPipeSecurity(PSECURITY_DESCRIPTOR* descriptor) {
   CloseHandle(token);
   if (!ok) return error;
   std::wstring user = StringSid(reinterpret_cast<TOKEN_USER*>(buffer)->User.Sid);
-  Sid capability;
-  error = CapabilitySid(kBinderClientCapability, &capability);
-  if (error != ERROR_SUCCESS) return error;
-  std::wstring client = StringSid(capability.value);
+  std::wstring client = StringSid(trustee);
   if (user.empty() || client.empty()) return ERROR_INVALID_SID;
   // Protected DACL: nothing inherited, no Everyone/anonymous read of the default one.
-  // The capability gets FILE_GENERIC_READ | FILE_WRITE_DATA | FILE_WRITE_ATTRIBUTES
+  // The client gets FILE_GENERIC_READ | FILE_WRITE_DATA | FILE_WRITE_ATTRIBUTES
   // (0x12018b), what binder_wire.h's kPipeClientAccess asks: no FILE_APPEND_DATA,
   // which for a pipe is FILE_CREATE_PIPE_INSTANCE (serving an instance of it).
   std::wstring sddl = L"D:P(A;;GA;;;SY)(A;;GA;;;" + user + L")(A;;0x12018b;;;" + client +

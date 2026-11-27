@@ -183,6 +183,7 @@ namespace gesher {
 enum class AccessKind { kStat, kRead, kWrite };
 static bool CheckExternalStorageAccess(const std::wstring&, AccessKind) { return true; }
 static bool CheckExternalStorageHandle(HANDLE, AccessKind) { return true; }
+#include "uncontained_storage_fixture.h"
 enum class PathKind { kFile, kMissing, kVirtual };
 static int FailWithLastError() { errno = static_cast<int>(last_error); return -1; }
 static HANDLE HandleFromFd(int fd) {

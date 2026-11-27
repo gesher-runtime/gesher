@@ -13,6 +13,7 @@
 #include <string.h>
 
 #include <algorithm>
+#include <atomic>
 #include <mutex>
 
 namespace gesher::devices::camera {
@@ -145,11 +146,20 @@ const Api& GetApi() {
 
 // COM on this thread (multithreaded), once.
 void EnsureCom() {
+#ifdef GESHER_CAMERA_BROKER_HOST
+  struct ComApartment {
+    HRESULT result = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    ~ComApartment() { if (SUCCEEDED(result)) CoUninitialize(); }
+  };
+  static thread_local ComApartment com;
+  (void)com;
+#else
   thread_local bool done = [] {
     CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     return true;
   }();
   (void)done;
+#endif
 }
 
 template <typename T>
@@ -197,12 +207,18 @@ void FreeDevices(IMFActivate** devices, UINT32 count) {
 
 // A source reader over a media source, with video processing (NV12 out); on
 // failure the source is shut down and released.
-HRESULT NewReaderFor(IMFMediaSource** source, IMFSourceReader** reader) {
+HRESULT NewReaderFor(IMFMediaSource** source, IMFSourceReader** reader,
+                     IMFSourceReaderCallback* callback = nullptr) {
   const Api& api = GetApi();
   *reader = nullptr;
   IMFAttributes* attributes = nullptr;
-  HRESULT hr = api.MFCreateAttributes(&attributes, 1);
+  HRESULT hr = api.MFCreateAttributes(&attributes, callback == nullptr ? 1 : 2);
   if (SUCCEEDED(hr)) hr = attributes->SetUINT32(kReaderVideoProcessing, TRUE);
+#ifdef GESHER_CAMERA_BROKER_HOST
+  if (SUCCEEDED(hr) && callback != nullptr) {
+    hr = attributes->SetUnknown(MF_SOURCE_READER_ASYNC_CALLBACK, callback);
+  }
+#endif
   if (SUCCEEDED(hr)) hr = api.MFCreateSourceReaderFromMediaSource(*source, attributes, reader);
   SafeRelease(attributes);
   if (FAILED(hr)) {
@@ -213,12 +229,13 @@ HRESULT NewReaderFor(IMFMediaSource** source, IMFSourceReader** reader) {
 }
 
 // A source reader over a device's media source.
-HRESULT NewReader(IMFActivate* device, IMFMediaSource** source, IMFSourceReader** reader) {
+HRESULT NewReader(IMFActivate* device, IMFMediaSource** source, IMFSourceReader** reader,
+                  IMFSourceReaderCallback* callback = nullptr) {
   *source = nullptr;
   *reader = nullptr;
   HRESULT hr = device->ActivateObject(__uuidof(IMFMediaSource), reinterpret_cast<void**>(source));
   if (FAILED(hr)) return hr;
-  return NewReaderFor(source, reader);
+  return NewReaderFor(source, reader, callback);
 }
 
 std::vector<std::pair<int, int>> NativeSizes(IMFSourceReader* reader) {
@@ -657,7 +674,7 @@ HRESULT NewTestReader(IMFMediaSource** source, IMFSourceReader** reader) {
   return NewReaderFor(source, reader);
 }
 
-std::vector<Device> FindDevices(std::string* status) {
+std::vector<Device> FindDevices(std::string* status, bool allow_test = true) {
   std::vector<Device> list;
   IMFActivate** devices = nullptr;
   UINT32 count = 0;
@@ -698,7 +715,7 @@ std::vector<Device> FindDevices(std::string* status) {
     }
     FreeDevices(devices, count);
   }
-  if (TestCameraWanted()) {
+  if (allow_test && TestCameraWanted()) {
     Device t;
     t.id = kTestId;
     t.name = "Gesher Test Camera";
@@ -733,6 +750,70 @@ void Pace(ULONGLONG* next) {
   *next = std::max<ULONGLONG>(now, *next) + 33;
 }
 
+#ifdef GESHER_CAMERA_BROKER_HOST
+class ReadCompletion final : public IMFSourceReaderCallback {
+ public:
+  ReadCompletion() : ready_(CreateEventW(nullptr, FALSE, FALSE, nullptr)) {}
+  bool valid() const { return ready_ != nullptr; }
+
+  STDMETHODIMP QueryInterface(REFIID iid, void** out) override {
+    if (out == nullptr) return E_POINTER;
+    *out = nullptr;
+    if (iid != __uuidof(IUnknown) && iid != __uuidof(IMFSourceReaderCallback)) return E_NOINTERFACE;
+    *out = static_cast<IMFSourceReaderCallback*>(this);
+    AddRef();
+    return S_OK;
+  }
+  STDMETHODIMP_(ULONG) AddRef() override { return ++refs_; }
+  STDMETHODIMP_(ULONG) Release() override {
+    const ULONG refs = --refs_;
+    if (refs == 0) delete this;
+    return refs;
+  }
+  STDMETHODIMP OnReadSample(HRESULT result, DWORD, DWORD flags, LONGLONG,
+                             IMFSample* sample) override {
+    std::lock_guard lock(lock_);
+    SafeRelease(sample_);
+    sample_ = sample;
+    if (sample_ != nullptr) sample_->AddRef();
+    result_ = result;
+    flags_ = flags;
+    SetEvent(ready_);
+    return S_OK;
+  }
+  STDMETHODIMP OnEvent(DWORD, IMFMediaEvent*) override { return S_OK; }
+  STDMETHODIMP OnFlush(DWORD) override { return S_OK; }
+
+  HRESULT Wait(ULONGLONG deadline, const std::function<bool()>& admitted,
+               DWORD* flags, IMFSample** sample) {
+    while (GetTickCount64() < deadline) {
+      const DWORD wait = WaitForSingleObject(ready_, 50);
+      if (wait == WAIT_OBJECT_0) {
+        std::lock_guard lock(lock_);
+        *flags = flags_;
+        *sample = std::exchange(sample_, nullptr);
+        return result_;
+      }
+      if (wait != WAIT_TIMEOUT) return HRESULT_FROM_WIN32(GetLastError());
+      if (!admitted()) return E_ACCESSDENIED;
+    }
+    return HRESULT_FROM_WIN32(ERROR_TIMEOUT);
+  }
+
+ private:
+  ~ReadCompletion() {
+    SafeRelease(sample_);
+    if (ready_ != nullptr) CloseHandle(ready_);
+  }
+  std::atomic<ULONG> refs_{1};
+  HANDLE ready_;
+  std::mutex lock_;
+  IMFSample* sample_ = nullptr;
+  HRESULT result_ = E_UNEXPECTED;
+  DWORD flags_ = 0;
+};
+#endif
+
 class MfCapture : public Capture {
  public:
   ~MfCapture() override {
@@ -742,11 +823,19 @@ class MfCapture : public Capture {
     SafeRelease(reader_);
     if (source_ != nullptr) source_->Shutdown();
     SafeRelease(source_);
+#ifdef GESHER_CAMERA_BROKER_HOST
+    SafeRelease(completion_);
+#endif
   }
 
   HRESULT Init(IMFActivate* device, int w, int h) {
     HRESULT hr = NewReader(device, &source_, &reader_);
     if (FAILED(hr)) return hr;
+    InitFocus();
+    return Configure(w, h);
+  }
+
+  void InitFocus() {
     camera_control_ = CameraControlOf(source_);
     if (camera_control_ != nullptr) {
       // The focus as the device had it: restored on close, so Gesher's AF does not leave
@@ -755,7 +844,6 @@ class MfCapture : public Capture {
       initial_focus_saved_ = SUCCEEDED(camera_control_->Get(
           kCameraControlFocus, &initial_focus_, &initial_focus_flags_));
     }
-    return Configure(w, h);
   }
 
   void RestoreFocus() {
@@ -799,6 +887,18 @@ class MfCapture : public Capture {
     }
     return hr;
   }
+#ifdef GESHER_CAMERA_BROKER_HOST
+  HRESULT InitRevocable(IMFActivate* device, int w, int h, std::function<bool()> admitted) {
+    completion_ = new ReadCompletion;
+    if (!completion_->valid()) return HRESULT_FROM_WIN32(GetLastError());
+    admitted_ = std::move(admitted);
+    HRESULT hr = NewReader(device, &source_, &reader_, completion_);
+    if (FAILED(hr)) return hr;
+    if (!admitted_()) return E_ACCESSDENIED;
+    InitFocus();
+    return Configure(w, h);
+  }
+#endif
 
   // The test camera's media source (TestSource).
   HRESULT InitTest(int w, int h) {
@@ -843,13 +943,33 @@ class MfCapture : public Capture {
     TraceSample trace(read_trace_);
     if (paced_) Pace(&next_);
     trace.Step(0);
+#ifdef GESHER_CAMERA_BROKER_HOST
+    const ULONGLONG deadline = GetTickCount64() + 3000;
+#endif
     for (;;) {
       DWORD stream = 0, flags = 0;
       LONGLONG timestamp = 0;
       IMFSample* sample = nullptr;
-      HRESULT hr = reader_->ReadSample(kFirstVideoStream, 0, &stream, &flags, &timestamp, &sample);
+      HRESULT hr;
+#ifdef GESHER_CAMERA_BROKER_HOST
+      if (completion_) {
+        if (!admitted_()) return E_ACCESSDENIED;
+        hr = reader_->ReadSample(kFirstVideoStream, 0, nullptr, nullptr, nullptr, nullptr);
+        if (SUCCEEDED(hr)) hr = completion_->Wait(deadline, admitted_, &flags, &sample);
+      } else
+#endif
+      {
+        hr = reader_->ReadSample(kFirstVideoStream, 0, &stream, &flags, &timestamp, &sample);
+      }
       trace.Step(1);
-      if (FAILED(hr)) return hr;
+      if (FAILED(hr)) {
+        SafeRelease(sample);
+        return hr;
+      }
+      if (flags & MF_SOURCE_READERF_CURRENTMEDIATYPECHANGED) {
+        SafeRelease(sample);
+        return static_cast<HRESULT>(0xC00D36B4);  // MF_E_INVALIDMEDIATYPE
+      }
       if (flags & (MF_SOURCE_READERF_ERROR | MF_SOURCE_READERF_ENDOFSTREAM)) {
         SafeRelease(sample);
         return static_cast<HRESULT>(0xC00D3E84);  // MF_E_END_OF_STREAM
@@ -903,6 +1023,10 @@ class MfCapture : public Capture {
   LONG initial_focus_ = 0;
   LONG initial_focus_flags_ = 0;
   std::mutex focus_mutex_;
+#ifdef GESHER_CAMERA_BROKER_HOST
+  ReadCompletion* completion_ = nullptr;
+  std::function<bool()> admitted_;
+#endif
   bool paced_ = false;  // the test camera's source makes frames at once: 30 a second here
   ULONGLONG next_ = 0;
   TraceStats read_trace_{"MF read", {"pace", "ReadSample", "contiguous buffer", "copy frame"}};
@@ -932,8 +1056,11 @@ const std::vector<Device>& List(std::string* status) {
   return *list;
 }
 
-std::unique_ptr<Capture> Open(const std::string& id, int width, int height, HRESULT* hr) {
-  if (id == kTestId && TestCameraWanted()) {
+namespace {
+
+std::unique_ptr<Capture> OpenWithPolicy(const std::string& id, int width, int height,
+                                       HRESULT* hr, const std::function<bool()>& admitted) {
+  if (!admitted && id == kTestId && TestCameraWanted()) {
     if (GetApi().missing.empty()) {
       // Through Media Foundation: its source reader over TestSource.
       auto capture = std::make_unique<MfCapture>();
@@ -965,12 +1092,35 @@ std::unique_ptr<Capture> Open(const std::string& id, int width, int height, HRES
     CoTaskMemFree(value);
     if (!match) continue;
     auto capture = std::make_unique<MfCapture>();
+#ifdef GESHER_CAMERA_BROKER_HOST
+    *hr = admitted ? (admitted() ? capture->InitRevocable(devices[i], width, height, admitted)
+                                 : E_ACCESSDENIED)
+                   : capture->Init(devices[i], width, height);
+#else
     *hr = capture->Init(devices[i], width, height);
+#endif
     capture->via = "Media Foundation (IMFSourceReader over the device)";
     if (SUCCEEDED(*hr)) result = std::move(capture);
   }
   FreeDevices(devices, count);
   return result;
 }
+
+}  // namespace
+
+std::unique_ptr<Capture> Open(const std::string& id, int width, int height, HRESULT* hr) {
+  return OpenWithPolicy(id, width, height, hr, {});
+}
+
+#ifdef GESHER_CAMERA_BROKER_HOST
+std::vector<Device> EnumerateRealDevices(std::string* status) {
+  return FindDevices(status, false);
+}
+
+std::unique_ptr<Capture> OpenRevocable(const std::string& id, int width, int height, HRESULT* hr,
+                                       std::function<bool()> admitted) {
+  return OpenWithPolicy(id, width, height, hr, admitted);
+}
+#endif
 
 }  // namespace gesher::devices::camera

@@ -179,10 +179,17 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
      * autofocus (null for a fixed-focus one); the capture thread's alone.
      */
     private CameraAutoFocus mAutoFocus;
+    private final String mAttributionTag;
 
     CameraDeviceUser(CameraService service, String cameraId, WindowsCamera.Device device,
             ICameraDeviceCallbacks callbacks) {
+        this(service, cameraId, device, callbacks, null);
+    }
+
+    CameraDeviceUser(CameraService service, String cameraId, WindowsCamera.Device device,
+            ICameraDeviceCallbacks callbacks, String attributionTag) {
         mService = service;
+        mAttributionTag = attributionTag;
         mCameraId = cameraId;
         mDevice = device;
         mCallbackQueue = new CameraCallbacks(cameraId, callbacks, () -> {
@@ -760,7 +767,7 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
     private void open(Size size) throws WindowsCamera.OpenException {
         long start = SystemClock.elapsedRealtime();
         WindowsCamera.Capture capture = CameraImageSource.open(mDevice.id, size.getWidth(),
-                size.getHeight(), mSourceChoice);
+                size.getHeight(), mSourceChoice, mAttributionTag);
         mCapture = capture;
         mCaptureFor = size;
         startAutoFocus(capture);

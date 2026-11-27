@@ -60,7 +60,15 @@ $bcp = (('core-oj', 'core-libart', 'core-icu4j') | ForEach-Object { NoDrive "$he
 # started sets no exit code.
 $ErrorActionPreference = 'Continue'
 $global:LASTEXITCODE = $null
-& (Join-Path $here 'dalvikvm.exe') "-Xbootclasspath:$bcp" "-Ximage:$(NoDrive "$here/framework/boot.art")" `
-  -Xint '-Xusejit:false' -cp (UserPath $dexFull) $Class @ProgramArgs
+$vm = Join-Path $here 'dalvikvm.exe'
+$image = "-Ximage:$(NoDrive "$here/framework/boot.art")"
+if ($env:GESHER_SANDBOX -ceq 'appcontainer-trusted') {
+  $hostBcp = $bcp + ':' + (NoDrive "$here/framework.jar") + ':' + (NoDrive "$here/gesher-app.jar")
+  $supervisor = @("-Xbootclasspath:$hostBcp", $image, '-Xint', '-Xusejit:false',
+    'com.gesher.server.ContainedDex', "-Xbootclasspath:$bcp", $image, (UserPath $dexFull), $Class)
+  & $vm @supervisor @ProgramArgs
+} else {
+  & $vm "-Xbootclasspath:$bcp" $image -Xint '-Xusejit:false' -cp (UserPath $dexFull) $Class @ProgramArgs
+}
 if ($null -eq $global:LASTEXITCODE) { throw "gesher: could not start $(Join-Path $here 'dalvikvm.exe')" }
 exit $LASTEXITCODE

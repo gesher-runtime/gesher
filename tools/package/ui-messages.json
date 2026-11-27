@@ -80,6 +80,30 @@
       "en": "Allow",
       "he": "לאפשר"
     },
+    "sandbox_override_title": {
+      "en": "Disable isolation for this app?",
+      "he": "לבטל את הבידוד עבור היישום?"
+    },
+    "sandbox_override_warning": {
+      "en": "The next time you open this app, it and its child processes will have the full access of your Windows account. They can read or change your files and use credentials, devices, and other apps that you can access. Android permissions will not restrict this Windows access. Only continue if you trust this app. Any running instances will close.",
+      "he": "בפתיחה הבאה, ליישום ולתהליכי הבת שלו תהיה גישה מלאה כמו לחשבון Windows שלך. הם יוכלו לקרוא או לשנות את הקבצים שלך ולהשתמש בפרטי גישה, בהתקנים וביישומים אחרים הנגישים לך. הרשאות Android לא יגבילו את הגישה הזאת ב־Windows. יש להמשיך רק אם היישום מהימן. אם היישום פתוח, הוא ייסגר."
+    },
+    "sandbox_override_accept": {
+      "en": "Disable isolation",
+      "he": "לבטל את הבידוד"
+    },
+    "cp_btn_app_isolation": {
+      "en": "Isolation",
+      "he": "בידוד"
+    },
+    "cp_app_isolation_restore": {
+      "en": "Restore isolation and close app",
+      "he": "להחזיר את הבידוד ולסגור את היישום"
+    },
+    "cp_app_isolation_unisolated": {
+      "en": "Disable isolation…",
+      "he": "לבטל את הבידוד…"
+    },
     "permission_deny": {
       "en": "Don't allow",
       "he": "לא לאפשר"

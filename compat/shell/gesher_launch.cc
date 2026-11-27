@@ -171,7 +171,7 @@ void EndHandover() {
 // (except launch).
 const wchar_t* const kCommands[] = {
     L"launch", L"protected-launch", L"install", L"uninstall", L"view", L"list", L"status", L"start", L"shutdown",
-    L"toast-activated", L"apk-icon", L"apk-info", L"proxy", L"windows", L"special-access",
+    L"toast-activated", L"apk-icon", L"apk-info", L"proxy", L"windows", L"app-isolation", L"special-access",
     L"settings-closed", L"settings-shown", L"sync-shortcuts", L"cameras", L"spell-checker",
     L"mobile-data", L"control-panel", L"settings", L"dashboard", L"gui", L"--app-crash"};
 

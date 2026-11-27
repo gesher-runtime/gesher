@@ -75,8 +75,10 @@ param(
   [Parameter(ValueFromRemainingArguments)] [string[]] $Arguments = @()
 )
 $ErrorActionPreference = 'Stop'
-# AppContainer M1 is a developer probe. Installed app launches use the ordinary runtime.
-Remove-Item Env:GESHER_SANDBOX -ErrorAction SilentlyContinue
+# The installed default remains on the established route during qualification.
+# Accept only the trusted cohost candidate, and never fall back within that run.
+$trustedAppContainer = $env:GESHER_SANDBOX -ceq 'appcontainer-trusted'
+if (-not $trustedAppContainer) { Remove-Item Env:GESHER_SANDBOX -ErrorAction SilentlyContinue }
 $scriptRoot = if ($PSScriptRoot) { $PSScriptRoot } elseif ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path } else { (Get-Location).Path }
 . (Join-Path $scriptRoot 'gesher-ui.ps1')
 . (Join-Path $scriptRoot 'gesher-runtime-files.ps1')
@@ -110,13 +112,14 @@ $root = Set-GesherProfileEnvironment $here
 # The optional addon installer records an explicit per-profile choice. An explicit
 # environment value (including 0) takes precedence for a single invocation.
 $enableMicrogForProfile = -not $env:GESHER_MICROG_SPOOF -and (Test-Path (Join-Path $root 'microg.enabled'))
-$commands = 'install', 'uninstall', 'view', 'list', 'status', 'start', 'shutdown', 'launch', 'protected-launch', 'toast-activated', 'apk-icon', 'apk-info', 'proxy', 'windows', 'special-access', 'settings-closed', 'settings-shown', 'sync-shortcuts', 'cameras', 'spell-checker', 'mobile-data'
+$commands = 'install', 'uninstall', 'view', 'list', 'status', 'start', 'shutdown', 'launch', 'protected-launch', 'toast-activated', 'apk-icon', 'apk-info', 'proxy', 'windows', 'app-isolation', 'special-access', 'settings-closed', 'settings-shown', 'sync-shortcuts', 'cameras', 'spell-checker', 'mobile-data'
 if ($Arguments.Count -eq 0) {
   Write-Host ((Get-GesherText 'usage') + 'gesher-app APK [--window | --hidden-window | --headless [--keep-task]] [--activity CLASS] [--ez KEY true|false]... [--proxy host:port|direct|windows] [--detach | --wait | --single-process | --system-server]')
   Write-Host '       gesher-app launch PACKAGE|APK [options] | install APK [--desktop-shortcut] | uninstall PACKAGE | view PACKAGE URL | list | status | start | shutdown | proxy [[PACKAGE] host:port|direct|windows] | windows PACKAGE separate|shared'
   Write-Host '       gesher-app spell-checker list|use COMPONENT|automatic|enable|disable|language ID'
   Write-Host '       gesher-app cameras [rear CAMERA_ID | reset]'
   Write-Host '       gesher-app protected-launch APK'
+  Write-Host '       gesher-app app-isolation PACKAGE [isolated|unisolated]'
   Write-Host '       gesher-app mobile-data [on|off] | mobile-data roaming [on|off]'
   exit 2
 }
@@ -159,8 +162,13 @@ function DeviceProcess($state, [string] $name) {
 
 # `gesher-app shutdown`, without starting a runtime: the system server's
 # shutdown event, then whatever is left is ended.
-if ($command -eq 'shutdown') {
+if ($command -eq 'shutdown' -or $command -eq 'app-isolation') {
   $state = DeviceState
+  if ($state -and $state['protected_binder'] -eq 'true') {
+    $env:GESHER_SANDBOX = 'appcontainer-trusted'
+  }
+}
+if ($command -eq 'shutdown' -and (-not $state -or $state['protected_binder'] -ne 'true')) {
   if (-not $state) { Write-Host ('gesher-app: ' + (Get-GesherText 'no_device')); exit 0 }
   $server = DeviceProcess $state 'system_server'
   if ($server) {
@@ -353,8 +361,17 @@ try {
     exit $LASTEXITCODE
   }
 
-  # Single process: the app alone, with stand-in services in its own process.
   $DriverArgs = @($rest | Where-Object { $_ -ne '--single-process' })
+  if ($trustedAppContainer) {
+    if ($DriverArgs -contains '--system-server') {
+      $ScopedArgs = @($DriverArgs | Where-Object { $_ -ne '--system-server' })
+      Invoke-Dalvikvm @dvm com.gesher.app.Launcher @launchErrorArguments launch-scoped @ScopedArgs (UserPath $apkFull)
+    } else {
+      Invoke-Dalvikvm @dvm com.gesher.app.Launcher @launchErrorArguments launch-cohost (UserPath $apkFull) @DriverArgs
+    }
+    exit $LASTEXITCODE
+  }
+  # Single process: the app alone, with stand-in services in its own process.
   if ($DriverArgs -notcontains '--system-server') {
     Invoke-Dalvikvm @dvm com.gesher.app.Main @DriverArgs (UserPath $apkFull)
     exit $LASTEXITCODE

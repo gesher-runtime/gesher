@@ -5,7 +5,13 @@
 package com.gesher.server;
 
 import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 
 /**
  * The Gesher device's processes: a zygote, lite. Windows has no fork, so an app process
@@ -34,6 +40,31 @@ public final class Zygote {
     static native int nativeSpawnInAppContainer(String commandLine, String[] setEnv,
             String[] unsetEnv, String logPath, String container, String displayName,
             String[] capabilities);
+    private static native int[] nativeStartProtectedDevice(String device, String[] commands,
+            String[] logs, String[] environment, boolean scoped);
+    public static native void finishScopedStandardStreams();
+    static native boolean nativeHasProtectedLaunchAuthority(boolean scoped);
+    interface CapturePolicy {
+        int MICROPHONE = 1;
+        int CAMERA_START = 2;
+        int CAMERA_CHECK = 3;
+        int CAMERA_FINISH = 4;
+        int CAMERA_RESET = 5;
+        boolean allowed(int uid, int kind, long installationHigh, long installationLow, long session,
+                String attributionTag);
+    }
+
+    static native boolean nativeAttachCapturePermissionPolicy(CapturePolicy policy);
+    static native int nativeOpenProtectedChildFile(int pid, long birth, String windowsPath);
+    public static native boolean nativePrepareProtectedOperator(int brokerPid, long birth);
+    private static native int nativeSpawnProtectedApp(String commandLine, String[] setEnv,
+            String[] unsetEnv, String logPath, String container, String displayName,
+            String[] capabilities, int uid, long installHigh, long installLow, long startSeq,
+            long codePin, boolean unisolatedApproved);
+    private static native boolean nativeChangeProtectedInstallation(long installHigh,
+            long installLow, boolean revoke);
+    private static native boolean nativeStopProtectedInstallation(long installHigh,
+            long installLow, long stopThrough);
     static native int nativeEnsureAppContainer(String container, String displayName);
     static native int nativeGrantToAppContainer(String path, String container, int access,
             boolean inherit);
@@ -43,6 +74,7 @@ public final class Zygote {
     static native int nativeProtectPrivateStorage(String path);
     static native int nativeGrantToCapability(String path, String capability, int access,
             boolean inherit);
+    static native int nativeGrantPropertyAreaRead(String container);
     static native int nativeDeleteAppContainer(String container);
     static native int nativeSpawnCompiler(String commandLine, String[] setEnv, String[] unsetEnv,
             String logPath, int memoryMiB, int cpuRate);
@@ -50,6 +82,26 @@ public final class Zygote {
             boolean stopOnLowMemory);
     static native long nativeAvailableMemory();
     private static native int nativeRestartWithUid(int uid);
+    private static native long nativePinStandaloneInput(String windowsPath);
+    private static native void nativeReleaseStandaloneInput(long pin);
+    private static native int nativeReadStandaloneInput(long pin, long offset, byte[] target)
+            throws IOException;
+    private static native int nativeRunContainedStandalone(String command, String container,
+            String display, String[] capabilities, long pin, int uid);
+    private static native int nativeRunPinnedCohost(String command, String container,
+            String display, String[] capabilities, long pin, int uid,
+            CohostPermissionHost permissions, String credential, String device,
+            String[] external, int[] streams,
+            String buildProp, String frameworkRes);
+    static native boolean nativeCohostPermissionLive(long lease);
+    static native boolean nativeCohostMatchesProcess(long lease, long pid, long birth);
+    static native byte[] nativeCohostClipboardExchange(int operation, byte[] data);
+    static native void nativeCancelCohost(long lease);
+    public static native int[] captureCohostStreams() throws IOException;
+    static native boolean nativeHasCohostPermissionScope();
+    static native boolean nativeCohostOwnsApk(String windowsPath);
+    static native boolean nativeCohostOwnsData(String credential, String device);
+    static native int[] nativeCohostPermissionExchange(int operation, String[] names);
     static native long nativeStartTime(int pid);
     static native long nativeChildStartTime(int pid);
     static native int nativeExitCode(int pid);
@@ -67,6 +119,53 @@ public final class Zygote {
 
     /** STILL_ACTIVE, the exit code of a process that runs. */
     public static final int STILL_ACTIVE = 259;
+
+    /** Host-only read lease held before examining or starting this source file. */
+    static final class StandaloneInput implements AutoCloseable {
+        final String path;
+        private volatile long pin;
+
+        StandaloneInput(String path) {
+            this.path = new File(path).getAbsolutePath();
+            pin = nativePinStandaloneInput(windowsPath(this.path));
+        }
+
+        boolean isOpen() { return pin != 0; }
+
+        void copyForVerification(Path target) throws IOException {
+            if (pin == 0) throw new IllegalStateException("Standalone code lease is closed");
+            byte[] bytes = new byte[128 * 1024];
+            try (var out = Files.newOutputStream(target, StandardOpenOption.CREATE_NEW,
+                    StandardOpenOption.WRITE)) {
+                long offset = 0;
+                for (;;) {
+                    int size = nativeReadStandaloneInput(pin, offset, bytes);
+                    if (size == 0) break;
+                    out.write(bytes, 0, size);
+                    offset += size;
+                }
+            }
+        }
+
+        int run(String command, String container, String display,
+                String[] capabilities, int uid) {
+            if (pin == 0) throw new IllegalStateException("Standalone code lease is closed");
+            return nativeRunContainedStandalone(command, container, display, capabilities, pin, uid);
+        }
+
+        int runCohost(String command, String container, String display, String[] capabilities,
+                int uid, CohostPermissionHost permissions, String credential, String device,
+                String[] external, int[] streams, String buildProp, String frameworkRes) {
+            if (!isOpen()) throw new IllegalStateException("Standalone code lease is closed");
+            return nativeRunPinnedCohost(command, container, display, capabilities, pin, uid,
+                    permissions, credential, device, external, streams, buildProp, frameworkRes);
+        }
+
+        @Override public void close() {
+            nativeReleaseStandaloneInput(pin);
+            pin = 0;
+        }
+    }
 
     /**
      * Re-enters the current standalone command with immutable UID/Binder identity.
@@ -112,6 +211,74 @@ public final class Zygote {
                     + container + " failed: Win32 error " + (-pid));
         }
         return pid;
+    }
+
+    public static int[] startProtectedDevice(String device, List<String> commands,
+            List<File> logs, List<String> environment) {
+        return startProtectedDevice(device, commands, logs, environment, false);
+    }
+
+    public static int[] startProtectedDevice(String device, List<String> commands,
+            List<File> logs, List<String> environment, boolean scoped) {
+        String[] paths = new String[logs.size()];
+        for (int i = 0; i < paths.length; i++) {
+            File log = logs.get(i);
+            log.getParentFile().mkdirs();
+            paths[i] = windowsPath(log.getPath());
+        }
+        List<String> hostEnvironment = new ArrayList<>(environment);
+        hostEnvironment.add("GESHER_ANDROID_DATA_HOST_PATH="
+                + windowsPath(Device.dataDir()));
+        int[] pids = nativeStartProtectedDevice(device, commands.toArray(new String[0]),
+                paths, hostEnvironment.toArray(new String[0]), scoped);
+        if (pids.length != 3) throw new IllegalStateException("Protected device startup failed");
+        return pids;
+    }
+
+    static int spawnProtectedApp(String commandLine, List<String> setEnv, String logPath,
+            String container, List<String> capabilities, ApkPackage pkg, long startSeq,
+            StandaloneInput code) {
+        return spawnControlledApp(commandLine, setEnv, logPath, container, capabilities,
+                pkg, startSeq, code, false);
+    }
+
+    static int spawnUnisolatedApprovedApp(String commandLine, List<String> setEnv, String logPath,
+            ApkPackage pkg, long startSeq) {
+        return spawnControlledApp(commandLine, setEnv, logPath, "", List.of(), pkg, startSeq, null, true);
+    }
+
+    private static int spawnControlledApp(String commandLine, List<String> setEnv, String logPath,
+            String container, List<String> capabilities, ApkPackage pkg, long startSeq,
+            StandaloneInput code, boolean unisolatedApproved) {
+        if (code != null && code.pin == 0) {
+            throw new IllegalStateException("The protected APK lease is closed");
+        }
+        UUID owner = UUID.fromString(pkg.enabledStateOwner());
+        int pid = nativeSpawnProtectedApp(commandLine, setEnv.toArray(new String[0]),
+                new String[] {"GESHER_BINDER_UID"}, windowsPath(logPath), container,
+                pkg.packageName, capabilities.toArray(new String[0]), pkg.uid(),
+                owner.getMostSignificantBits(), owner.getLeastSignificantBits(), startSeq,
+                code != null ? code.pin : 0, unisolatedApproved);
+        if (pid <= 0) {
+            throw new IllegalStateException("Protected launch failed for "
+                    + pkg.packageName + " with Win32 error " + (-pid));
+        }
+        return pid;
+    }
+
+    static boolean changeProtectedInstallation(ApkPackage pkg, boolean revoke) {
+        UUID owner = UUID.fromString(pkg.enabledStateOwner());
+        return nativeChangeProtectedInstallation(owner.getMostSignificantBits(),
+                owner.getLeastSignificantBits(), revoke);
+    }
+
+    static void stopProtectedInstallation(ApkPackage pkg, long stopThrough) {
+        UUID owner = UUID.fromString(pkg.enabledStateOwner());
+        if (!nativeStopProtectedInstallation(owner.getMostSignificantBits(),
+                owner.getLeastSignificantBits(), stopThrough)) {
+            throw new IllegalStateException("Could not stop contained processes for "
+                    + pkg.packageName);
+        }
     }
 
     /** The process's creation time, 0 when it does not run. */

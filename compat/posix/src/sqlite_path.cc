@@ -43,7 +43,9 @@ extern "C" int gesher_sqlite_full_pathname(
   // SQLite examines the output even when xFullPathname fails.
   full[0] = '\0';
   std::wstring windows;
-  if (!gesher::DiskPath(path, &windows, EINVAL)) return SQLITE_CANTOPEN;
+  // The Win32 SQL VFS handles actual selected-root access through its broker
+  // wrappers. This step only builds SQLite's owned canonical filename.
+  if (!gesher::DiskPath(path, &windows, EINVAL, true)) return SQLITE_CANTOPEN;
   if (!gesher::CheckExternalStorageAccess(windows, gesher::AccessKind::kStat)) return SQLITE_CANTOPEN;
   const std::string native = gesher::Narrow(windows.c_str());
   if (native.empty()) return SQLITE_CANTOPEN;

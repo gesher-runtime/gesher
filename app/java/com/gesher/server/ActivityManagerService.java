@@ -143,6 +143,12 @@ public final class ActivityManagerService extends IActivityManager.Default {
         return states;
     }
 
+    int cameraForegroundState(int uid) {
+        AppOpsService.UidState state = appOpsUidStates().get(uid);
+        return state != null && (state.capabilities()
+                & ActivityManager.PROCESS_CAPABILITY_FOREGROUND_CAMERA) != 0 ? state.state() : -1;
+    }
+
 
     void setAccountManager(AccountManagerService accounts) { mAtm.setAccountManager(accounts); }
 

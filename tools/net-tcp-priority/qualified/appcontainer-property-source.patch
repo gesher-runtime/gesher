@@ -1,0 +1,185 @@
+diff --git a/compat/posix/include/gesher/system_properties.h b/compat/posix/include/gesher/system_properties.h
+index 3516cd627..78b746609 100644
+--- a/compat/posix/include/gesher/system_properties.h
++++ b/compat/posix/include/gesher/system_properties.h
+@@ -21,0 +22,3 @@ bool Initialize();
++// Initialize the broker's current area and return the exact file to grant
++// the guest read access to. A contained process cannot prepare a grant.
++std::wstring ReadOnlyAreaPath();
+diff --git a/compat/posix/src/system_properties.cc b/compat/posix/src/system_properties.cc
+index 8e960fbb5..a9df01917 100644
+--- a/compat/posix/src/system_properties.cc
++++ b/compat/posix/src/system_properties.cc
+@@ -28 +28 @@ constexpr uint32_t kMagic = 0x47535052; // GSPR
+-constexpr uint32_t kVersion = 2;
++constexpr uint32_t kVersion = 3;
+@@ -41 +41 @@ struct Header {
+-  uint32_t used;
++  uint32_t used[2];
+@@ -42,0 +43,5 @@ struct Header {
++constexpr DWORD kMappingSize = sizeof(Header) + 2 * kCapacity;
++
++char* Payload(void* view, uint32_t slot) {
++  return static_cast<char*>(view) + sizeof(Header) + slot * kCapacity;
++}
+@@ -64 +69,2 @@ struct Area {
+-  std::wstring root, persistent;
++  std::wstring root, path, persistent;
++  bool writable = false;
+@@ -68,0 +75,12 @@ bool Valid(const std::string& name, const std::string& value);
++bool WritableProcess() {
++  // Use the primary Windows token even when a thread is impersonating a client.
++  static const bool writable = [] {
++    Handle token;
++    DWORD contained = 0, size = 0;
++    return OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token.value) &&
++           GetTokenInformation(token.value, TokenIsAppContainer, &contained,
++                               sizeof(contained), &size) && !contained;
++  }();
++  return writable;
++}
++
+@@ -240 +258,3 @@ Snapshot Initial() {
+-         {"ro.product.brand", "gesher"}, {"ro.hardware", "gesher"}, {"ro.debuggable", "0"}}) {
++         {"ro.product.brand", "gesher"}, {"ro.hardware", "gesher"}, {"ro.debuggable", "0"},
++         // The DisplayEventReceiver stand-in has no vsync source.
++         {"debug.choreographer.vsync", "false"}}) {
+@@ -264,8 +284,20 @@ bool Refresh(Area* area) {
+-  const auto* header = static_cast<Header*>(area->view);
+-  if (header->magic != kMagic || header->version != kVersion || header->used > kCapacity - sizeof(Header)) return false;
+-  uint32_t generation = __atomic_load_n(&header->generation, __ATOMIC_ACQUIRE);
+-  if (generation == area->cached_generation) return true;
+-  std::string data(static_cast<const char*>(area->view) + sizeof(Header), header->used);
+-  if (!Decode(data, &area->values)) return false;
+-  area->cached_generation = generation;
+-  return true;
++  const auto* header = static_cast<const Header*>(area->view);
++  for (int attempt = 0; attempt < 8; ++attempt) {
++    uint32_t generation = __atomic_load_n(&header->generation, __ATOMIC_ACQUIRE);
++    if (!generation || header->magic != kMagic || header->version != kVersion) return false;
++    if (generation == area->cached_generation) return true;
++    uint32_t slot = generation & 1;
++    uint32_t used = __atomic_load_n(&header->used[slot], __ATOMIC_RELAXED);
++    std::string data;
++    if (used <= kCapacity) data.assign(Payload(area->view, slot), used);
++    // The writer publishes the other slot first. If it has published again
++    // while we copied, this slot might have been reused and must be discarded.
++    __atomic_thread_fence(__ATOMIC_SEQ_CST);
++    if (generation != __atomic_load_n(&header->generation, __ATOMIC_ACQUIRE)) continue;
++    if (used > kCapacity || !Decode(data, &area->values)) return false;
++    area->cached_generation = generation;
++    return true;
++  }
++  // During sustained writes, keep the last coherent snapshot. Wait callers
++  // will poll again until the property changes or their timeout expires.
++  return area->cached_generation != 0;
+@@ -273,0 +306 @@ bool Publish(Area* area, Snapshot values) {
++  if (!area->writable) return false;
+@@ -275 +308 @@ bool Publish(Area* area, Snapshot values) {
+-  if (data.size() > kCapacity - sizeof(Header)) return false;
++  if (data.size() > kCapacity) return false;
+@@ -277 +310,2 @@ bool Publish(Area* area, Snapshot values) {
+-  uint32_t generation = __atomic_load_n(&header->generation, __ATOMIC_RELAXED) + 1;
++  uint32_t previous = __atomic_load_n(&header->generation, __ATOMIC_RELAXED);
++  uint32_t generation = previous + 1;
+@@ -279,4 +313,6 @@ bool Publish(Area* area, Snapshot values) {
+-  std::memcpy(static_cast<char*>(area->view) + sizeof(Header), data.data(), data.size());
+-  header->magic = kMagic;
+-  header->version = kVersion;
+-  header->used = static_cast<uint32_t>(data.size());
++  // Zero means uninitialized. Skip directly to an even generation on wrap
++  // so a writer always leaves the currently published slot intact.
++  if (previous && (previous & 1) == (generation & 1)) ++generation;
++  uint32_t slot = generation & 1;
++  std::memcpy(Payload(area->view, slot), data.data(), data.size());
++  __atomic_store_n(&header->used[slot], static_cast<uint32_t>(data.size()), __ATOMIC_RELAXED);
+@@ -353,2 +389 @@ Area* Current() { // LocalMutex is held by every caller.
+-  std::wstring path = dir + L"\\" + Key(session) + L".area";
+-  if (!Directories(dir) || !Directories(data + L"\\property")) return nullptr;
++  std::wstring path = dir + L"\\" + Key(L"property-v3-" + session) + L".area";
+@@ -357,2 +392,8 @@ Area* Current() { // LocalMutex is held by every caller.
+-  area->persistent = data + L"\\property\\persistent_properties";
+-  area->mutex.value = CreateMutexW(nullptr, FALSE, (L"Local\\gesher-properties-" + Key(path)).c_str());
++  area->path = path;
++  area->writable = WritableProcess();
++  if (area->writable) {
++    if (!Directories(dir) || !Directories(data + L"\\property")) return nullptr;
++    area->persistent = data + L"\\property\\persistent_properties";
++    area->mutex.value = CreateMutexW(nullptr, FALSE, (L"Local\\gesher-properties-" + Key(path)).c_str());
++    if (!area->mutex.value) return nullptr;
++  }
+@@ -360,3 +401,4 @@ Area* Current() { // LocalMutex is held by every caller.
+-  if (!lock.held) return nullptr;
+-  area->file.value = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE,
+-                                 FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS,
++  if (area->writable && !lock.held) return nullptr;
++  area->file.value = CreateFileW(path.c_str(), area->writable ? GENERIC_READ | GENERIC_WRITE : GENERIC_READ,
++                                 FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
++                                 area->writable ? OPEN_ALWAYS : OPEN_EXISTING,
+@@ -365 +407,2 @@ Area* Current() { // LocalMutex is held by every caller.
+-  area->mapping.value = CreateFileMappingW(area->file.value, nullptr, PAGE_READWRITE, 0, kCapacity, nullptr);
++  area->mapping.value = CreateFileMappingW(area->file.value, nullptr, area->writable ? PAGE_READWRITE : PAGE_READONLY,
++                                           0, area->writable ? kMappingSize : 0, nullptr);
+@@ -367 +410 @@ Area* Current() { // LocalMutex is held by every caller.
+-  area->view = MapViewOfFile(area->mapping.value, FILE_MAP_ALL_ACCESS, 0, 0, kCapacity);
++  area->view = MapViewOfFile(area->mapping.value, area->writable ? FILE_MAP_WRITE : FILE_MAP_READ, 0, 0, kMappingSize);
+@@ -370 +413 @@ Area* Current() { // LocalMutex is held by every caller.
+-  if (!header->magic) {
++  if (area->writable && !__atomic_load_n(&header->generation, __ATOMIC_RELAXED)) {
+@@ -373,0 +417,2 @@ Area* Current() { // LocalMutex is held by every caller.
++    header->magic = kMagic;
++    header->version = kVersion;
+@@ -381 +426 @@ Area* Current() { // LocalMutex is held by every caller.
+-  RemoveOldAreas(dir, path);
++  if (result->writable) RemoveOldAreas(dir, path);
+@@ -419,0 +465,8 @@ bool Initialize() {
++
++std::wstring ReadOnlyAreaPath() {
++  if (!WritableProcess()) return {};
++  std::lock_guard lock(LocalMutex());
++  Area* area = Current();
++  return area ? area->path : std::wstring{};
++}
++
+@@ -422,6 +475,2 @@ namespace {
+-// few properties (log.tag.*). Without the cross-process mutex, this reads only
+-// the header's 32-bit generation (one aligned load) and never the shared
+-// values: when it equals the generation this process last decoded under the
+-// mutex, the process's own decoded copy (area->values) is returned, which is
+-// what a locked read would have seen before any Set still in progress. A
+-// different generation takes the mutex and decodes again.
++// few properties (log.tag.*). Refresh returns the process's decoded copy
++// when the published generation has not changed.
+@@ -430,7 +479 @@ Area* Refreshed() {
+-  if (!area) return nullptr;
+-  const auto* header = static_cast<const Header*>(area->view);
+-  if (__atomic_load_n(&header->generation, __ATOMIC_ACQUIRE) != area->cached_generation) {
+-    MutexLock lock(area->mutex.value);
+-    if (!lock.held || !Refresh(area)) return nullptr;
+-  }
+-  return area;
++  return area && Refresh(area) ? area : nullptr;
+@@ -467 +510 @@ bool Set(const std::string& name, const std::string& value) {
+-  if (!Valid(name, value)) return false;
++  if (!WritableProcess() || !Valid(name, value)) return false;
+@@ -479 +522 @@ bool Set(const std::string& name, const std::string& value) {
+-  if (Encode(values).size() > kCapacity - sizeof(Header)) return false;
++  if (Encode(values).size() > kCapacity) return false;
+@@ -485,4 +528,2 @@ Snapshot List() {
+-  Area* area = Current();
+-  if (!area) return {};
+-  MutexLock lock(area->mutex.value);
+-  return lock.held && Refresh(area) ? area->values : Snapshot{};
++  Area* area = Refreshed();
++  return area ? area->values : Snapshot{};
+@@ -492,4 +533,2 @@ uint32_t AreaSerial() {
+-  Area* area = Current();
+-  if (!area) return 0;
+-  MutexLock lock(area->mutex.value);
+-  return lock.held && Refresh(area) ? area->cached_generation : 0;
++  Area* area = Refreshed();
++  return area ? area->cached_generation : 0;
+@@ -522,2 +561 @@ bool Wait(const std::string* name, uint32_t old_serial, uint32_t* new_serial,
+-      MutexLock lock(area->mutex.value);
+-      if (!lock.held || !Refresh(area)) return false;
++      if (!Refresh(area)) return false;

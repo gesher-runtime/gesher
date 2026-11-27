@@ -60,7 +60,8 @@ import java.util.Map;
  * ({@link WindowsCamera.Device#autofocus}) the AF modes {@link CameraAutoFocus} runs; auto
  * exposure and white balance only, outputs YUV_420_888, JPEG and PRIVATE at the
  * device's sizes (frames are scaled for other sizes). Opening needs a current CAMERA grant
- * for the actual application UID. No torch, no reprocessing, no offline sessions, no extensions.
+ * for the actual application UID. The protected Windows broker also checks AppOps.
+ * No torch, no reprocessing, no offline sessions, no extensions.
  */
 public final class CameraService extends ICameraService.Default {
     static final String TAG = "camera";
@@ -535,7 +536,8 @@ public final class CameraService extends ICameraService.Default {
                     + " does not have " + Manifest.permission.CAMERA);
         }
         CameraDeviceUser previous;
-        CameraDeviceUser user = new CameraDeviceUser(this, cameraId, d, callbacks);
+        CameraDeviceUser user = new CameraDeviceUser(this, cameraId, d, callbacks,
+                clientAttribution.attributionTag);
         synchronized (mOpen) {
             previous = mOpen.put(cameraId, user);
         }

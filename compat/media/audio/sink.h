@@ -45,7 +45,8 @@ class Sink {
 
 // WASAPI shared mode on the default render endpoint; null with `error` set
 // when there is none or it fails.
-std::unique_ptr<Sink> OpenWasapiSink(const std::u16string& app_name, std::string* error);
+std::unique_ptr<Sink> OpenWasapiSink(const std::u16string& app_name, std::string* error,
+                                    uint32_t session_owner = 0);
 // The mixed output, paced by the clock, into a 16-bit stereo 48 kHz WAV file.
 std::unique_ptr<Sink> OpenCaptureSink(const std::wstring& path, std::string* error);
 // Nothing heard, paced by the clock.

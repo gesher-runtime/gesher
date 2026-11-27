@@ -96,8 +96,10 @@ public final class CameraCallbackAdmissionTest {
         System.loadLibrary("android_runtime");
         cameraType = Class.forName("com.gesher.server.CameraDeviceUser");
         queueType = Class.forName("com.gesher.server.CameraCallbacks");
-        constructor = cameraType.getDeclaredConstructors()[0]; constructor.setAccessible(true);
         Class<?> serviceType = Class.forName("com.gesher.server.CameraService");
+        constructor = cameraType.getDeclaredConstructor(serviceType, String.class,
+                Class.forName("com.gesher.server.WindowsCamera$Device"), ICameraDeviceCallbacks.class);
+        constructor.setAccessible(true);
         service = serviceType.getMethod("get").invoke(null);
         int maximum = field(queueType, "MAX_FRAMES").getInt(null);
         long budget = field(queueType, "MAX_BYTES").getLong(null);

@@ -17,6 +17,7 @@
 
 #include <chrono>
 #include <cstring>
+#include <thread>
 
 #include "gesher_window.h"
 #include "layered_bitmap.h"
@@ -24,6 +25,8 @@
 #include "drop_target.h"
 #include "window_frame.h"
 #include "../../locale/ui_locale.h"
+#include <gesher/binder_endpoint.h>
+#include <gesher/drop_mount.h>
 
 namespace gesher {
 namespace {
@@ -372,8 +375,27 @@ void Window::Run(std::wstring title, int width, int height) {
       app_user_model_id_ = Narrow(id);
     }
   }
+  std::shared_ptr<gesher::drop_mount::Channel> hosted_drop;
+  std::thread hosted_poll;
   if (hwnd != nullptr) {
-    gesher::windows::RegisterWindowDropTarget(hwnd);
+    const bool guest = gesher::binder_endpoint::Current().IsGuest();
+    if (guest) hosted_drop = gesher::drop_mount::Channel::Attach(hwnd);
+    if (!guest) {
+      gesher::windows::RegisterWindowDropTarget(hwnd);
+    } else if (hosted_drop) {
+      hosted_poll = std::thread([hosted_drop, hwnd] {
+        gesher::drop_mount::Event event;
+        while (hosted_drop->Poll(&event)) {
+          if (event.action) {
+            gesher::windows::DispatchDragToSession(hwnd, static_cast<int>(event.action), event.x, event.y,
+                event.paths.empty() ? nullptr : &event.paths, event.text, event.file_drag, true);
+          } else {
+            Sleep(22);
+          }
+        }
+        if (!hosted_drop->Detached()) hosted_drop->Close();
+      });
+    }
   }
   {
     std::lock_guard<std::mutex> lock(create_mutex_);
@@ -419,7 +441,10 @@ void Window::Run(std::wstring title, int width, int height) {
     }
   }
   layered_bitmap_.reset();
-  if (hwnd != nullptr) {
+  if (hosted_drop) {
+    hosted_drop->Detach();
+    hosted_poll.join();
+  } else if (hwnd != nullptr) {
     gesher::windows::RevokeWindowDropTarget(hwnd);
   }
   if (SUCCEEDED(ole)) {

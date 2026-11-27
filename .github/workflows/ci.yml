@@ -1345,6 +1345,7 @@ jobs:
           cp out/*.exe out/dalvikvm.map out/dex2oat.map dist/
           cp tools/package/licenses/BIONIC-GDTOA-NOTICES.txt dist/
           cp out/gesher_shellext.dll dist/
+          cp out/gesher-drop-worker.exe dist/
           cp out/futex_test_module.dll dist/
           cp out/gesher_usb_block_owner_module_test.dll dist/
           cp -r out/dlopen-fixtures dist/
@@ -1929,22 +1930,12 @@ jobs:
           foreach ($f in [regex]::Matches((Get-Content -Raw "$app\fonts\fonts.xml"), '[A-Za-z0-9_-]+\.ttf') | ForEach-Object Value | Sort-Object -Unique) {
             if (-not (Test-Path "$app\fonts\$f")) { throw "The installer left out fonts\$f, which fonts.xml names" }
           }
-          $out = & "$app\gesher-app.cmd" "$app\lifecycle.apk" --single-process 2>&1 | Out-String
-          $code = $LASTEXITCODE
-          Write-Host "gesher-app lifecycle.apk --single-process (exit $code):"
-          Write-Host (($out -split "`n" | Select-Object -Last 15) -join "`n")
-          if ($code -ne 0 -or $out -notmatch 'gesher-app: done' -or $out -notmatch 'stand-in services in this process') {
-            throw "The installed gesher-app --single-process did not take lifecycle.apk to onResume (exit $code)"
-          }
-          $fonts = $out -split "`n" | Select-String -Pattern 'gesher-app: system fonts' | Select-Object -First 1
-          Write-Host $fonts
-          if ($out -notmatch 'gesher-app: system fonts: \d+ typefaces') { throw 'The installed gesher-app did not load the system fonts' }
-          if ($out -notmatch 'gesher: boot image loaded: 5 spaces') { throw 'The installed gesher-app did not load the installed boot image with its extensions' }
-          'PASS  installer: the installed boot image loads (gesher: the primary image, 3 spaces; gesher-app: with the framework and gesher-app extensions, 5 spaces)' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
-          'PASS  installer: gesher-app loads the installed system fonts' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           # The default: the Gesher device (binderd, servicemanager and a
           # persistent system server, detached), the APK installed, its
           # process started by the system server (docs/services.md).
+          # Run the cold device launch before the single-process probe. A
+          # protected single-process launch can start a policy owner that the
+          # default launch would reuse instead of starting a fresh device.
           $device = "$env:LOCALAPPDATA\Gesher\data\system\gesher-device"
           function DevicePids {
             if (-not (Test-Path $device)) { return @() }
@@ -1960,14 +1951,15 @@ jobs:
           # The device's processes log how they execute (checked below, ADR 0081).
           $env:GESHER_LOG_EXECUTION = '1'
           # CardWake (#407) looks up UsbManager during Activity.onCreate.
-          $out = & "$app\gesher-app.cmd" "$app\lifecycle.apk" --ez com.gesher.lifecycle.CHECK_USB_SERVICE true 2>&1 | Out-String
+          $out = & "$app\gesher-app.cmd" "$app\lifecycle.apk" --ez com.gesher.lifecycle.CHECK_USB_SERVICE true --ez com.gesher.lifecycle.CHECK_ANDROID_DATA true 2>&1 | Out-String
           $code = $LASTEXITCODE
           Remove-Item Env:GESHER_LOG_EXECUTION
           Write-Host "gesher-app lifecycle.apk (exit $code):"
           Write-Host (($out -split "`n" | Select-Object -Last 15) -join "`n")
           if ($code -ne 0 -or $out -notmatch 'gesher-app: done' -or $out -notmatch 'started the Gesher device' -or
               $out -notmatch 'installed com\.gesher\.lifecycle' -or $out -notmatch 'LifecycleActivity onResume' -or
-              $out -notmatch 'LifecycleActivity onCreate: USB service available') {
+              $out -notmatch 'LifecycleActivity onCreate: USB service available' -or
+              $out -notmatch 'LifecycleActivity Android data capacity and device-state isolation verified') {
             Get-Content "$env:LOCALAPPDATA\Gesher\logs\*.log" -ErrorAction SilentlyContinue | Select-Object -Last 60 | Out-Host
             throw "The installed gesher-app did not run lifecycle.apk on the Gesher device (exit $code)"
           }
@@ -2008,6 +2000,19 @@ jobs:
           }
           if ($out -notmatch 'Windows AppUserModelID Gesher\.App\.com\.gesher\.lifecycle') { throw 'The app process did not set its AppUserModelID' }
           'PASS  installer: the first launch of lifecycle.apk makes its Start menu shortcut; its process sets the AppUserModelID Gesher.App.com.gesher.lifecycle' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          $out = & "$app\gesher-app.cmd" "$app\lifecycle.apk" --single-process 2>&1 | Out-String
+          $code = $LASTEXITCODE
+          Write-Host "gesher-app lifecycle.apk --single-process (exit $code):"
+          Write-Host (($out -split "`n" | Select-Object -Last 15) -join "`n")
+          if ($code -ne 0 -or $out -notmatch 'gesher-app: done' -or $out -notmatch 'stand-in services in this process') {
+            throw "The installed gesher-app --single-process did not take lifecycle.apk to onResume (exit $code)"
+          }
+          $fonts = $out -split "`n" | Select-String -Pattern 'gesher-app: system fonts' | Select-Object -First 1
+          Write-Host $fonts
+          if ($out -notmatch 'gesher-app: system fonts: \d+ typefaces') { throw 'The installed gesher-app did not load the system fonts' }
+          if ($out -notmatch 'gesher: boot image loaded: 5 spaces') { throw 'The installed gesher-app did not load the installed boot image with its extensions' }
+          'PASS  installer: the installed boot image loads (gesher: the primary image, 3 spaces; gesher-app: with the framework and gesher-app extensions, 5 spaces)' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          'PASS  installer: gesher-app loads the installed system fonts' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           $out = & "$app\gesher-app.cmd" uninstall com.gesher.lifecycle 2>&1 | Out-String
           $code = $LASTEXITCODE
           Write-Host $out

@@ -100,6 +100,13 @@ function New-PanelActionWorker([string] $operation, $request) {
                         & (Join-Path $here 'gesher-app.ps1') uninstall ([string]$request.Package) 6>$null | Out-Null
                         if ($LASTEXITCODE -ne 0) { throw (Get-GesherText 'cp_uninstall_failed' @([string]$request.Label)) }
                     }
+                    'AppIsolation' {
+                        $global:LASTEXITCODE = 0
+                        & (Join-Path $here 'gesher-app.ps1') app-isolation ([string]$request.Package) ([string]$request.Mode) 6>$null | Out-Null
+                        if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 1223) {
+                            throw (Get-GesherText 'cp_action_failed' @($LASTEXITCODE))
+                        }
+                    }
                     default { throw 'Unknown dashboard operation.' }
                 }
             } catch { $failures.Add($_.Exception.Message) }

@@ -25,6 +25,8 @@
 
 #include "binder_internal.h"
 #include "binder_transport.h"
+#include <gesher/binder_endpoint.h>
+
 #include "binder_wire.h"
 #include "event_internal.h"
 #include "internal.h"
@@ -99,14 +101,18 @@ HANDLE Connect() {
   const std::wstring name = std::wstring(wire::kPipePrefix) + Widen(device.c_str());
   HANDLE pipe = INVALID_HANDLE_VALUE;
   for (int attempt = 0; attempt < 50 && pipe == INVALID_HANDLE_VALUE; ++attempt) {
-    pipe = CreateFileW(name.c_str(), wire::kPipeClientAccess, 0, nullptr, OPEN_EXISTING, 0,
-                       nullptr);
+    pipe = CreateFileW(name.c_str(), wire::kPipeClientAccess, 0, nullptr, OPEN_EXISTING,
+                       SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, nullptr);
     if (pipe == INVALID_HANDLE_VALUE) {
       if (GetLastError() != ERROR_PIPE_BUSY) return INVALID_HANDLE_VALUE;
       WaitNamedPipeW(name.c_str(), 100);
     }
   }
   if (pipe == INVALID_HANDLE_VALUE) return pipe;
+  if (!binder_endpoint::Current().VerifyPipe(pipe)) {
+    CloseHandle(pipe);
+    return INVALID_HANDLE_VALUE;
+  }
   Request hello;
   hello.Put<uint32_t>(wire::kHelloRights);
   hello.Put<uint32_t>(wire::kMagic);

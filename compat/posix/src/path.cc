@@ -26,6 +26,11 @@
 #include <gesher/reserved_names.h>
 #include <gesher/unc_paths.h>
 
+#include "startup_null.h"
+#include "standalone_input.h"
+#include "rooted_storage_client.h"
+#include <gesher/drop_mount.h>
+
 #include <string>
 #include <limits>
 #include <cstdlib>
@@ -35,6 +40,7 @@
 #include "binder_internal.h"
 #include "fifo_internal.h"
 #include "internal.h"
+#include "ofd_internal.h"
 #include "record_lock_descriptors.h"
 #include "system_linker.h"
 #include "revocable_internal.h"
@@ -208,7 +214,7 @@ DWORD Access(int flags) {
 }
 
 // The CRT fd for a new handle; closes the handle if there is none.
-int FdFromHandle(HANDLE h, int flags) {
+int FdFromHandle(HANDLE h, int flags, const std::wstring* drop_path = nullptr) {
   record_locks::DescriptorGuard descriptor_guard;
   int crt_flags = _O_BINARY |
                   ((flags & O_ACCMODE) == O_RDONLY ? _O_RDONLY : 0) |
@@ -222,6 +228,15 @@ int FdFromHandle(HANDLE h, int flags) {
     int saved = errno;
     _close(fd);
     return errno = saved, -1;
+  }
+  if (drop_path != nullptr) {
+    std::shared_ptr<OpenFileDescription> ofd;
+    if (!LookupOfd(fd, &ofd)) {
+      close(fd);
+      return errno = EIO, -1;
+    }
+    std::lock_guard<std::mutex> guard(ofd->mutex);
+    ofd->drop_path = *drop_path;
   }
   return fd;
 }
@@ -242,6 +257,61 @@ int OpenFile(const std::wstring& path, int flags, mode_t mode) {
     return -1;
   }
   if ((flags & O_PATH) == 0) flags |= O_LARGEFILE;
+  auto& selected = standalone_input::Current();
+  if (selected.Matches(path)) {
+    const bool metadata_only = (flags & O_PATH) != 0;
+    if ((flags & O_DIRECTORY) != 0) return errno = ENOTDIR, -1;
+    if (!metadata_only) {
+      if ((flags & (O_CREAT | O_EXCL)) == (O_CREAT | O_EXCL)) return errno = EEXIST, -1;
+      if ((Access(flags) & GENERIC_WRITE) != 0) return errno = EACCES, -1;
+    }
+    HANDLE owned = selected.Open(metadata_only, (flags & O_CLOEXEC) == 0);
+    if (owned == INVALID_HANDLE_VALUE) return errno = EACCES, -1;
+    return FdFromHandle(owned, flags);
+  }
+  if (const auto bootstrap = storage_root::LookupBootstrap(path)) {
+    if ((flags & O_DIRECTORY) != 0) return errno = ENOTDIR, -1;
+    if ((flags & (O_CREAT | O_TRUNC)) != 0 || (Access(flags) & GENERIC_WRITE) != 0) {
+      return errno = EACCES, -1;
+    }
+    HANDLE owned;
+    const int error = storage_root::OpenBootstrap(*bootstrap, &owned);
+    if (error != 0) return errno = error, -1;
+    if ((flags & O_CLOEXEC) == 0 && !SetHandleInformation(owned, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT)) {
+      const int result = FailWithLastError();
+      CloseHandle(owned);
+      return result;
+    }
+    return FdFromHandle(owned, flags);
+  }
+  if (const auto rooted = storage_root::Lookup(path)) {
+    namespace wire = rooted_storage_wire;
+    uint32_t access = wire::kMetadata;
+    if ((flags & O_PATH) == 0) {
+      switch (flags & O_ACCMODE) {
+        case O_RDONLY: access = (flags & O_TRUNC) != 0 ? wire::kReadWrite : wire::kRead; break;
+        case O_WRONLY: access = wire::kWrite; break;
+        default: access = wire::kReadWrite; break;
+      }
+      if ((flags & O_CREAT) != 0) {
+        access |= wire::kCreate;
+        if ((flags & O_EXCL) != 0) access |= wire::kExclusive;
+        if ((mode & 0200) == 0) access |= wire::kReadOnlyCreate;
+      }
+      if ((flags & O_TRUNC) != 0) access |= wire::kTruncate;
+      if ((flags & O_DSYNC) != 0) access |= wire::kWriteThrough;
+    }
+    if ((flags & O_DIRECTORY) != 0) access |= wire::kDirectory;
+    HANDLE owned;
+    const int error = storage_root::Open(rooted, access, &owned);
+    if (error != 0) return errno = error, -1;
+    if ((flags & O_CLOEXEC) == 0 && !SetHandleInformation(owned, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT)) {
+      const int result = FailWithLastError();
+      CloseHandle(owned);
+      return result;
+    }
+    return FdFromHandle(owned, flags, rooted.drop_alias ? &path : nullptr);
+  }
   DWORD disposition;
   if ((flags & O_PATH) != 0) {
     disposition = OPEN_EXISTING;
@@ -367,9 +437,7 @@ int OpenDevice(PathKind kind, int flags) {
   if ((flags & O_PATH) == 0 && (flags & O_NOATIME) != 0) return errno = EOPNOTSUPP, -1;
   if ((flags & O_DIRECTORY) != 0) return errno = ENOTDIR, -1;
   if ((flags & (O_CREAT | O_EXCL)) == (O_CREAT | O_EXCL)) return errno = EEXIST, -1;
-  SECURITY_ATTRIBUTES inherit = {sizeof(inherit), nullptr, (flags & O_CLOEXEC) == 0};
-  HANDLE h = CreateFileW(L"NUL", Access(flags), FILE_SHARE_READ | FILE_SHARE_WRITE, &inherit,
-                         OPEN_EXISTING, 0, nullptr);
+  HANDLE h = OpenNullDevice(Access(flags), (flags & O_CLOEXEC) == 0);
   if (h == INVALID_HANDLE_VALUE) return FailWithLastError();
   int fd = FdFromHandle(h, flags);
   if (fd >= 0 && kind == PathKind::kZero) RegisterDevice(fd, Device::kZero);
@@ -418,8 +486,7 @@ bool ResolveAt(int dirfd, const char* path, std::string* out) {
     *out = "/" + Narrow(directory.c_str()) + "/" + path;
     return true;
   }
-  HANDLE h = HandleFromFd(dirfd);
-  if (h == INVALID_HANDLE_VALUE) return errno = EBADF, false;
+  HANDLE h = snapshot->handle;
   BY_HANDLE_FILE_INFORMATION info;
   if (!GetFileInformationByHandle(h, &info)) return errno = ENOTDIR, false;
   unsigned proc_type;
@@ -432,11 +499,15 @@ bool ResolveAt(int dirfd, const char* path, std::string* out) {
     return true;
   }
   if ((info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) return errno = ENOTDIR, false;
-  DWORD n = GetFinalPathNameByHandleW(h, nullptr, 0, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
-  std::wstring dir(n, L'\0');
-  n = GetFinalPathNameByHandleW(h, dir.data(), n, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
-  if (n == 0 || n >= dir.size()) return FailWithLastError(), false;
-  dir.resize(n);
+  auto dir = DropDescriptorPath(snapshot);
+  if (dir.empty()) dir = storage_root::DescriptorPath(h);
+  if (dir.empty()) {
+    DWORD n = GetFinalPathNameByHandleW(h, nullptr, 0, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+    dir.resize(n);
+    n = GetFinalPathNameByHandleW(h, dir.data(), n, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+    if (n == 0 || n >= dir.size()) return FailWithLastError(), false;
+    dir.resize(n);
+  }
   *out = LinuxPath(dir.c_str());
   if (out->back() != '/') *out += '/';
   *out += path;
@@ -557,6 +628,12 @@ bool ExternalStoragePath(const char* path, std::wstring* windows) {
 }
 
 PathKind MapPath(const char* path, std::wstring* windows) {
+
+  if (std::string_view(path).starts_with(drop_mount::kAndroidPrefix) && drop_mount::Enabled()) {
+    *windows = Widen(path);
+    std::replace(windows->begin(), windows->end(), L'/', L'\\');
+    return PathKind::kFile;
+  }
   // "//name" is left to Windows as a UNC path; POSIX lets an implementation
   // give a leading "//" its own meaning. A name with a character Windows
   // reserves (':' and the like) is stored encoded (gesher/reserved_names.h).
@@ -600,11 +677,15 @@ std::wstring NativeFontWindowsPath(const std::string& path) {
   return MapPath(path.c_str(), &windows) == PathKind::kFile ? windows : std::wstring();
 }
 
-bool DiskPath(const char* path, std::wstring* windows, int special) {
+bool DiskPath(const char* path, std::wstring* windows, int special, bool allow_broker) {
   if (path == nullptr) return errno = EFAULT, false;
   if (path[0] == '\0') return errno = ENOENT, false;
   switch (MapPath(path, windows)) {
     case PathKind::kFile:
+      if (!allow_broker) {
+        const auto rooted = storage_root::Lookup(*windows);
+        if (rooted) return errno = rooted.error != 0 ? rooted.error : EOPNOTSUPP, false;
+      }
       return true;
     case PathKind::kMissing:
       return errno = ENOENT, false;
@@ -670,6 +751,10 @@ std::string LinuxPath(const wchar_t* windows) {
 // removed itself, by unlink, also when it points to a directory.
 int PosixDelete(const std::wstring& windows, bool directory) {
   if (!CheckExternalStorageAccess(windows, AccessKind::kWrite)) return -1;
+  if (const auto rooted = storage_root::Lookup(windows)) {
+    const int error = storage_root::Remove(rooted, directory);
+    return error != 0 ? (errno = error, -1) : 0;
+  }
   HANDLE h = INVALID_HANDLE_VALUE;
   for (int attempt = 0; attempt < 20; ++attempt) {
     h = CreateFileW(windows.c_str(), DELETE | FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES,
@@ -894,6 +979,14 @@ int utimensat(int dirfd, const char* path, const struct timespec times[2], int f
   switch (gesher::MapPath(resolved.c_str(), &windows)) {
     case PathKind::kFile: {
       if (!gesher::CheckExternalStorageAccess(windows, gesher::AccessKind::kWrite)) return -1;
+      if (const auto rooted = gesher::storage_root::Lookup(windows)) {
+        HANDLE h;
+        const int error = gesher::storage_root::Open(rooted, gesher::rooted_storage_wire::kMetadataWrite, &h);
+        if (error != 0) return errno = error, -1;
+        const int result = SetTimes(h, times);
+        CloseTimeHandle(h);
+        return result;
+      }
       HANDLE h = gesher::CreateFileFollowingFifo(windows.c_str(), 0,
                              FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                              FILE_FLAG_BACKUP_SEMANTICS |
@@ -951,9 +1044,14 @@ int mkdir(const char* path) {
   if (path == nullptr) return errno = EFAULT, -1;
   std::wstring windows;
   switch (path[0] != '\0' ? gesher::MapPath(path, &windows) : PathKind::kMissing) {
-    case PathKind::kFile:
+    case PathKind::kFile: {
       if (!gesher::CheckExternalStorageAccess(windows, gesher::AccessKind::kWrite)) return -1;
+      if (const auto rooted = gesher::storage_root::Lookup(windows)) {
+        const int error = gesher::storage_root::MakeDirectory(rooted);
+        return error != 0 ? (errno = error, -1) : 0;
+      }
       return CreateDirectoryW(windows.c_str(), nullptr) ? 0 : gesher::FailWithLastError();
+    }
     case PathKind::kMissing:
       return errno = ENOENT, -1;
     default:
@@ -964,7 +1062,7 @@ int mkdir(const char* path) {
 int unlink(const char* path) {
   if (gesher::system_linker::RefuseChange(path) != 0) return -1;
   std::wstring windows;
-  if (!gesher::DiskPath(path, &windows, EACCES)) return -1;  // EACCES: /dev and /proc names
+  if (!gesher::DiskPath(path, &windows, EACCES, true)) return -1;  // EACCES: /dev and /proc names
   return gesher::PosixDelete(windows, false);
 }
 

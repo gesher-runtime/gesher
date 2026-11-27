@@ -71,7 +71,8 @@ def main() -> int:
         source, binary = work / "contracts.cc", work / "contracts"
         source.write_text(template)
         command = shlex.split(args.cxx) + ["-std=c++20", "-D_GNU_SOURCE", "-O1", "-g", "-Wall", "-Wextra",
-                "-Werror", "-Wno-unused-function", str(source), "-o", str(binary)]
+                "-Werror", "-Wno-unused-function", "-I", str(ROOT / "tests/native"),
+                str(source), "-o", str(binary)]
         if args.sanitize:
             command += ["-fsanitize=address,undefined", "-fno-omit-frame-pointer", "-fno-sanitize-recover=all"]
         subprocess.run(command, check=True, timeout=120)

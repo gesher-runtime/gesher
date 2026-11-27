@@ -56,6 +56,9 @@ DWORD CapabilitySid(const std::wstring& capability, Sid* sid);
 // The container's own writable folder (%LOCALAPPDATA%\Packages\<name>\AC).
 DWORD FolderPath(PSID container, std::wstring* path);
 
+// The current user's actual Windows profile path, independent of its environment.
+DWORD LocalAppDataPath(std::wstring* path);
+
 // Adds an allow ACE for `trustee` to the DACL of `path` (merged with what is
 // there; inherited by children and propagated to existing ones when `inherit`).
 DWORD Grant(const std::wstring& path, PSID trustee, DWORD access, bool inherit);
@@ -80,6 +83,8 @@ DWORD ProtectPrivateStorage(const std::wstring& path);
 // processes run at Low integrity).
 // Free with LocalFree.
 DWORD BinderPipeSecurity(PSECURITY_DESCRIPTOR* descriptor);
+// The same pipe access for a single per-run standalone AppContainer SID.
+DWORD AppContainerPipeSecurity(PSECURITY_DESCRIPTOR* descriptor, PSID client);
 
 }  // namespace appcontainer
 }  // namespace gesher

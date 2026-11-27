@@ -183,11 +183,18 @@ public final class SystemServer {
         }
     }
 
+    private static volatile boolean protectedDevice;
+
+    static boolean isProtectedDevice() {
+        return protectedDevice;
+    }
+
     private static void run(String[] args) throws Exception {
         String buildProp = null;
         String frameworkRes = null;
         boolean persistent = false;
         boolean launchInitialApk = false;
+        boolean cohostOwner = false;
         String adopt = null;
         long idleTimeoutS = 600;
         List<String> apks = new ArrayList<>();
@@ -199,6 +206,8 @@ public final class SystemServer {
                 case "--strict-services": StandIn.setStrict(true); break;
                 case "--persistent": persistent = true; break;
                 case "--launch-initial-apk": launchInitialApk = true; break;
+                case "--protected-launch": protectedDevice = true; break;
+                case "--cohost-owner": cohostOwner = true; break;
                 case "--adopt": adopt = args[++i]; break;
                 case "--idle-timeout": idleTimeoutS = Long.parseLong(args[++i]); break;
                 default:
@@ -213,6 +222,15 @@ public final class SystemServer {
         if (System.getenv("GESHER_BINDER") == null) {
             throw new IllegalStateException("$GESHER_BINDER is not set: the system server"
                     + " registers its services with servicemanager over binderd");
+        }
+        if (cohostOwner && (!persistent || !protectedDevice || !apks.isEmpty())) {
+            throw new IllegalArgumentException("A cohost policy owner must be an empty protected host launch");
+        }
+        if (protectedDevice) {
+            System.loadLibrary("android_runtime");
+            if (adopt != null || !Zygote.nativeHasProtectedLaunchAuthority(!persistent)) {
+                throw new IllegalStateException("Protected system server requires a live launch authority");
+            }
         }
         StandIn.setTag(TAG);
         // Binder calls from this process carry the system uid, as system_server's do
@@ -229,13 +247,16 @@ public final class SystemServer {
         if (launchInitialApk && (!ProtectedRuntime.enabled() || apks.size() != 1)) {
             throw new SecurityException("Initial protected launch needs one authority-staged APK");
         }
+        // The Windows runtime does not supply display vsync yet. Publish the
+        // frame scheduling setting before contained apps read system properties.
+        android.os.SystemProperties.set("debug.choreographer.vsync", "false");
 
         if (persistent) {
             // The device goes as a whole: binderd, servicemanager and the app processes
             // end with this process (a kill-on-close job; app processes join it as its
             // children).
-            boolean job = Zygote.joinJob(0);
-            if (adopt != null) {
+            boolean job = protectedDevice || Zygote.joinJob(0);
+            if (!protectedDevice && adopt != null) {
                 for (String pid : adopt.split(",")) {
                     if (!pid.isEmpty()) job &= Zygote.joinJob(Integer.parseInt(pid.trim()));
                 }
@@ -295,33 +316,69 @@ public final class SystemServer {
                 log("microg addon: " + p.describe());
             }
         }
-        for (String apk : apks) {
-            ApkPackage p = ApkPackage.parse(apk);
-            if (ProtectedRuntime.enabled()) ProtectedRuntime.verify(p);
-            selectCommandLinePackage(packages, p);
+        Map<ApkPackage, Zygote.StandaloneInput> pinnedInputs;
+        if (ProtectedRuntime.enabled()) {
+            for (String apk : apks) {
+                ApkPackage p = ApkPackage.parse(apk);
+                if (ProtectedRuntime.enabled()) ProtectedRuntime.verify(p);
+                selectCommandLinePackage(packages, p);
+            }
+            pinnedInputs = Map.of();
+        } else {
+            pinnedInputs = selectExplicitPackages(packages, apks, protectedDevice);
         }
         try (PackageUids.Admission identity = PackageUids.prepare(packages, committed)) {
             identity.commit();
-            preparePackageStorage(committed, packages);
+            if (!cohostOwner) preparePackageStorage(committed, packages);
             identity.accept();
         }
 
+        // Keep one PackageManager and policy writer for this root. An owner-only
+        // process starts without publishing an Android device. On request it
+        // publishes the usual services on these same live objects.
+        PackageManagerService ownerPm = cohostOwner ? new PackageManagerService(packages) : null;
+        PermissionRequests ownerPermissions = cohostOwner ? new PermissionRequests(ownerPm) : null;
+        CohostOwnerService cohostControl = null;
+        if (cohostOwner) {
+            // The hidden policy owner can authorize clipboard for the actually
+            // configured IME before the rest of the device services are published.
+            new SettingsProvider();
+            cohostControl = new CohostOwnerService(ownerPm, ownerPermissions,
+                    Zygote.vmCommandLine(SystemServer.class.getName()));
+            cohostControl.publish();
+            startBinderThreads(TAG, 31);
+            DeviceControl.writeReady(Device.cohostOwnerReadyFile());
+            while (!cohostControl.awaitPromotion()) {
+                if (idleTimeoutS > 0
+                        && SystemClock.uptimeMillis() - cohostControl.lastUse() >= idleTimeoutS * 1000
+                        && cohostControl.closeIfIdle()) {
+                    return;
+                }
+            }
+            preparePackageStorage(committed, packages);
+        }
+
         // The services, published with servicemanager.
-        Map<String, IBinder> services = Services.create(packages);
+        Map<String, IBinder> services = cohostOwner ? Services.create(ownerPm, true, ownerPermissions).services
+                : Services.create(packages);
         Services.Created created = Services.sLast;
+        if (persistent && protectedDevice && cohostControl == null) {
+            cohostControl = new CohostOwnerService(created.pm, created.atm.permissionRequests(),
+                    Zygote.vmCommandLine(SystemServer.class.getName()));
+            cohostControl.publish();
+        }
         // Host installation can precede the first application bind. Initialize the
         // server's writable region and real package-cache nonce before publishing APIs.
         created.am.invalidatePermissionCaches();
         ExternalStorageAccess.syncAll(created.pm);
-        startAppProcessesOnDemand(created.atm, created.pm);
-        PersistentDevice device = null;
-        if (persistent) {
-            device = new PersistentDevice(created, Installer.create(created.pm, created.atm),
-                    idleTimeoutS);
-            services.put(GesherService.NAME, new GesherService(device));
-        } else {
+        startAppProcessesOnDemand(created.atm, created.pm, pinnedInputs);
+        Installer installer = persistent ? Installer.create(created.pm, created.atm) : null;
+        if (!persistent) {
             Installer.attachMetadata(created.pm, created.atm);
         }
+        DeviceControl device = persistent || protectedDevice
+                ? new DeviceControl(created, installer, cohostControl, idleTimeoutS) : null;
+        if (device != null) services.put(GesherService.NAME, new GesherService(device));
         for (Map.Entry<String, IBinder> e : services.entrySet()) {
             ServiceManager.addService(e.getKey(), e.getValue());
         }
@@ -333,8 +390,9 @@ public final class SystemServer {
         // activityPaused), and startActivityAndWait and getContentProvider hold a thread
         // until an activity is idle or a provider is published. system_server runs up to
         // 31 (BinderInternal.setMaxThreads).
-        startBinderThreads(TAG, 31);
-        if (device != null) device.start();
+        if (!cohostOwner) startBinderThreads(TAG, 31);
+        if (persistent) device.startPersistent();
+        else if (protectedDevice) DeviceControl.writeReady(new File(Device.logsDir(), "ready"));
         created.usb.startHost();
         if (launchInitialApk) {
             ApkPackage initial = packages.stream().filter(p -> p.apkPath.equals(apks.get(0)))
@@ -368,13 +426,46 @@ public final class SystemServer {
         Binder.joinThreadPool();
     }
 
+    private static Map<ApkPackage, Zygote.StandaloneInput> selectExplicitPackages(
+            List<ApkPackage> packages, List<String> apks, boolean pinCode) throws Exception {
+        // Keep the actual selected code pinned for this temporary device's lifetime,
+        // including subsequent process starts from the same package publication.
+        Map<ApkPackage, Zygote.StandaloneInput> pinned = new java.util.IdentityHashMap<>();
+        try {
+            for (String apk : apks) {
+                if (!pinCode) {
+                    selectCommandLinePackage(packages, ApkPackage.parse(apk));
+                    continue;
+                }
+                Zygote.StandaloneInput input = new Zygote.StandaloneInput(apk);
+                try {
+                    ApkPackage pkg = ApkPackage.parseStandaloneInput(input);
+                    selectCommandLinePackage(packages, pkg);
+                    pinned.put(pkg, input);
+                } catch (Exception failure) {
+                    input.close();
+                    throw failure;
+                }
+            }
+            pinned.entrySet().removeIf(entry -> {
+                if (packages.contains(entry.getKey())) return false;
+                entry.getValue().close();
+                return true;
+            });
+            return Map.copyOf(pinned);
+        } catch (Exception failure) {
+            pinned.values().forEach(Zygote.StandaloneInput::close);
+            throw failure;
+        }
+    }
+
     /**
      * App processes on demand: a dalvikvm like this one (its runtime options) running
      * android.app.GesherAppProcess for the package, its output appended to the package's
      * log.
      */
     private static void startAppProcessesOnDemand(ActivityTaskManagerService atm,
-            PackageManagerService pm) {
+            PackageManagerService pm, Map<ApkPackage, Zygote.StandaloneInput> pinnedInputs) {
         final String vm;
         try {
             // With the JIT and its profile saver, as Android's app processes (ADR 0054).
@@ -400,6 +491,9 @@ public final class SystemServer {
             logFile.getParentFile().mkdirs();
             ApkPackage pkg = pm.get(packageName);
             if (pkg == null) throw new IllegalStateException("Unknown package " + packageName);
+            if (protectedDevice && !atm.protectedStartCurrent(pkg, startSeq)) {
+                throw new IllegalStateException("Contained start retired for " + packageName);
+            }
             String uid = String.valueOf(pkg.uid());
             List<String> env = new java.util.ArrayList<>(List.of("GESHER_BINDER=" + binder,
                     "GESHER_UID=" + uid,
@@ -438,7 +532,8 @@ public final class SystemServer {
             // Experimental (ADR 0090): the package's own AppContainer.
             if (AppSandbox.enabled()) {
                 return AppSandbox.spawn(command, env, logFile, pm, pkg, packageName,
-                        ConnectivityService.requests(pkg, ConnectivityService.INTERNET));
+                        ConnectivityService.requests(pkg, ConnectivityService.INTERNET), startSeq,
+                        pinnedInputs.get(pkg));
             }
             ExternalStorageAccess.syncPackage(pm, pkg);
             return Zygote.spawn(command, env, logFile.getPath(), false);
@@ -458,18 +553,22 @@ public final class SystemServer {
         }
     }
 
-    /** The persistent device's lifetime: ready, idle, shutdown. */
-    private static final class PersistentDevice implements GesherService.Device {
+    /** Host control for a published persistent or launch-scoped device. */
+    private static final class DeviceControl implements GesherService.Device {
         private final Services.Created mServices;
         private final Installer mInstaller;
+        private final CohostOwnerService mCohostControl;
         private final long mIdleTimeoutMs;
         private final long mStarted = System.currentTimeMillis();
         private volatile long mLastCall = SystemClock.uptimeMillis();
+        private volatile boolean mParked;
         private boolean mShuttingDown;
 
-        PersistentDevice(Services.Created services, Installer installer, long idleTimeoutS) {
+        DeviceControl(Services.Created services, Installer installer,
+                      CohostOwnerService cohostControl, long idleTimeoutS) {
             mServices = services;
             mInstaller = installer;
+            mCohostControl = cohostControl;
             mIdleTimeoutMs = idleTimeoutS * 1000;
         }
 
@@ -507,28 +606,30 @@ public final class SystemServer {
             reaper.start();
         }
 
-        void start() throws Exception {
-            // Settings requests of an earlier device wait for nobody now (SettingsResults).
-            ControlCenter.clearResults(Device.dataDir());
-            // The camera app, when the PC has a camera (hwsvc2, ADR 0051).
-            CameraApp.sync(mInstaller, mServices.pm);
-            // The text-to-speech engine, when Windows has voices (docs/tts.md).
-            TtsEngineApp.sync(mInstaller, mServices.pm);
-            // The speech recognition service, when Windows has recognizers (docs/speech-recognition.md).
-            SttEngineApp.sync(mInstaller, mServices.pm);
-            trackLauncherRecords(mServices.pm);
-            // The launcher waits for this file: the services are registered.
-            File ready = Device.readyFile();
+        static void writeReady(File ready) throws IOException {
             ready.getParentFile().mkdirs();
             try (OutputStream out = new FileOutputStream(ready)) {
                 out.write(String.valueOf(Process.myPid()).getBytes(StandardCharsets.UTF_8));
             }
+        }
+
+        void startPersistent() throws Exception {
+            ControlCenter.clearResults(Device.dataDir());
+            // The camera app, when the PC has a camera (hwsvc2, ADR 0051).
+            CameraApp.sync(mInstaller, mServices.pm);
+            TtsEngineApp.sync(mInstaller, mServices.pm);
+            SttEngineApp.sync(mInstaller, mServices.pm);
+            trackLauncherRecords(mServices.pm);
+            if (mCohostControl != null) mCohostControl.setRepublish(this::republish);
+            // The launcher waits for this file: the services are registered.
+            writeReady(Device.readyFile());
             long event = Zygote.createEvent(Device.shutdownEventName());
             Thread events = new Thread(() -> {
-                while (!Zygote.waitEvent(event, 60_000)) {
-                    // waiting
+                while (true) {
+                    if (Zygote.waitEvent(event, 60_000)) {
+                        shutdown("the shutdown event was set (gesher-app shutdown)");
+                    }
                 }
-                shutdown("the shutdown event was set (gesher-app shutdown)");
             }, "shutdown-event");
             events.setDaemon(true);
             events.start();
@@ -538,14 +639,20 @@ public final class SystemServer {
                         SystemClock.sleep(Math.min(5000, mIdleTimeoutMs));
                         long since = mServices.atm.idleSince();
                         long now = SystemClock.uptimeMillis();
+                        if (mParked) {
+                            if (now - mCohostControl.lastUse() >= mIdleTimeoutMs) {
+                                closeParkedOwner();
+                            }
+                            continue;
+                        }
                         // Scheduled alarms and jobs due within the timeout keep the
                         // device for at most one more timeout (devsvc, DeviceWork).
-                        if (since != 0 && now - since >= mIdleTimeoutMs
+                        if ((mCohostControl == null || !mCohostControl.hasActiveLaunch())
+                                && since != 0 && now - since >= mIdleTimeoutMs
                                 && now - mLastCall >= mIdleTimeoutMs
                                 && !DeviceWork.keepsIdleDevice(now - since, mIdleTimeoutMs)) {
                             shutdown("idle: no app in use for " + (mIdleTimeoutMs / 1000)
                                     + " s");
-                            return;
                         }
                     }
                 }, "idle");
@@ -558,6 +665,31 @@ public final class SystemServer {
             if (notifications != null) notifications.startActivator();
             log("the Gesher device is ready (idle timeout "
                     + (mIdleTimeoutMs > 0 ? (mIdleTimeoutMs / 1000) + " s" : "none") + ")");
+        }
+
+        private synchronized void closeParkedOwner() {
+            if (mParked && mCohostControl.closeIfIdle()) System.exit(0);
+        }
+
+        private synchronized void republish() {
+            if (!mParked) return;
+            try {
+                mServices.atm.resumeDeviceProcesses();
+                writeReady(Device.readyFile());
+                touch();
+                mParked = false;
+                mShuttingDown = false;
+            } catch (IOException failure) {
+                throw new IllegalStateException("Cannot publish the protected device", failure);
+            }
+        }
+
+        private synchronized void park(java.util.Properties state) throws IOException {
+            Device.write(Device.cohostOwnerFile(), state);
+            writeReady(Device.cohostOwnerReadyFile());
+            mParked = true;
+            java.nio.file.Files.deleteIfExists(Device.readyFile().toPath());
+            java.nio.file.Files.delete(Device.stateFile().toPath());
         }
 
         @Override
@@ -573,23 +705,32 @@ public final class SystemServer {
 
         @Override
         public String[] install(String apk) throws Exception {
+            if (mInstaller == null) throw new UnsupportedOperationException("Temporary device");
             return mInstaller.install(apk);
         }
 
         @Override
         public String[] install(String apk, boolean explicitInstall) throws Exception {
+            if (mInstaller == null) throw new UnsupportedOperationException("Temporary device");
             return mInstaller.install(apk, explicitInstall);
         }
 
         @Override
         public String[] installConfirmed(String apk, String pkg, long version, String digest)
                 throws Exception {
+            if (mInstaller == null) throw new UnsupportedOperationException("Temporary device");
             return mInstaller.installConfirmed(apk, pkg, version, digest);
         }
 
         @Override
         public boolean uninstall(String packageName) throws Exception {
+            if (mInstaller == null) throw new UnsupportedOperationException("Temporary device");
             return mInstaller.uninstall(packageName);
+        }
+
+        @Override
+        public String appIsolation(String packageName, String operation) throws Exception {
+            return SandboxOptOut.change(packageName, operation, mInstaller, mServices.pm, mServices.atm);
         }
 
         @Override
@@ -666,14 +807,32 @@ public final class SystemServer {
             Thread t = new Thread(() -> {
                 SystemClock.sleep(200);
                 log("shutting down: " + reason);
-                mServices.atm.endAllProcesses(5000);
+                boolean stopped = true;
+                try {
+                    if (mCohostControl != null) mServices.atm.stopDeviceProcesses();
+                    else mServices.atm.endAllProcesses(5000);
+                } catch (RuntimeException failure) {
+                    stopped = false;
+                    log("could not stop app processes individually: " + failure);
+                }
                 mServices.atm.flushUsageStats();
                 mServices.am.flushShortcutQuota();
-                java.util.Properties state = Device.read(Device.stateFile());
-                if (state != null && Device.pid(state, Device.SYSTEM_SERVER) == Process.myPid()) {
-                    Device.stateFile().delete();
+                if (mInstaller != null) {
+                    java.util.Properties state = Device.read(Device.stateFile());
+                    if (state != null && Device.pid(state, Device.SYSTEM_SERVER) == Process.myPid()) {
+                        if (stopped && mCohostControl != null && !mCohostControl.closeIfIdle()) {
+                            try {
+                                park(state);
+                                log("the Gesher device stopped; an independent app is still running");
+                                return;
+                            } catch (IOException failure) {
+                                log("could not park the protected policy owner: " + failure);
+                            }
+                        }
+                        Device.stateFile().delete();
+                    }
+                    Device.readyFile().delete();
                 }
-                Device.readyFile().delete();
                 log("the Gesher device stopped");
                 System.out.flush();
                 // binderd and servicemanager are in this process's job: they end with it.

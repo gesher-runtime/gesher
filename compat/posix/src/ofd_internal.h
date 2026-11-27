@@ -57,6 +57,8 @@ struct OpenFileDescription {
   // attribute, read once): -1 not read yet, 0 no, 1 yes. A file's kind is
   // immutable, so fstat of a memfd reads no attribute after the first.
   std::atomic<signed char> procfs_file{-1};
+  // Immutable once the new descriptor is published. Aliases share it via this OFD.
+  std::wstring drop_path;
   ~OpenFileDescription();
   int Flags() const;
   void SetFlags(int flags);

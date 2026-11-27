@@ -39,7 +39,8 @@ def main() -> int:
         generated, binary = work / "contracts.cc", work / "contracts"
         generated.write_text(template.replace("@PRODUCTION_RENAME@", production))
         command = shlex.split(args.cxx) + ["-std=c++20", "-O1", "-g", "-Wall", "-Wextra", "-Werror",
-                                          "-Wno-unused-function", str(generated), "-o", str(binary)]
+                                          "-Wno-unused-function", "-I", str(ROOT / "tests/native"),
+                                          str(generated), "-o", str(binary)]
         if args.sanitize:
             command += ["-fsanitize=address,undefined", "-fno-sanitize-recover=all", "-fno-omit-frame-pointer"]
         subprocess.run(command, check=True, timeout=120)

@@ -117,7 +117,41 @@ enum Op : uint32_t {
   // Protected endpoint only. The authenticated system server publishes its
   // actual framework region. No caller-supplied PID/UID participates.
   // -> {magic, version, source_handle (u64), exact_size (u64)}; <- {Win32 status}
-  kPublishApplicationSharedMemory = 12,
+  kPublishApplicationSharedMemory = 26,
+  // Same framing as kHelloProc. The protected broker authenticates the
+  // Windows device operator and assigns Android shell; the fields grant no role.
+  kHelloOperator = 12,
+  // One protected child admission over an authenticated pipe. Source is
+  // a Windows process handle in the admitted parent's handle table.
+  // -> {magic, version, source (u64)}; <- {status}
+  kEnrollChild = 13,
+  // Protected regular-file record locks. Requests refer only to a handle in
+  // the pipe sender's table. The broker derives process and file identities.
+  // -> {magic, version, file_handle:u64, command:i32, flock fields}; <- {-errno or 0[, flock fields]}
+  kFileRecordLock = 14,
+  // -> {magic, version, file_handle:u64}; <- {-errno or 0}. After the client
+  // closes its temporary pin, it sends {1:u32} and receives the commit status.
+  kFileRecordClose = 15,
+  // Protected playback. Each request carries {magic, version, stream, interval}.
+  // Each reply carries {status, payload:u64}. The payload is a section handle
+  // in the sender's process, an activity bit, or a device-unique session ID.
+  kAudioPlaybackPublish = 17,
+  kAudioPlaybackQuery = 18,
+  kAudioPlaybackSession = 19,
+  // Audio request framing, with the writable flag in the stream field.
+  kAudioDeviceControls = 20,
+  // Open a bounded protected WASAPI render connection. The payload is a
+  // version and a UTF-16 label, followed by the audio_render protocol.
+  kAudioRender = 21,
+  // Starts a host capture lane or asks for real input endpoint availability.
+  kAudioCapture = 22,
+  // Private metadata or capture connection backed by the Windows camera.
+  kCamera = 23,
+  // Authenticated worker for Windows file drops.
+  kDropWorker = 24,
+  // -> {magic, version}; <- {status[, available, total, free (u64 bytes)]}.
+  // The host chooses the Android data volume; the sender supplies no path.
+  kAndroidDataCapacity = 25,
 };
 
 // The descriptor broker's protocol version (kHelloRights), apart from kVersion:
@@ -154,6 +188,7 @@ constexpr uint32_t kRightsMaxInFlight = 65536;
 
 // The pipe name of a device: \\.\pipe\gesher-binder-<device>.
 constexpr const wchar_t kPipePrefix[] = L"\\\\.\\pipe\\gesher-binder-";
+constexpr const wchar_t kStandaloneRecordPipe[] = L"\\\\.\\pipe\\gesher-binder-standalone-record-";
 // What a client asks of the device's pipe: GENERIC_READ | FILE_WRITE_DATA |
 // FILE_WRITE_ATTRIBUTES. Not GENERIC_WRITE: for a pipe its FILE_APPEND_DATA is
 // FILE_CREATE_PIPE_INSTANCE, which binderd grants AppContainer clients no more

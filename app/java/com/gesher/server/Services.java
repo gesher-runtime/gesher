@@ -96,6 +96,18 @@ public final class Services {
 
     /** Trusted standalone startup: admit the actual APK before selecting the VM identity. */
     public static InProcessApplication createInProcess(ApkPackage pkg) {
+        if (Zygote.nativeHasCohostPermissionScope()) {
+            int uid = android.os.Process.myUid();
+            if (uid < android.os.Process.FIRST_APPLICATION_UID
+                    || !Zygote.nativeCohostOwnsApk(Zygote.windowsPath(pkg.apkPath))) {
+                throw new SecurityException("The contained APK does not match the host admission");
+            }
+            pkg.assignUid(uid);
+            android.permission.PermissionManager.disablePermissionCache();
+            android.permission.PermissionManager.disablePackageNamePermissionCache();
+            return new InProcessApplication(pkg,
+                    new PackageManagerService(java.util.List.of(pkg), false, true));
+        }
         return new InProcessApplication(pkg,
                 new PackageManagerService(java.util.List.of(pkg), false));
     }
@@ -105,8 +117,13 @@ public final class Services {
     }
 
     static Created create(PackageManagerService pm, boolean persistentAccounts) {
+        return create(pm, persistentAccounts, new PermissionRequests(pm));
+    }
+
+    static Created create(PackageManagerService pm, boolean persistentAccounts,
+            PermissionRequests permissionRequests) {
         Map<String, IBinder> services = new LinkedHashMap<>();
-        ActivityTaskManagerService atm = new ActivityTaskManagerService(pm);
+        ActivityTaskManagerService atm = new ActivityTaskManagerService(pm, permissionRequests);
         pm.attachInstallSourceCallers(atm);
         NotificationManagerService notifications = new NotificationManagerService();
         ActivityManagerService am = new ActivityManagerService(atm, pm, notifications);
@@ -114,6 +131,16 @@ public final class Services {
         UsbService usb = new UsbService(am.callers(), pm, am);
         Created created = new Created(pm, atm, am, clipboard, usb, services);
         sLast = created;
+        if (SystemServer.isProtectedDevice()) {
+            ProtectedCameraPolicy camera = new ProtectedCameraPolicy(pm);
+            if (!Zygote.nativeAttachCapturePermissionPolicy((uid, kind, high, low, session, tag) ->
+                    kind == Zygote.CapturePolicy.MICROPHONE
+                        ? pm.checkUidPermission(android.Manifest.permission.RECORD_AUDIO, uid)
+                            == android.content.pm.PackageManager.PERMISSION_GRANTED
+                        : camera.installed(uid, kind, high, low, session, tag, am))) {
+                SystemServer.log("The protected capture permission channel is unavailable");
+            }
+        }
         services.put("uri_grants", StandIn.of(android.app.IUriGrantsManager.class,
                 new UriGrantsManagerService(pm, atm, am)).asBinder());
         services.put("package", StandIn.of(IPackageManager.class, pm).asBinder());

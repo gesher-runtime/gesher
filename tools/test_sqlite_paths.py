@@ -152,6 +152,17 @@ namespace usb_block {
 @USB_BLOCK_HELPERS@
 static bool Attached() { return false; }
 }
+namespace drop_mount {
+inline constexpr char kAndroidPrefix[] = "/mnt/gesher/drop/";
+inline bool Enabled() { return false; }
+}
+namespace storage_root {
+struct Selection {
+  int error = 0;
+  explicit operator bool() const { return false; }
+};
+static Selection Lookup(const std::wstring&) { return {}; }
+}
 '''
     prologue = prologue.replace("@USB_BLOCK_HELPERS@", usb_helpers)
     signatures = ["bool IsDriveLetter(", "std::string_view NextPart(", "std::wstring VirtualDirectoryPath(", "PathKind VirtualKind(",

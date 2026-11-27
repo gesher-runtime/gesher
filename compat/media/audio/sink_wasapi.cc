@@ -64,8 +64,9 @@ const PROPERTYKEY kKeyFormFactor = {{0x1DA5D803, 0xD492, 0x4EDD,
 const GUID kGesherContext = {0x6765736B, 0x6865, 0x7200,
                              {0x61, 0x75, 0x64, 0x69, 0x6F, 0x00, 0x00, 0x01}};
 // A session per group: {67657368-6572-0000-6175-64696F0000gg}.
-GUID SessionGuid(int group) {
+GUID SessionGuid(int group, uint32_t session_owner) {
   GUID g = {0x67657368, 0x6572, 0x0000, {0x61, 0x75, 0x64, 0x69, 0x6F, 0x00, 0x00, 0x00}};
+  if (session_owner != 0) g.Data1 ^= session_owner;
   g.Data4[7] = static_cast<unsigned char>(group);
   return g;
 }
@@ -179,8 +180,9 @@ class WasapiSink : public Sink {
     if (mix_ != nullptr) CoTaskMemFree(mix_);
   }
 
-  bool Open(const std::u16string& app_name, std::string* error) {
+  bool Open(const std::u16string& app_name, std::string* error, uint32_t session_owner) {
     app_name_ = app_name;
+    session_owner_ = session_owner;
     HRESULT hr = CoCreateInstance(kClsidMMDeviceEnumerator, nullptr, CLSCTX_ALL,
                                   kIidIMMDeviceEnumerator, reinterpret_cast<void**>(&enumerator_));
     if (FAILED(hr)) {
@@ -375,7 +377,7 @@ class WasapiSink : public Sink {
   }
 
   bool OpenGroup(Group& g, int index, std::string* error) {
-    const GUID session = SessionGuid(index);
+    const GUID session = SessionGuid(index, session_owner_);
     HRESULT hr = OpenLowLatencyGroup(g, session);
     if (FAILED(hr)) {
       hr = device_->Activate(kIidIAudioClient, CLSCTX_ALL, nullptr,
@@ -480,6 +482,7 @@ class WasapiSink : public Sink {
   }
 
   std::u16string app_name_;
+  uint32_t session_owner_ = 0;
   std::string device_name_ = "Windows default output";
   int device_type_ = 0x2;
   IMMDeviceEnumerator* enumerator_ = nullptr;
@@ -497,9 +500,10 @@ class WasapiSink : public Sink {
 
 }  // namespace
 
-std::unique_ptr<Sink> OpenWasapiSink(const std::u16string& app_name, std::string* error) {
+std::unique_ptr<Sink> OpenWasapiSink(const std::u16string& app_name, std::string* error,
+                                    uint32_t session_owner) {
   auto sink = std::make_unique<WasapiSink>();
-  if (!sink->Open(app_name, error)) return nullptr;
+  if (!sink->Open(app_name, error, session_owner)) return nullptr;
   return sink;
 }
 
