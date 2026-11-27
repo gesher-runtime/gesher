@@ -219,6 +219,14 @@ struct Impl {
   std::vector<std::function<void(ICoreWebView2*)>> service_waiting;
   // Popup completion ownership has its own extracted production fixture.
   void CancelPendingNewWindows() {}
+  // Network identity observation is an unrelated boundary here. Record the
+  // exact extracted NavigationStarting handoff without modeling CDP/WebView2.
+  unsigned network_starts = 0;
+  UINT64 network_start_id = 0;
+  std::wstring network_start_url;
+  void NetworkNavigationStarted(UINT64 nav, const std::wstring& url) {
+    ++network_starts; network_start_id = nav; network_start_url = url;
+  }
   std::map<int64_t, Request> requests;
   Com<ICoreWebView2_2> webview{new ICoreWebView2_2, false};
   Com<ICoreWebView2Environment2> env{new ICoreWebView2Environment2, false};
@@ -675,6 +683,11 @@ void NavigationLifecycleContracts() {
     ICoreWebView2NavigationStartingEventArgs args{L"https://example.test/later", 50};
     NavigationStartHandler(state)(nullptr, &args);
     Check(state->webview->stops == (stopped ? 1 : 0), "ordinary Stop reaches the renderer");
+#if NETWORK_STARTED_BOUNDARY
+    Check(state->network_starts == 1 && state->network_start_id == args.id
+              && state->network_start_url == args.url,
+          "accepted navigation observes its exact native identity once");
+#endif
     Check(!args.cancelled && listener.calls == 1 && state->events.size() == 1
               && state->events[0].type == kPageStarted && state->cancelled.empty(),
           "healthy host and ordinary Stop allow a later page navigation");
@@ -693,6 +706,7 @@ void NavigationLifecycleContracts() {
     NavigationStartHandler(state)(nullptr, &args);
     Check(args.cancelled && state->cancelled.count(args.id) == 1,
           "failed or closing host cancels page, auth-retry, API and redirect events");
+    Check(state->network_starts == 0, "retired navigation never reaches the network observer");
     Check(listener.calls == 0 && state->events.empty()
               && state->main_document == L"https://example.test/retained"
               && state->NavigationEnded(args.id) == 0,
