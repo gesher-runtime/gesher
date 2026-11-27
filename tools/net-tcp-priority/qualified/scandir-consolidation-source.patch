@@ -1,5 +1,5 @@
 diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
-index f9e65608b..f891569a6 100644
+index f9e65608b..9dadf2751 100644
 --- a/.github/workflows/ci.yml
 +++ b/.github/workflows/ci.yml
 @@ -29,6 +29,24 @@ env:
@@ -81,7 +81,7 @@ index f9e65608b..f891569a6 100644
      strategy:
        fail-fast: false
        matrix:
-@@ -102,18 +160,125 @@ jobs:
+@@ -102,18 +160,134 @@ jobs:
          with:
            distribution: temurin
            java-version: '21.0.13'
@@ -104,6 +104,11 @@ index f9e65608b..f891569a6 100644
 +            exit /b 1
 +          )
 +          cl /nologo /std:c11 /GS- /W4 /WX /D_WIN32_WINNT=0x0A00 /DGESHER_PROBE_USER32 tests\native\usb_guest_loader_probe.c /Fe:guest-user32.exe /link /NODEFAULTLIB /ENTRY:GuestLoaderProbeEntry /SUBSYSTEM:CONSOLE kernel32.lib user32.lib >> usb-protected-launch.log 2>&1
++          if errorlevel 1 (
++            type usb-protected-launch.log
++            exit /b 1
++          )
++          cl /nologo /std:c11 /GS- /W4 /WX /D_WIN32_WINNT=0x0A00 /DGESHER_PROBE_USER32_LATE tests\native\usb_guest_loader_probe.c /Fe:guest-user32-late.exe /link /NODEFAULTLIB /ENTRY:GuestLoaderProbeEntry /SUBSYSTEM:CONSOLE kernel32.lib >> usb-protected-launch.log 2>&1
 +          if errorlevel 1 (
 +            type usb-protected-launch.log
 +            exit /b 1
@@ -136,6 +141,10 @@ index f9e65608b..f891569a6 100644
 +        if: ${{ !cancelled() }}
 +        shell: cmd
 +        run: python tools/test_protected_thread_signals.py --cxx cl
++      - name: Protected inherited NUL handle ownership across POSIX modules
++        if: ${{ !cancelled() }}
++        shell: cmd
++        run: python tools/test_appcontainer_null_owner.py --cxx cl
 +      - name: Launch failure text with native Windows direction classification
 +        if: ${{ !cancelled() }}
 +        shell: pwsh
@@ -209,7 +218,7 @@ index f9e65608b..f891569a6 100644
          shell: pwsh
          run: |
            & .\app-identity-restart.exe
-@@ -125,7 +290,7 @@ jobs:
+@@ -125,7 +299,7 @@ jobs:
        - name: Build actual dexopt child waiting and resource budgets
          if: ${{ !cancelled() }}
          shell: cmd
@@ -218,7 +227,7 @@ index f9e65608b..f891569a6 100644
        - name: Verify real compiler cancellation, reaping, CPU and memory budgets
          if: ${{ !cancelled() }}
          shell: pwsh
-@@ -140,6 +305,65 @@ jobs:
+@@ -140,6 +314,65 @@ jobs:
          if: ${{ !cancelled() }}
          shell: pwsh
          run: tests/windows/clipboard/Publication.ps1
@@ -284,7 +293,7 @@ index f9e65608b..f891569a6 100644
        - name: Exact native reader ownership and handle reuse controls
          if: ${{ !cancelled() }}
          shell: pwsh
-@@ -148,6 +372,91 @@ jobs:
+@@ -148,6 +381,91 @@ jobs:
          if: ${{ !cancelled() }}
          shell: pwsh
          run: python tools/test_windows_host_events.py --java-home "$env:JAVA_HOME"
@@ -376,7 +385,7 @@ index f9e65608b..f891569a6 100644
        - name: Build native clipboard foreground actor before timed startup
          if: ${{ !cancelled() }}
          shell: cmd
-@@ -168,6 +477,72 @@ jobs:
+@@ -168,6 +486,72 @@ jobs:
          if: ${{ !cancelled() }}
          shell: bash
          run: python tools/test_storage_stats_scans.py --java-home "$JAVA_HOME"
@@ -449,7 +458,7 @@ index f9e65608b..f891569a6 100644
        - name: Release updater and control panel contracts on Windows PowerShell 5.1
          if: ${{ !cancelled() }}
          shell: powershell
-@@ -178,23 +553,44 @@ jobs:
+@@ -178,23 +562,44 @@ jobs:
            tests/windows/shell/ControlPanelRefreshChecks.ps1
            tests/windows/shell/ControlPanelRecoveryChecks.ps1
            tests/windows/shell/ControlPanelIdleChecks.ps1
@@ -494,7 +503,7 @@ index f9e65608b..f891569a6 100644
        - name: API 37 report gate failure and selection contracts
          if: ${{ !cancelled() }}
          shell: bash
-@@ -211,7 +607,8 @@ jobs:
+@@ -211,7 +616,8 @@ jobs:
            PYTHONIOENCODING: utf-8
          run: python tools/ci/run_api37_report_tests.py --profile windows
    api37-report-tests:
@@ -504,7 +513,7 @@ index f9e65608b..f891569a6 100644
      runs-on: ubuntu-24.04
      timeout-minutes: 10
      env:
-@@ -236,18 +633,22 @@ jobs:
+@@ -236,18 +642,22 @@ jobs:
          shell: bash
          run: python tools/ci/run_api37_report_tests.py --profile linux
    union-tsf:
@@ -531,7 +540,7 @@ index f9e65608b..f891569a6 100644
      runs-on: ubuntu-24.04
      steps:
        - uses: actions/checkout@v4
-@@ -255,8 +656,13 @@ jobs:
+@@ -255,8 +665,13 @@ jobs:
            fetch-depth: 0
        - name: Install media contract encoder and decoder tools
          run: |
@@ -547,7 +556,7 @@ index f9e65608b..f891569a6 100644
 
        - name: Windows test shard coverage, dependencies and failure controls
          shell: pwsh
-@@ -305,6 +711,9 @@ jobs:
+@@ -305,6 +720,9 @@ jobs:
        - name: Notification image staging, cache, cancellation and encoder ownership
          run: python3 tools/test_notification_images.py
 
@@ -557,7 +566,7 @@ index f9e65608b..f891569a6 100644
        - name: Native allocation, directory, semaphore, file-lock and socket-control contracts
          run: |
            python3 tools/test_hwui_renderer_policy.py --sanitize
-@@ -316,31 +725,40 @@ jobs:
+@@ -316,31 +734,41 @@ jobs:
            python3 tools/test_bionic_system_contracts.py --sanitize
            python3 tools/test_environment_contracts.py --sanitize
            python3 tools/test_environment_lookup_contracts.py
@@ -570,6 +579,7 @@ index f9e65608b..f891569a6 100644
 +          python3 tools/test_search_delete_report.py
            python3 tools/test_scandir_sort.py --sanitize --negative-controls --output-dir scandir-sort-contracts
            python3 tools/test_scandir_report.py
++          python3 -m unittest discover -s tools/tests -p test_scandir_report.py
            python3 tools/test_bionic_semaphore_contracts.py --sanitize
            python3 tools/test_file_allocation_contracts.py --sanitize
            python3 tools/test_positioned_io_contracts.py --sanitize
@@ -599,7 +609,7 @@ index f9e65608b..f891569a6 100644
            python3 tools/test_pthread_clock_contracts.py --sanitize
            python3 tools/test_pthread_clock_contracts.py --linux-reference
            python3 tools/test_pthread_attribute_contracts.py --sanitize
-@@ -361,6 +779,7 @@ jobs:
+@@ -361,6 +789,7 @@ jobs:
            python3 tools/test_elf_tls_rollback.py --sanitize
            python3 tools/test_arm64_pending_rollback.py --sanitize
            python3 tools/test_arm64_native_rollback.py --sanitize
@@ -607,7 +617,7 @@ index f9e65608b..f891569a6 100644
            python3 tools/test_media_api_contracts.py --sanitize
            python3 tools/test_aaudio_builder_contracts.py
            python3 tools/test_aaudio_lifecycle_contracts.py --sanitize
-@@ -371,8 +790,13 @@ jobs:
+@@ -371,8 +800,13 @@ jobs:
            python3 tools/test_boottime_resume.py --sanitize
            python3 tools/test_timerfd_contracts.py --sanitize
            python3 tools/test_input_surface_callbacks.py --sanitize
@@ -621,7 +631,7 @@ index f9e65608b..f891569a6 100644
            python3 tools/test_dns_admission.py --sanitize
 
        - name: Stream device identity across close and reopen
-@@ -395,8 +819,14 @@ jobs:
+@@ -395,8 +829,14 @@ jobs:
        - name: Descriptor-backed stdio and stream lifetime contracts
          run: |
            python3 tools/test_stdio_contracts.py --sanitize
@@ -636,7 +646,7 @@ index f9e65608b..f891569a6 100644
        - name: MediaPlayer PCM priming and playback lifecycle contracts
          run: python3 tools/test_media_player_priming.py --sanitize
 
-@@ -409,6 +839,7 @@ jobs:
+@@ -409,6 +849,7 @@ jobs:
            python3 tools/test_fnmatch_performance.py --sanitize
            python3 tools/test_virtual_path_classification.py --sanitize
            python3 tools/test_binder_reply_allocations.py --sanitize
@@ -644,7 +654,7 @@ index f9e65608b..f891569a6 100644
            python3 tools/test_binder_receive_views.py --sanitize
            python3 tools/test_camera_capture_allocations.py --sanitize
            python3 tools/test_layered_bitmap_cache.py --sanitize
-@@ -421,7 +852,9 @@ jobs:
+@@ -421,7 +862,9 @@ jobs:
            python3 tools/test_art_jni_dispatch.py --sanitize
            python3 tools/test_audio_mixer_allocations.py --sanitize
            python3 tools/test_audio_unity_rate.py --sanitize
@@ -654,7 +664,7 @@ index f9e65608b..f891569a6 100644
            python3 tools/test_capture_stream_selection.py --sanitize
            python3 tools/test_audio_file_source.py --sanitize
            python3 tools/test_audio_rate_history.py --sanitize
-@@ -436,6 +869,7 @@ jobs:
+@@ -436,6 +879,7 @@ jobs:
              tests/native/event_loop_reference.c -o "$RUNNER_TEMP/event-loop-reference"
            "$RUNNER_TEMP/event-loop-reference"
            python3 tools/test_audio_state_contracts.py --sanitize
@@ -662,7 +672,7 @@ index f9e65608b..f891569a6 100644
            python3 tools/test_surface_geometry_contracts.py --sanitize
            python3 tools/test_video_scaling_contracts.py --sanitize
            python3 tools/test_native_window_dispatch.py --sanitize
-@@ -467,6 +901,12 @@ jobs:
+@@ -467,6 +911,12 @@ jobs:
            "$RUNNER_TEMP/gesher-noreplace-holes"
            python3 tools/test_madvise_reference.py
 
@@ -675,7 +685,7 @@ index f9e65608b..f891569a6 100644
        - name: Filesystem metadata and media source ownership contracts
          run: |
            python3 tools/test_file_timestamp_contracts.py --sanitize
-@@ -478,9 +918,13 @@ jobs:
+@@ -478,9 +928,13 @@ jobs:
            python3 tools/test_media_callback_state.py --sanitize
            python3 tools/test_media_http_contracts.py --sanitize
            python3 tools/test_mf_encoder_input.py --sanitize
@@ -689,7 +699,7 @@ index f9e65608b..f891569a6 100644
            cc -std=gnu11 -O1 -Wall -Wextra -Werror -DGESHER_FILESYSTEM_REFERENCE_MAIN \
              tests/native/filesystem_contract_guest.c -o "$RUNNER_TEMP/filesystem-metadata-reference"
            "$RUNNER_TEMP/filesystem-metadata-reference"
-@@ -501,13 +945,22 @@ jobs:
+@@ -501,13 +955,22 @@ jobs:
            python3 tools/test_media_callback_contracts.py --java-home "$JAVA_HOME"
            python3 tools/test_media_receiver_lifetimes.py
            python3 tools/test_media_recorder_state.py --java-home "$JAVA_HOME"
@@ -713,7 +723,7 @@ index f9e65608b..f891569a6 100644
 
        - name: WebStorage origin, owned WebView responses and running-task contracts
          run: |
-@@ -515,6 +968,8 @@ jobs:
+@@ -515,6 +978,8 @@ jobs:
            python3 tools/test_webview_owned_responses.py --java-home "$JAVA_HOME"
            python3 tools/test_webview_boundary_dispatch.py --java-home "$JAVA_HOME"
            python3 tools/test_webview_geometry.py --java-home "$JAVA_HOME" --sanitize
@@ -722,7 +732,7 @@ index f9e65608b..f891569a6 100644
            python3 tools/test_uia_snapshot_contracts.py --sanitize
            python3 tools/test_running_tasks_contracts.py
 
-@@ -523,8 +978,19 @@ jobs:
+@@ -523,8 +988,19 @@ jobs:
            python3 tools/test_bluetooth_native_contracts.py --sanitize
            python3 tools/test_bluetooth_gatt_contracts.py --java-home "$JAVA_HOME"
            python3 tools/test_bluetooth_socket_contracts.py --java-home "$JAVA_HOME"
@@ -742,7 +752,7 @@ index f9e65608b..f891569a6 100644
 
        - name: MediaDataSource adapter contracts with checked JNI and UBSan
          run: python3 tools/test_media_callback_adapter.py
-@@ -538,6 +1004,20 @@ jobs:
+@@ -538,6 +1014,20 @@ jobs:
        - name: APK native library filename contracts
          run: python3 tools/test_native_library_paths.py --java-home "$JAVA_HOME"
 
@@ -763,7 +773,7 @@ index f9e65608b..f891569a6 100644
        - name: Java service dispatch, durable settings, APK scans and bounded launcher logs
          run: |
            python3 tools/test_java_performance_contracts.py --java-home "$JAVA_HOME"
-@@ -545,13 +1025,16 @@ jobs:
+@@ -545,13 +1035,16 @@ jobs:
            python3 tools/test_launcher_log_contracts.py --java-home "$JAVA_HOME"
            python3 tools/test_launcher_tail_io.py --java-home "$JAVA_HOME"
            python3 tools/test_launcher_log_bounds.py --java-home "$JAVA_HOME"
@@ -780,7 +790,7 @@ index f9e65608b..f891569a6 100644
            python3 tools/test_dexopt_work.py --java-home "$JAVA_HOME"
 
        - name: Validate user interface translations
-@@ -563,7 +1046,8 @@ jobs:
+@@ -563,7 +1056,8 @@ jobs:
          run: python3 tools/test_app_crash_diagnostics.py
 
    build-framework-assets:
@@ -790,7 +800,7 @@ index f9e65608b..f891569a6 100644
      runs-on: ubuntu-24.04
      steps:
        - uses: actions/checkout@v4
-@@ -590,12 +1074,47 @@ jobs:
+@@ -590,12 +1084,47 @@ jobs:
 
        - name: Recorder lifecycle and complete-container size budgets
          run: |
@@ -840,7 +850,7 @@ index f9e65608b..f891569a6 100644
 
        - name: libcore System.nanoTime shares Android awake-time domain
          run: python3 tools/test_system_nanotime.py --source third_party/aosp/libcore/ojluni/src/main/native/System.c
-@@ -608,6 +1127,12 @@ jobs:
+@@ -608,6 +1137,12 @@ jobs:
        - name: Build test apps
          run: tests/build-test-apps.sh out/test-apps
 
@@ -853,7 +863,7 @@ index f9e65608b..f891569a6 100644
        - name: Build boot class path (core-oj, core-libart)
          run: tools/build-boot-jars.sh out/boot-jars
 
-@@ -617,7 +1142,13 @@ jobs:
+@@ -617,7 +1152,13 @@ jobs:
        - name: Collect framework assets
          run: |
            mkdir -p framework-assets
@@ -867,7 +877,7 @@ index f9e65608b..f891569a6 100644
            # ICU's data, which the runtime maps from $ANDROID_I18N_ROOT/etc/icu.
            cp third_party/aosp/external/icu/icu4c/source/stubdata/icudt*l.dat framework-assets/
            # The system fonts and fonts.xml, for $ANDROID_ROOT (docs/fonts.md).
-@@ -636,7 +1167,8 @@ jobs:
+@@ -636,7 +1177,8 @@ jobs:
    # Everything is cross-compiled on Linux with llvm-mingw, then executed on
    # real Windows runners.
    build:
@@ -877,7 +887,7 @@ index f9e65608b..f891569a6 100644
      runs-on: ubuntu-24.04
      env:
        GESHER_HOST_PTHREAD_SELECTION: ${{ (github.ref == 'refs/heads/wip/pthread-production-factory' || github.ref == 'refs/heads/wip/coherent-selected-tcp') && 'selected-minimum' || 'publisher-cancel' }}
-@@ -702,6 +1234,9 @@ jobs:
+@@ -702,6 +1244,9 @@ jobs:
            python3 tools/test_binder_reply_allocations.py --compile-only \
              --cxx "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang++" \
              --output out/binder_reply_allocations_test.exe
@@ -887,7 +897,7 @@ index f9e65608b..f891569a6 100644
            python3 tools/test_binder_lifetime.py --compile-only --aosp-dir third_party/aosp \
              --cxx "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang++" \
              --output out/binder_lifetime_test.exe
-@@ -717,6 +1252,14 @@ jobs:
+@@ -717,6 +1262,14 @@ jobs:
            python3 tools/test_arm64_tls_lifecycle.py --compile-only \
              --cxx "$GESHER_BUILD_LLVM/bin/x86_64-w64-mingw32-clang++" \
              --output out/arm64_tls_lifecycle_test.exe
@@ -902,7 +912,7 @@ index f9e65608b..f891569a6 100644
 
        - name: Build
          run: |
-@@ -745,9 +1288,10 @@ jobs:
+@@ -745,9 +1298,10 @@ jobs:
            ninja -C out CMakeFiles/gesher_bionic_unicode.dir/compat/bionic/unicode_width.cc.obj
            ninja -C out native3_unicode_test
            ninja -C out native3_cpu_clock_test clock_domains_windows_test boottime_resume_windows_test
@@ -914,16 +924,18 @@ index f9e65608b..f891569a6 100644
            ninja -C out arm64_numeric_return_host arm64_numeric_fenv_test
            ninja -C out font_environment_test
 
-@@ -802,6 +1346,8 @@ jobs:
+@@ -801,7 +1355,10 @@ jobs:
+           cp out/*.exe out/dalvikvm.map out/dex2oat.map dist/
            cp tools/package/licenses/BIONIC-GDTOA-NOTICES.txt dist/
            cp out/gesher_shellext.dll dist/
++          cp out/gesher-drop-worker.exe dist/
            cp out/futex_test_module.dll dist/
 +          cp out/gesher_usb_block_owner_module_test.dll dist/
 +          cp -r out/dlopen-fixtures dist/
            cp out/libgesher_account_crypto.so dist/
            cp out/libgesher_install_pipe.so dist/
            cp out/libgesher_webview_bridge.so dist/
-@@ -903,7 +1449,8 @@ jobs:
+@@ -903,7 +1460,8 @@ jobs:
            if-no-files-found: error
 
    native3-locks-reference:
@@ -933,7 +945,7 @@ index f9e65608b..f891569a6 100644
      runs-on: ubuntu-24.04
      timeout-minutes: 8
      steps:
-@@ -917,7 +1464,8 @@ jobs:
+@@ -917,7 +1475,8 @@ jobs:
            if-no-files-found: error
 
    native3-locks-regression:
@@ -943,7 +955,7 @@ index f9e65608b..f891569a6 100644
      strategy:
        fail-fast: false
        matrix:
-@@ -969,7 +1517,8 @@ jobs:
+@@ -969,7 +1528,8 @@ jobs:
    # tools/framework/build.py): .github/workflows/framework.yml, which also
    # runs on its own (gh workflow run framework --ref <branch>).
    framework:
@@ -953,7 +965,7 @@ index f9e65608b..f891569a6 100644
      # A local call runs the framework.yml of the commit under test, so a
      # framework.yml change takes effect in the same PR. Hosted build runners;
      # see docs/self-hosted-ci.md before routing it to the restricted group.
-@@ -980,63 +1529,73 @@ jobs:
+@@ -980,63 +1540,73 @@ jobs:
    # Phase 6 (native libraries): the Android NDK test .so files, built on the
    # Linux runner. .github/workflows/native-libs.yml, which also runs on its own.
    native-libs:
@@ -1037,7 +1049,7 @@ index f9e65608b..f891569a6 100644
      uses: ./.github/workflows/webview.yml
      with:
        apk: true
-@@ -1044,24 +1603,28 @@ jobs:
+@@ -1044,24 +1614,28 @@ jobs:
    # Gesher's boot image (docs/boot-image.md): dex2oat.exe from the build job
    # compiles the boot class path on Windows: .github/workflows/boot-image.yml.
    boot-image:
@@ -1070,7 +1082,7 @@ index f9e65608b..f891569a6 100644
      runs-on: ubuntu-24.04
      steps:
        - uses: actions/checkout@v4
-@@ -1097,7 +1660,8 @@ jobs:
+@@ -1097,7 +1671,8 @@ jobs:
    # The Windows installer (tools/package/gesher.iss), installed and tried on a
    # clean runner: Hello through the installed `gesher` command, then uninstall.
    package:
@@ -1080,7 +1092,7 @@ index f9e65608b..f891569a6 100644
      runs-on: windows-2022
      env:
        GH_TOKEN: ${{ github.token }}
-@@ -1120,6 +1684,15 @@ jobs:
+@@ -1120,6 +1695,15 @@ jobs:
              .github/workflows
              tools/fonts
              tools/binder
@@ -1096,7 +1108,7 @@ index f9e65608b..f891569a6 100644
 
        - name: Verify PowerShell UI translations
          shell: powershell
-@@ -1130,7 +1703,11 @@ jobs:
+@@ -1130,7 +1714,11 @@ jobs:
            tests/windows/shell/ControlPanelRefreshChecks.ps1
            tests/windows/shell/ControlPanelRecoveryChecks.ps1
            tests/windows/shell/ControlPanelIdleChecks.ps1
@@ -1108,7 +1120,7 @@ index f9e65608b..f891569a6 100644
            tests/windows/shell/UpdateChecks.ps1
            tests/windows/shell/UpdateTransportChecks.ps1
            tests/windows/shell/ControlPanelUpdateChecks.ps1
-@@ -1165,6 +1742,7 @@ jobs:
+@@ -1165,6 +1753,7 @@ jobs:
            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
        - name: Build installer
@@ -1116,7 +1128,7 @@ index f9e65608b..f891569a6 100644
          shell: pwsh
          run: |
            $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
-@@ -1181,6 +1759,11 @@ jobs:
+@@ -1181,6 +1770,11 @@ jobs:
            "$checksum  $($installer.Name)" | Set-Content -LiteralPath 'installer\SHA256SUMS.txt' -Encoding ascii
            Get-ChildItem installer
 
@@ -1128,7 +1140,7 @@ index f9e65608b..f891569a6 100644
        # Uploaded before the checks below: the e2e job tests this installer even when one
        # of them fails.
        - name: Upload tested installer artifact
-@@ -1189,9 +1772,105 @@ jobs:
+@@ -1189,10 +1783,110 @@ jobs:
            name: gesher-setup
            path: |
              installer/*.exe
@@ -1232,9 +1244,14 @@ index f9e65608b..f891569a6 100644
        - name: Install, run Hello, uninstall
 +        if: ${{ !cancelled() && steps.build_installer.outcome == 'success' }}
          shell: pwsh
++        env:
++          # Exercise the candidate through the installed launcher before changing the shipping default.
++          GESHER_SANDBOX: appcontainer-trusted
++          GESHER_LOCALES: en-US
          run: |
            $setup = (Get-ChildItem installer\gesher-setup-*.exe).FullName
-@@ -1205,9 +1884,11 @@ jobs:
+           # Every run of the installed Gesher below must load the installed boot
+@@ -1205,9 +1899,11 @@ jobs:
            if ($LASTEXITCODE -ne 0) { throw 'Crash dialog host/Windows checks failed' }
            python tools/test_app_crash_runtime.py --runtime "$app" --fixture dist/crashnotice.apk --output out/crash-notice-art
            if ($LASTEXITCODE -ne 0) { throw 'Crash notice Windows/ART checks failed' }
@@ -1247,7 +1264,7 @@ index f9e65608b..f891569a6 100644
            . (Join-Path $app 'gesher-update.ps1')
            $installedVersion = Get-GesherInstalledVersion -InstallDirectory $app
            if ($installedVersion -cne $env:GESHER_PACKAGE_VERSION) {
-@@ -1220,6 +1901,9 @@ jobs:
+@@ -1220,6 +1916,9 @@ jobs:
              throw "Installer ProductVersion mismatch: expected '$env:GESHER_PACKAGE_VERSION', normalized '$installerVersion', raw '$rawProductVersion'"
            }
            'PASS  installer: updater, runtime synchronizer and exact release version are installed' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
@@ -1257,7 +1274,7 @@ index f9e65608b..f891569a6 100644
            $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
            if (-not ($userPath -split ';' -contains $app)) { throw "PATH lacks $app" }
            $out = & "$app\gesher.cmd" "$app\hello.dex" gesher.Hello 2>&1 | Out-String
-@@ -1231,8 +1915,8 @@ jobs:
+@@ -1231,8 +1930,8 @@ jobs:
            if ($out -notmatch 'gesher: boot image loaded: 3 spaces') { throw 'The installed gesher did not load the installed boot image' }
            # gesher-app and the framework it runs on are installed, and the
            # installed copy takes the bundled app to onResume.
@@ -1268,13 +1285,39 @@ index f9e65608b..f891569a6 100644
              if (-not (Test-Path "$app\$f")) { throw "The installer left out $f" }
            }
            $oatdumpOutput = & "$app\oatdump.exe" "--oat-file=$app/framework/x86_64/boot-framework.oat" --header-only --no-disassemble 2>&1 | Out-String
-@@ -1275,13 +1959,15 @@ jobs:
+@@ -1245,22 +1944,12 @@ jobs:
+           foreach ($f in [regex]::Matches((Get-Content -Raw "$app\fonts\fonts.xml"), '[A-Za-z0-9_-]+\.ttf') | ForEach-Object Value | Sort-Object -Unique) {
+             if (-not (Test-Path "$app\fonts\$f")) { throw "The installer left out fonts\$f, which fonts.xml names" }
+           }
+-          $out = & "$app\gesher-app.cmd" "$app\lifecycle.apk" --single-process 2>&1 | Out-String
+-          $code = $LASTEXITCODE
+-          Write-Host "gesher-app lifecycle.apk --single-process (exit $code):"
+-          Write-Host (($out -split "`n" | Select-Object -Last 15) -join "`n")
+-          if ($code -ne 0 -or $out -notmatch 'gesher-app: done' -or $out -notmatch 'stand-in services in this process') {
+-            throw "The installed gesher-app --single-process did not take lifecycle.apk to onResume (exit $code)"
+-          }
+-          $fonts = $out -split "`n" | Select-String -Pattern 'gesher-app: system fonts' | Select-Object -First 1
+-          Write-Host $fonts
+-          if ($out -notmatch 'gesher-app: system fonts: \d+ typefaces') { throw 'The installed gesher-app did not load the system fonts' }
+-          if ($out -notmatch 'gesher: boot image loaded: 5 spaces') { throw 'The installed gesher-app did not load the installed boot image with its extensions' }
+-          'PASS  installer: the installed boot image loads (gesher: the primary image, 3 spaces; gesher-app: with the framework and gesher-app extensions, 5 spaces)' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+-          'PASS  installer: gesher-app loads the installed system fonts' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+           # The default: the Gesher device (binderd, servicemanager and a
+           # persistent system server, detached), the APK installed, its
+           # process started by the system server (docs/services.md).
++          # Run the cold device launch before the single-process probe. A
++          # protected single-process launch can start a policy owner that the
++          # default launch would reuse instead of starting a fresh device.
+           $device = "$env:LOCALAPPDATA\Gesher\data\system\gesher-device"
+           function DevicePids {
+             if (-not (Test-Path $device)) { return @() }
+@@ -1275,13 +1964,16 @@ jobs:
            $env:GESHER_APP_WINDOW = 'headless'
            # The device's processes log how they execute (checked below, ADR 0081).
            $env:GESHER_LOG_EXECUTION = '1'
 -          $out = & "$app\gesher-app.cmd" "$app\lifecycle.apk" 2>&1 | Out-String
 +          # CardWake (#407) looks up UsbManager during Activity.onCreate.
-+          $out = & "$app\gesher-app.cmd" "$app\lifecycle.apk" --ez com.gesher.lifecycle.CHECK_USB_SERVICE true 2>&1 | Out-String
++          $out = & "$app\gesher-app.cmd" "$app\lifecycle.apk" --ez com.gesher.lifecycle.CHECK_USB_SERVICE true --ez com.gesher.lifecycle.CHECK_ANDROID_DATA true 2>&1 | Out-String
            $code = $LASTEXITCODE
            Remove-Item Env:GESHER_LOG_EXECUTION
            Write-Host "gesher-app lifecycle.apk (exit $code):"
@@ -1282,11 +1325,51 @@ index f9e65608b..f891569a6 100644
            if ($code -ne 0 -or $out -notmatch 'gesher-app: done' -or $out -notmatch 'started the Gesher device' -or
 -              $out -notmatch 'installed com\.gesher\.lifecycle' -or $out -notmatch 'LifecycleActivity onResume') {
 +              $out -notmatch 'installed com\.gesher\.lifecycle' -or $out -notmatch 'LifecycleActivity onResume' -or
-+              $out -notmatch 'LifecycleActivity onCreate: USB service available') {
++              $out -notmatch 'LifecycleActivity onCreate: USB service available' -or
++              $out -notmatch 'LifecycleActivity Android data capacity and device-state isolation verified') {
              Get-Content "$env:LOCALAPPDATA\Gesher\logs\*.log" -ErrorAction SilentlyContinue | Select-Object -Last 60 | Out-Host
              throw "The installed gesher-app did not run lifecycle.apk on the Gesher device (exit $code)"
            }
-@@ -1473,8 +2159,11 @@ jobs:
+@@ -1292,6 +1984,9 @@ jobs:
+             throw "gesher-app list does not show the installed lifecycle.apk"
+           }
+           'PASS  installer: gesher-app installs lifecycle.apk and runs it on the Gesher device (a persistent system server); list shows it' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
++          if ((Get-Content $device) -cnotcontains 'protected_binder=true') {
++            throw 'The installer qualification did not start the candidate isolated device'
++          }
+           # The installed device compiled it at install with the installed dex2oat (ADR 0054).
+           $dexopt = Get-Content "$env:LOCALAPPDATA\Gesher\logs\system_server.log" -ErrorAction SilentlyContinue | Select-String 'dexopt: com\.gesher\.lifecycle: verify \(reason install\)' | Select-Object -First 1
+           if (-not $dexopt) {
+@@ -1322,6 +2017,19 @@ jobs:
+           }
+           if ($out -notmatch 'Windows AppUserModelID Gesher\.App\.com\.gesher\.lifecycle') { throw 'The app process did not set its AppUserModelID' }
+           'PASS  installer: the first launch of lifecycle.apk makes its Start menu shortcut; its process sets the AppUserModelID Gesher.App.com.gesher.lifecycle' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
++          $out = & "$app\gesher-app.cmd" "$app\lifecycle.apk" --single-process 2>&1 | Out-String
++          $code = $LASTEXITCODE
++          Write-Host "gesher-app lifecycle.apk --single-process (exit $code):"
++          Write-Host (($out -split "`n" | Select-Object -Last 15) -join "`n")
++          if ($code -ne 0 -or $out -notmatch 'gesher-app: done' -or $out -notmatch 'stand-in services in this process') {
++            throw "The installed gesher-app --single-process did not take lifecycle.apk to onResume (exit $code)"
++          }
++          $fonts = $out -split "`n" | Select-String -Pattern 'gesher-app: system fonts' | Select-Object -First 1
++          Write-Host $fonts
++          if ($out -notmatch 'gesher-app: system fonts: \d+ typefaces') { throw 'The installed gesher-app did not load the system fonts' }
++          if ($out -notmatch 'gesher: boot image loaded: 5 spaces') { throw 'The installed gesher-app did not load the installed boot image with its extensions' }
++          'PASS  installer: the installed boot image loads (gesher: the primary image, 3 spaces; gesher-app: with the framework and gesher-app extensions, 5 spaces)' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
++          'PASS  installer: gesher-app loads the installed system fonts' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+           $out = & "$app\gesher-app.cmd" uninstall com.gesher.lifecycle 2>&1 | Out-String
+           $code = $LASTEXITCODE
+           Write-Host $out
+@@ -1468,13 +2176,18 @@ jobs:
+           $code = $LASTEXITCODE
+           Write-Host "gesher-app lifecycle.apk --system-server (exit $code):"
+           Write-Host (($out -split "`n" | Select-Object -Last 12) -join "`n")
+-          if ($code -ne 0 -or $out -notmatch 'gesher-app: done' -or $out -notmatch '\(in another process\)') {
+-            Get-Content "$env:LOCALAPPDATA\Gesher\logs\run-system_server.*" -ErrorAction SilentlyContinue | Select-Object -Last 40 | Out-Host
++          if ($code -ne 0 -or $out -notmatch 'gesher-app: done' -or $out -notmatch 'LifecycleActivity onResume' -or
++              $out -notmatch 'gesher-app: attached to the system server \(pid \d+\)' -or
++              (DevicePids).Count -ne 0) {
++            Get-Content "$env:LOCALAPPDATA\Gesher\logs\run-*\system_server.log" -ErrorAction SilentlyContinue | Select-Object -Last 40 | Out-Host
              throw "The installed gesher-app --system-server did not take lifecycle.apk to onResume (exit $code)"
            }
            'PASS  installer: gesher-app --system-server runs the app with the services in a system server process' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
@@ -1300,7 +1383,7 @@ index f9e65608b..f891569a6 100644
            $cls = 'HKCU:\Software\Classes'
            $progId = (Get-ItemProperty "$cls\.apk" -ErrorAction SilentlyContinue).'(default)'
            if ($progId -ne 'Gesher.Apk') { throw ".apk's default ProgID is '$progId', not Gesher.Apk" }
-@@ -1482,20 +2171,251 @@ jobs:
+@@ -1482,20 +2195,251 @@ jobs:
            $open = (Get-ItemProperty "$cls\Gesher.Apk\shell\open\command").'(default)'
            Write-Host "Gesher.Apk open command: $open"
            if ($open -notmatch '^"([^"]+)"\s*(.*)$' -or $Matches[1] -ne "$app\gesher-launch.exe") { throw "Gesher.Apk's open command does not start gesher-launch.exe: $open" }
@@ -1531,8 +1614,7 @@ index f9e65608b..f891569a6 100644
 +          $registry = Join-Path $stageParent 'packages.list'
 +          if (Select-String -LiteralPath $registry -Pattern '^com\.gesher\.splitcontract\t' -Quiet) {
 +            throw 'a mismatched digest published an installed package'
-           }
--          'PASS  installer: .apk opens with gesher-app through the registered command' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
++          }
 +          $expectedHashes = @{}
 +          foreach ($name in @($looseInputs.Values) + 'base.dm') {
 +            $expectedHashes[$name] = (Get-FileHash -LiteralPath (Join-Path $loose $name)).Hash
@@ -1546,7 +1628,8 @@ index f9e65608b..f891569a6 100644
 +          $out = Complete-ApkOpen $run 'gesher-launch with loose splits and dex metadata'
 +          if ($run.Process.ExitCode -ne 0 -or $answer.Problems.Count) {
 +            throw "confirmed loose APK install failed: $out $($answer.Problems -join '; ')"
-+          }
+           }
+-          'PASS  installer: .apk opens with gesher-app through the registered command' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
 +          $row = @(Get-Content -LiteralPath $registry | Where-Object { $_.StartsWith("$splitPackage`t") })
 +          if ($row.Count -ne 1) { throw 'confirmed loose APK did not publish an installed package' }
 +          $codeDir = (($row[0] -split "`t")[1] -split '[/\\]')[-1]
@@ -1565,7 +1648,7 @@ index f9e65608b..f891569a6 100644
            # Gesher's toast activator (ADR 0051): a local server running gesher-app toast-activated.
            $activator = (Get-ItemProperty "$cls\CLSID\{C18D9445-A7F0-472E-985F-AC354EBEB660}\LocalServer32" -ErrorAction SilentlyContinue).'(default)'
            Write-Host "toast activator: $activator"
-@@ -1540,7 +2460,7 @@ jobs:
+@@ -1540,7 +2484,7 @@ jobs:
            # The device outlives the console that started it.
            $running = DevicePids
            if ($running.Count -ne 3) { throw "The Gesher device did not outlive the .apk open command's console: $running" }
@@ -1574,7 +1657,15 @@ index f9e65608b..f891569a6 100644
            # An app's window on the device (docs/graphics.md, ADR 0029): the
            # installed gesher-app launches uiapp.apk with a hidden window; the
            # app process the system server starts draws its UI into a Win32
-@@ -1825,6 +2745,16 @@ jobs:
+@@ -1594,6 +2538,7 @@ jobs:
+           }
+           'PASS  installer: gesher-app runs uiapp.apk on the Gesher device in a Win32 window of its app process (hwui''s frame read back with PrintWindow; the Activity''s label, AppUserModelID Gesher.App.com.gesher.uiapp, its icon); closing it ends the app' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+           'PASS  installer: input reaches uiapp.apk''s views on the Gesher device (a click runs the Button''s onClick, keys and a WM_CHAR type into its EditText, the wheel scrolls, the resized window redraws at 600x700)' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
++          tests/windows/shell/InstalledAppIsolationChecks.ps1 -RuntimeDirectory $app -EvidenceDirectory "$PWD/out/installed-isolation"
+           # gesher-launch's splash (compat/shell/gesher_launch.cc, docs/installer.md):
+           # `gesher-launch install` shows none; `gesher-launch launch com.gesher.uiapp`
+           # (the shortcut's command, the app's window shown) shows a GesherSplash
+@@ -1825,6 +2770,16 @@ jobs:
            Set-Content $sentinel 'not Gesher''s'
            # An app id as the system server registers one for an app's toasts (ADR 0038), which uninstalling must remove.
            $null = New-Item 'HKCU:\Software\Classes\AppUserModelId\Gesher.App.com.gesher.ci' -Force
@@ -1591,7 +1682,7 @@ index f9e65608b..f891569a6 100644
            Start-Process "$app\unins000.exe" -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES' -Wait
            # The uninstaller hands over to a copy of itself and returns at once.
            for ($i = 0; $i -lt 60 -and (Test-Path "$app\unins000.exe"); $i++) { Start-Sleep 1 }
-@@ -1832,6 +2762,10 @@ jobs:
+@@ -1832,6 +2787,10 @@ jobs:
            if ($left) { throw "Uninstall left the Gesher device's processes running: $left" }
            if (Test-Path "$env:LOCALAPPDATA\Gesher") { throw "Uninstall left $env:LOCALAPPDATA\Gesher" }
            'PASS  installer: uninstall stops the Gesher device and removes its data' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
@@ -1602,7 +1693,7 @@ index f9e65608b..f891569a6 100644
            $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
            if ($userPath -split ';' -contains $app) { throw 'Uninstall left Gesher on PATH' }
            if (Test-Path "$app\dalvikvm.exe") { throw 'Uninstall left dalvikvm.exe' }
-@@ -1839,6 +2773,13 @@ jobs:
+@@ -1839,6 +2798,13 @@ jobs:
            if ((Get-ItemProperty "$cls\.apk" -ErrorAction SilentlyContinue).'(default)' -eq 'Gesher.Apk') { throw "Uninstall left .apk's default on Gesher.Apk" }
            if ($null -ne (Get-ItemProperty "$cls\.apk\OpenWithProgids" -ErrorAction SilentlyContinue).'Gesher.Apk') { throw 'Uninstall left Gesher.Apk in OpenWithProgids' }
            'PASS  installer: uninstall removes the .apk association' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
@@ -1616,16 +1707,18 @@ index f9e65608b..f891569a6 100644
            if (Test-Path "$cls\CLSID\{C18D9445-A7F0-472E-985F-AC354EBEB660}") { throw 'Uninstall left the toast activator' }
            $appIds = @(Get-ChildItem "$cls\AppUserModelId" -ErrorAction SilentlyContinue | Where-Object PSChildName -like 'Gesher.App.*')
            if ($appIds) { throw "Uninstall left app ids: $($appIds.PSChildName -join ', ')" }
-@@ -1851,14 +2792,22 @@ jobs:
+@@ -1851,14 +2817,24 @@ jobs:
            'PASS  installer: uninstall removes the Gesher Apps Start menu folder with the apps'' shortcuts, and nothing else of the Start menu' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
            'PASS  installer: installs, runs Hello and gesher-app, uninstalls' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
 
-+      - name: Preserve portable Windows runtime and Setup evidence
++      - name: Preserve portable runtime and installer isolation evidence
 +        if: always()
 +        uses: actions/upload-artifact@v4
 +        with:
 +          name: portable-runtime-windows-2022
-+          path: ${{ runner.temp }}/gesher-portable-runtime-*/logs/**
++          path: |
++            ${{ runner.temp }}/gesher-portable-runtime-*/logs/**
++            out/installed-isolation/**
 +          if-no-files-found: warn
 +
    # End-to-end with real apps (docs/e2e.md): the installer from the package job on a
@@ -1641,7 +1734,7 @@ index f9e65608b..f891569a6 100644
      strategy:
        fail-fast: false
        matrix:
-@@ -1875,6 +2824,7 @@ jobs:
+@@ -1875,6 +2851,7 @@ jobs:
              tools/ci
              tools/surface
              tests/windows/graphics
@@ -1649,7 +1742,7 @@ index f9e65608b..f891569a6 100644
 
        - name: Verify and assemble gesher-setup artifact
          shell: pwsh
-@@ -1916,9 +2866,22 @@ jobs:
+@@ -1916,9 +2893,22 @@ jobs:
            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
            $setup = (Get-ChildItem installer\gesher-setup-*.exe).FullName
            $env:GESHER_TRACE_MISSING_BOOT_CLASSES = '1'
@@ -1672,7 +1765,7 @@ index f9e65608b..f891569a6 100644
        - name: Validate and publish real-app coverage
          if: always()
          shell: pwsh
-@@ -1942,7 +2905,8 @@ jobs:
+@@ -1942,7 +2932,8 @@ jobs:
    # (20 API requests each) with one bundle receipt per shard (7 requests).
    # The repository's GITHUB_TOKEN quota is shared by every concurrent run.
    core-suppliers:
@@ -1682,7 +1775,7 @@ index f9e65608b..f891569a6 100644
      runs-on: ubuntu-24.04
      # Room for a reachable wait on the shared hourly API quota.
      timeout-minutes: 90
-@@ -1968,7 +2932,8 @@ jobs:
+@@ -1968,7 +2959,8 @@ jobs:
 
    test-shards:
      name: test-${{ matrix.shard }} (${{ matrix.os }})
@@ -1692,7 +1785,7 @@ index f9e65608b..f891569a6 100644
      strategy:
        fail-fast: false
        matrix:
-@@ -2025,6 +2990,11 @@ jobs:
+@@ -2025,6 +3017,11 @@ jobs:
            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
            & ./dist/binder_reply_allocations_test.exe gate
            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -1704,7 +1797,7 @@ index f9e65608b..f891569a6 100644
            & ./dist/layered_bitmap_cache_test.exe gate
            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
            & ./dist/structured_logging_test.exe
-@@ -2042,6 +3012,14 @@ jobs:
+@@ -2042,6 +3039,14 @@ jobs:
            & ./dist/sqlite_path_test.exe
            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -1719,7 +1812,7 @@ index f9e65608b..f891569a6 100644
        - name: Verify and assemble framework artifact
          shell: pwsh
          run: |
-@@ -2060,11 +3038,13 @@ jobs:
+@@ -2060,11 +3065,13 @@ jobs:
            python tools/surface/assemble-artifacts.py --source ci-suppliers/core/artifacts/arm64 --destination dist --ledger ci-owners.json --owner arm64
            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -1734,7 +1827,15 @@ index f9e65608b..f891569a6 100644
            & ./dist/arm64_tls_lifecycle_test.exe gate ./dist/gesher_arm64.dll
            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-@@ -2215,6 +3195,8 @@ jobs:
+@@ -2154,6 +3161,7 @@ jobs:
+
+       - name: Run tests
+         env:
++          GESHER_SANDBOX: appcontainer-trusted
+           GESHER_TRACE_TOAST_IDENTITY: ${{ matrix.shard == 'services' && '1' || '0' }}
+           GESHER_FONT_REGRESSION_SCOPE: ${{ matrix.os == 'windows-2022' && 'functional-and-strict' || matrix.os == 'windows-2025' && 'functional' || 'unselected' }}
+         shell: pwsh
+@@ -2215,6 +3223,8 @@ jobs:
            path: |
              results.txt
              ci-owners.json
@@ -1743,7 +1844,7 @@ index f9e65608b..f891569a6 100644
              dist/realtime-signals-evidence/**/*.json
              ${{ runner.temp }}/gesher-root/devsvc-toast-*-projection.jsonl
              ${{ runner.temp }}/gesher-root/logs/system_server.log
-@@ -2224,8 +3206,8 @@ jobs:
+@@ -2224,8 +3234,8 @@ jobs:
 
    test:
      name: test (${{ matrix.os }})
@@ -1754,7 +1855,7 @@ index f9e65608b..f891569a6 100644
      strategy:
        fail-fast: false
        matrix:
-@@ -2240,7 +3222,8 @@ jobs:
+@@ -2240,7 +3250,8 @@ jobs:
    # Extra isolated jobs execute the real regression in the SAME canonical
    # full. Only these jobs download the separately named hook artifact.
    web3-query-regression:
@@ -1764,7 +1865,7 @@ index f9e65608b..f891569a6 100644
      strategy:
        fail-fast: false
        matrix:
-@@ -2301,11 +3284,13 @@ jobs:
+@@ -2301,11 +3312,13 @@ jobs:
    # Ordinary Binder scope is mandatory and separate from production installer
    # payload and query-hook runtime. No raw/public-prefix transport-loss gate.
    binder2-sg-fixtures:
@@ -1780,7 +1881,7 @@ index f9e65608b..f891569a6 100644
      strategy:
        fail-fast: false
        matrix:
-@@ -2363,7 +3348,8 @@ jobs:
+@@ -2363,7 +3376,8 @@ jobs:
 
    # Current selected TCP role; historical canonical red remains separately preserved.
    compile:
@@ -1790,7 +1891,7 @@ index f9e65608b..f891569a6 100644
      name: compile-${{ matrix.supplier }}
      strategy:
        fail-fast: false
-@@ -2508,7 +3494,8 @@ jobs:
+@@ -2508,7 +3522,8 @@ jobs:
            if-no-files-found: error
            retention-days: 14
    linux-reference:
@@ -1800,7 +1901,7 @@ index f9e65608b..f891569a6 100644
      env:
        GH_TOKEN: ${{ github.token }}
        TCP_EVIDENCE_SCOPE: ${{ github.repository == 'gesher-runtime/gesher' && 'canonical' || 'fork-diagnostic' }}
-@@ -2533,7 +3520,8 @@ jobs:
+@@ -2533,7 +3548,8 @@ jobs:
            g++ -std=c++20 -Wall -Wextra -Werror -pthread tests/net-tcp-priority/contract.cc -o /tmp/tcp-priority-reference
            timeout 20 /tmp/tcp-priority-reference
    supplier-correlation:
@@ -1810,7 +1911,7 @@ index f9e65608b..f891569a6 100644
      runs-on: ubuntu-24.04
      # +61 minutes: a quota-exhausted GitHub read may wait up to 61 minutes for the
      # published hourly reset instead of failing the job.
-@@ -2570,7 +3558,8 @@ jobs:
+@@ -2570,7 +3586,8 @@ jobs:
            if [[ "$TCP_EVIDENCE_SCOPE" == fork-diagnostic ]]; then args+=(--fork-diagnostic); fi
            python3 tools/toolchain/coherent_supplier_correlation.py "${args[@]}"
    windows:
@@ -1820,7 +1921,7 @@ index f9e65608b..f891569a6 100644
      strategy:
        fail-fast: false
        matrix:
-@@ -2613,10 +3602,28 @@ jobs:
+@@ -2613,10 +3630,28 @@ jobs:
    ci-required:
      name: ci-required
      if: always()
@@ -1923,10 +2024,16 @@ index 1f3394e95..550eb5826 100644
    E("scandir64", Scandir);
    E("scandirat", Scandirat);
 diff --git a/compat/bionic/shim_internal.h b/compat/bionic/shim_internal.h
-index 036f65783..42fef2a4e 100644
+index 036f65783..88622e01a 100644
 --- a/compat/bionic/shim_internal.h
 +++ b/compat/bionic/shim_internal.h
-@@ -14,6 +14,8 @@
+@@ -9,11 +9,14 @@
+ #include <stddef.h>
+ #include <stdio.h>
+
++#include <atomic>
+ #include <cstring>
+
  #include <string>
  #include <unordered_map>
 
@@ -1935,7 +2042,7 @@ index 036f65783..42fef2a4e 100644
  namespace gesher::bionic {
 
  // bionic's semaphore bound, shared by enforcement and _SC_SEM_VALUE_MAX.
-@@ -139,11 +141,24 @@ void RegisterDnsWire(SymbolTable& table); // dns_wire.cc
+@@ -139,11 +142,24 @@ void RegisterDnsWire(SymbolTable& table); // dns_wire.cc
  void RegisterSocket(SymbolTable& table);   // socket_bionic.cc
  void RegisterSignal(SymbolTable& table);   // signal_bionic.cc
  void RegisterTime(SymbolTable& table);     // time_bionic.cc
@@ -1961,19 +2068,24 @@ index 036f65783..42fef2a4e 100644
  // A raw x86-64 Linux system call, as the kernel takes it: the shim function
  // that does the same, and the kernel's result or -errno. The ELF loader's
  // handler for `syscall` instructions in loaded code (ADR 0084), and
-@@ -167,6 +182,11 @@ bool DeliverExternalSignal(int sig, int sender_pid, int code, int status, bool o
+@@ -167,6 +183,16 @@ bool DeliverExternalSignal(int sig, int sender_pid, int code, int status, bool o
  // A nonzero error reports unavailable delivery/registration, never completion.
  bool InterruptibleSleep(uint32_t ms, uint32_t* left_ms, int* error);
 
 +// A blocking call's wait (wait4): up to `ms`, running the handlers of signals
 +// that arrive. 0, or EINTR when a handler without SA_RESTART ran (one with
 +// SA_RESTART returns 0: the call restarts), or a delivery error.
-+int InterruptibleWaitPoint(uint32_t ms);
++// A wait also ends when its owner publishes a changed generation. A zero
++// timeout waits indefinitely. Wake publishers must hold no signal-state lock.
++int InterruptibleWaitPoint(uint32_t ms, const std::atomic<uint64_t>& generation,
++                           uint64_t observed);
++void NotifyInterruptibleWaiters();
++void ChildWaitStateChanged();
 +
  // As above, observing an interruption before delivering its handlers. The
  // observer is an internal host callback, never loaded application code; it
  // runs without the signal-state lock and must only record the wake instant.
-@@ -180,12 +200,51 @@ int InterruptibleBoottimeSleepObserved(int64_t deadline, void (*observe)(void*),
+@@ -180,12 +206,51 @@ int InterruptibleBoottimeSleepObserved(int64_t deadline, void (*observe)(void*),
  // and sleeps, and wherever the signal mask is lowered. Cheap when none are
  // pending.
  void DeliverPendingSignals();
@@ -2754,10 +2866,20 @@ index fcd68fdfa..2904c3999 100644
       b'while (n > 0) {', 'scandir reverse endpoint'),
      ('public export', b'E("scandir", Scandir);', b'E("scandir", ScandirWrong);', 'scandir reverse endpoint'),
 diff --git a/tools/net-tcp-priority/test-selected-policy.py b/tools/net-tcp-priority/test-selected-policy.py
-index 5f0fff857..9133f7a72 100644
+index 5f0fff857..a01aa0fae 100644
 --- a/tools/net-tcp-priority/test-selected-policy.py
 +++ b/tools/net-tcp-priority/test-selected-policy.py
-@@ -265,7 +265,144 @@ RECEIPT_SOURCE_BLOCK=b'''  if ($null -ne $SourceIdentity) {
+@@ -2,6 +2,9 @@
+ from pathlib import Path
+ import ast,hashlib,json,subprocess,tempfile
+ ROOT=Path(__file__).resolve().parents[2]
++
++def live_source(path):
++ return (ROOT/path).read_bytes()
+ BASE='657fb27a63c8171d540d6890ad47aa5fba5d26b2'
+ # fd.cc gained reviewed nested-epoll readiness and waiter wakeups. Keep those
+ # exact bytes pinned independently from the original TCP snapshot.
+@@ -265,7 +268,144 @@ RECEIPT_SOURCE_BLOCK=b'''  if ($null -ne $SourceIdentity) {
  # then EVERY earlier preservation assertion below still runs on its result.
  # Coupled OFD/stdio/pipe source files are pinned by the same qualification.
  # No supplier, socket core, fixture predicate, deadline or DAG is exempted.
@@ -2903,7 +3025,7 @@ index 5f0fff857..9133f7a72 100644
  # PR73 unifies Bionic conversion metadata with the existing shared stream
  # owner. Keep the original OFD receipt and all of its 71 source digests intact.
  # Only this separately pinned four-file transition may be reversed to main's
-@@ -273,7 +410,7 @@ OFD_QUALIFICATION_SHA256 = '9512156833c9d5dff459e7b0768ac5467138acc8a1268695e26f
+@@ -273,7 +413,7 @@ OFD_QUALIFICATION_SHA256 = '9512156833c9d5dff459e7b0768ac5467138acc8a1268695e26f
  # qualifies Windows execution nor replaces review of the production delta.
  SHARED_STDIO_BASE = '6d7638b789e21cba6270c1dbfabe5091680c4100'
  SHARED_STDIO_FEATURE_HEAD = 'de1e43c391275137c7b7b25dc170892684d55b5e'
@@ -2912,7 +3034,7 @@ index 5f0fff857..9133f7a72 100644
  SHARED_STDIO_PATHS = (
   'compat/bionic/stdio_bionic.cc',
   'compat/posix/include/gesher/stdio.h',
-@@ -281,7 +418,7 @@ SHARED_STDIO_PATHS = (
+@@ -281,7 +421,7 @@ SHARED_STDIO_PATHS = (
   'compat/posix/src/stdio_output.cc',
  )
 
@@ -2921,7 +3043,7 @@ index 5f0fff857..9133f7a72 100644
   folder=ROOT/'tools/net-tcp-priority/qualified'
   raw=(folder/'shared-stdio-source.json').read_bytes()
   assert hashlib.sha256(raw).hexdigest()==SHARED_STDIO_TRANSITION_SHA256,'shared-stdio source transition changed'
-@@ -299,9 +436,10 @@ def preceding_shared_stdio_sources(qualification):
+@@ -299,9 +439,10 @@ def preceding_shared_stdio_sources(qualification):
   assert hashlib.sha256(patch).hexdigest()==transition['patch_sha256'],'shared-stdio transition patch changed'
   assert [line for line in patch.splitlines() if line.startswith(b'diff --git ')]==[
       ('diff --git a/'+path+' b/'+path).encode() for path in paths],'shared-stdio patch paths changed'
@@ -2933,7 +3055,7 @@ index 5f0fff857..9133f7a72 100644
    assert hashlib.sha256(current[path]).hexdigest()==transition['after_sha256'][path],path
    baseline[path]=subprocess.check_output(['git','-C',str(ROOT),'show',SHARED_STDIO_BASE+':'+path])
    assert hashlib.sha256(baseline[path]).hexdigest()==transition['before_sha256'][path],path
-@@ -323,17 +461,158 @@ def preceding_shared_stdio_sources(qualification):
+@@ -323,20 +464,161 @@ def preceding_shared_stdio_sources(qualification):
   return baseline
 
 
@@ -3014,15 +3136,15 @@ index 5f0fff857..9133f7a72 100644
 +
 +# Normalize the scanner before line input; shared-stdio then receives its
 +# unchanged complete inputs. Every stage is independently reversible and pinned.
-+def current_stdio_line_inputs():
-+ scan=preceding_composed_scan_sources()
++def current_stdio_line_inputs(read_source=live_source):
++ scan=preceding_composed_scan_sources({path:read_source(path) for path in COMPOSED_SCAN_PATHS})
 + assert SNPRINTF_BOUNDS_SOURCE not in scan,'formatter/scanner source qualifications overlap'
-+ current={path:scan[path] if path in scan else (ROOT/path).read_bytes() for path in COMPOSED_STDIO_PATHS}
-+ current[SNPRINTF_BOUNDS_SOURCE]=preceding_snprintf_bounds_source()
++ current={path:scan[path] if path in scan else read_source(path) for path in COMPOSED_STDIO_PATHS}
++ current[SNPRINTF_BOUNDS_SOURCE]=preceding_snprintf_bounds_source(read_source)
 + return current
 +
-+def preceding_stdio_feature_sources():
-+ return preceding_composed_stdio_sources(current_stdio_line_inputs())
++def preceding_stdio_feature_sources(read_source=live_source):
++ return preceding_composed_stdio_sources(current_stdio_line_inputs(read_source))
 +
 +# The guest snprintf prefix accumulator changes only this formatter source.
 +# Reverse its exact transition to the reviewed line-input integration checkpoint.
@@ -3033,9 +3155,9 @@ index 5f0fff857..9133f7a72 100644
 +SNPRINTF_BOUNDS_SHA256='96a90eb52ad6e4b91e1ee0e16c526894e5426a16f3a65e61e11e001a1caed75f'
 +SNPRINTF_BOUNDS_PREVIOUS_SHA256='5bb5e959e3a32cbc2ce0ab594724b7207b6fd921c6310e8c28766faf34bad13a'
 +SNPRINTF_BOUNDS_PATCH_SHA256='416b44106f476ea5c4dcd519bb8b0c100cb3d614e0afdcef0be334cfd4ec7208'
-+def preceding_snprintf_bounds_source():
++def preceding_snprintf_bounds_source(read_source=live_source):
 + path=SNPRINTF_BOUNDS_SOURCE
-+ current=(ROOT/path).read_bytes()
++ current=read_source(path)
 + assert hashlib.sha256(current).hexdigest()==SNPRINTF_BOUNDS_SHA256,path
 + patch=(ROOT/'tools/net-tcp-priority/qualified/snprintf-bounds-source.patch').read_bytes()
 + assert hashlib.sha256(patch).hexdigest()==SNPRINTF_BOUNDS_PATCH_SHA256,'snprintf bounds transition changed'
@@ -3089,13 +3211,17 @@ index 5f0fff857..9133f7a72 100644
 +  subprocess.run(['git','apply','--unidiff-zero','-'],input=patch,cwd=work,check=True,capture_output=True)
 +  assert (work/path).read_bytes()==source,'gles property transition does not reproduce: '+path
 + return previous
-+def preceding_logging_property_source(source):
++def preceding_logging_property_source(source, header_source):
 + path='compat/posix/src/system_properties.cc'
 + source=preceding_gles_property_source(source)
   assert hashlib.sha256(source).hexdigest()==PROPERTY_REVISION_SHA256,path
   header='compat/posix/include/gesher/system_properties.h'
-  assert hashlib.sha256((ROOT/header).read_bytes()).hexdigest()==PROPERTY_REVISION_HEADER_SHA256,header
-@@ -347,6 +626,51 @@ def preceding_logging_property_source():
+- assert hashlib.sha256((ROOT/header).read_bytes()).hexdigest()==PROPERTY_REVISION_HEADER_SHA256,header
++ assert hashlib.sha256(header_source).hexdigest()==PROPERTY_REVISION_HEADER_SHA256,header
+  patch=(ROOT/'tools/net-tcp-priority/qualified/native13-property-source.patch').read_bytes()
+  assert hashlib.sha256(patch).hexdigest()==PROPERTY_REVISION_PATCH_SHA256,'property revision transition changed'
+  assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==[path]
+@@ -347,6 +629,51 @@ def preceding_logging_property_source():
    subprocess.run(['git','apply','--reverse','--unidiff-zero','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
    subprocess.run(['git','apply','--reverse','--unidiff-zero','-'],input=patch,cwd=work,check=True,capture_output=True)
    return (work/path).read_bytes()
@@ -3109,7 +3235,7 @@ index 5f0fff857..9133f7a72 100644
 +MEMFD_LEASE_QUALIFICATION_SHA256 = '6cf8d4bbad04834885426b63c468f0f7f4b1b64784190ed8cab523bbf082ae8c'
 +MEMFD_LEASE_BASELINE='e074b67b2f83ce9128c11713171329e9fbbf6739'
 +MEMFD_LEASE_PATHS=['compat/posix/src/internal.h','compat/posix/src/memfd_seals.cc','compat/posix/src/mman.cc']
-+def preceding_memfd_lease_sources(usb_block):
++def preceding_memfd_lease_sources(usb_block,read_source=live_source):
 + raw=(ROOT/MEMFD_LEASE_QUALIFICATION).read_bytes()
 + assert hashlib.sha256(raw).hexdigest()==MEMFD_LEASE_QUALIFICATION_SHA256,'memfd lease source qualification changed'
 + qualification=json.loads(raw)
@@ -3123,7 +3249,7 @@ index 5f0fff857..9133f7a72 100644
 + # Remove only that exact USB delta first; the unchanged memfd receipt must
 + # then see every byte of main's lease implementation before reversing it.
 + assert set(usb_block).intersection(MEMFD_LEASE_PATHS)=={'compat/posix/src/internal.h'},'USB/memfd qualification overlap changed'
-+ current={path:usb_block[path] if path in usb_block else (ROOT/path).read_bytes()
++ current={path:usb_block[path] if path in usb_block else read_source(path)
 +          for path in MEMFD_LEASE_PATHS}
 + for path in MEMFD_LEASE_PATHS:
 +  assert hashlib.sha256(current[path]).hexdigest()==qualification['source_sha256'][path],path
@@ -3147,7 +3273,7 @@ index 5f0fff857..9133f7a72 100644
  # Bionic's independently reviewed memmem search changes only this include and
  # complete wrapper. Restore those exact bytes before applying the UNCHANGED
  # OFD qualification digest. Pin the new pure-search helper separately: no other
-@@ -394,12 +718,321 @@ PIPE_POLL_ERROR_REPLACEMENTS = (
+@@ -394,12 +721,349 @@ PIPE_POLL_ERROR_REPLACEMENTS = (
          if (!result) waiting_files = true;
  '''),
  )
@@ -3274,7 +3400,7 @@ index 5f0fff857..9133f7a72 100644
 + return after
 +
 +
-+USB_BLOCK_TRANSITION_SHA256 = 'c2d21ff03f9a6a1d9cb8a095450ff7fa72a20860d6b60398ef0aaf5b49068676'
++USB_BLOCK_TRANSITION_SHA256 = 'c87a4daeece1c25a29af3e87ddd1f42e48b0655f4c4df083474fa7668ae5f994'
 +USB_NETLINK_MAIN = '279966e6bcb842ae8a44fef87d740baed6818208'
 +USB_NETLINK_PATHS = {
 + 'compat/posix/posix.cmake',
@@ -3316,7 +3442,7 @@ index 5f0fff857..9133f7a72 100644
 +)
 +
 +
-+def preceding_usb_block_sources(folder):
++def preceding_usb_block_sources(folder,read_source=live_source):
 + main513 = qualified_usb_main513_endpoints()
 + raw = (folder/'usb-block-source.json').read_bytes()
 + assert hashlib.sha256(raw).hexdigest() == USB_BLOCK_TRANSITION_SHA256, 'USB block source transition changed'
@@ -3331,13 +3457,13 @@ index 5f0fff857..9133f7a72 100644
 + assert [line for line in delta.splitlines() if line.startswith(b'diff --git ')] == [
 +     ('diff --git a/'+path+' b/'+path).encode() for path in paths]
 + for path, digest in transition['dependencies_sha256'].items():
-+  assert hashlib.sha256((ROOT/path).read_bytes()).hexdigest() == digest, path
++  assert hashlib.sha256(read_source(path)).hexdigest() == digest, path
 +
 + preceding = {}
 + with tempfile.TemporaryDirectory(prefix='gesher-usb-block-qualification-') as temporary:
 +  work = Path(temporary)
 +  for path in paths:
-+   current = (ROOT/path).read_bytes()
++   current = read_source(path)
 +   assert hashlib.sha256(current).hexdigest() == transition['after_sha256'][path], path
 +   (work/path).parent.mkdir(parents=True, exist_ok=True)
 +   (work/path).write_bytes(current)
@@ -3348,12 +3474,13 @@ index 5f0fff857..9133f7a72 100644
 +  for path in paths:
 +   preceding[path] = (work/path).read_bytes()
 +   base = USB_NETLINK_MAIN if path in USB_NETLINK_PATHS else USB_BLOCK_PATH_BASES.get(path, USB_BLOCK_BASE)
++   if path==CHILD_WAIT_PATH:base=CHILD_WAIT_MAIN
 +   historical = main513[path] if path in main513 else subprocess.check_output(
 +       ['git','-C',str(ROOT),'show',base+':'+path])
 +   assert preceding[path] == historical, path
 +  subprocess.run(['git','apply','--unidiff-zero','--check','-'],input=delta,cwd=work,check=True,capture_output=True)
 +  subprocess.run(['git','apply','--unidiff-zero','-'],input=delta,cwd=work,check=True,capture_output=True)
-+  for path in paths:assert (work/path).read_bytes()==(ROOT/path).read_bytes(),('USB forward endpoint',path)
++  for path in paths:assert (work/path).read_bytes()==read_source(path),('USB forward endpoint',path)
 + return preceding
 +
 +
@@ -3368,7 +3495,7 @@ index 5f0fff857..9133f7a72 100644
 +NETLINK_RECEIPT='tools/net-tcp-priority/qualified/netlink-source.json'
 +NETLINK_RECEIPT_SHA256='585c1908cd44fb873cf65f24f70c8b78f68ae15e170aae3134e7e4ae5b152ed1'
 +
-+def preceding_netlink_sources(usb_block):
++def preceding_netlink_sources(usb_block,read_source=live_source):
 + raw=(ROOT/NETLINK_RECEIPT).read_bytes()
 + assert hashlib.sha256(raw).hexdigest()==NETLINK_RECEIPT_SHA256,NETLINK_RECEIPT
 + receipt=json.loads(raw)
@@ -3378,7 +3505,7 @@ index 5f0fff857..9133f7a72 100644
 + assert paths==sorted(receipt['before_sha256'])
 + assert set(usb_block).intersection(paths)==USB_NETLINK_PATHS,'USB/Netlink qualification overlap changed'
 + assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==paths
-+ current={path:usb_block[path] if path in usb_block else (ROOT/path).read_bytes() for path in paths}
++ current={path:usb_block[path] if path in usb_block else read_source(path) for path in paths}
 + with tempfile.TemporaryDirectory(prefix='gesher-netlink-qualification-') as temporary:
 +  work=Path(temporary)
 +  for path,source in current.items():
@@ -3421,7 +3548,7 @@ index 5f0fff857..9133f7a72 100644
 + 'compat/posix/src/storage_policy.cc',
 + 'compat/posix/src/storage_policy.h',
 +]
-+def preceding_storage_policy_sources(before_features):
++def preceding_storage_policy_sources(before_features,read_source=live_source):
 + raw=(ROOT/STORAGE_POLICY_QUALIFICATION).read_bytes()
 + assert hashlib.sha256(raw).hexdigest()==STORAGE_POLICY_QUALIFICATION_SHA256,'storage policy source qualification changed'
 + qualification=json.loads(raw)
@@ -3434,11 +3561,11 @@ index 5f0fff857..9133f7a72 100644
 + baseline_policy=subprocess.check_output(['git','-C',str(ROOT),'show',STORAGE_POLICY_BASELINE+':tools/net-tcp-priority/test-selected-policy.py'])
 + assert hashlib.sha256(baseline_policy).hexdigest()==qualification['baseline_policy_sha256'],'storage policy baseline policy changed'
 + for path in STORAGE_POLICY_HELPERS:
-+  assert hashlib.sha256(before_features.get(path,(ROOT/path).read_bytes())).hexdigest()==qualification['helper_sha256'][path],path
++  assert hashlib.sha256(before_features.get(path,read_source(path))).hexdigest()==qualification['helper_sha256'][path],path
 + patch=(ROOT/STORAGE_POLICY_PATCH).read_bytes()
 + assert hashlib.sha256(patch).hexdigest()==qualification['patch_sha256'],'storage policy transition patch changed'
 + assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==STORAGE_POLICY_PATHS
-+ current={path:before_features[path] if path in before_features else (ROOT/path).read_bytes()
++ current={path:before_features[path] if path in before_features else read_source(path)
 +          for path in STORAGE_POLICY_PATHS}
 + baseline={path:subprocess.check_output(['git','-C',str(ROOT),'show',STORAGE_POLICY_BASELINE+':'+path]) for path in STORAGE_POLICY_PATHS}
 + for path in STORAGE_POLICY_PATHS:
@@ -3460,6 +3587,33 @@ index 5f0fff857..9133f7a72 100644
 +   assert (work/path).read_bytes()==current[path],('storage policy forward endpoint',path)
 + return baseline
 +
++# Reverse the one process collector transition to the unchanged OFD digest.
++# This source check does not qualify Windows execution.
++CHILD_WAIT_PATH='compat/bionic/process_bionic.cc'
++CHILD_WAIT_MAIN='d5c8e60673cd99e388cdf4ec1e895039c5d9fe66'
++CHILD_WAIT_PATCH='tools/net-tcp-priority/qualified/child-wait-source.patch'
++CHILD_WAIT_PATCH_SHA256='a2c8cecd2c71a63adee65f5c6339cb876ac288d0895bdad530035817e0fbb62e'
++CHILD_WAIT_SOURCE_SHA256='70222a932a0ea37339d8d5b320e838ae44ee5fc5ebf2d741baf39ae679ded59a'
++
++def preceding_child_wait_source(current):
++ patch=(ROOT/CHILD_WAIT_PATCH).read_bytes()
++ assert hashlib.sha256(current).hexdigest()==CHILD_WAIT_SOURCE_SHA256,CHILD_WAIT_PATH
++ assert hashlib.sha256(patch).hexdigest()==CHILD_WAIT_PATCH_SHA256,CHILD_WAIT_PATCH
++ assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==[CHILD_WAIT_PATH]
++ with tempfile.TemporaryDirectory(prefix='gesher-child-wait-qualification-') as temporary:
++  work=Path(temporary)
++  source=work/CHILD_WAIT_PATH
++  source.parent.mkdir(parents=True)
++  source.write_bytes(current)
++  subprocess.run(['git','apply','--reverse','--unidiff-zero','-'],input=patch,cwd=work,check=True,capture_output=True)
++  baseline=source.read_bytes()
++  usb_base=USB_BLOCK_PATH_BASES[CHILD_WAIT_PATH]
++  assert baseline==subprocess.check_output(
++      ['git','-C',str(ROOT),'show',usb_base+':'+CHILD_WAIT_PATH]),'child wait reverse and original USB endpoints disagree'
++  subprocess.run(['git','apply','--unidiff-zero','-'],input=patch,cwd=work,check=True,capture_output=True)
++  assert source.read_bytes()==current,CHILD_WAIT_PATH
++ return baseline
++
  # Reverse only the reviewed adaptive stable-directory sort before the exact
  # Memrchr transition and all original OFD checks. It grants no supplier,
  # controller or runtime approval and admits no other POSIX source change.
@@ -3471,7 +3625,7 @@ index 5f0fff857..9133f7a72 100644
  def preceding_scandir_source(current):
   folder=ROOT/'tools/net-tcp-priority/qualified'
   raw=(folder/'scandir-source.json').read_bytes()
-@@ -436,9 +1069,9 @@ def preceding_scandir_source(current):
+@@ -436,10 +1100,10 @@ def preceding_scandir_source(current):
  # Reverse only the reviewed bounded memrchr word-search delta to the exact
  # public main source before the unchanged OFD digest is checked. This admits
  # no other POSIX byte and grants no supplier, controller or runtime approval.
@@ -3479,30 +3633,214 @@ index 5f0fff857..9133f7a72 100644
 +MEMRCHR_BASE = '93c32f6f02521790eaf8936f2ff1fa1a650653f2'
  MEMRCHR_SOURCE = 'compat/bionic/posix_bionic.cc'
 -MEMRCHR_TRANSITION_SHA256 = 'c47d6b869fc5791a64badde4c0c2923ec91771ee1000cb0988533dfbf2cffe92'
+-def preceding_memrchr_source(qualification):
 +MEMRCHR_TRANSITION_SHA256 = 'f814eed0ce7bee4fe49c0a36415e1fb4343db1930ef18115c5eb3693bd7f2c13'
- def preceding_memrchr_source(qualification):
++def preceding_memrchr_source(qualification,read_source=live_source):
   folder=ROOT/'tools/net-tcp-priority/qualified'
   raw=(folder/'memrchr-source.json').read_bytes()
-@@ -475,6 +1108,9 @@ def preceding_memrchr_source(qualification):
+  assert hashlib.sha256(raw).hexdigest()==MEMRCHR_TRANSITION_SHA256,'memrchr source transition changed'
+@@ -456,7 +1120,7 @@ def preceding_memrchr_source(qualification):
+  assert hashlib.sha256(patch).hexdigest()==transition['patch_sha256'],'memrchr transition patch changed'
+  assert [line for line in patch.splitlines() if line.startswith(b'diff --git ')]==[
+      ('diff --git a/'+MEMRCHR_SOURCE+' b/'+MEMRCHR_SOURCE).encode()],'memrchr patch paths changed'
+- current=preceding_scandir_source((ROOT/MEMRCHR_SOURCE).read_bytes())
++ current=preceding_scandir_source(read_source(MEMRCHR_SOURCE))
+  assert hashlib.sha256(current).hexdigest()==transition['after_sha256'][MEMRCHR_SOURCE],MEMRCHR_SOURCE
+  baseline=subprocess.check_output(['git','-C',str(ROOT),'show',MEMRCHR_BASE+':'+MEMRCHR_SOURCE])
+  assert hashlib.sha256(baseline).hexdigest()==transition['before_sha256'][MEMRCHR_SOURCE],MEMRCHR_SOURCE
+@@ -474,7 +1138,181 @@ def preceding_memrchr_source(qualification):
+   assert (work/MEMRCHR_SOURCE).read_bytes()==current,'memrchr forward endpoint'
   return baseline
 
- def preceding_ofd_sources():
-+ stdio_main=preceding_stdio_feature_sources()
+-def preceding_ofd_sources():
++# Preserve the two donor receipts at their published source endpoints. Their
++# patches precede the USB, Netlink and GLES property changes in this branch.
++APPCONTAINER_IDENTITY_DONOR = '950dc2dbee2454d35e0f7265d50d146f41638264'
++APPCONTAINER_IDENTITY_PATCH_SHA256 = 'b7a2c02e1561bd3096f9eeca4c04c37c25e77cf54c747cc222825083ddada2af'
++APPCONTAINER_IDENTITY_SOURCE_SHA256 = {
++ 'compat/binder/binderd.cc': 'fbf2ca62efe037b081b7fa909806333fcea132cdbb8f165c2b69cb98d30a0aa7',
++ 'compat/elf/exec/exec_spawn.cc': 'feb52107f1d35105e7831a50466b9f24ae8c2b7396828dcaefa509b083476f33',
++ 'compat/posix/include/gesher/file_description.h': '94ce9ad7806d727977cc2c6f6df9fa289d1ea94b124404aed6c58fb7416a95d9',
++ 'compat/posix/include/gesher/system_properties.h': 'a414e1a7bca1f7974130c34d5103a0f94745b7aa02a9fd47e2de575fffaf8b8f',
++ 'compat/posix/posix.cmake': '8fe75797496a0561ac677ddf12b7b11e31e429daa2ec0379856ffe934392b756',
++ 'compat/posix/src/binder.cc': '10dbeec0a67daee5fc2363fa35db8282fbf80135b95805d2f05707bde3b2fd11',
++ 'compat/posix/src/binder_wire.h': '17a3474e3d2052b298db14262bb3431c54bce1069aac9c3c78e749721e406af5',
++ 'compat/posix/src/dirent.cc': '22e3bcf261e56a950fe7a1f3e719cfc5153505f2bd7a693eb6da82c71a4efcff',
++ 'compat/posix/src/errno.cc': 'f2d2e94807fec9abd2e3785994f388538b1dee9abc49a4b2e574cdd594f89238',
++ 'compat/posix/src/fd.cc': '4f7ab619d769b885e6f54be626567d4df8ec5a2739901b6beba8a2a5548305dc',
++ 'compat/posix/src/fsops.cc': '0e07ac571f75aa39273bf5674389e5ddfc0eadd536a772795c655d00c89d0dfa',
++ 'compat/posix/src/internal.h': '63d4a1383062aee4d6b96bbbbc0ec1c8858ae2af49d4ebabcaaee9b53d32033f',
++ 'compat/posix/src/ofd.cc': 'ce71c6ee99f9c417055eaa8d4eeb2196b74f9d3bdec3f5f46abd6d487f4ec6e1',
++ 'compat/posix/src/ofd_internal.h': 'ec2f2773ebeb78bbdf0fc1a450a3f6e17c565b811196c79f00520597dfc6a1f8',
++ 'compat/posix/src/path.cc': '78abebbd0f39d4b231906c9b14a03f0b30091a5dcad32e571d37365098a57647',
++ 'compat/posix/src/pipe_io.cc': '6df3e0ab8cae3afc9cf6cebc902c5950a7d612bea2745460cdd1447538e6e23b',
++ 'compat/posix/src/procfs.cc': '4c57dcd3dddd91c603c5a5344eb80ee6cbcc7191fce5d5890448f9b1763a42b5',
++ 'compat/posix/src/record_lock_descriptors.cc': '3289895673c4f63c98ae1c7434c89cce5700197c5b1401a4cc7f12cb79dcc819',
++ 'compat/posix/src/record_lock_descriptors.h': '915a45d8232f44ae07d1cfefe9d0b9c128253e6b16cc6f9fef1e185fd52d6e63',
++ 'compat/posix/src/record_lock_duplicate.cc': '563bc13b88b61ce80de4c3370849c843c316087039e98f12ec278ac0b49cfe4f',
++ 'compat/posix/src/record_lock_operation.cc': '5a61fd0f2c6dcd3204205cbbc35fb125efea21b155530816d9a0204e974d079f',
++ 'compat/posix/src/record_lock_operation.h': '90634149c714c0c0f8ac0e7e2af46a91f750981456ff90ac473243e8c661020a',
++ 'compat/posix/src/sqlite_path.cc': '793968fbd0e9d3002568a6da6f2ae2ec082bdb048d1d32ca3aa3f9496dab87fe',
++ 'compat/posix/src/stat.cc': '5a9fb602ff9bacb8fe8f612ec78c88e89a6da4a64d46db23cffb91cda66ece8e',
++ 'compat/posix/src/system.cc': 'e9a53915f7b79faecf03eb1d5a90ac93baccd6ae2c7101e64fae4613a09e40c3',
++ 'compat/posix/src/system_properties.cc': 'bb8b16bfd421ddef655bec8e933ea0196f18f1b697e59d13c6155c5c487b594a',
++ 'compat/posix/src/unistd.cc': '586933c9fbb8199caf5fe4fb562363a9397a8020b291b584ce82f2bbbcf8f0c4',
++ 'compat/posix/src/unix_rights.cc': '6092dca06e5b423d819151c1f1cad6150a3ddda667a71d99156491abbf2e4bb3',
++ 'tests/native/ofd_transfer_host_test.cc.in': 'd1f0a1ac8987d92e938e2b460d009108c79ee364bdc4bd79759a230f4c18891e',
++ 'tools/test_ofd_transfer_contracts.py': '6a0515f2f8ccad82c7cd8a1e1bceb25474af46db5d6ab2894441f7f644eaa545',
++ 'tools/test_revocable_file_contracts.py': '7a47c95932e421deecf31456aee22eb3358a713550eb57f6a39cb837c4d37019',
++}
++
++APPCONTAINER_PROPERTY_DONOR = 'c15e737a753e37c17298e1799b2f521444ccdfa3'
++APPCONTAINER_PROPERTY_DONOR_BASE = 'd80a204d897ebda23575e30080f8760cbdcb0d56'
++APPCONTAINER_PROPERTY_PATCH_SHA256 = '3da6f46e88a0845264a3ae077ec3a3654a24edece8b8880154961c17ddd6b1df'
++APPCONTAINER_PROPERTY_SOURCE_SHA256 = {
++ 'compat/posix/include/gesher/system_properties.h': 'a414e1a7bca1f7974130c34d5103a0f94745b7aa02a9fd47e2de575fffaf8b8f',
++ 'compat/posix/src/system_properties.cc': '561b60eb0bf874438ba65fa8e3b9d5a8bcf3af67589c5a46105c0375fb1bb42b',
++}
++
++def appcontainer_donor_predecessor(name, revision, expected_patch, expected_sources):
++ patch=(ROOT/'tools/net-tcp-priority/qualified'/f'appcontainer-{name}-source.patch').read_bytes()
++ assert hashlib.sha256(patch).hexdigest()==expected_patch,('AppContainer donor transition changed',name)
++ paths=list(expected_sources)
++ assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==paths
++ current={path:subprocess.check_output(['git','-C',str(ROOT),'show',revision+':'+path]) for path in paths}
++ with tempfile.TemporaryDirectory(prefix='gesher-appcontainer-donor-qualification-') as temporary:
++  work=Path(temporary)
++  for path,source in current.items():
++   assert hashlib.sha256(source).hexdigest()==expected_sources[path],path
++   (work/path).parent.mkdir(parents=True,exist_ok=True)
++   (work/path).write_bytes(source)
++  apply=['git','-c','core.autocrlf=false','apply','--unidiff-zero']
++  subprocess.run([*apply,'--reverse','-'],input=patch,cwd=work,check=True,capture_output=True)
++  previous={path:(work/path).read_bytes() for path in paths}
++  subprocess.run([*apply,'-'],input=patch,cwd=work,check=True,capture_output=True)
++  assert all((work/path).read_bytes()==current[path] for path in paths),('AppContainer donor forward endpoint',name)
++ return previous
++
++def check_appcontainer_donor_receipts():
++ identity=appcontainer_donor_predecessor('identity',APPCONTAINER_IDENTITY_DONOR,APPCONTAINER_IDENTITY_PATCH_SHA256,APPCONTAINER_IDENTITY_SOURCE_SHA256)
++ property_area=appcontainer_donor_predecessor('property',APPCONTAINER_PROPERTY_DONOR,APPCONTAINER_PROPERTY_PATCH_SHA256,APPCONTAINER_PROPERTY_SOURCE_SHA256)
++ for path,source in property_area.items():
++  expected=subprocess.check_output(['git','-C',str(ROOT),'show',APPCONTAINER_PROPERTY_DONOR_BASE+':'+path])
++  assert source==expected and identity[path]==expected,('AppContainer donor property predecessor',path)
++
++# Restore only the independently reviewed AppContainer integration delta before
++# replaying the existing TCP/OFD, USB, and main feature qualifications. Both
++# ends of each changed file are exact, and no runtime pass is granted here.
++APPCONTAINER_INTEGRATION_BASE = 'ff2c1870053c9d0332e6abef07a25fc282d384b5'
++APPCONTAINER_INTEGRATION_PATCH = 'tools/net-tcp-priority/qualified/appcontainer-integration-source.patch'
++APPCONTAINER_INTEGRATION_QUALIFICATION = 'tools/net-tcp-priority/qualified/appcontainer-integration-source.json'
++APPCONTAINER_INTEGRATION_QUALIFICATION_SHA256 = '21aa55ea117efbb3929cd737e011c19c85f1c34af0789d2617268b3dbc90a87f'
++# In addition to the donor identity surface, the merged startup/fork path
++# intersects the exact USB and child-wait source qualification.
++APPCONTAINER_INTEGRATION_PATHS = sorted(APPCONTAINER_IDENTITY_SOURCE_SHA256.keys() | {
++ 'compat/bionic/process_bionic.cc', 'compat/credentials/account_crypto.c',
++ 'compat/elf/exec/exec.cmake', 'compat/elf/exec/gesher_tools.cc',
++ 'compat/posix/src/binder_transport.cc', 'compat/posix/src/process.cc', 'compat/posix/src/storage_policy.cc',
++ 'compat/posix/src/storage_policy.h',
++})
++
++def preceding_appcontainer_integration_sources(receipt_sha256):
++ raw=live_source(APPCONTAINER_INTEGRATION_QUALIFICATION)
++ assert hashlib.sha256(raw).hexdigest()==receipt_sha256,'AppContainer integration qualification changed'
++ qualification=json.loads(raw)
++ assert set(qualification)=={'baseline','paths','previous_sha256','source_sha256','patch_sha256','native_runtime_approval'}
++ assert qualification['baseline']==APPCONTAINER_INTEGRATION_BASE and qualification['native_runtime_approval'] is False
++ paths=qualification['paths']
++ assert paths==APPCONTAINER_INTEGRATION_PATHS==sorted(qualification['source_sha256'])==sorted(qualification['previous_sha256'])
++ patch=live_source(APPCONTAINER_INTEGRATION_PATCH)
++ assert hashlib.sha256(patch).hexdigest()==qualification['patch_sha256'],'AppContainer integration patch changed'
++ assert [line for line in patch.splitlines() if line.startswith(b'diff --git ')]==[
++     ('diff --git a/'+path+' b/'+path).encode() for path in paths]
++ current={path:live_source(path) for path in paths}
++ previous={path:subprocess.check_output(['git','-C',str(ROOT),'show',APPCONTAINER_INTEGRATION_BASE+':'+path]) for path in paths}
++ apply=['git','-c','core.autocrlf=false','apply','--unidiff-zero']
++ with tempfile.TemporaryDirectory(prefix='gesher-appcontainer-integration-qualification-') as temporary:
++  work=Path(temporary)
++  for path in paths:
++   assert hashlib.sha256(current[path]).hexdigest()==qualification['source_sha256'][path],path
++   assert hashlib.sha256(previous[path]).hexdigest()==qualification['previous_sha256'][path],('AppContainer integration baseline digest',path)
++   assert current[path]!=previous[path],('empty AppContainer integration delta',path)
++   (work/path).parent.mkdir(parents=True,exist_ok=True)
++   (work/path).write_bytes(current[path])
++  subprocess.run([*apply,'--reverse','-'],input=patch,cwd=work,check=True,capture_output=True)
++  for path in paths:
++   assert (work/path).read_bytes()==previous[path],('AppContainer integration reverse endpoint',path)
++  subprocess.run([*apply,'-'],input=patch,cwd=work,check=True,capture_output=True)
++  for path in paths:
++   assert (work/path).read_bytes()==current[path],('AppContainer integration forward endpoint',path)
++ return previous
++
++def appcontainer_integration_negative_controls(receipt_sha256):
++ from unittest.mock import patch
++ original=Path.read_bytes
++ manifest=ROOT/APPCONTAINER_INTEGRATION_QUALIFICATION
++ qualification=json.loads(original(manifest))
++ path=qualification['paths'][0]
++ target=ROOT/path
++ altered=original(target)+b'\n// unqualified AppContainer integration bytes\n'
++ cases=[({target:altered},receipt_sha256,path)]
++ repinned={**qualification,'source_sha256':{**qualification['source_sha256'],path:hashlib.sha256(altered).hexdigest()}}
++ cases.append(({target:altered},repinned,('AppContainer integration reverse endpoint',path)))
++ # This donor control targets native AppContainer detection introduced after
++ # the older pipe fixture. Exercise the live source before normalization.
++ pipe_path='compat/posix/src/pipe_io.cc'
++ pipe=original(ROOT/pipe_path)
++ assert pipe.count(b'TokenIsAppContainer')==1
++ cases.append(({ROOT/pipe_path:pipe.replace(b'TokenIsAppContainer',b'TokenElevation',1)},receipt_sha256,pipe_path))
++ patch_path=ROOT/APPCONTAINER_INTEGRATION_PATCH
++ malformed=original(patch_path).replace(b'@@',b'@x',1)
++ assert malformed!=original(patch_path)
++ cases.append(({patch_path:malformed},receipt_sha256,'AppContainer integration patch changed'))
++ cases.append(({}, {**qualification,'native_runtime_approval':True}, None))
++ cases.append(({}, {**qualification,'baseline':'0'*40}, None))
++ for overrides,receipt,expected in cases:
++  if isinstance(receipt,dict):
++   raw=(json.dumps(receipt,indent=2,sort_keys=True)+'\n').encode()
++   overrides[manifest]=raw
++   receipt=hashlib.sha256(raw).hexdigest()
++  def read(path):return overrides[path] if path in overrides else original(path)
++  with patch.object(Path,'read_bytes',read):
++   try:preceding_appcontainer_integration_sources(receipt)
++   except AssertionError as error:assert (error.args[0] if error.args else None)==expected,error
++   else:raise AssertionError('unqualified AppContainer transition accepted')
++ print('TCP_APPCONTAINER_INTEGRATION_NEGATIVE_CONTROLS_PASS cases='+str(len(cases))+' native_processes_started=0')
++
++def source_function(source,marker):
++ assert source.count(marker)==1,marker
++ begin=source.index(marker);start=source.index(b'{',begin);depth=1;end=start+1
++ while depth:
++  assert end<len(source),marker
++  depth+=(source[end:end+1]==b'{')-(source[end:end+1]==b'}');end+=1
++ return source[begin:end]
++
++APPCONTAINER_PROPERTY_SOURCE='compat/posix/src/system_properties.cc'
++APPCONTAINER_PROPERTY_GLES_GUARD=b'if (!ServedBuildProperty(name, text) || !Valid(name, text)) continue;'
++
++def check_appcontainer_property_filter(source):
++ loader=source_function(source,b'bool LoadBootstrapOverrides(')
++ publish=b'area->overrides[name] = std::move(update);'
++ assert loader.count(APPCONTAINER_PROPERTY_GLES_GUARD)==loader.count(publish)==1,APPCONTAINER_PROPERTY_SOURCE
++ assert loader.index(APPCONTAINER_PROPERTY_GLES_GUARD)<loader.index(publish),APPCONTAINER_PROPERTY_SOURCE
++
++def preceding_ofd_sources(read_source=live_source):
++ stdio_main=preceding_stdio_feature_sources(read_source)
 + historical=preceding_stdio_line_sources({path:subprocess.check_output(['git','-C',str(ROOT),'show',COMPOSED_STDIO_PRIOR_FEATURE+':'+path]) for path in COMPOSED_STDIO_PATHS})
 + historical_scan=preceding_stdio_scan_source(subprocess.check_output(['git','-C',str(ROOT),'show',COMPOSED_SCAN_PRIOR_FEATURE+':'+COMPOSED_SCAN_PATHS[0]]))
   folder=ROOT/'tools/net-tcp-priority/qualified'
   raw=(folder/'ofd-stream-source.json').read_bytes()
   assert hashlib.sha256(raw).hexdigest()==OFD_QUALIFICATION_SHA256,'OFD source qualification changed'
-@@ -485,10 +1121,31 @@ def preceding_ofd_sources():
+@@ -485,42 +1323,86 @@ def preceding_ofd_sources():
          'compat/posix/src/system.cc','compat/posix/src/winsock.cc']
   assert qualification['paths']==paths
   assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==paths
 - shared_stdio=preceding_shared_stdio_sources(qualification)
-+ usb_block=preceding_usb_block_sources(folder)
-+ netlink=preceding_netlink_sources(usb_block)
++ usb_block=preceding_usb_block_sources(folder,read_source)
++ netlink=preceding_netlink_sources(usb_block,read_source)
 + before_features={**usb_block,**netlink}  # The overlapping Netlink endpoints are the older bytes.
-+ memfd_lease=preceding_memfd_lease_sources(usb_block)
-+ shared_input={path:stdio_main[path] if path in stdio_main else (ROOT/path).read_bytes() for path in SHARED_STDIO_PATHS}
++ memfd_lease=preceding_memfd_lease_sources(usb_block,read_source)
++ shared_input={path:stdio_main[path] if path in stdio_main else read_source(path) for path in SHARED_STDIO_PATHS}
 + shared_stdio=preceding_shared_stdio_sources(qualification,shared_input)
 + assert shared_stdio[COMPOSED_SCAN_PATHS[0]]==historical_scan,'historical scanner and composed shared-stdio normalization disagree'
 + for path,previous in historical.items():
@@ -3515,38 +3853,55 @@ index 5f0fff857..9133f7a72 100644
 +   assert current==expected,('current main misc endpoint changed',path)
 +  else:
 +   assert current==previous,('historical stdio and current-main normalization disagree',path)
-+ storage_policy=preceding_storage_policy_sources(before_features)
++ storage_policy=preceding_storage_policy_sources(before_features,read_source)
 + assert memfd_lease.keys().isdisjoint(shared_stdio.keys()|stdio_main.keys()),'source qualifications overlap'
 + assert storage_policy.keys().isdisjoint(memfd_lease.keys()|shared_stdio.keys()|stdio_main.keys()),'source qualifications overlap'
 + preceding={**before_features,**memfd_lease,**stdio_main,**shared_stdio,**storage_policy}
   for path,digest in qualification['source_sha256'].items():
 -  actual=shared_stdio[path] if path in shared_stdio else (ROOT/path).read_bytes()
 -  if path=='compat/posix/src/system_properties.cc':actual=preceding_logging_property_source()
-+  actual=preceding[path] if path in preceding else (ROOT/path).read_bytes()
++  actual=preceding[path] if path in preceding else read_source(path)
++  if path==CHILD_WAIT_PATH:actual=preceding_child_wait_source(actual)
 +  if path=='compat/binder/binderd.cc':actual=preceding_composed_binder_output_source(actual)
-+  if path=='compat/posix/src/system_properties.cc':actual=preceding_logging_property_source(actual)
++  if path=='compat/posix/src/system_properties.cc':
++   header='compat/posix/include/gesher/system_properties.h'
++   actual=preceding_logging_property_source(actual,read_source(header))
    if path=='compat/bionic/shim.cc':actual=preceding_memmem_source(actual)
-   if path==MEMRCHR_SOURCE:actual=preceding_memrchr_source(qualification)
+-  if path==MEMRCHR_SOURCE:actual=preceding_memrchr_source(qualification)
++  if path==MEMRCHR_SOURCE:actual=preceding_memrchr_source(qualification,read_source)
    assert hashlib.sha256(actual).hexdigest()==digest,path
-@@ -496,7 +1153,7 @@ def preceding_ofd_sources():
+  with tempfile.TemporaryDirectory(prefix='gesher-ofd-qualification-') as temporary:
    work=Path(temporary)
    for path in paths:
     (work/path).parent.mkdir(parents=True,exist_ok=True)
 -   (work/path).write_bytes((ROOT/path).read_bytes())
-+   (work/path).write_bytes(preceding.get(path,(ROOT/path).read_bytes()))
-   subprocess.run(['git','apply','--reverse','--unidiff-zero','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
-   subprocess.run(['git','apply','--reverse','--unidiff-zero','-'],input=patch,cwd=work,check=True,capture_output=True)
+-  subprocess.run(['git','apply','--reverse','--unidiff-zero','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
+-  subprocess.run(['git','apply','--reverse','--unidiff-zero','-'],input=patch,cwd=work,check=True,capture_output=True)
++   (work/path).write_bytes(preceding.get(path,read_source(path)))
++  reverse=['git','-c','core.autocrlf=false','apply','--reverse','--unidiff-zero']
++  subprocess.run([*reverse,'--check','-'],input=patch,cwd=work,check=True,capture_output=True)
++  subprocess.run([*reverse,'-'],input=patch,cwd=work,check=True,capture_output=True)
    previous={path:(work/path).read_bytes() for path in paths}
-@@ -512,7 +1169,7 @@ def preceding_ofd_sources():
+- def function(source,marker):
+-  assert source.count(marker)==1,marker
+-  begin=source.index(marker);start=source.index(b'{',begin);depth=1;end=start+1
+-  while depth:
+-   assert end<len(source),marker
+-   depth+=(source[end:end+1]==b'{')-(source[end:end+1]==b'}');end+=1
+-  return source[begin:end]
+  # Independently retain socket ownership and actual native poll core bytes.
+  for path,markers in {
     'compat/posix/src/fd.cc':[b'bool Remove(',b'void Insert(',b'bool ReplaceSocket(',b'bool LookupSocket(',b'static int PollFdsImpl('],
     'compat/posix/src/system.cc':[b'bool SocketIo('],
   }.items():
 -  current=(ROOT/path).read_bytes()
-+  current=netlink.get(path,(ROOT/path).read_bytes())
++  current=netlink[path] if path in netlink else live_source(path)
    for marker in markers:
-    actual=function(current,marker);expected=function(previous[path],marker)
+-   actual=function(current,marker);expected=function(previous[path],marker)
++   actual=source_function(current,marker);expected=source_function(previous[path],marker)
     if marker==b'static int PollFdsImpl(':
-@@ -521,6 +1178,32 @@ def preceding_ofd_sources():
+     for before,after in PIPE_POLL_ERROR_REPLACEMENTS:
+      assert actual.count(after)==expected.count(before)==1,(path,marker)
       actual=actual.replace(after,before,1)
     assert actual==expected,(path,marker)
   return previous
@@ -3579,7 +3934,7 @@ index 5f0fff857..9133f7a72 100644
  # AF_UNIX credentials and descriptor passing (ADR 0088) and memfd seals change
  # these selected sources after REVIEWED_CHECKPOINT, a commit on main. The
  # pinned REVIEWED_PATCH lists each changed line as an exact hunk at its line in
-@@ -529,7 +1212,9 @@ def preceding_ofd_sources():
+@@ -529,7 +1411,9 @@ def preceding_ofd_sources():
  # checkpoint's bytes. Any other change fails here as before.
  REVIEWED_CHECKPOINT='7a45c2468c270bfe68ee5f854aa9d4feaf2208b3'
  REVIEWED_PATCH='tools/net-tcp-priority/reviewed-adr0088-memfd-seals.json'
@@ -3590,7 +3945,7 @@ index 5f0fff857..9133f7a72 100644
  def reviewed(path,actual):
   raw=(ROOT/REVIEWED_PATCH).read_bytes()
   assert hashlib.sha256(raw).hexdigest()==REVIEWED_PATCH_SHA256,REVIEWED_PATCH
-@@ -555,10 +1240,66 @@ NDK_ARCHIVE_SHARING={
+@@ -555,12 +1439,68 @@ NDK_ARCHIVE_SHARING={
    b"archive = Path('tcp-ndk-archive/android-ndk-r27c-linux.zip')\narchive.parent.mkdir(exist_ok=True)\n",
    b"# Shares native2's publisher-archive cache entry (same path and key), so one copy is kept.\narchive = Path('dns-ndk.zip')\n"),
  }
@@ -3604,7 +3959,7 @@ index 5f0fff857..9133f7a72 100644
 +TSF_METADATA_QUALIFICATION_SHA256='b6f40f75fa20ebfd9e47473c2cd2a2d5dfe697dd4b01e50d2c04f925545d6e22'
 +TSF_METADATA_PATHS=('tools/windows4/TsfJobSupervisor.cs','tools/windows4/test-tsf-job-supervisor.ps1')
 +TSF_METADATA_ADDITIONAL_SOURCE='tools/windows4/TsfOutputMetadataChecks.cs'
-+def preceding_tsf_metadata_sources():
++def preceding_tsf_metadata_sources(read_source=live_source):
 + folder=ROOT/'tools/net-tcp-priority/qualified'
 + raw=(folder/'tsf-output-metadata-source.json').read_bytes()
 + assert hashlib.sha256(raw).hexdigest()==TSF_METADATA_QUALIFICATION_SHA256,'TSF metadata qualification changed'
@@ -3619,7 +3974,7 @@ index 5f0fff857..9133f7a72 100644
 + assert list(transition['additional_sources'])==[TSF_METADATA_ADDITIONAL_SOURCE],'TSF metadata additional paths changed'
 + baseline_policy=subprocess.check_output(['git','-C',str(ROOT),'show',TSF_METADATA_BASE+':tools/net-tcp-priority/test-selected-policy.py'])
 + assert hashlib.sha256(baseline_policy).hexdigest()==transition['baseline_policy_sha256'],'TSF metadata baseline policy changed'
-+ additional=(ROOT/TSF_METADATA_ADDITIONAL_SOURCE).read_bytes()
++ additional=read_source(TSF_METADATA_ADDITIONAL_SOURCE)
 + assert hashlib.sha256(additional).hexdigest()==transition['additional_sources'][TSF_METADATA_ADDITIONAL_SOURCE],TSF_METADATA_ADDITIONAL_SOURCE
 + published=subprocess.check_output(['git','-C',str(ROOT),'show',TSF_METADATA_FEATURE_HEAD+':'+TSF_METADATA_ADDITIONAL_SOURCE])
 + assert additional==published,'TSF metadata additional source endpoint'
@@ -3629,7 +3984,7 @@ index 5f0fff857..9133f7a72 100644
 +     ('diff --git a/'+path+' b/'+path).encode() for path in paths],'TSF metadata patch paths changed'
 + current={};baseline={}
 + for path in paths:
-+  current[path]=(ROOT/path).read_bytes()
++  current[path]=read_source(path)
 +  assert hashlib.sha256(current[path]).hexdigest()==transition['after_sha256'][path],path
 +  baseline[path]=subprocess.check_output(['git','-C',str(ROOT),'show',TSF_METADATA_BASE+':'+path])
 +  assert hashlib.sha256(baseline[path]).hexdigest()==transition['before_sha256'][path],path
@@ -3651,23 +4006,31 @@ index 5f0fff857..9133f7a72 100644
 +
  REVIEWED_PATHS=('compat/posix/src/fd.cc','compat/posix/src/socket.cc','compat/posix/src/socket_internal.h','compat/posix/src/system.cc','compat/posix/src/winsock.cc')
  def old(path):return subprocess.check_output(['git','-C',str(ROOT),'show',BASE+':'+path])
- def check():
-  preceding=preceding_ofd_sources()
-+ preceding.update(preceding_tsf_metadata_sources())
-  assert hashlib.sha256((ROOT/OWNER_THREAD_DIAGNOSTIC_PATH).read_bytes()).hexdigest()==OWNER_THREAD_DIAGNOSTIC_SHA256,OWNER_THREAD_DIAGNOSTIC_PATH
-  assert hashlib.sha256((ROOT/FD_POLL_SCRATCH_HEADER).read_bytes()).hexdigest()==FD_POLL_SCRATCH_SHA256,FD_POLL_SCRATCH_HEADER
+-def check():
+- preceding=preceding_ofd_sources()
+- assert hashlib.sha256((ROOT/OWNER_THREAD_DIAGNOSTIC_PATH).read_bytes()).hexdigest()==OWNER_THREAD_DIAGNOSTIC_SHA256,OWNER_THREAD_DIAGNOSTIC_PATH
+- assert hashlib.sha256((ROOT/FD_POLL_SCRATCH_HEADER).read_bytes()).hexdigest()==FD_POLL_SCRATCH_SHA256,FD_POLL_SCRATCH_HEADER
++def check(read_source=live_source):
++ preceding=preceding_ofd_sources(read_source)
++ preceding.update(preceding_tsf_metadata_sources(read_source))
++ assert hashlib.sha256(read_source(OWNER_THREAD_DIAGNOSTIC_PATH)).hexdigest()==OWNER_THREAD_DIAGNOSTIC_SHA256,OWNER_THREAD_DIAGNOSTIC_PATH
++ assert hashlib.sha256(read_source(FD_POLL_SCRATCH_HEADER)).hexdigest()==FD_POLL_SCRATCH_SHA256,FD_POLL_SCRATCH_HEADER
   paths=subprocess.check_output(['git','-C',str(ROOT),'diff','1745e99d7f2849ba81784545e07d60cb2b7800c3^','1745e99d7f2849ba81784545e07d60cb2b7800c3','--name-only'],text=True).splitlines()
-@@ -570,6 +1311,9 @@ def check():
+  paths+=['.github/workflows/net-tcp-coherent-component.yml','tests/net-tcp-priority/contract.cc','tests/net-tcp-priority/native_udp_control.cc','tests/native2/net_udp_trunc.cpp','tests/native2/net_udp_fault_observer.c','tools/net-tcp-priority/qualified/TsfJobSupervisor.cs','tools/windows4/TsfJobSupervisor.cs','tools/windows4/TsfJobWorker.cs','tools/windows4/test-tsf-job-supervisor.ps1','tools/ci/receipt-diagnostics.ps1','tools/net-tcp-priority/import-policy.json','tools/net-tcp-priority/import_policy.py','tools/net-tcp-priority/build-guests.py','tools/net-tcp-priority/prepare-ndk.py']
+  for path in paths:
+@@ -569,7 +1509,10 @@ def check():
+          WINSOCK_BASE if path=='compat/posix/src/winsock.cc' else
           CONTROL_BASE if path=='tools/windows4/test-tsf-job-supervisor.ps1' else BASE)
    expected=subprocess.check_output(['git','-C',str(ROOT),'show',epoch+':'+path])
-   actual=preceding.get(path,(ROOT/path).read_bytes())
+-  actual=preceding.get(path,(ROOT/path).read_bytes())
++  actual=preceding.get(path,read_source(path))
 +  for addition in FORK_LOCK_ADDITIONS.get(path,()):
 +   assert actual.count(addition)==1 and actual.endswith(addition),path
 +   actual=actual[:-len(addition)]
    if path=='compat/posix/src/winsock.cc':
     assert actual.count(TCP_PRIORITY_WAKE_AFTER)==1 and TCP_PRIORITY_WAKE_BEFORE not in actual,path
     actual=actual.replace(TCP_PRIORITY_WAKE_AFTER,TCP_PRIORITY_WAKE_BEFORE,1)
-@@ -663,10 +1407,147 @@ def check():
+@@ -663,11 +1606,159 @@ def check():
   assert pin['ordered_patch_sha256']=={'minimum-detached-retirement.patch':'ebc5aac990c6ec075431d0c25a9b74ecadc0940da1bdad9503f358d4fe3431ad','minimum-noattach-join.patch':'c4f47903af720542a584fa743932316d86c45683da70a4c8620d7a71d3eb7f96'}
   for name,digest in pin['ordered_patch_sha256'].items():assert hashlib.sha256((ROOT/'tools/host-pthread-authority'/name).read_bytes()).hexdigest()==digest
   for path in ['tools/net-tcp-priority/manifest.py','tools/host-pthread-authority/minimum_receipt.py']:ast.parse((ROOT/path).read_text(encoding='utf-8'))
@@ -3813,10 +4176,22 @@ index 5f0fff857..9133f7a72 100644
   from unittest.mock import patch
   original=Path.read_bytes
 + usb_preceding=preceding_usb_block_sources(ROOT/'tools/net-tcp-priority/qualified')
++ # The outer USB pin also rejects this live mutation. Test the Child Wait
++ # leaf independently at the normalized input, including a repinned source.
++ child_wait=usb_preceding[CHILD_WAIT_PATH]
++ bad_wait=child_wait.replace(b'needs_poll |= !child.watched;',b'needs_poll = false;',1)
++ assert bad_wait!=child_wait,CHILD_WAIT_PATH
++ with patch.dict(globals(),CHILD_WAIT_SOURCE_SHA256=hashlib.sha256(bad_wait).hexdigest()):
++  try:preceding_child_wait_source(bad_wait)
++  except (AssertionError,subprocess.CalledProcessError):pass
++  else:raise AssertionError('repinned child-wait mutation accepted')
   cases=[
++  (CHILD_WAIT_PATH,b'needs_poll |= !child.watched;',b'needs_poll = false;'),
++  (CHILD_WAIT_PATCH,b'@@',b'@x'),
    ('compat/posix/src/fd.cc',b'--state->description->descriptor_refs == 0',b'--state->description->descriptor_refs == 1'),
    ('compat/posix/src/fd.cc',b'return TransferPipe(snapshot, bytes, count, false);',b'return 0;'),
-@@ -675,6 +1556,9 @@ def transition_negative_controls():
+   ('compat/posix/src/system.cc',b'gesher::ws::RecvOwned(state.socket,',b'gesher::ws::SendOwned(state.socket,'),
+@@ -675,6 +1766,9 @@ def transition_negative_controls():
    ('compat/posix/src/ofd.cc',b'InterlockedCompareExchange(&shared->flags,',b'InterlockedExchange(&shared->flags,'),
    ('compat/elf/exec/shell_execute.inc',b'gesher::ReadPipeDescriptionInterruptible(description, value, 1, interrupted)',b'gesher::ReadFileDescription(description, value, 1)'),
    ('tools/net-tcp-priority/qualified/ofd-stream-source.patch',b'@@',b'@x'),
@@ -3826,7 +4201,7 @@ index 5f0fff857..9133f7a72 100644
    ('compat/posix/src/fd.cc',b'if (result < 0) return -1;',b'if (result < 0) return 0;'),
    ('compat/posix/src/fd.cc',b'SocketRegistry& socket_registry = *new (socket_registry_storage) SocketRegistry;',b'SocketRegistry socket_registry;'),
    ('compat/posix/src/stdio_output.cc',b'if (locked_stream_) _lock_file(locked_stream_);',b'if (locked_stream_) {}'),
-@@ -689,6 +1573,11 @@ def transition_negative_controls():
+@@ -689,6 +1783,11 @@ def transition_negative_controls():
    ('compat/posix/src/system_properties.cc',b'SetWideEnvironment(L"GESHER_PROPERTY_ROOT", root.c_str())',b'_wputenv_s(L"GESHER_PROPERTY_ROOT", root.c_str())'),
    ('compat/posix/include/gesher/system_properties.h',b'uint32_t generation = 0;',b'uint64_t generation = 0;'),
    ('tools/net-tcp-priority/qualified/native13-property-source.patch',b'@@',b'@x'),
@@ -3838,7 +4213,7 @@ index 5f0fff857..9133f7a72 100644
    # The memmem normalization admits its exact reviewed delta only. The old
    # whole-file digest must still reject any unrelated shim change afterwards.
    ('compat/bionic/shim.cc',b'size_t n = std::strlen(s) + 1;',b'size_t n = std::strlen(s) + 2;'),
-@@ -696,6 +1585,40 @@ def transition_negative_controls():
+@@ -696,6 +1795,40 @@ def transition_negative_controls():
    ('compat/bionic/shim.cc',b'#include "memmem_search.h"\n',b''),
    ('compat/bionic/shim.cc',b'#include "memmem_search.h"\n',b'#include "memmem_search.h"\n#include "memmem_search.h"\n'),
    (MEMMEM_HEADER,b'if (needle_size == 0) return haystack_data;',b'if (needle_size == 0) return nullptr;'),
@@ -3879,7 +4254,7 @@ index 5f0fff857..9133f7a72 100644
   ]
   for name,before,after in cases:
    target=ROOT/name
-@@ -703,22 +1626,158 @@ def transition_negative_controls():
+@@ -703,22 +1836,183 @@ def transition_negative_controls():
    def changed(path):
     raw=original(path)
     return raw.replace(before,after,1) if path==target else raw
@@ -3893,6 +4268,10 @@ index 5f0fff857..9133f7a72 100644
 -    except (AssertionError,subprocess.CalledProcessError):rejected=True
 -   assert rejected,'unqualified mutation accepted: '+name+' repin='+str(repin)
 - print('TCP_SELECTED_TRANSITION_NEGATIVE_CONTROLS_PASS cases='+str(len(cases))+' repinned_property_controls=4')
+-if __name__=='__main__':
+- import sys
+- check()
+- if '--selftest' in sys.argv:
 +  # A refreshed new-file hash alone cannot authorize property or memfd lease
 +  # behavior changes: the pinned reverse transition and original OFD receipt
 +  # must reject them too.
@@ -4036,10 +4415,30 @@ index 5f0fff857..9133f7a72 100644
 +   except (AssertionError,subprocess.CalledProcessError):rejected=True
 +  assert rejected,'repinned composed Binder mutation accepted: '+before.decode()
 + print('TCP_SELECTED_TRANSITION_NEGATIVE_CONTROLS_PASS cases='+str(len(cases))+' repinned_property_controls=5 repinned_memfd_lease_controls='+str(repinned_memfd_lease)+' repinned_binder_output_controls=6 repinned_composed_binder_controls='+str(len(composed_cases)))
- if __name__=='__main__':
-  import sys
-  check()
-  if '--selftest' in sys.argv:
++def check_live():
++ check_appcontainer_donor_receipts()
++ previous=preceding_appcontainer_integration_sources(APPCONTAINER_INTEGRATION_QUALIFICATION_SHA256)
++ check_appcontainer_property_filter(live_source(APPCONTAINER_PROPERTY_SOURCE))
++ check(lambda path:previous[path] if path in previous else live_source(path))
++ return previous
++
++def selftest(previous):
++ from unittest.mock import patch
++ appcontainer_integration_negative_controls(APPCONTAINER_INTEGRATION_QUALIFICATION_SHA256)
++ # Independently reject the protected loader taking an unserved GLES value.
++ source=live_source(APPCONTAINER_PROPERTY_SOURCE)
++ altered=source.replace(APPCONTAINER_PROPERTY_GLES_GUARD,b'if (!Valid(name, text)) continue;',1)
++ assert altered!=source,APPCONTAINER_PROPERTY_SOURCE
++ try:check_appcontainer_property_filter(altered)
++ except AssertionError as error:assert error.args==(APPCONTAINER_PROPERTY_SOURCE,),error
++ else:raise AssertionError('unfiltered protected build.prop assignment accepted')
++ print('TCP_APPCONTAINER_PROPERTY_FILTER_NEGATIVE_CONTROL_PASS')
++ # The outer proof above has bound the staged predecessors to the live files.
++ # The original mutation probes must exercise their own rejection layers.
++ historical_inputs={ROOT/path:source for path,source in previous.items()}
++ original=Path.read_bytes
++ def historical(path):return historical_inputs[path] if path in historical_inputs else original(path)
++ with patch.object(Path,'read_bytes',historical):
 +  usb_main513_negative_controls()
 +  storage_policy_negative_controls()
    transition_negative_controls()
@@ -4048,6 +4447,11 @@ index 5f0fff857..9133f7a72 100644
    runpy.run_path(str(ROOT/'tools/net-tcp-priority/test-memrchr-policy.py'),run_name='__main__')
 +  runpy.run_path(str(ROOT/'tools/net-tcp-priority/test-tsf-metadata-policy.py'),run_name='__main__')
    runpy.run_path(str(ROOT/'tools/net-tcp-priority/test-scandir-policy.py'),run_name='__main__')
++
++if __name__=='__main__':
++ import sys
++ previous=check_live()
++ if '--selftest' in sys.argv:selftest(previous)
 diff --git a/tools/test_memrchr_report.py b/tools/test_memrchr_report.py
 index bbbec330d..c0850be45 100644
 --- a/tools/test_memrchr_report.py

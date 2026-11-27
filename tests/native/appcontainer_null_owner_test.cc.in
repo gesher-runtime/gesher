@@ -1,0 +1,117 @@
+// Copyright (C) 2026 The Gesher Authors. SPDX-License-Identifier: Apache-2.0
+// Only containment and startup record discovery are fixture boundaries.
+// All handle opens, identity checks, duplicates, reads, writes and closes are Win32.
+#include "startup_null.h"
+
+#include <cstdio>
+
+namespace {
+HANDLE startup_value = nullptr;
+int checks = 0, failures = 0;
+
+BOOL WINAPI FixtureGetTokenInformation(HANDLE token, TOKEN_INFORMATION_CLASS kind, LPVOID info,
+                                       DWORD bytes, PDWORD returned) {
+  if (kind != TokenIsAppContainer) return GetTokenInformation(token, kind, info, bytes, returned);
+  if (bytes < sizeof(DWORD)) return FALSE;
+  *static_cast<DWORD*>(info) = 1;
+  *returned = sizeof(DWORD);
+  return TRUE;
+}
+
+void WINAPI FixtureGetStartupInfo(STARTUPINFOW* startup) {
+  *startup = {};
+  startup->cb = sizeof(*startup);
+}
+
+namespace binder_bootstrap {
+enum class Endpoint { kApplication, kStandalone };
+struct Startup { HANDLE null_device; };
+bool ReadStartup(Endpoint endpoint, Startup* launch) {
+  if (endpoint != Endpoint::kApplication) return false;
+  launch->null_device = startup_value;
+  return true;
+}
+HANDLE DecodeHandle(HANDLE handle) { return handle; }
+}
+
+// The executable and a DLL compile separate static POSIX owners but read
+// the same startup record. Give each module the unchanged production class.
+using gesher::DuplicateVerifiedNull;
+#define GetTokenInformation FixtureGetTokenInformation
+#define GetStartupInfoW FixtureGetStartupInfo
+namespace module_a {
+@PRODUCTION_OWNER@
+}
+namespace module_b {
+@PRODUCTION_OWNER@
+}
+#undef GetTokenInformation
+#undef GetStartupInfoW
+
+void Check(bool ok, const char* name) {
+  ++checks;
+  if (!ok) {
+    std::fprintf(stderr, "FAIL %s (Win32 %lu)\n", name, GetLastError());
+    ++failures;
+  }
+}
+
+bool IsNull(HANDLE handle) {
+  if (handle == INVALID_HANDLE_VALUE) return false;
+  HANDLE probe = DuplicateVerifiedNull(handle);
+  if (probe == nullptr) return false;
+  CloseHandle(probe);
+  DWORD wrote = 0, read = 1;
+  char byte = 'n';
+  return WriteFile(handle, &byte, 1, &wrote, nullptr) && wrote == 1 &&
+         ReadFile(handle, &byte, 1, &read, nullptr) && read == 0;
+}
+
+void UseNull(HANDLE handle, bool inheritable, const char* name) {
+  DWORD flags = 0;
+  Check(IsNull(handle) && GetHandleInformation(handle, &flags) &&
+      ((flags & HANDLE_FLAG_INHERIT) != 0) == inheritable, name);
+  if (handle != INVALID_HANDLE_VALUE) CloseHandle(handle);
+}
+}  // namespace
+
+int main() {
+  SECURITY_ATTRIBUTES attributes{sizeof(attributes), nullptr, TRUE};
+  HANDLE original = CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE,
+      FILE_SHARE_READ | FILE_SHARE_WRITE, &attributes, OPEN_EXISTING, 0, nullptr);
+  if (original == INVALID_HANDLE_VALUE) return 2;
+  startup_value = original;
+  {
+    module_a::AppContainerNull one;
+    module_b::AppContainerNull two;
+    UseNull(one.NewNull(GENERIC_READ | GENERIC_WRITE, false), false, "first POSIX owner has real NUL");
+    UseNull(two.NewNull(GENERIC_READ | GENERIC_WRITE, true), true, "second POSIX owner has real NUL");
+    UseNull(two.NewPlaceholder(false), false, "CRT placeholder duplicates NUL");
+    Check(IsNull(original), "startup NUL remains valid with both owners live");
+  }
+  Check(IsNull(original), "destroying both owners leaves original NUL with the process");
+  CloseHandle(original);
+
+  HANDLE event = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  if (event == nullptr) return 2;
+  startup_value = event;
+  {
+    module_a::AppContainerNull one;
+    module_b::AppContainerNull two;
+    Check(one.NewNull(GENERIC_READ | GENERIC_WRITE, false) == INVALID_HANDLE_VALUE,
+          "first owner rejects an unrelated event as NUL");
+    Check(two.NewNull(GENERIC_READ | GENERIC_WRITE, false) == INVALID_HANDLE_VALUE,
+          "second owner rejects an unrelated event as NUL");
+    HANDLE placeholder = one.NewPlaceholder(false);
+    Check(placeholder != INVALID_HANDLE_VALUE && GetFileType(placeholder) == FILE_TYPE_PIPE,
+          "rejected startup value can still reserve a private CRT slot");
+    if (placeholder != INVALID_HANDLE_VALUE) CloseHandle(placeholder);
+    Check(SetEvent(event) && WaitForSingleObject(event, 0) == WAIT_OBJECT_0,
+          "rejected event remains live with both owners alive");
+  }
+  Check(ResetEvent(event) && WaitForSingleObject(event, 0) == WAIT_TIMEOUT,
+        "destroying both owners leaves the rejected event untouched");
+  CloseHandle(event);
+  std::printf("AppContainer NUL ownership: %d checks, %d failures\n", checks, failures);
+  return failures != 0;
+}

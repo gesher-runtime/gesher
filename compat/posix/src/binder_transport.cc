@@ -4,6 +4,9 @@
 
 #include "../../binder/protected_client_startup.h"
 #include "../../binder/protected_data_pipe.h"
+#ifdef GESHER
+#include <gesher/fork.h>
+#endif
 
 #include <algorithm>
 #include <charconv>
@@ -22,12 +25,13 @@ struct RoutingState {
   wchar_t locator[kLocatorCapacity]{};
   binder::ProtectedDataEndpoint endpoint{};
 };
+constinit RoutingState g_routing;
 
 // gesher_posix is linked into the executable and into Android DLLs. Native
 // startup and the framework's Binder calls must share one sealed route.
 RoutingState* Owner() {
   using Factory = RoutingState* (*)();
-  static const auto factory = reinterpret_cast<Factory>(reinterpret_cast<void*>(
+  const auto factory = reinterpret_cast<Factory>(reinterpret_cast<void*>(
       GetProcAddress(GetModuleHandleW(nullptr), "gesher_binder_transport_owner_v1")));
   return factory ? factory() : nullptr;
 }
@@ -42,8 +46,7 @@ bool ParseId(std::string_view text, DWORD* value) {
 
 extern "C" void gesher_binder_transport_anchor_v1() {}
 extern "C" __declspec(dllexport) RoutingState* gesher_binder_transport_owner_v1() {
-  static RoutingState state;
-  return &state;
+  return &g_routing;
 }
 
 bool ConfigureProtectedBinderStartup(std::string_view name, std::string_view authority_pid,
@@ -101,3 +104,7 @@ HANDLE OpenProtectedBinder(const binder::ProtectedDataEndpoint& routing) {
 }
 
 }  // namespace gesher
+
+#ifdef GESHER_FORK_LOCK
+GESHER_FORK_LOCK(gesher::kForkOrderSubsystem, std::mutex, gesher::g_routing.mutex);
+#endif

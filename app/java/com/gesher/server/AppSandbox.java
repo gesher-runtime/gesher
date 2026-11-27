@@ -199,14 +199,14 @@ final class AppSandbox {
      * Prepare the new inode before atomic policy publication: replacing a file
      * does not copy its old explicit AppContainer ACE to the replacement.
      */
-    static void prepareStoragePolicyFile(String packageName, File stagedFile) throws IOException {
+    static void prepareStoragePolicyFile(ApkPackage pkg, File stagedFile) throws IOException {
         if (!enabled()) return;
         File policyRoot = new File(Device.dataDir(), "system/storage-policy").getCanonicalFile();
         File staged = stagedFile.getCanonicalFile();
         if (!policyRoot.equals(staged.getParentFile()) || !staged.isFile()) {
             throw new IOException("Storage policy file outside the policy directory: " + stagedFile);
         }
-        setStorageAccess(staged, containerName(packageName), READ_EXECUTE, false);
+        setStorageAccess(staged, installationContainer(pkg), READ, false);
     }
 
     /**
@@ -217,7 +217,7 @@ final class AppSandbox {
      */
     static void syncStorageAccess(String packageName, ExternalStorageAccess.Policy policy)
             throws IOException {
-        if (!enabled()) return;
+        if (!enabled() || SystemServer.isProtectedDevice()) return;
         if (packageName == null || packageName.isEmpty() || packageName.indexOf('/') >= 0
                 || packageName.indexOf('\\') >= 0 || ".".equals(packageName)
                 || "..".equals(packageName)) {

@@ -46,8 +46,14 @@ class PackageManagerService {
     boolean isRemovalPending(String name){return false;}
 }
 class ActivityTaskManagerService {
+    interface RunnableIo {void run()throws IOException;}
     int stops;
-    void forceStopPackage(String name){stops++;}
+    boolean stopFails;
+    void withStoppedProtectedInstallation(ApkPackage expected,RunnableIo apply)throws IOException{
+        if (stopFails)throw new IllegalStateException("retirement failed");
+        stops++;
+        apply.run();
+    }
 }
 class SystemServer {static boolean isProtectedDevice(){return true;}}
 class AccountSecretStore {static void ensureLoaded(){}}
@@ -81,12 +87,20 @@ public class SandboxOptOutHost {
         check(!SandboxOptOut.isApproved(PM.apk));
         duringConsent=()->{};
         PM.apk=original;
+        ATM.stopFails=true;
+        try {change("unisolated");throw new AssertionError("failed retirement");}
+        catch(IllegalStateException expected){check(!SandboxOptOut.isApproved(original));}
+        ATM.stopFails=false;
         check(change("unisolated").equals("unisolated") && ATM.stops==1);
         check(change("status").equals("unisolated"));
         check(change("unisolated").equals("unisolated") && ATM.stops==1);
         check(!SandboxOptOut.isApproved(new ApkPackage(original.apkPath,2,101)));
         check(!SandboxOptOut.isApproved(new ApkPackage(original.apkPath,1,102)));
         check(!SandboxOptOut.isApproved(new ApkPackage("/app/a-2/base.apk",1,101)));
+        ATM.stopFails=true;
+        try {change("isolated");throw new AssertionError("failed retirement");}
+        catch(IllegalStateException expected){check(SandboxOptOut.isApproved(original));}
+        ATM.stopFails=false;
         check(change("isolated").equals("isolated") && ATM.stops==2);
         check(!SandboxOptOut.isApproved(original));
         PM.apk=new ApkPackage(original.apkPath,0,101);

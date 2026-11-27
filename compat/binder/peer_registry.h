@@ -9,6 +9,7 @@
 #include <memory>
 #include <mutex>
 #include <set>
+#include <string>
 
 #include "../posix/include/gesher/windows_process_identity.h"
 
@@ -29,6 +30,7 @@ struct Peer {
   const Role role;
   const uint32_t uid;
   const std::array<uint8_t, 16> installation;
+  const std::string package;
 };
 
 class Registry {
@@ -40,7 +42,8 @@ class Registry {
   // Only the broker's private launcher control channel may call this entry.
   // A public pipe connection cannot enroll or assign a role to a process.
   bool Enroll(OwnedHandle process, DWORD pid, uint64_t birth, Role role, uint32_t uid,
-              const std::array<uint8_t, 16>& installation, PSID container) {
+              const std::array<uint8_t, 16>& installation, PSID container,
+              std::string package = {}) {
     process_identity::Process generation;
     if (!process_identity::ReadLiveProcess(process.get(), &generation) ||
         generation.pid != pid || generation.birth != birth ||
@@ -51,7 +54,7 @@ class Registry {
     // Once admitted, Android sees the exact same application role and UID.
     if (role == Role::kUnisolatedApplication) role = Role::kApplication;
     auto peer = std::shared_ptr<Peer>(new Peer{
-        std::move(process), generation, role, uid, installation});
+        std::move(process), generation, role, uid, installation, std::move(package)});
     std::lock_guard<std::mutex> lock(mutex_);
     if (!active_) return false;
     if (role == Role::kApplication && revoked_installations_.count(installation)) return false;
@@ -104,7 +107,7 @@ class Registry {
           peer->generation.birth == generation.birth ? peer : Lease{};
     }
     if (peers_.size() >= 4096) return {};
-    Lease admitted(new Peer{std::move(process), generation, Role::kOperator, 2000, {}});
+    Lease admitted(new Peer{std::move(process), generation, Role::kOperator, 2000, {}, {}});
     peers_.emplace(pid, admitted);
     return admitted;
   }
@@ -122,6 +125,7 @@ class Registry {
     process_identity::Process snapshot;
     if (!parent || parent->role != Role::kApplication ||
         !process_identity::ReadLiveProcess(child.get(), &snapshot) ||
+        process_identity::ReadParentProcessId(child.get(), snapshot.pid) != parent->generation.pid ||
         !(snapshot.principal == parent->generation.principal) ||
         !process_identity::MatchCapabilities(parent->process.get(), child.get())) return false;
     std::lock_guard<std::mutex> lock(mutex_);
@@ -135,7 +139,7 @@ class Registry {
     PruneExitedLocked();
     if (peers_.size() >= 4096 || peers_.find(snapshot.pid) != peers_.end()) return false;
     Lease admitted(new Peer{std::move(child), snapshot, Role::kApplication,
-                            parent->uid, parent->installation});
+                            parent->uid, parent->installation, parent->package});
     peers_.emplace(snapshot.pid, std::move(admitted));
     return true;
   }

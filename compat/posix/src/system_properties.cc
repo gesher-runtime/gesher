@@ -365,7 +365,7 @@ bool LoadBootstrapOverrides(Area* area) {
     std::string name = Trim(line.substr(0, equal));
     if (!name.empty() && name.back() == '?') name = Trim(name.substr(0, name.size() - 1));
     std::string text = Trim(line.substr(equal + 1));
-    if (!Valid(name, text)) continue;
+    if (!ServedBuildProperty(name, text) || !Valid(name, text)) continue;
     const auto existing = area->values.find(name);
     const bool present = existing != area->values.end();
     // Match the standalone Java loader. Existing ro.* properties stay

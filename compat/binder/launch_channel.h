@@ -38,6 +38,7 @@ struct Request {
   uint32_t uid = 0;
   std::array<uint8_t, 16> installation{};
   process_identity::Sid container;
+  std::array<char, 256> package{};
 };
 
 inline bool PrivatePipe(binder_peer::OwnedHandle* server, binder_peer::OwnedHandle* writer,

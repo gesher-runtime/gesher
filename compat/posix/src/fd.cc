@@ -152,8 +152,11 @@ class AppContainerNull {
         binder_bootstrap::ReadStartup(binder_bootstrap::Endpoint::kStandalone, &launch)) {
       HANDLE inherited = binder_bootstrap::DecodeHandle(launch.null_device);
       handle_ = DuplicateVerifiedNull(inherited);
-      if (inherited != startup.hStdInput && inherited != startup.hStdOutput &&
-          inherited != startup.hStdError) CloseHandle(inherited);
+      // Every linked POSIX copy reads this same process startup record.
+      // Keep its original handle alive for process lifetime so a later DLL
+      // cannot close an unrelated handle that reused its numeric value.
+      // Each module owns only its verified duplicate; rejected raw startup
+      // values are never closed here either.
       verified_writable_ = handle_ != nullptr;
       if (handle_ != nullptr) return;
     }

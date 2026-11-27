@@ -183,6 +183,11 @@ jobs:
             type usb-protected-launch.log
             exit /b 1
           )
+          cl /nologo /std:c11 /GS- /W4 /WX /D_WIN32_WINNT=0x0A00 /DGESHER_PROBE_USER32_LATE tests\native\usb_guest_loader_probe.c /Fe:guest-user32-late.exe /link /NODEFAULTLIB /ENTRY:GuestLoaderProbeEntry /SUBSYSTEM:CONSOLE kernel32.lib >> usb-protected-launch.log 2>&1
+          if errorlevel 1 (
+            type usb-protected-launch.log
+            exit /b 1
+          )
           python -c "from datetime import datetime, timezone; print('Protected launch: fixture-start-utc=' + datetime.now(timezone.utc).isoformat(timespec='microseconds'))" >> usb-protected-launch.log 2>&1
           usb_protected_launch_test.exe --scm-profile-control --lowbox-iat-trace >> usb-protected-launch.log 2>&1
           set "GESHER_PROTECTED_LAUNCH_NATIVE_EXIT=%errorlevel%"
@@ -211,6 +216,10 @@ jobs:
         if: ${{ !cancelled() }}
         shell: cmd
         run: python tools/test_protected_thread_signals.py --cxx cl
+      - name: Protected inherited NUL handle ownership across POSIX modules
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: python tools/test_appcontainer_null_owner.py --cxx cl
       - name: Launch failure text with native Windows direction classification
         if: ${{ !cancelled() }}
         shell: pwsh
@@ -734,6 +743,7 @@ jobs:
           python3 tools/test_search_delete_report.py
           python3 tools/test_scandir_sort.py --sanitize --negative-controls --output-dir scandir-sort-contracts
           python3 tools/test_scandir_report.py
+          python3 -m unittest discover -s tools/tests -p test_scandir_report.py
           python3 tools/test_bionic_semaphore_contracts.py --sanitize
           python3 tools/test_file_allocation_contracts.py --sanitize
           python3 tools/test_positioned_io_contracts.py --sanitize
@@ -1873,6 +1883,10 @@ jobs:
       - name: Install, run Hello, uninstall
         if: ${{ !cancelled() && steps.build_installer.outcome == 'success' }}
         shell: pwsh
+        env:
+          # Exercise the candidate through the installed launcher before changing the shipping default.
+          GESHER_SANDBOX: appcontainer-trusted
+          GESHER_LOCALES: en-US
         run: |
           $setup = (Get-ChildItem installer\gesher-setup-*.exe).FullName
           # Every run of the installed Gesher below must load the installed boot
@@ -1970,6 +1984,9 @@ jobs:
             throw "gesher-app list does not show the installed lifecycle.apk"
           }
           'PASS  installer: gesher-app installs lifecycle.apk and runs it on the Gesher device (a persistent system server); list shows it' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          if ((Get-Content $device) -cnotcontains 'protected_binder=true') {
+            throw 'The installer qualification did not start the candidate isolated device'
+          }
           # The installed device compiled it at install with the installed dex2oat (ADR 0054).
           $dexopt = Get-Content "$env:LOCALAPPDATA\Gesher\logs\system_server.log" -ErrorAction SilentlyContinue | Select-String 'dexopt: com\.gesher\.lifecycle: verify \(reason install\)' | Select-Object -First 1
           if (-not $dexopt) {
@@ -2159,8 +2176,10 @@ jobs:
           $code = $LASTEXITCODE
           Write-Host "gesher-app lifecycle.apk --system-server (exit $code):"
           Write-Host (($out -split "`n" | Select-Object -Last 12) -join "`n")
-          if ($code -ne 0 -or $out -notmatch 'gesher-app: done' -or $out -notmatch '\(in another process\)') {
-            Get-Content "$env:LOCALAPPDATA\Gesher\logs\run-system_server.*" -ErrorAction SilentlyContinue | Select-Object -Last 40 | Out-Host
+          if ($code -ne 0 -or $out -notmatch 'gesher-app: done' -or $out -notmatch 'LifecycleActivity onResume' -or
+              $out -notmatch 'gesher-app: attached to the system server \(pid \d+\)' -or
+              (DevicePids).Count -ne 0) {
+            Get-Content "$env:LOCALAPPDATA\Gesher\logs\run-*\system_server.log" -ErrorAction SilentlyContinue | Select-Object -Last 40 | Out-Host
             throw "The installed gesher-app --system-server did not take lifecycle.apk to onResume (exit $code)"
           }
           'PASS  installer: gesher-app --system-server runs the app with the services in a system server process' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
@@ -2519,6 +2538,7 @@ jobs:
           }
           'PASS  installer: gesher-app runs uiapp.apk on the Gesher device in a Win32 window of its app process (hwui''s frame read back with PrintWindow; the Activity''s label, AppUserModelID Gesher.App.com.gesher.uiapp, its icon); closing it ends the app' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           'PASS  installer: input reaches uiapp.apk''s views on the Gesher device (a click runs the Button''s onClick, keys and a WM_CHAR type into its EditText, the wheel scrolls, the resized window redraws at 600x700)' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          tests/windows/shell/InstalledAppIsolationChecks.ps1 -RuntimeDirectory $app -EvidenceDirectory "$PWD/out/installed-isolation"
           # gesher-launch's splash (compat/shell/gesher_launch.cc, docs/installer.md):
           # `gesher-launch install` shows none; `gesher-launch launch com.gesher.uiapp`
           # (the shortcut's command, the app's window shown) shows a GesherSplash
@@ -2797,12 +2817,14 @@ jobs:
           'PASS  installer: uninstall removes the Gesher Apps Start menu folder with the apps'' shortcuts, and nothing else of the Start menu' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           'PASS  installer: installs, runs Hello and gesher-app, uninstalls' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
 
-      - name: Preserve portable Windows runtime and Setup evidence
+      - name: Preserve portable runtime and installer isolation evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: portable-runtime-windows-2022
-          path: ${{ runner.temp }}/gesher-portable-runtime-*/logs/**
+          path: |
+            ${{ runner.temp }}/gesher-portable-runtime-*/logs/**
+            out/installed-isolation/**
           if-no-files-found: warn
 
   # End-to-end with real apps (docs/e2e.md): the installer from the package job on a
@@ -3139,6 +3161,7 @@ jobs:
 
       - name: Run tests
         env:
+          GESHER_SANDBOX: appcontainer-trusted
           GESHER_TRACE_TOAST_IDENTITY: ${{ matrix.shard == 'services' && '1' || '0' }}
           GESHER_FONT_REGRESSION_SCOPE: ${{ matrix.os == 'windows-2022' && 'functional-and-strict' || matrix.os == 'windows-2025' && 'functional' || 'unselected' }}
         shell: pwsh

@@ -17,6 +17,8 @@ struct Selection {
   std::wstring relative;
   uint64_t drop_alias = 0;
 
+  bool IsInstalledMedia() const { return matched && area == rooted_storage_wire::kInstalledMedia; }
+
   // Failure to classify a path in a contained process also suppresses fallback.
   explicit operator bool() const { return matched || error != 0; }
 };

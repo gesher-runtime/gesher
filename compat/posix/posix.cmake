@@ -6,6 +6,7 @@ add_library(gesher_posix STATIC
   ${CMAKE_CURRENT_LIST_DIR}/../usb_storage/protected_runtime_client.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/usb_block.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/binder.cc
+  ${CMAKE_CURRENT_LIST_DIR}/src/binder_endpoint.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/binder_transport.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/crash.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/dirent.cc
@@ -114,6 +115,7 @@ target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_environment_anchor_v1)
 # Native bootstrap routes belong to the executable even when Binder and JNI
 # callers are linked into separate AOSP DLLs.
 target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_binder_transport_anchor_v1)
+target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_binder_endpoint_anchor_v1)
 target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_usb_block_owner_anchor_v1)
 target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_protected_runtime_anchor)
 target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_storage_policy_anchor_v1)

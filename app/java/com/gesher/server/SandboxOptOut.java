@@ -85,8 +85,7 @@ final class SandboxOptOut {
             if (pm.get(packageName) != pkg || pm.isRemovalPending(packageName)) {
                 throw new IllegalStateException("The installed app changed. Try again to review the current app.");
             }
-            write(packageName, verified);
-            atm.forceStopPackage(packageName);
+            atm.withStoppedProtectedInstallation(pkg, () -> write(packageName, verified));
         }
         return operation;
     }

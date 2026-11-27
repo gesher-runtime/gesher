@@ -922,14 +922,14 @@ char* realpath(const char* path, char* resolved_path) {
       gesher::FailWithLastError();
       return nullptr;
     }
-    if (!gesher::CheckExternalStorageHandle(h, gesher::AccessKind::kStat)) {
+    if (!rooted.IsInstalledMedia() && !gesher::CheckExternalStorageHandle(h, gesher::AccessKind::kStat)) {
       CloseHandle(h);
       errno = EACCES;
       return nullptr;
     }
     // Gesher's ELF loader by its name, however it was reached (system_linker.h).
     bool ok;
-    if (rooted.drop_alias) {
+    if (rooted.drop_alias || rooted.IsInstalledMedia()) {
       out = gesher::LinuxPath(wpath.c_str());
       ok = true;
     } else if (gesher::system_linker::IsFileHandle(h)) {

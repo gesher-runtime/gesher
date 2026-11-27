@@ -49,6 +49,7 @@ struct Enrollment {
   uint32_t uid;
   std::array<uint8_t, 16> installation{};
   bool* channel_failed = nullptr;
+  std::u16string_view package{};
 };
 
 struct DeviceLifetime {
@@ -174,6 +175,11 @@ bool EnrollProcess(const Enrollment& enrollment, HANDLE process,
   request.pid = snapshot.pid;
   request.birth = snapshot.birth;
   request.installation = enrollment.installation;
+  if (enrollment.package.size() >= request.package.size()) return false;
+  for (size_t i = 0; i < enrollment.package.size(); ++i) {
+    if (enrollment.package[i] > 127 || enrollment.package[i] == 0) return false;
+    request.package[i] = static_cast<char>(enrollment.package[i]);
+  }
   if (container != nullptr && !request.container.CopyFrom(container)) return false;
   if (WaitForSingleObject(enrollment.broker, 0) != WAIT_TIMEOUT) return false;
   HANDLE remote = nullptr;
@@ -1007,7 +1013,7 @@ int SpawnProtectedApp(const std::u16string& command_line, const std::vector<std:
   bool channel_failed = false;
   const auto role = unisolated_approved ? peer::Role::kUnisolatedApplication : peer::Role::kApplication;
   const Enrollment enrollment{authority.channel.get(), authority.broker.get(),
-                              role, uid, installation, &channel_failed};
+                              role, uid, installation, &channel_failed, sandbox.display_name};
   std::unique_ptr<PinnedChildInput> input;
   if (code_pin != 0) {
     input = std::make_unique<PinnedChildInput>();
@@ -1015,7 +1021,29 @@ int SpawnProtectedApp(const std::u16string& command_line, const std::vector<std:
     if (error != ERROR_SUCCESS) return -static_cast<int>(error);
   }
   const auto* stdio = input && authority.stdio[0] ? &authority.stdio : nullptr;
-  int pid = SpawnImpl(command_line, set, unset, log_path, false,
+  auto child_environment = set;
+  auto unset_child_environment = unset;
+  unset_child_environment.push_back(u"GESHER_STORAGE_MEDIA_NT_PATH");
+  if (!unisolated_approved) {
+    const wchar_t* data = _wgetenv(L"GESHER_ANDROID_DATA_HOST_PATH");
+    if (data != nullptr && *data != L'\0') {
+      const std::wstring path = std::wstring(data) + L"\\media\\0";
+      peer::OwnedHandle root(CreateFileW(path.c_str(), FILE_READ_ATTRIBUTES,
+          FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+          FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+      BY_HANDLE_FILE_INFORMATION info{};
+      constexpr auto format = FILE_NAME_NORMALIZED | VOLUME_NAME_NT;
+      if (root.get() == INVALID_HANDLE_VALUE || !GetFileInformationByHandle(root.get(), &info) ||
+          !(info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || (info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
+        return -ERROR_ACCESS_DENIED;
+      }
+      wchar_t name[32768];
+      const DWORD used = GetFinalPathNameByHandleW(root.get(), name, std::size(name), format);
+      if (!used || used >= std::size(name)) return -ERROR_PATH_NOT_FOUND;
+      child_environment.push_back(u"GESHER_STORAGE_MEDIA_NT_PATH=" + U(name, used));
+    }
+  }
+  int pid = SpawnImpl(command_line, child_environment, unset_child_environment, log_path, false,
                       unisolated_approved ? nullptr : &sandbox, &app_handles,
                       &enrollment, job->second.get(), std::move(input), stdio);
   if (pid > 0 && stdio != nullptr) authority.stdio = {};

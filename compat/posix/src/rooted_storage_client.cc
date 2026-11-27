@@ -12,7 +12,9 @@
 #include <vector>
 
 #include "rooted_storage_client.h"
+#include "storage_policy.h"
 #include <gesher/drop_mount.h>
+#include "../../usb_storage/protected_runtime_client.h"
 
 namespace gesher::storage_root {
 namespace {
@@ -52,6 +54,17 @@ int Call(wire::Op operation, const Selection& path, const Selection& target, uin
   if (path.error != 0) return path.error;
   if (target.error != 0) return target.error;
   if (!path.matched || (operation == wire::Op::kRename && !target.matched)) return EXDEV;
+  if (path.IsInstalledMedia() || target.IsInstalledMedia()) {
+    if (!path.IsInstalledMedia() || (operation == wire::Op::kRename && !target.IsInstalledMedia())) return EXDEV;
+    wire::Request request;
+    request.operation = operation;
+    request.source_area = path.area;
+    request.target_area = target.area;
+    request.flags = flags;
+    request.path_units = static_cast<uint32_t>(path.relative.size());
+    request.target_units = static_cast<uint32_t>(target.relative.size());
+    return binder_endpoint::InstalledMedia(request, path.relative, target.relative, reply);
+  }
   const auto& state = cohost_bootstrap::Current();
   if (!state || !state.storage_host || state.storage_pipe.empty()) return EACCES;
 
@@ -139,7 +152,28 @@ Selection Lookup(const std::wstring& mapped) {
   auto drop = drop_mount::Lookup(mapped);
   if (drop.matched) return {true, drop.error, wire::kCredential, std::move(drop.relative), drop.alias};
   const auto& state = cohost_bootstrap::Current();
-  if (!state || state.storage_pipe.empty()) return {};
+  if (!state || state.storage_pipe.empty()) {
+    const auto& binding = binder_endpoint::Current();
+    if (!binding.IsGuest() || binding.IsStandalone() || usb_storage::ProtectedRuntimeEnabled()) return {};
+    static const bool isolated = [] {
+      process_identity::Process self;
+      return process_identity::ReadLiveProcess(GetCurrentProcess(), &self) && self.principal.container.size != 0;
+    }();
+    if (!isolated) return {};
+    static const std::wstring media = [] {
+      const auto data = ExternalStorageDataRoot();
+      return data.empty() ? std::wstring{} : AbsoluteDosPath(data + L"\\media\\0");
+    }();
+    if (media.empty()) return {};
+    const std::wstring absolute = AbsoluteDosPath(mapped);
+    if (absolute.size() < media.size() ||
+        (absolute.size() != media.size() && absolute[media.size()] != L'\\') ||
+        CompareStringOrdinal(absolute.data(), static_cast<int>(media.size()), media.data(),
+            static_cast<int>(media.size()), TRUE) != CSTR_EQUAL) return {};
+    auto relative = absolute.size() == media.size() ? std::wstring{} : absolute.substr(media.size() + 1);
+    std::replace(relative.begin(), relative.end(), L'\\', L'/');
+    return {true, 0, wire::kInstalledMedia, std::move(relative)};
+  }
   struct Root {
     std::wstring path;
     uint32_t area;
@@ -179,7 +213,9 @@ Selection Lookup(const std::wstring& mapped) {
 
 std::wstring DescriptorPath(HANDLE file) {
   const auto& state = cohost_bootstrap::Current();
-  if (!state || state.storage_pipe.empty()) return {};
+  const bool standalone = state && !state.storage_pipe.empty();
+  const auto& installed_root = ExternalStorageMediaNtRoot();
+  if (!standalone && installed_root.empty()) return {};
   constexpr DWORD format = FILE_NAME_NORMALIZED | VOLUME_NAME_NT;
   const DWORD size = GetFinalPathNameByHandleW(file, nullptr, 0, format);
   if (size == 0 || size > wire::kMaxPathUnits + 1) return {};
@@ -187,6 +223,11 @@ std::wstring DescriptorPath(HANDLE file) {
   const DWORD used = GetFinalPathNameByHandleW(file, name.data(), size, format);
   if (used == 0 || used >= size) return {};
   name.resize(used);
+  if (!standalone) {
+    const std::wstring data_root = ExternalStorageDataRoot();
+    if (data_root.empty() || !Within(name, installed_root)) return {};
+    return AbsoluteDosPath(data_root + L"\\media\\0") + name.substr(installed_root.size());
+  }
   const std::wstring* selected = nullptr;
   size_t prefix = 0;
   const auto consider = [&](const std::wstring& nt, const std::wstring& canonical) {

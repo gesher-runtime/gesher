@@ -21,6 +21,8 @@ constexpr uint32_t kDevice = 1;
 constexpr uint32_t kFirstExternalArea = 2;
 constexpr uint32_t kExternalAreaCount = 3;
 constexpr uint32_t kAreaCount = kFirstExternalArea + kExternalAreaCount;
+// The installed media broker admits this area separately from standalone roots.
+constexpr uint32_t kInstalledMedia = kAreaCount;
 
 // For kOpen the low bits name the requested access. The remaining bits are
 // booleans. kRemove accepts only kDirectory, and kRename only kReplace.

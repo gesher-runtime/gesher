@@ -1,16 +1,20 @@
 // Copyright (C) 2026 The Gesher Authors
 // SPDX-License-Identifier: Apache-2.0
 #include <windows.h>
+#include <dirent.h>
 #include <fcntl.h>
 #include <gesher/binder_endpoint.h>
+#include <gesher/bionic_shim.h>
 #include <gesher/cohost_bootstrap.h>
 #include <io.h>
 #include <poll.h>
 #include <share.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
@@ -18,9 +22,12 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <vector>
 #include "exec_spawn.h"
 #include "services_zygote.h"
 #include "cohost_permission_server.h"
+#include "rooted_storage_server.h"
+#include "../../compat/bionic/abi_types.h"
 
 namespace {
 namespace launch = gesher::zygote;
@@ -148,6 +155,55 @@ std::u16string Profile(const fs::path& dir, const wchar_t* suffix) {
   return U16(dir.filename().native()) + u"." + U16(suffix);
 }
 
+bool CheckForkBinder() {
+  if (!Lowbox() || gesher::binder_bootstrap::GuestUid() != 11001) return false;
+  const int fd = open("/dev/binder", O_RDWR | O_CLOEXEC);
+  return fd >= 0 && close(fd) == 0;
+}
+
+int ForkExecGuest(const fs::path& dir) {
+  using Fork = int (BIONIC_SYSV*)(int, int, const void*);
+  using Exec = int (BIONIC_SYSV*)(const char*, char* const*);
+  using Wait = int (BIONIC_SYSV*)(int, int*, int);
+  const auto fork = reinterpret_cast<Fork>(gesher::bionic::LookupBionicSymbol("__gesher_fork"));
+  const auto exec = reinterpret_cast<Exec>(gesher::bionic::LookupBionicSymbol("execv"));
+  const auto wait = reinterpret_cast<Wait>(gesher::bionic::LookupBionicSymbol("waitpid"));
+  if (!Check(fork && exec && wait && CheckForkBinder(), "contained fork parent has its bound Binder identity")) return 1;
+  if (!Check(SetCurrentDirectoryW(dir.c_str()), "contained fork uses its accessible fixture directory")) return 1;
+  const auto path = fs::path(launch::ExePath()).native();
+  auto command = L"\"" + path + L"\"";
+  // This stays suspended and inherits our actual package and device job. It
+  // is a sibling of the caller below, rather than that caller's own child.
+  STARTUPINFOW startup{};
+  startup.cb = sizeof(startup);
+  PROCESS_INFORMATION sibling{};
+  if (!Check(CreateProcessW(path.c_str(), command.data(), nullptr, nullptr, FALSE,
+                 CREATE_SUSPENDED | CREATE_NO_WINDOW, nullptr, nullptr, &startup, &sibling),
+             "start the same-package sibling denial control suspended")) return 1;
+  auto program = gesher::exec::Narrow(path);
+  char mode[] = "--fork-exec-binder";
+  char* args[] = {program.data(), mode, nullptr};
+  const int pid = fork(17, 0, nullptr);
+  if (pid == 0) {
+    if (!Check(CheckForkBinder(), "contained fork child immediately uses its own bound Binder identity") ||
+        !Check(!gesher::binder_endpoint::EnrollChild(sibling.hProcess), "fork cannot enroll its same-package sibling")) {
+      TerminateProcess(GetCurrentProcess(), 20);
+    }
+    CloseHandle(sibling.hProcess);
+    CloseHandle(sibling.hThread);
+    exec(program.c_str(), args);
+    std::fprintf(stderr, "protected fork: execv failed with errno=%d\n", errno);
+    TerminateProcess(GetCurrentProcess(), 21);
+  }
+  int status = -1;
+  const bool complete = pid > 0 && wait(pid, &status, 0) == pid && status == 0;
+  TerminateProcess(sibling.hProcess, 0);
+  WaitForSingleObject(sibling.hProcess, 1000);
+  CloseHandle(sibling.hThread);
+  CloseHandle(sibling.hProcess);
+  return Check(complete, "forked child and real exec replacement preserve Binder admission") ? 0 : 1;
+}
+
 int Server(const fs::path& dir) {
   if (!Check(launch::HasProtectedLaunchAuthority(), "server has real startup authority")) return 1;
   const auto self = launch::ExePath();
@@ -166,14 +222,19 @@ int Server(const fs::path& dir) {
   observer_id[0] = 2;
   const auto owner = Profile(dir, kOwner);
   const auto observer = Profile(dir, kObserver);
+  if (!Check(launch::GrantToAppContainer(U16(dir.native()), owner, FILE_GENERIC_READ | FILE_GENERIC_EXECUTE, false) == 0,
+             "grant the fork fixture's exact current directory")) return 1;
   const auto owner_log = dir / L"owner.log";
   uint64_t start_sequence = 0;
   const auto start = [&](const std::u16string& args, const fs::path& log, const std::u16string& profile,
                          uint32_t uid, const std::array<uint8_t, 16>& id) {
+    const std::u16string package = uid == 11001 ? u"gesher.fixture.record.owner" : u"gesher.fixture.record.observer";
     return launch::SpawnProtectedApp(Quote(exe) + args + u" " + Quote(dir), {}, {},
-                                    U16(log.native()), {profile, profile, {u"gesherBinderClient"}},
-                                    uid, id, ++start_sequence);
+                                    U16(log.native()), {profile, package, {u"gesherBinderClient"}},
+                                    uid, id, ++start_sequence, 0, false);
   };
+  const int fork = start(u" --fork-exec", dir / L"fork-exec.log", owner, 11001, owner_id);
+  if (!Check(fork > 0 && WaitExit(fork), "protected fork and exec use the exact Binder enrollment")) return 1;
   const int holder = start(u" --hold", owner_log, owner, 11001, owner_id);
   int check_number = 0;
   const auto observe = [&](int expected) {
@@ -348,13 +409,16 @@ int ReadPinnedSource(const fs::path& dir) {
   return 0;
 }
 
+#include "cohost-directory-probe.inc"
+
 constexpr uint32_t kCohostClipboardProbeBytes = 2 * 65536 + 17;
 
 int CohostGuest() {
   namespace permissions = gesher::cohost_permissions;
   const auto& scope = gesher::cohost_bootstrap::Current();
-  if (!Check(Lowbox() && scope && scope.storage_pipe.empty() && !scope.permission_pipe.empty(),
-             "actual cohost receives its authenticated permission scope")) return 1;
+  if (!Check(Lowbox() && scope && !scope.storage_pipe.empty() && !scope.permission_pipe.empty(),
+             "actual cohost receives its authenticated storage and permission scope") ||
+      !CheckCohostDirectory(scope.credential)) return 1;
   gesher::binder_bootstrap::Startup boot;
   if (!gesher::binder_bootstrap::ReadStartupRecord(&boot)) return 1;
   HANDLE mapping = gesher::binder_bootstrap::DecodeHandle(boot.cohost_section);
@@ -418,6 +482,22 @@ int CohostDescendant() {
 
 bool CheckCohost(const fs::path& dir, const fs::path& exe) {
   namespace permissions = gesher::cohost_permissions;
+  namespace storage = gesher::rooted_storage;
+  const auto ce = dir / L"fixture-ce";
+  const auto de = dir / L"fixture-de";
+  fs::create_directories(ce / L"scan");
+  fs::create_directories(de);
+  std::ofstream(ce / L"scan/a") << "a";
+  std::ofstream(ce / L"scan/b") << "b";
+  using gesher::binder_peer::OwnedHandle;
+  auto open_root = [](const fs::path& path) {
+    return OwnedHandle(CreateFileW(path.c_str(), FILE_LIST_DIRECTORY | FILE_TRAVERSE |
+        FILE_READ_ATTRIBUTES | SYNCHRONIZE, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+        OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+  };
+  const auto ce_root = open_root(ce), de_root = open_root(de);
+  if (ce_root.get() == INVALID_HANDLE_VALUE || de_root.get() == INVALID_HANDLE_VALUE) return false;
+  storage::Server storage_authority({ce_root.get(), de_root.get()});
   uint64_t pin = 0;
   if (launch::PinStandaloneInput(U16((dir / L"source.bin").native()), &pin) != ERROR_SUCCESS) return false;
   const auto profile = Profile(dir, L"cohost");
@@ -454,8 +534,12 @@ bool CheckCohost(const fs::path& dir, const fs::path& exe) {
     }
     return ERROR_SUCCESS;
   });
-  launch::CohostSpec services{{}, {}, {}, U16(authority.name()),
-      [&](void* process, void* job) { return authority.Start(process, job); }};
+  launch::CohostSpec services{U16(ce.native()), U16(de.native()),
+      U16(storage_authority.name()), U16(authority.name()), [&](void* process, void* job) {
+        const auto error = storage_authority.Start(process, job);
+        return error == ERROR_SUCCESS ? authority.Start(process, job) : error;
+      }, DirectoryName(ce_root.get(), VOLUME_NAME_DOS), DirectoryName(de_root.get(), VOLUME_NAME_DOS),
+      DirectoryName(ce_root.get(), VOLUME_NAME_NT), DirectoryName(de_root.get(), VOLUME_NAME_NT)};
   uint32_t exit = 1;
   const auto result = supplied ? launch::RunPinnedCohost(Quote(exe) + u" --cohost-guest",
       {profile, profile, {}}, pin, 11005, services, &exit) : ERROR_ACCESS_DENIED;
@@ -478,8 +562,8 @@ int ScopedServer(const fs::path& dir) {
   std::array<uint8_t, 16> installation{};
   installation[0] = 3;
   const int guest = launch::SpawnProtectedApp(Quote(exe) + u" --read-pinned-source " + Quote(dir), {}, {},
-      U16((dir / L"scoped-guest.log").native()), {profile, profile, {u"gesherBinderClient"}},
-      11004, installation, 1, pin);
+      U16((dir / L"scoped-guest.log").native()), {profile, u"gesher.fixture.record.pinned", {u"gesherBinderClient"}},
+      11004, installation, 1, pin, false);
   launch::ReleaseStandaloneInput(pin);
   if (!Check(guest > 0 && WaitExit(guest), "protected server executes the pinned source admission")) return 1;
   if (!CheckCohost(dir, exe)) return 1;
@@ -563,6 +647,9 @@ bool CheckScopedDevice(const fs::path& runtime, const fs::path& dir, const fs::p
 }  // namespace
 
 int wmain(int argc, wchar_t** argv) {
+  if (argc == 3 && std::wstring(argv[1]) == L"--fork-exec") return ForkExecGuest(argv[2]);
+  if (argc == 2 && std::wstring(argv[1]) == L"--fork-exec-binder")
+    return Check(CheckForkBinder(), "real exec replacement uses the inherited UID through Binder") ? 0 : 1;
   if (argc == 3 && std::wstring(argv[1]) == L"--server") return Server(argv[2]);
   if (argc == 3 && std::wstring(argv[1]) == L"--hold") return Hold(argv[2]);
   if (argc == 3 && std::wstring(argv[1]) == L"--standalone-guest") return StandaloneGuest(argv[2]);

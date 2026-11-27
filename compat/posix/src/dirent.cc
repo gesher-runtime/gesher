@@ -28,16 +28,16 @@
 #include "rooted_storage_client.h"
 #include <gesher/file_description.h>
 #include <gesher/reserved_names.h>
+#include <gesher/binder_endpoint.h>
 #if __has_include(<gesher/fork.h>)
 #include <gesher/fork.h>
 #endif
 
 struct gesher_DIR {
   struct RootedScan {
-    alignas(FILE_ID_BOTH_DIR_INFO) unsigned char bytes[16384]{};
-    size_t offset = sizeof(bytes);
-    bool restart = true;
-    bool finished = false;
+    unsigned char bytes[16384]{};
+    size_t used = 0;
+    size_t offset = 0;
   };
   std::wstring path;     // the directory, as MapPath gave it
   std::wstring pattern;  // path\*
@@ -58,10 +58,8 @@ bool Start(DIR* dir) {
   dir->position = 0;
   if (dir->is_virtual) return gesher::procfs::List(dir->path, &dir->entries);
   if (dir->rooted) {
-    dir->rooted->offset = sizeof(dir->rooted->bytes);
-    dir->rooted->restart = true;
-    dir->rooted->finished = false;
-    return true;
+    dir->rooted->used = dir->rooted->offset = 0;
+    return lseek(dir->fd, 0, SEEK_SET) >= 0;
   }
   dir->find = FindFirstFileExW(dir->pattern.c_str(), FindExInfoBasic, &dir->data,
                                FindExSearchNameMatch, nullptr, FIND_FIRST_EX_LARGE_FETCH);
@@ -86,34 +84,31 @@ void Fill(struct dirent* e, const std::string& name, unsigned char type, long lo
 
 struct dirent* ReadRooted(DIR* dir) {
   auto& scan = *dir->rooted;
-  if (scan.finished) return nullptr;
-  if (scan.offset == sizeof(scan.bytes)) {
-    const HANDLE directory = gesher::HandleFromFd(dir->fd);
-    if (directory == INVALID_HANDLE_VALUE) return errno = EBADF, nullptr;
-    const auto format = scan.restart ? FileIdBothDirectoryRestartInfo : FileIdBothDirectoryInfo;
-    if (!GetFileInformationByHandleEx(directory, format, scan.bytes, sizeof(scan.bytes))) {
-      if (GetLastError() == ERROR_NO_MORE_FILES) scan.finished = true;
-      else gesher::FailWithLastError();
-      return nullptr;
-    }
+  if (scan.offset == scan.used) {
+    const ssize_t size = getdents64(dir->fd, scan.bytes, sizeof(scan.bytes));
+    if (size <= 0) return nullptr;
+    scan.used = static_cast<size_t>(size);
     scan.offset = 0;
-    scan.restart = false;
   }
-  const size_t available = sizeof(scan.bytes) - scan.offset;
-  constexpr size_t kNameStart = offsetof(FILE_ID_BOTH_DIR_INFO, FileName);
-  if (available < kNameStart || scan.offset % alignof(FILE_ID_BOTH_DIR_INFO) != 0) return errno = EIO, nullptr;
-  auto* item = reinterpret_cast<const FILE_ID_BOTH_DIR_INFO*>(scan.bytes + scan.offset);
-  const size_t used = item->NextEntryOffset != 0 ? item->NextEntryOffset : available;
-  if (used > available || used < kNameStart || item->FileNameLength > used - kNameStart ||
-      item->FileNameLength % sizeof(wchar_t) != 0) return errno = EIO, nullptr;
-  scan.offset += used;
-  const std::wstring name(item->FileName, item->FileNameLength / sizeof(wchar_t));
-  const DWORD attrs = item->FileAttributes;
-  const unsigned char type = (attrs & FILE_ATTRIBUTE_REPARSE_POINT) != 0 ? DT_LNK :
-      (attrs & FILE_ATTRIBUTE_DIRECTORY) != 0 ? DT_DIR : DT_REG;
-  Fill(&dir->entry, gesher::Narrow(gesher::reserved_names::Decoded(name.c_str()).c_str()), type,
-       ++dir->position);
-  if (item->FileId.QuadPart != 0) dir->entry.d_ino = static_cast<uint64_t>(item->FileId.QuadPart);
+  constexpr size_t name_offset = 19;
+  const size_t available = scan.used - scan.offset;
+  if (available < name_offset + 1) return errno = EIO, nullptr;
+  const auto* record = scan.bytes + scan.offset;
+  unsigned long long inode = 0;
+  long long next = 0;
+  unsigned short length = 0;
+  memcpy(&inode, record, sizeof(inode));
+  memcpy(&next, record + 8, sizeof(next));
+  memcpy(&length, record + 16, sizeof(length));
+  if (length < name_offset + 1 || length > available || length % 8 != 0)
+    return errno = EIO, nullptr;
+  const char* name = reinterpret_cast<const char*>(record + name_offset);
+  const auto* end = static_cast<const char*>(memchr(name, 0, length - name_offset));
+  if (!end) return errno = EIO, nullptr;
+  Fill(&dir->entry, std::string(name, end), record[18], next);
+  dir->entry.d_ino = inode;
+  dir->position = next;
+  scan.offset += length;
   return &dir->entry;
 }
 
@@ -192,6 +187,14 @@ bool DirectoryOfHandle(HANDLE h, std::string* path, bool* on_disk) {
   std::wstring buffer(32768, L'\0');
   DWORD n = GetFinalPathNameByHandleW(h, buffer.data(), 32768, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
   if (n == 0 || n >= 32768) {
+    // A contained descriptor needs no path to enumerate. Keep an immutable
+    // identity key solely for the process-local stream cache; reopen through
+    // its authenticated broker using the actual descriptor, never this key.
+    if (gesher::binder_endpoint::Current().IsGuest()) {
+      *path = "gesher-directory:" + std::to_string(info.dwVolumeSerialNumber) + ":" +
+          std::to_string(info.nFileIndexHigh) + ":" + std::to_string(info.nFileIndexLow);
+      return true;
+    }
     // A directory removed while open has no name left: still a directory.
     FILE_STANDARD_INFO standard;
     if (GetFileInformationByHandleEx(h, FileStandardInfo, &standard, sizeof(standard)) &&
@@ -395,6 +398,13 @@ bool OpenDirectory(HANDLE fd_handle, std::atomic<HANDLE>* slot, bool* gone) {
     *gone = true;
     return false;
   }
+  if (gesher::binder_endpoint::Current().IsGuest()) {
+    HANDLE reopened = INVALID_HANDLE_VALUE;
+    const int error = gesher::binder_endpoint::ReopenDirectory(fd_handle, &reopened);
+    if (error != 0) return errno = error, false;
+    slot->store(reopened);
+    return true;
+  }
   FILE_ID_DESCRIPTOR id = {};
   id.dwSize = sizeof(id);
   id.Type = ExtendedFileIdType;
@@ -596,9 +606,19 @@ DIR* opendir(const char* name) { return Open(name, -1); }
 DIR* fdopendir(int fd) {
   auto snapshot = gesher::CaptureDescriptor(fd);
   if (!snapshot) return nullptr;
+  if (gesher::FileDescriptionFlags(snapshot) & O_PATH) return errno = EBADF, nullptr;
   if (snapshot->description && !snapshot->description->virtual_directory.empty()) {
     const std::string name = gesher::procfs::LinuxName(snapshot->description->virtual_directory);
     return Open(name.c_str(), fd);
+  }
+  if (gesher::binder_endpoint::Current().IsGuest()) {
+    BY_HANDLE_FILE_INFORMATION info{};
+    if (!GetFileInformationByHandle(snapshot->handle, &info) ||
+        !(info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) return errno = ENOTDIR, nullptr;
+    auto dir = std::make_unique<gesher_DIR>();
+    dir->rooted = std::make_unique<gesher_DIR::RootedScan>();
+    dir->fd = fd;
+    return dir.release();
   }
   auto scoped = gesher::DropDescriptorPath(snapshot);
   if (scoped.empty()) scoped = gesher::storage_root::DescriptorPath(snapshot->handle);
@@ -613,6 +633,7 @@ ssize_t getdents64(int fd, void* buffer, size_t size) {
   // cannot turn this call to another file (Linux pins it with fdget_pos).
   gesher::DescriptorSnapshotPtr snapshot = gesher::CaptureDescriptor(fd);
   if (!snapshot) return errno == 0 ? (errno = EBADF, -1) : -1;
+  if (gesher::FileDescriptionFlags(snapshot) & O_PATH) return errno = EBADF, -1;
   if (snapshot->description && !snapshot->description->virtual_directory.empty() &&
       gesher::procfs::Type(snapshot->description->virtual_directory) != S_IFDIR) {
     return errno = ENOENT, -1;  // The USB authority/session no longer exposes this directory.

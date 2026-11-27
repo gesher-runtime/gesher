@@ -60,7 +60,9 @@
 #include "../posix/src/binder_file_descriptions.h"
 #include "../posix/src/binder_sg.h"
 #include "launch_channel.h"
+#include "shared_storage_broker.h"
 #include "../posix/include/gesher/capture_policy.h"
+#include <gesher/directory_reopen.h>
 #ifdef GESHER_AUDIO_RENDER_BROKER
 #include "brokered_audio.h"
 #include "shared_state.h"
@@ -1742,11 +1744,16 @@ void ServeLaunchAuthority(HANDLE endpoint, ULONG launcher_pid,
                 IsValidSid(container) && GetLengthSid(container) == request.container.size &&
                 (!g_record_only || g_record_container.Matches(container))
             : request.container.size == 0;
-        if (role_allowed && sid_matches &&
+        const auto package_end = std::find(request.package.begin(), request.package.end(), '\0');
+        const std::string package(request.package.begin(), package_end);
+        const bool package_allowed = package_end != request.package.end() &&
+            (package.empty() || (system && (isolated_app || unisolated_app) &&
+              gesher::shared_storage_broker::ValidPackage(package)));
+        if (role_allowed && sid_matches && package_allowed &&
             (request.role != peer::Role::kLauncher || request.pid == launcher_pid)) {
           accepted = g_peer_registry->Enroll(std::move(process), request.pid, request.birth,
               request.role, request.uid, request.installation,
-              isolated_app ? container : nullptr);
+              isolated_app ? container : nullptr, package);
           if (g_record_only && accepted) admitted_standalone = true;
         }
         break;
@@ -1979,6 +1986,91 @@ void ServeAndroidDataCapacity(HANDLE pipe, In in) {
   if (WriteMessage(pipe, reply)) WaitRecordClient(pipe, false);
 }
 
+// Directory and media deliveries are independent of POSIX record-lock transactions.
+// Bound pending deliveries without serializing unrelated directories behind
+// a blocking fcntl or retaining a slot while a completed reply is consumed.
+std::mutex g_directory_lanes_lock;
+std::map<std::pair<DWORD, uint64_t>, unsigned> g_directory_lanes;
+unsigned g_directory_total = 0;
+struct HandleDeliveryBudget {
+  explicit HandleDeliveryBudget(const gesher::process_identity::Process& generation)
+      : id{generation.pid, generation.birth} {
+    std::lock_guard lock(g_directory_lanes_lock);
+    const auto found = g_directory_lanes.find(id);
+    if (g_directory_total >= 128 || (found != g_directory_lanes.end() && found->second >= 16)) return;
+    ++g_directory_lanes[id];
+    ++g_directory_total;
+    active = true;
+  }
+  ~HandleDeliveryBudget() { Release(); }
+  void Release() {
+    if (!active) return;
+    std::lock_guard lock(g_directory_lanes_lock);
+    auto found = g_directory_lanes.find(id);
+    if (--found->second == 0) g_directory_lanes.erase(found);
+    --g_directory_total;
+    active = false;
+  }
+  std::pair<DWORD, uint64_t> id;
+  bool active = false;
+};
+
+void ServeInstalledMedia(HANDLE pipe, In in) {
+  namespace media = gesher::shared_storage_broker;
+  namespace storage = gesher::rooted_storage_wire;
+  storage::Request request;
+  uint32_t version = 0;
+  if (!in.Get(&version) || version != wire::kVersion || !in.Get(&request) || !media::Valid(request)) {
+    return FinishRecordReply(pipe, EINVAL);
+  }
+  const auto guest = g_peer_registry ? g_peer_registry->Authenticate(pipe) : nullptr;
+  if (!guest || guest->role != peer::Role::kApplication || guest->generation.principal.container.size == 0) {
+    return FinishRecordReply(pipe, EACCES);
+  }
+  peer::OwnedHandle opened;
+  HandleDeliveryBudget budget(guest->generation);
+  if (!budget.active) return FinishRecordReply(pipe, EAGAIN);
+  const auto complete = [&](int error) {
+    opened.reset();
+    budget.Release();
+    FinishRecordReply(pipe, error);
+  };
+  std::wstring path(request.path_units, L'\0'), target(request.target_units, L'\0');
+  if (!in.Read(path.data(), path.size() * sizeof(wchar_t)) ||
+      !in.Read(target.data(), target.size() * sizeof(wchar_t)) || in.p != in.end) {
+    return complete(EINVAL);
+  }
+  bool created = false;
+  if (!g_peer_registry->Live(guest)) return complete(EACCES);
+  const int error = media::Dispatch(_wgetenv(L"GESHER_ANDROID_DATA_HOST_PATH"),
+      *guest, request, path, target, &opened, &created);
+  if (error || !opened) return complete(error);
+
+  HANDLE remote = nullptr;
+  if (!g_peer_registry->Live(guest)) return complete(EACCES);
+  if (!DuplicateHandle(GetCurrentProcess(), opened.get(), guest->process.get(), &remote,
+      0, FALSE, DUPLICATE_SAME_ACCESS)) return complete(EIO);
+  opened.reset();  // Only the pending guest-owned offer remains.
+  struct Pending {
+    HANDLE process, value;
+    ~Pending() {
+      HANDLE recovered = nullptr;
+      if (value && DuplicateHandle(process, value, GetCurrentProcess(), &recovered,
+          0, FALSE, DUPLICATE_CLOSE_SOURCE | DUPLICATE_SAME_ACCESS)) CloseHandle(recovered);
+    }
+  } pending{guest->process.get(), remote};
+  WireReply reply;
+  reply.Put<int32_t>(0);
+  reply.Put<uint32_t>(created ? storage::kCreated : 0);
+  reply.Put<uint64_t>(launch::EncodeHandle(remote));
+  if (!WriteMessage(pipe, reply) || !WaitRecordClient(pipe, true) ||
+      g_peer_registry->Authenticate(pipe) != guest) return;
+  if (!ReplyRecordLock(pipe, 0)) return;
+  pending.value = nullptr;
+  budget.Release();
+  WaitRecordClient(pipe, false);
+}
+
 namespace playback = gesher::audio_state;
 
 struct AudioRegion {
@@ -2186,6 +2278,59 @@ void ServeCamera(HANDLE pipe, In in) {
   }
 }
 #endif
+
+void ServeReopenDirectory(HANDLE pipe, In in) {
+  uint32_t version = 0;
+  uint64_t source = 0;
+  if (!in.Get(&version) || version != wire::kVersion || !in.Get(&source) ||
+      !source || source > UINTPTR_MAX || in.p != in.end) return FinishRecordReply(pipe, EINVAL);
+  const auto caller = g_peer_registry ? g_peer_registry->Authenticate(pipe) : nullptr;
+  if (!caller || caller->role != peer::Role::kApplication) return FinishRecordReply(pipe, EACCES);
+  peer::OwnedHandle original, file;
+  HandleDeliveryBudget lane(caller->generation);
+  if (!lane.active) return FinishRecordReply(pipe, EAGAIN);
+  const auto complete = [&](int error) {
+    original.reset();
+    file.reset();
+    lane.Release();
+    FinishRecordReply(pipe, error);
+  };
+  HANDLE copied = nullptr;
+  if (!DuplicateHandle(caller->process.get(), launch::DecodeHandle(source), GetCurrentProcess(),
+      &copied, 0, FALSE, DUPLICATE_SAME_ACCESS)) return complete(EBADF);
+  original.reset(copied);
+  HANDLE opened = INVALID_HANDLE_VALUE;
+  const DWORD status = gesher::directory_reopen::Open(original.get(), &opened);
+  original.reset();
+  if (status != ERROR_SUCCESS) {
+    const int error = status == ERROR_ACCESS_DENIED ? EACCES :
+        status == ERROR_DIRECTORY ? ENOTDIR : status == ERROR_INVALID_HANDLE ? EBADF : EIO;
+    return complete(error);
+  }
+  file.reset(opened);
+  if (!g_peer_registry->Live(caller)) return complete(EACCES);
+  HANDLE remote = nullptr;
+  if (!DuplicateHandle(GetCurrentProcess(), file.get(), caller->process.get(), &remote,
+      0, FALSE, DUPLICATE_SAME_ACCESS)) return complete(EIO);
+  file.reset();  // Only the pending guest-owned offer remains.
+  struct Pending {
+    HANDLE process, value;
+    ~Pending() {
+      HANDLE recovered = nullptr;
+      if (value && DuplicateHandle(process, value, GetCurrentProcess(), &recovered,
+          0, FALSE, DUPLICATE_CLOSE_SOURCE | DUPLICATE_SAME_ACCESS)) CloseHandle(recovered);
+    }
+  } pending{caller->process.get(), remote};
+  WireReply reply;
+  reply.Put<int32_t>(0);
+  reply.Put<uint64_t>(launch::EncodeHandle(remote));
+  if (!WriteMessage(pipe, reply) || !WaitRecordClient(pipe, true) ||
+      g_peer_registry->Authenticate(pipe) != caller) return;
+  if (!ReplyRecordLock(pipe, 0)) return;
+  pending.value = nullptr;
+  lane.Release();
+  WaitRecordClient(pipe, false);
+}
 
 void ServeFileRecordLock(HANDLE pipe, In in, bool close) {
   uint32_t version = 0;
@@ -2728,10 +2873,14 @@ void Serve(HANDLE pipe) {
       } else if (op == wire::kDropWorker) {
         ServeDropWorker(pipe, in);
 #ifdef GESHER_RECORD_LOCK_BROKER
+      } else if (op == wire::kReopenDirectory) {
+        ServeReopenDirectory(pipe, in);
       } else if (op == wire::kFileRecordLock || op == wire::kFileRecordClose) {
         ServeFileRecordLock(pipe, in, op == wire::kFileRecordClose);
       } else if (!g_record_only && op == wire::kAndroidDataCapacity) {
         ServeAndroidDataCapacity(pipe, in);
+      } else if (!g_record_only && op == wire::kInstalledMedia) {
+        ServeInstalledMedia(pipe, in);
       } else if (op == wire::kAudioPlaybackPublish || op == wire::kAudioPlaybackQuery ||
                  op == wire::kAudioPlaybackSession || op == wire::kAudioDeviceControls) {
         ServeAudioPlayback(pipe, in, op);

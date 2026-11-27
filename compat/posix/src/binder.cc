@@ -1047,6 +1047,96 @@ int binder_endpoint::QueryAndroidDataCapacity(rooted_storage_wire::Filesystem* c
   return 0;
 }
 
+int binder_endpoint::ReopenDirectory(HANDLE source, HANDLE* result) {
+  if (!result || !source || source == INVALID_HANDLE_VALUE) return EBADF;
+  *result = INVALID_HANDLE_VALUE;
+  if (!Current().IsGuest()) return EACCES;
+  const std::wstring name = RecordPipeName();
+  if (name.empty()) return EACCES;
+  RecordPipe pipe{ConnectPipe(name)};
+  if (pipe.handle == INVALID_HANDLE_VALUE) return EACCES;
+  DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
+  if (!SetNamedPipeHandleState(pipe.handle, &mode, nullptr, nullptr)) return EIO;
+  const ULONGLONG deadline = GetTickCount64() + 5000;
+  struct Request {
+    uint32_t length, op, magic, version;
+    uint64_t source;
+  } request{20, wire::kReopenDirectory, wire::kMagic, wire::kVersion,
+            binder_bootstrap::EncodeHandle(source)};
+  static_assert(sizeof(Request) == 24);
+  struct Header { uint32_t length; int32_t status; } offer{};
+  if (!binder_bootstrap::Transfer(pipe.handle, &request, sizeof(request), true, deadline) ||
+      !binder_bootstrap::Transfer(pipe.handle, &offer, sizeof(offer), false, deadline)) return EIO;
+  if (offer.status > 0 || offer.status < -4095) return EPROTO;
+  if (offer.status) return offer.length == sizeof(offer.status) ? -offer.status : EPROTO;
+  uint64_t offered = 0;
+  if (offer.length != sizeof(offer.status) + sizeof(offered) ||
+      !binder_bootstrap::Transfer(pipe.handle, &offered, sizeof(offered), false, deadline)) return EPROTO;
+  if (!offered || offered == UINT64_MAX || offered > UINTPTR_MAX || !Current().VerifyPipe(pipe.handle))
+    return EPROTO;
+  uint32_t acknowledge[] = {sizeof(uint32_t), 1};
+  Header commit{};
+  if (!binder_bootstrap::Transfer(pipe.handle, acknowledge, sizeof(acknowledge), true, deadline) ||
+      !binder_bootstrap::Transfer(pipe.handle, &commit, sizeof(commit), false, deadline)) return EIO;
+  if (commit.length != sizeof(commit.status) || commit.status != 0) return EPROTO;
+  HANDLE file = binder_bootstrap::DecodeHandle(offered);
+  if (!Current().VerifyPipe(pipe.handle)) {
+    CloseHandle(file);
+    return EACCES;
+  }
+  *result = file;
+  return 0;
+}
+
+int binder_endpoint::InstalledMedia(const rooted_storage_wire::Request& operation,
+                                    const std::wstring& path, const std::wstring& target,
+                                    rooted_storage_wire::Reply* result) {
+  namespace storage = rooted_storage_wire;
+  if (!result || !Current().IsGuest() || Current().IsStandalone()) return EACCES;
+  if (path.size() > 4096 || target.size() > 4096) return ENAMETOOLONG;
+  const std::wstring name = PipeName();
+  if (name.empty()) return EACCES;
+  RecordPipe pipe{ConnectPipe(name)};
+  if (pipe.handle == INVALID_HANDLE_VALUE) return ErrnoFromWin32(GetLastError());
+  DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
+  if (!SetNamedPipeHandleState(pipe.handle, &mode, nullptr, nullptr)) return EIO;
+  Message message;
+  message.Put<uint32_t>(wire::kInstalledMedia);
+  message.Put<uint32_t>(wire::kMagic);
+  message.Put<uint32_t>(wire::kVersion);
+  message.Put(operation);
+  message.Write(path.data(), path.size() * sizeof(wchar_t));
+  message.Write(target.data(), target.size() * sizeof(wchar_t));
+  const uint32_t length = static_cast<uint32_t>(message.bytes.size() - sizeof(uint32_t));
+  std::memcpy(message.bytes.data(), &length, sizeof(length));
+  const ULONGLONG deadline = GetTickCount64() + 5000;
+  struct Response { uint32_t size; int32_t status; } reply{};
+  if (!binder_bootstrap::Transfer(pipe.handle, message.bytes.data(), message.bytes.size(), true, deadline) ||
+      !binder_bootstrap::Transfer(pipe.handle, &reply, sizeof(reply), false, deadline)) return EIO;
+  if (reply.status != 0 || !storage::OpensHandle(operation.operation)) {
+    return reply.size == sizeof(reply.status) && reply.status <= 0 && reply.status >= -4095
+        ? -reply.status : EPROTO;
+  }
+  uint32_t flags = 0;
+  uint64_t offered = 0;
+  if (reply.size != sizeof(reply.status) + sizeof(flags) + sizeof(offered) ||
+      !binder_bootstrap::Transfer(pipe.handle, &flags, sizeof(flags), false, deadline) ||
+      !binder_bootstrap::Transfer(pipe.handle, &offered, sizeof(offered), false, deadline)) return EPROTO;
+  if (offered == 0 || offered == UINT64_MAX || offered > UINTPTR_MAX || (flags & ~storage::kCreated) ||
+      !Current().VerifyPipe(pipe.handle)) return EPROTO;
+  uint32_t acknowledge[] = {sizeof(uint32_t), 1};
+  if (!binder_bootstrap::Transfer(pipe.handle, acknowledge, sizeof(acknowledge), true, deadline) ||
+      !binder_bootstrap::Transfer(pipe.handle, &reply, sizeof(reply), false, deadline) ||
+      reply.size != sizeof(reply.status) || reply.status != 0) return EIO;
+  if (!Current().VerifyPipe(pipe.handle)) {
+    CloseHandle(binder_bootstrap::DecodeHandle(offered));
+    return EACCES;
+  }
+  result->flags = flags;
+  result->handle = offered;
+  return 0;
+}
+
 int binder_endpoint::FileRecordLock(HANDLE file, int command, record_locks::LinuxFlock* flock) {
   if (!binder_endpoint::Current().IsGuest() || !flock) return EACCES;
   const std::wstring name = RecordPipeName();

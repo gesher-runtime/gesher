@@ -453,7 +453,7 @@ jobs:
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/lifecycle/build.sh out/app \
             --framework-res out/framework-res/framework-res.apk \
             --framework-classes out/framework/classes --core-classes out/coremod
-          BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/uiapp/build.sh out/app \
+          SIGN_TEST_APK=1 BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/uiapp/build.sh out/app \
             --framework-res out/framework-res/framework-res.apk \
             --framework-classes out/framework/classes --core-classes out/coremod
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/components/build.sh out/app \

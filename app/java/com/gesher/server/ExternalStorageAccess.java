@@ -189,11 +189,17 @@ public final class ExternalStorageAccess {
                 if (revision != current) { revision = current; continue; }
                 if (pm.get(pkg.packageName) != pkg || pm.isRemovalPending(pkg.packageName)) return;
                 try {
-                    // Revoke native access before touching ACLs. A failed downgrade must
-                    // not leave the old permissive policy active in running processes.
-                    sWriter.write(pkg, SCOPED, file);
-                    AppSandbox.syncStorageAccess(pkg.packageName, policy);
-                    if (!policy.equals(SCOPED)) sWriter.write(pkg, policy, file);
+                    if (SystemServer.isProtectedDevice()) {
+                        // The same-user broker reads this exact immutable snapshot
+                        // for each new operation. There is no shared ACL to update.
+                        sWriter.write(pkg, policy, file);
+                    } else {
+                        // The older sandbox layout revokes native access before
+                        // updating its Windows ACLs.
+                        sWriter.write(pkg, SCOPED, file);
+                        AppSandbox.syncStorageAccess(pkg.packageName, policy);
+                        if (!policy.equals(SCOPED)) sWriter.write(pkg, policy, file);
+                    }
                     FAILURES.remove(key);
                     return;
                 } catch (IOException error) {
@@ -269,6 +275,7 @@ public final class ExternalStorageAccess {
         String content = "v=1\n"
                 + "pkg=" + pkg.packageName + "\n"
                 + "uid=" + pkg.uid() + "\n"
+                + "installation=" + pkg.enabledStateOwner() + "\n"
                 + "declared=" + (declaresPermission(pkg) ? "1" : "0") + "\n"
                 + "mode=" + policy.mode().name() + "\n"
                 + "media_mask=" + policy.mediaMask() + "\n";
@@ -279,7 +286,7 @@ public final class ExternalStorageAccess {
             Files.createDirectories(dir);
             temp = Files.createTempFile(dir, targetFile.getName() + ".", ".tmp");
             Files.writeString(temp, content, StandardCharsets.UTF_8);
-            AppSandbox.prepareStoragePolicyFile(pkg.packageName, temp.toFile());
+            AppSandbox.prepareStoragePolicyFile(pkg, temp.toFile());
             try {
                 Files.move(temp, target,
                         StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);

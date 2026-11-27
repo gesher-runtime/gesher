@@ -152,6 +152,9 @@ enum Op : uint32_t {
   // -> {magic, version}; <- {status[, available, total, free (u64 bytes)]}.
   // The host chooses the Android data volume; the sender supplies no path.
   kAndroidDataCapacity = 25,
+  // Reopen an already held directory-list capability; no guest path input.
+  kReopenDirectory = 27,
+  kInstalledMedia = 28,
 };
 
 // The descriptor broker's protocol version (kHelloRights), apart from kVersion:

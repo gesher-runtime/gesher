@@ -11,7 +11,7 @@
 #include "windows_process_identity.h"
 
 namespace gesher::record_locks { struct LinuxFlock; }
-namespace gesher::rooted_storage_wire { struct Filesystem; }
+namespace gesher::rooted_storage_wire { struct Filesystem; struct Request; struct Reply; }
 
 namespace gesher::binder_endpoint {
 
@@ -22,7 +22,17 @@ constexpr DWORD kPinRights = PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE;
 // SCM_RIGHTS lanes when an endpoint becomes stale or unavailable.
 class Binding {
  public:
-  Binding() {
+  Binding() = default;
+  Binding(const Binding&) = delete;
+  Binding& operator=(const Binding&) = delete;
+  ~Binding() {
+    if (broker_ != nullptr) CloseHandle(broker_);
+  }
+
+  void Initialize() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (initialized_) return;
+    initialized_ = true;
     binder_bootstrap::Startup startup;
     if (!binder_bootstrap::ReadStartupRecord(&startup) ||
         (startup.endpoint != binder_bootstrap::Endpoint::kClient &&
@@ -49,11 +59,7 @@ class Binding {
     }
   }
 
-  Binding(const Binding&) = delete;
-  Binding& operator=(const Binding&) = delete;
-  ~Binding() {
-    if (broker_ != nullptr) CloseHandle(broker_);
-  }
+  std::mutex& ForkMutex() { return mutex_; }
 
   bool PrepareOperator(DWORD pid, uint64_t birth) {
     process_identity::Process caller, peer;
@@ -119,6 +125,7 @@ class Binding {
  private:
   std::mutex mutex_;
   HANDLE broker_ = nullptr;
+  bool initialized_ = false;
   bool required_ = false;
   bool operator_ = false;
   bool guest_ = false;
@@ -126,10 +133,7 @@ class Binding {
   bool system_ = false;
 };
 
-inline Binding& Current() {
-  static Binding binding;
-  return binding;
-}
+Binding& Current();
 
 bool EnrollChild(HANDLE process);
 audio_state::Activity* OpenAudioPlaybackActivity();
@@ -141,9 +145,13 @@ HANDLE OpenAudioCapture(bool info_only);
 HANDLE OpenCamera(bool info_only);
 HANDLE OpenDropWorker();
 int QueryAndroidDataCapacity(rooted_storage_wire::Filesystem* capacity);
+int InstalledMedia(const rooted_storage_wire::Request& operation, const std::wstring& path,
+                   const std::wstring& target, rooted_storage_wire::Reply* result);
 int FileRecordLock(HANDLE file, int command, record_locks::LinuxFlock* input_and_output);
 // Closes the caller-owned pin after the broker has captured file identity.
 // The pointer is cleared only if the pin was closed.
 int FileRecordClosed(HANDLE* pin);
+// Returns a fresh directory cursor with no access beyond the source handle.
+int ReopenDirectory(HANDLE source, HANDLE* result);
 
 }  // namespace gesher::binder_endpoint

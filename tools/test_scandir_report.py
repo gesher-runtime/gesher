@@ -35,8 +35,18 @@ def percentile(values, p):
     hi = min(lo + 1, len(values) - 1)
     return values[lo] + (values[hi] - values[lo]) * (point - lo)
 
-def main():
-    report = json.loads(REPORT.read_text())
+def main(*, check_current_sources=False):
+    report = json.loads(REPORT.read_text(encoding='utf-8'))
+    # These pins identify the historical measurement, independently of today's tree.
+    require(report['archive'] == {
+        'path': 'docs/research/data/scandir-stable-sort-2026-11-23.tar.gz',
+        'sha256': 'cae0558ee56a97d3bee5ff5b2e5a9e816d3fd53707ae30ddab541502c406f770',
+        'bytes': 1342719, 'members': 728,
+    }, 'historical archive identity')
+    source_pins = json.dumps(report['sources'], sort_keys=True, separators=(',', ':')).encode()
+    require(digest(source_pins) ==
+            'e0f41f53e795558fcaee0f898425b5b44f0e14c444bdfec2b673a58b5629b1ff',
+            'historical source pins')
     blob = (ROOT / report['archive']['path']).read_bytes()
     require(digest(blob) == report['archive']['sha256'], 'archive digest')
     require(len(blob) == report['archive']['bytes'], 'archive size')
@@ -52,10 +62,12 @@ def main():
     for path, expected in manifest['members'].items():
         require(digest(members[path]) == expected['sha256'], 'member digest: ' + path)
         require(len(members[path]) == expected['bytes'], 'member size: ' + path)
-    from scandir_consolidation import historical_sources
-    source_bytes = historical_sources(ROOT, report, members, '439ca86b3a44e5bbbb11137d190a79866e387121d6993868a0398ba2c77c69ff')
+    if check_current_sources:
+        from scandir_consolidation import historical_sources
+        source_bytes = historical_sources(ROOT, report, members, '458e7c5f5e0f726fa285a3c8cb8f1685fb24b10215a01d6d3f2b1188f4608202')
+        for path, expected in report['sources'].items():
+            require(digest(source_bytes[path]) == expected, 'current source: ' + path)
     for path, expected in report['sources'].items():
-        require(digest(source_bytes[path]) == expected, 'current source: ' + path)
         require(digest(members['repo/' + path]) == expected, 'archived source: ' + path)
     current = members['repo/compat/bionic/posix_bionic.cc']
     require(digest(current) == report['candidate_production_sha256'], 'candidate production')
@@ -138,4 +150,4 @@ def main():
     print(f'SCANDIR_REPORT_PASS checks={checks} archive_members={len(members)} final_processes=360 pilot_processes=60 final_observations=1440 pilot_observations=240')
 
 if __name__ == '__main__':
-    main()
+    main(check_current_sources=True)

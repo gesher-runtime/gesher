@@ -157,7 +157,8 @@ int StatPath(const char* path, struct stat* buf, bool follow, int depth = 0) {
           HANDLE h;
           const int error = gesher::storage_root::Open(rooted, gesher::rooted_storage_wire::kMetadata, &h);
           if (error != 0) return errno = error, -1;
-          const int result = gesher::CheckExternalStorageHandle(h, gesher::AccessKind::kStat)
+          const int result = (rooted.IsInstalledMedia() ||
+              gesher::CheckExternalStorageHandle(h, gesher::AccessKind::kStat))
                        ? FromHandle(h, buf) : -1;
           if (result == 0 && rooted.drop_alias) buf->st_mode &= ~0222;
           CloseHandle(h);

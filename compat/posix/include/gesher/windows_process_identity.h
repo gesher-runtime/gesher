@@ -108,6 +108,26 @@ inline bool ReadLiveProcess(HANDLE process, Process* result) {
   return true;
 }
 
+// The PID is metadata of this exact process handle, never a request field.
+inline DWORD ReadParentProcessId(HANDLE process, DWORD expected_pid) {
+  struct BasicInformation {
+    LONG exit_status;
+    void* peb;
+    ULONG_PTR affinity;
+    LONG base_priority;
+    ULONG_PTR pid;
+    ULONG_PTR parent_pid;
+  };
+  using Query = LONG(NTAPI*)(HANDLE, int, PVOID, ULONG, PULONG);
+  const auto query = reinterpret_cast<Query>(reinterpret_cast<void*>(
+      GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQueryInformationProcess")));
+  BasicInformation result{};
+  // ProcessBasicInformation is class 0, available with query-limited access.
+  if (!query || query(process, 0, &result, sizeof(result), nullptr) < 0 ||
+      result.pid != expected_pid || result.parent_pid > MAXDWORD) return 0;
+  return static_cast<DWORD>(result.parent_pid);
+}
+
 inline bool ReadCapabilities(HANDLE process, std::vector<BYTE>* bytes) {
   HANDLE token = nullptr;
   if (!OpenProcessToken(process, TOKEN_QUERY, &token)) return false;

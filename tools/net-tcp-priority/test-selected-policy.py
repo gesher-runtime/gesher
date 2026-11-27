@@ -844,7 +844,7 @@ def qualified_usb_main513_endpoints():
  return after
 
 
-USB_BLOCK_TRANSITION_SHA256 = 'c2d21ff03f9a6a1d9cb8a095450ff7fa72a20860d6b60398ef0aaf5b49068676'
+USB_BLOCK_TRANSITION_SHA256 = 'c87a4daeece1c25a29af3e87ddd1f42e48b0655f4c4df083474fa7668ae5f994'
 USB_NETLINK_MAIN = '279966e6bcb842ae8a44fef87d740baed6818208'
 USB_NETLINK_PATHS = {
  'compat/posix/posix.cmake',
@@ -918,6 +918,7 @@ def preceding_usb_block_sources(folder,read_source=live_source):
   for path in paths:
    preceding[path] = (work/path).read_bytes()
    base = USB_NETLINK_MAIN if path in USB_NETLINK_PATHS else USB_BLOCK_PATH_BASES.get(path, USB_BLOCK_BASE)
+   if path==CHILD_WAIT_PATH:base=CHILD_WAIT_MAIN
    historical = main513[path] if path in main513 else subprocess.check_output(
        ['git','-C',str(ROOT),'show',base+':'+path])
    assert preceding[path] == historical, path
@@ -1028,6 +1029,33 @@ def preceding_storage_policy_sources(before_features,read_source=live_source):
   subprocess.run(['git','apply','-'],input=patch,cwd=work,check=True,capture_output=True)
   for path in STORAGE_POLICY_PATHS:
    assert (work/path).read_bytes()==current[path],('storage policy forward endpoint',path)
+ return baseline
+
+# Reverse the one process collector transition to the unchanged OFD digest.
+# This source check does not qualify Windows execution.
+CHILD_WAIT_PATH='compat/bionic/process_bionic.cc'
+CHILD_WAIT_MAIN='d5c8e60673cd99e388cdf4ec1e895039c5d9fe66'
+CHILD_WAIT_PATCH='tools/net-tcp-priority/qualified/child-wait-source.patch'
+CHILD_WAIT_PATCH_SHA256='a2c8cecd2c71a63adee65f5c6339cb876ac288d0895bdad530035817e0fbb62e'
+CHILD_WAIT_SOURCE_SHA256='70222a932a0ea37339d8d5b320e838ae44ee5fc5ebf2d741baf39ae679ded59a'
+
+def preceding_child_wait_source(current):
+ patch=(ROOT/CHILD_WAIT_PATCH).read_bytes()
+ assert hashlib.sha256(current).hexdigest()==CHILD_WAIT_SOURCE_SHA256,CHILD_WAIT_PATH
+ assert hashlib.sha256(patch).hexdigest()==CHILD_WAIT_PATCH_SHA256,CHILD_WAIT_PATCH
+ assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==[CHILD_WAIT_PATH]
+ with tempfile.TemporaryDirectory(prefix='gesher-child-wait-qualification-') as temporary:
+  work=Path(temporary)
+  source=work/CHILD_WAIT_PATH
+  source.parent.mkdir(parents=True)
+  source.write_bytes(current)
+  subprocess.run(['git','apply','--reverse','--unidiff-zero','-'],input=patch,cwd=work,check=True,capture_output=True)
+  baseline=source.read_bytes()
+  usb_base=USB_BLOCK_PATH_BASES[CHILD_WAIT_PATH]
+  assert baseline==subprocess.check_output(
+      ['git','-C',str(ROOT),'show',usb_base+':'+CHILD_WAIT_PATH]),'child wait reverse and original USB endpoints disagree'
+  subprocess.run(['git','apply','--unidiff-zero','-'],input=patch,cwd=work,check=True,capture_output=True)
+  assert source.read_bytes()==current,CHILD_WAIT_PATH
  return baseline
 
 # Reverse only the reviewed adaptive stable-directory sort before the exact
@@ -1188,6 +1216,15 @@ def check_appcontainer_donor_receipts():
 APPCONTAINER_INTEGRATION_BASE = 'ff2c1870053c9d0332e6abef07a25fc282d384b5'
 APPCONTAINER_INTEGRATION_PATCH = 'tools/net-tcp-priority/qualified/appcontainer-integration-source.patch'
 APPCONTAINER_INTEGRATION_QUALIFICATION = 'tools/net-tcp-priority/qualified/appcontainer-integration-source.json'
+APPCONTAINER_INTEGRATION_QUALIFICATION_SHA256 = '21aa55ea117efbb3929cd737e011c19c85f1c34af0789d2617268b3dbc90a87f'
+# In addition to the donor identity surface, the merged startup/fork path
+# intersects the exact USB and child-wait source qualification.
+APPCONTAINER_INTEGRATION_PATHS = sorted(APPCONTAINER_IDENTITY_SOURCE_SHA256.keys() | {
+ 'compat/bionic/process_bionic.cc', 'compat/credentials/account_crypto.c',
+ 'compat/elf/exec/exec.cmake', 'compat/elf/exec/gesher_tools.cc',
+ 'compat/posix/src/binder_transport.cc', 'compat/posix/src/process.cc', 'compat/posix/src/storage_policy.cc',
+ 'compat/posix/src/storage_policy.h',
+})
 
 def preceding_appcontainer_integration_sources(receipt_sha256):
  raw=live_source(APPCONTAINER_INTEGRATION_QUALIFICATION)
@@ -1196,8 +1233,7 @@ def preceding_appcontainer_integration_sources(receipt_sha256):
  assert set(qualification)=={'baseline','paths','previous_sha256','source_sha256','patch_sha256','native_runtime_approval'}
  assert qualification['baseline']==APPCONTAINER_INTEGRATION_BASE and qualification['native_runtime_approval'] is False
  paths=qualification['paths']
- assert paths and paths==sorted(qualification['source_sha256'])==sorted(qualification['previous_sha256'])
- assert all(p.startswith(('compat/','probes/','tests/','tools/')) and '..' not in Path(p).parts for p in paths)
+ assert paths==APPCONTAINER_INTEGRATION_PATHS==sorted(qualification['source_sha256'])==sorted(qualification['previous_sha256'])
  patch=live_source(APPCONTAINER_INTEGRATION_PATCH)
  assert hashlib.sha256(patch).hexdigest()==qualification['patch_sha256'],'AppContainer integration patch changed'
  assert [line for line in patch.splitlines() if line.startswith(b'diff --git ')]==[
@@ -1232,6 +1268,12 @@ def appcontainer_integration_negative_controls(receipt_sha256):
  cases=[({target:altered},receipt_sha256,path)]
  repinned={**qualification,'source_sha256':{**qualification['source_sha256'],path:hashlib.sha256(altered).hexdigest()}}
  cases.append(({target:altered},repinned,('AppContainer integration reverse endpoint',path)))
+ # This donor control targets native AppContainer detection introduced after
+ # the older pipe fixture. Exercise the live source before normalization.
+ pipe_path='compat/posix/src/pipe_io.cc'
+ pipe=original(ROOT/pipe_path)
+ assert pipe.count(b'TokenIsAppContainer')==1
+ cases.append(({ROOT/pipe_path:pipe.replace(b'TokenIsAppContainer',b'TokenElevation',1)},receipt_sha256,pipe_path))
  patch_path=ROOT/APPCONTAINER_INTEGRATION_PATCH
  malformed=original(patch_path).replace(b'@@',b'@x',1)
  assert malformed!=original(patch_path)
@@ -1249,6 +1291,23 @@ def appcontainer_integration_negative_controls(receipt_sha256):
    except AssertionError as error:assert (error.args[0] if error.args else None)==expected,error
    else:raise AssertionError('unqualified AppContainer transition accepted')
  print('TCP_APPCONTAINER_INTEGRATION_NEGATIVE_CONTROLS_PASS cases='+str(len(cases))+' native_processes_started=0')
+
+def source_function(source,marker):
+ assert source.count(marker)==1,marker
+ begin=source.index(marker);start=source.index(b'{',begin);depth=1;end=start+1
+ while depth:
+  assert end<len(source),marker
+  depth+=(source[end:end+1]==b'{')-(source[end:end+1]==b'}');end+=1
+ return source[begin:end]
+
+APPCONTAINER_PROPERTY_SOURCE='compat/posix/src/system_properties.cc'
+APPCONTAINER_PROPERTY_GLES_GUARD=b'if (!ServedBuildProperty(name, text) || !Valid(name, text)) continue;'
+
+def check_appcontainer_property_filter(source):
+ loader=source_function(source,b'bool LoadBootstrapOverrides(')
+ publish=b'area->overrides[name] = std::move(update);'
+ assert loader.count(APPCONTAINER_PROPERTY_GLES_GUARD)==loader.count(publish)==1,APPCONTAINER_PROPERTY_SOURCE
+ assert loader.index(APPCONTAINER_PROPERTY_GLES_GUARD)<loader.index(publish),APPCONTAINER_PROPERTY_SOURCE
 
 def preceding_ofd_sources(read_source=live_source):
  stdio_main=preceding_stdio_feature_sources(read_source)
@@ -1287,6 +1346,7 @@ def preceding_ofd_sources(read_source=live_source):
  preceding={**before_features,**memfd_lease,**stdio_main,**shared_stdio,**storage_policy}
  for path,digest in qualification['source_sha256'].items():
   actual=preceding[path] if path in preceding else read_source(path)
+  if path==CHILD_WAIT_PATH:actual=preceding_child_wait_source(actual)
   if path=='compat/binder/binderd.cc':actual=preceding_composed_binder_output_source(actual)
   if path=='compat/posix/src/system_properties.cc':
    header='compat/posix/include/gesher/system_properties.h'
@@ -1303,13 +1363,6 @@ def preceding_ofd_sources(read_source=live_source):
   subprocess.run([*reverse,'--check','-'],input=patch,cwd=work,check=True,capture_output=True)
   subprocess.run([*reverse,'-'],input=patch,cwd=work,check=True,capture_output=True)
   previous={path:(work/path).read_bytes() for path in paths}
- def function(source,marker):
-  assert source.count(marker)==1,marker
-  begin=source.index(marker);start=source.index(b'{',begin);depth=1;end=start+1
-  while depth:
-   assert end<len(source),marker
-   depth+=(source[end:end+1]==b'{')-(source[end:end+1]==b'}');end+=1
-  return source[begin:end]
  # Independently retain socket ownership and actual native poll core bytes.
  for path,markers in {
    'compat/posix/src/fd.cc':[b'bool Remove(',b'void Insert(',b'bool ReplaceSocket(',b'bool LookupSocket(',b'static int PollFdsImpl('],
@@ -1317,7 +1370,7 @@ def preceding_ofd_sources(read_source=live_source):
  }.items():
   current=netlink[path] if path in netlink else live_source(path)
   for marker in markers:
-   actual=function(current,marker);expected=function(previous[path],marker)
+   actual=source_function(current,marker);expected=source_function(previous[path],marker)
    if marker==b'static int PollFdsImpl(':
     for before,after in PIPE_POLL_ERROR_REPLACEMENTS:
      assert actual.count(after)==expected.count(before)==1,(path,marker)
@@ -1694,12 +1747,22 @@ def transition_negative_controls():
  from unittest.mock import patch
  original=Path.read_bytes
  usb_preceding=preceding_usb_block_sources(ROOT/'tools/net-tcp-priority/qualified')
+ # The outer USB pin also rejects this live mutation. Test the Child Wait
+ # leaf independently at the normalized input, including a repinned source.
+ child_wait=usb_preceding[CHILD_WAIT_PATH]
+ bad_wait=child_wait.replace(b'needs_poll |= !child.watched;',b'needs_poll = false;',1)
+ assert bad_wait!=child_wait,CHILD_WAIT_PATH
+ with patch.dict(globals(),CHILD_WAIT_SOURCE_SHA256=hashlib.sha256(bad_wait).hexdigest()):
+  try:preceding_child_wait_source(bad_wait)
+  except (AssertionError,subprocess.CalledProcessError):pass
+  else:raise AssertionError('repinned child-wait mutation accepted')
  cases=[
+  (CHILD_WAIT_PATH,b'needs_poll |= !child.watched;',b'needs_poll = false;'),
+  (CHILD_WAIT_PATCH,b'@@',b'@x'),
   ('compat/posix/src/fd.cc',b'--state->description->descriptor_refs == 0',b'--state->description->descriptor_refs == 1'),
   ('compat/posix/src/fd.cc',b'return TransferPipe(snapshot, bytes, count, false);',b'return 0;'),
   ('compat/posix/src/system.cc',b'gesher::ws::RecvOwned(state.socket,',b'gesher::ws::SendOwned(state.socket,'),
   ('compat/posix/src/pipe_io.cc',b'if (!count) return 0;',b'if (!count) return 1;'),
-  ('compat/posix/src/pipe_io.cc',b'TokenIsAppContainer',b'TokenElevation'),
   ('compat/posix/src/ofd.cc',b'InterlockedCompareExchange(&shared->flags,',b'InterlockedExchange(&shared->flags,'),
   ('compat/elf/exec/shell_execute.inc',b'gesher::ReadPipeDescriptionInterruptible(description, value, 1, interrupted)',b'gesher::ReadFileDescription(description, value, 1)'),
   ('tools/net-tcp-priority/qualified/ofd-stream-source.patch',b'@@',b'@x'),
@@ -1916,10 +1979,30 @@ def transition_negative_controls():
    except (AssertionError,subprocess.CalledProcessError):rejected=True
   assert rejected,'repinned composed Binder mutation accepted: '+before.decode()
  print('TCP_SELECTED_TRANSITION_NEGATIVE_CONTROLS_PASS cases='+str(len(cases))+' repinned_property_controls=5 repinned_memfd_lease_controls='+str(repinned_memfd_lease)+' repinned_binder_output_controls=6 repinned_composed_binder_controls='+str(len(composed_cases)))
-if __name__=='__main__':
- import sys
- check()
- if '--selftest' in sys.argv:
+def check_live():
+ check_appcontainer_donor_receipts()
+ previous=preceding_appcontainer_integration_sources(APPCONTAINER_INTEGRATION_QUALIFICATION_SHA256)
+ check_appcontainer_property_filter(live_source(APPCONTAINER_PROPERTY_SOURCE))
+ check(lambda path:previous[path] if path in previous else live_source(path))
+ return previous
+
+def selftest(previous):
+ from unittest.mock import patch
+ appcontainer_integration_negative_controls(APPCONTAINER_INTEGRATION_QUALIFICATION_SHA256)
+ # Independently reject the protected loader taking an unserved GLES value.
+ source=live_source(APPCONTAINER_PROPERTY_SOURCE)
+ altered=source.replace(APPCONTAINER_PROPERTY_GLES_GUARD,b'if (!Valid(name, text)) continue;',1)
+ assert altered!=source,APPCONTAINER_PROPERTY_SOURCE
+ try:check_appcontainer_property_filter(altered)
+ except AssertionError as error:assert error.args==(APPCONTAINER_PROPERTY_SOURCE,),error
+ else:raise AssertionError('unfiltered protected build.prop assignment accepted')
+ print('TCP_APPCONTAINER_PROPERTY_FILTER_NEGATIVE_CONTROL_PASS')
+ # The outer proof above has bound the staged predecessors to the live files.
+ # The original mutation probes must exercise their own rejection layers.
+ historical_inputs={ROOT/path:source for path,source in previous.items()}
+ original=Path.read_bytes
+ def historical(path):return historical_inputs[path] if path in historical_inputs else original(path)
+ with patch.object(Path,'read_bytes',historical):
   usb_main513_negative_controls()
   storage_policy_negative_controls()
   transition_negative_controls()
@@ -1928,3 +2011,8 @@ if __name__=='__main__':
   runpy.run_path(str(ROOT/'tools/net-tcp-priority/test-memrchr-policy.py'),run_name='__main__')
   runpy.run_path(str(ROOT/'tools/net-tcp-priority/test-tsf-metadata-policy.py'),run_name='__main__')
   runpy.run_path(str(ROOT/'tools/net-tcp-priority/test-scandir-policy.py'),run_name='__main__')
+
+if __name__=='__main__':
+ import sys
+ previous=check_live()
+ if '--selftest' in sys.argv:selftest(previous)

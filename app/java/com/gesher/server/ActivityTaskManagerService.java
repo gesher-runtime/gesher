@@ -4810,6 +4810,33 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         }
     }
 
+    @FunctionalInterface
+    interface IsolationChange {
+        void commit() throws java.io.IOException;
+    }
+
+    /** Hold publication across retirement so the next process gets only the committed policy. */
+    void withStoppedProtectedInstallation(ApkPackage expected, IsolationChange change)
+            throws java.io.IOException {
+        String name = expected.packageName;
+        synchronized (this) {
+            if (!SystemServer.isProtectedDevice() || mPm.get(name) != expected
+                    || mPm.isRemovalPending(name)) {
+                throw new IllegalStateException("Cannot change isolation for a retired installation");
+            }
+            mProtectedStops.merge(name, 1, Integer::sum);
+        }
+        try {
+            forceStopPackage(name);
+            change.commit();
+        } finally {
+            synchronized (this) {
+                mProtectedStops.computeIfPresent(name, (pkg, count) -> count > 1 ? count - 1 : null);
+                notifyAll();
+            }
+        }
+    }
+
     /**
      * Ends the package's processes (an update or an uninstall, as
      * ActivityManagerService.forceStopPackage): the ones this server started are killed,

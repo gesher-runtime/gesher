@@ -370,7 +370,11 @@ int Access(const char* path, int mode, bool follow) {
   if (rooted.drop_alias && (mode & W_OK)) return errno = EACCES, -1;
   HANDLE h;
   if (rooted) {
-    const int error = gesher::storage_root::Open(rooted, gesher::rooted_storage_wire::kMetadata, &h);
+    namespace wire = gesher::rooted_storage_wire;
+    const uint32_t access = !rooted.IsInstalledMedia() ? wire::kMetadata
+        : access_kind == gesher::AccessKind::kWrite ? wire::kMetadataWrite
+        : access_kind == gesher::AccessKind::kRead ? wire::kRead : wire::kMetadata;
+    const int error = gesher::storage_root::Open(rooted, access, &h);
     if (error != 0) return errno = error, -1;
   } else {
     h = gesher::CreateFileFollowingFifo(windows.c_str(), FILE_READ_ATTRIBUTES,
@@ -379,7 +383,7 @@ int Access(const char* path, int mode, bool follow) {
 
   }
   if (h == INVALID_HANDLE_VALUE) return gesher::FailWithLastError();
-  if (!gesher::CheckExternalStorageHandle(h, access_kind)) {
+  if (!rooted.IsInstalledMedia() && !gesher::CheckExternalStorageHandle(h, access_kind)) {
     CloseHandle(h);
     return errno = EACCES, -1;
   }

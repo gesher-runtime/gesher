@@ -273,11 +273,11 @@ public final class PermissionRequestsTest {
         AtomicBoolean launchLive = new AtomicBoolean(true);
         try (AutoCloseable owner = (AutoCloseable) scoped.newInstance(policy, pin.newInstance(args[0]),
                 legacyCohost, null, (BooleanSupplier) () -> false)) {
-            AtomicInteger prompts = new AtomicInteger();
+            AtomicInteger legacyPrompts = new AtomicInteger();
             Object reviewController = controller(pm, pmClass, Runnable::run, (o, n) -> false,
                     (o, n) -> DENIED, (o, groups, enabled) -> {
                         require(groups.length == 2, "cohost legacy review omitted runtime permissions");
-                        if (prompts.incrementAndGet() == 1) launchLive.set(false);
+                        if (legacyPrompts.incrementAndGet() == 1) launchLive.set(false);
                         return ALLOWED;
                     });
             Method reviewScoped = method(reviewController.getClass(), "reviewScopedPermissions",
@@ -288,11 +288,11 @@ public final class PermissionRequestsTest {
             launchLive.set(true);
             require(((CompletableFuture<?>) reviewScoped.invoke(reviewController, owner,
                             (BooleanSupplier) launchLive::get)).get().equals(Boolean.TRUE)
-                            && prompts.get() == 2,
+                            && legacyPrompts.get() == 2,
                     "a fresh cohost launch did not receive and commit its own legacy review");
             require(((CompletableFuture<?>) reviewScoped.invoke(reviewController, owner,
                             (BooleanSupplier) launchLive::get)).get().equals(Boolean.TRUE)
-                            && prompts.get() == 2,
+                            && legacyPrompts.get() == 2,
                     "confirmed cohost review was shown again for the same admission");
         }
         System.out.println("PermissionRequestsTest: scoped consent shares the host decisions and drops expired owners");
