@@ -11,6 +11,16 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class QueueWorkflows(unittest.TestCase):
+    def test_contract_checkout_contains_planner_and_preflight_audit_inputs(self):
+        doc = yaml.safe_load((ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8'))
+        steps = doc['jobs']['automerge-script']['steps']
+        checkout = next(step for step in steps if step.get('uses') == 'actions/checkout@v4')
+        paths = set(checkout['with']['sparse-checkout'].splitlines())
+        # The planner reads the shard manifest. Preflight ownership audits scan
+        # all Python tools and verify every mapped entry point exists.
+        self.assertTrue({'tools', 'tests/windows/test-shards.json',
+                         '.github/workflows', '.github/scripts'} <= paths)
+
     def test_local_controller_pool_requires_main_and_an_explicit_flag(self):
         doc = yaml.safe_load((ROOT / '.github/workflows/automerge.yml').read_text())
         job = doc['jobs']['automerge']
