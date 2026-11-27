@@ -8,6 +8,8 @@ set(_uapi "${AOSP_DIR}/bionic/libc/kernel/uapi")
 # binderd: Win32 only, with the driver's ABI from bionic's uapi header,
 # searched after gesher-base's <linux/*.h>.
 add_executable(binderd ${CMAKE_SOURCE_DIR}/compat/binder/binderd.cc
+  ${CMAKE_SOURCE_DIR}/compat/binder/brokered_network.cc
+  ${CMAKE_SOURCE_DIR}/compat/binder/loopback_relay.cc
   ${CMAKE_SOURCE_DIR}/compat/posix/src/rooted_storage.cc
   ${CMAKE_SOURCE_DIR}/compat/posix/src/internal.cc
   ${CMAKE_SOURCE_DIR}/compat/posix/src/binder_endpoint.cc
@@ -28,10 +30,12 @@ target_compile_options(binderd PRIVATE -Wall -Wextra -Werror "SHELL:-idirafter $
 # Resolve ordinary imports before mincore's umbrella API-set library. Only
 # precise interrupt-time APIs require mincore; keep the broker's explicit
 # system-DLL contract identical to the rest of gesher_posix.
-target_link_libraries(binderd PRIVATE bcrypt advapi32 ole32 shell32 uuid kernel32 powrprof mincore)
+target_link_libraries(binderd PRIVATE bcrypt advapi32 ole32 shell32 uuid kernel32 powrprof ws2_32 mincore)
 
 add_executable(binder_protected_admission_test EXCLUDE_FROM_ALL
   ${CMAKE_SOURCE_DIR}/tests/native/binder_protected_admission_test.cc
+  ${CMAKE_SOURCE_DIR}/compat/binder/brokered_network.cc
+  ${CMAKE_SOURCE_DIR}/compat/binder/loopback_relay.cc
   ${CMAKE_SOURCE_DIR}/compat/binder/protected_bootstrap.cc
   ${CMAKE_SOURCE_DIR}/compat/binder/protected_peers.cc
   ${CMAKE_SOURCE_DIR}/compat/binder/protected_shared_memory.cc
@@ -40,7 +44,20 @@ target_compile_definitions(binder_protected_admission_test PRIVATE
   GESHER_PROTECTED_BINDER GESHER_BINDER_PEER_FIXTURE)
 target_compile_options(binder_protected_admission_test PRIVATE -Wall -Wextra -Werror
   "SHELL:-idirafter ${_uapi}")
-target_link_libraries(binder_protected_admission_test PRIVATE bcrypt advapi32 ole32 shell32 uuid)
+target_link_libraries(binder_protected_admission_test PRIVATE bcrypt advapi32 ole32 shell32 uuid ws2_32)
+
+# The production relay retains its TCP endpoint and exchanges data over a real
+# named pipe. This transport fixture is separate from actual ART integration.
+add_executable(loopback_relay_test EXCLUDE_FROM_ALL
+  ${CMAKE_SOURCE_DIR}/tests/native/loopback_relay_test.cc
+  ${CMAKE_SOURCE_DIR}/compat/binder/loopback_relay.cc)
+set_target_properties(loopback_relay_test PROPERTIES LINK_LIBRARIES "ws2_32")
+target_compile_options(loopback_relay_test PRIVATE -Wall -Wextra -Werror)
+
+add_executable(loopback_relay_frames_test EXCLUDE_FROM_ALL
+  ${CMAKE_SOURCE_DIR}/tests/native/loopback_relay_frames_test.cc)
+set_target_properties(loopback_relay_frames_test PROPERTIES LINK_LIBRARIES "ws2_32")
+target_compile_options(loopback_relay_frames_test PRIVATE -Wall -Wextra -Werror)
 
 # servicemanager, as vndservicemanager is built (no VINTF, no perfetto), with
 # libcutils' multiuser.cpp (not in libcutils' Windows set) and a main of its

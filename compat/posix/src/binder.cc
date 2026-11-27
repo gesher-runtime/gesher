@@ -37,6 +37,7 @@
 #include <gesher/rooted_storage_wire.h>
 
 #include "binder_internal.h"
+#include "socket_internal.h"
 #include "binder_file_descriptions.h"
 #include "binder_sg.h"
 #include "binder_transport.h"
@@ -44,6 +45,7 @@
 #include "record_lock_operation.h"
 #include "internal.h"
 #include "native_fence_internal.h"
+#include "../../binder/loopback_relay.h"
 #include "record_lock_descriptors.h"
 
 namespace gesher {
@@ -380,6 +382,10 @@ bool SendFds(uint8_t* data, size_t data_size, const void* offsets, size_t offset
     DescriptorSnapshotPtr snapshot;
     {
       record_locks::DescriptorGuard guard;
+      SocketFd socket_state;
+      if (LookupSocket(fd, &socket_state) && ws::HasLoopbackRelay(socket_state.description)) {
+        errno = EOPNOTSUPP; ok = false; obj.pad_binder = 0; return;
+      }
       if (ProtectedBinderEndpoint()) {
         // Offer only the exact file object. The authenticated broker admits it
         // only from the registered system server and only when it matches the
@@ -1015,6 +1021,47 @@ HANDLE binder_endpoint::OpenDropWorker() {
   const HANDLE connected = pipe.handle;
   pipe.handle = INVALID_HANDLE_VALUE;
   return connected;
+}
+
+HANDLE binder_endpoint::OpenLoopbackRelay(const loopback_relay::Request& operation) {
+  if (!Current().IsGuest()) return INVALID_HANDLE_VALUE;
+  const std::wstring name = RecordPipeName();
+  if (name.empty()) return INVALID_HANDLE_VALUE;
+  RecordPipe pipe{ConnectPipe(name)};
+  DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
+  if (pipe.handle == INVALID_HANDLE_VALUE ||
+      !SetNamedPipeHandleState(pipe.handle, &mode, nullptr, nullptr)) return INVALID_HANDLE_VALUE;
+  Message request;
+  request.Put<uint32_t>(wire::kLoopbackConnect);
+  request.Put<uint32_t>(wire::kMagic);
+  request.Put<uint32_t>(wire::kVersion);
+  request.Put(operation);
+  const uint32_t bytes = static_cast<uint32_t>(request.bytes.size() - sizeof(uint32_t));
+  memcpy(request.bytes.data(), &bytes, sizeof(bytes));
+  if (!binder_bootstrap::Transfer(pipe.handle, request.bytes.data(), static_cast<DWORD>(request.bytes.size()), true,
+                                  GetTickCount64() + 5000)) return INVALID_HANDLE_VALUE;
+  const HANDLE connected = pipe.handle;
+  pipe.handle = INVALID_HANDLE_VALUE;
+  return connected;
+}
+
+bool binder_endpoint::LoopbackUsesNativeNamespace() {
+  if (!Current().IsGuest()) return true;
+  const std::wstring name = RecordPipeName();
+  if (name.empty()) return true;
+  RecordPipe pipe{ConnectPipe(name)};
+  DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
+  if (pipe.handle == INVALID_HANDLE_VALUE ||
+      !SetNamedPipeHandleState(pipe.handle, &mode, nullptr, nullptr)) return true;
+  uint32_t request[]{3 * sizeof(uint32_t), wire::kLoopbackNamespace, wire::kMagic, wire::kVersion};
+  uint32_t response[2]{};
+  const ULONGLONG deadline = GetTickCount64() + 5000;
+  if (!binder_bootstrap::Transfer(pipe.handle, request, sizeof(request), true, deadline) ||
+      !binder_bootstrap::Transfer(pipe.handle, response, sizeof(response), false, deadline) ||
+      response[0] != sizeof(uint32_t) || response[1] > 1 || !Current().VerifyPipe(pipe.handle)) return true;
+  uint32_t receipt[]{sizeof(uint32_t), 1};
+  if (!binder_bootstrap::Transfer(pipe.handle, receipt, sizeof(receipt), true, deadline)) return true;
+  return response[1] == 1;
 }
 
 int binder_endpoint::QueryAndroidDataCapacity(rooted_storage_wire::Filesystem* capacity) {

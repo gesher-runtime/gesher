@@ -17,10 +17,12 @@
 
 #include <string>
 #include <vector>
+#include <utility>
 
 namespace gesher {
 struct NetlinkState;
 }  // namespace gesher
+namespace gesher::loopback_relay { class Client; }
 
 namespace gesher::ws {
 
@@ -74,6 +76,14 @@ enum class ConnectState { kInitial, kConnecting, kConnected, kFailed };
 enum class Provider { kOther, kNativeIpv4Tcp, kNativeIpv4Udp };
 struct ConnectOperation;
 struct SocketDescription {
+  // Only the PC-local TCP relay uses this backend; the ordinary native socket
+  // retains its original AppContainer identity for all other operations.
+  std::shared_ptr<gesher::loopback_relay::Client> relay;  // error_mutex
+  // Confirmed retained-socket mutations survive AF_UNSPEC and native reconnect.
+  std::vector<std::pair<Option, int>> relay_option_values;  // native_call_mutex
+  bool relay_error_recorded = false;  // error_mutex; SO_ERROR is consumed once
+  int relay_connect_timeout = 0;  // captured SO_SNDTIMEO, milliseconds
+  bool relay_eligible = true;  // immutable: imported descriptors retain their original native authority
   std::shared_ptr<gesher::NetlinkState> netlink;
   int (*netlink_poll)(gesher::NetlinkState&, int) = nullptr;  // non-null only for AF_NETLINK descriptors
   std::atomic<ConnectState> state{ConnectState::kInitial};
@@ -136,6 +146,17 @@ Provider ClassifyProvider(Socket s);  // exact provider identity, never SO_ERROR
 int ConfigureOwnedDatagram(Socket s);  // -1 failure, 0 other socket, 1 permanent native NB UDP
 
 Socket Open(Family family, Type type, int protocol, bool process_binding = true);
+int StartLoopbackRelay(Socket socket, const Address& target,
+                        const std::shared_ptr<SocketDescription>& description);
+bool IsLoopbackRelayTarget(const Address& target);
+int AwaitLoopbackRelay(const std::shared_ptr<SocketDescription>& description, bool nonblocking);
+bool HasLoopbackRelay(const std::shared_ptr<SocketDescription>& description);
+int LoopbackRelayOption(const std::shared_ptr<SocketDescription>& description,
+                        Option option, bool set, int* value);
+int PollLoopbackRelay(const std::shared_ptr<SocketDescription>& description, int events);
+int DisconnectLoopbackRelay(Socket socket, const std::shared_ptr<SocketDescription>& description);
+bool NativeListenerMatches(Socket socket, const Address& target,
+                            const std::shared_ptr<SocketDescription>& description);
 int Close(Socket s, const std::shared_ptr<SocketDescription>& description = {}, bool retain_failure = false);
 Socket Duplicate(Socket s);  // a second socket for the same endpoint
 int SetNonBlocking(Socket s, bool on);
@@ -155,10 +176,10 @@ bool ReadConnectOwnerCensus(OwnerCensus* result);  // read-only HOST lifetime ev
 void RefreshConnect(const std::shared_ptr<SocketDescription>& description);
 int Listen(Socket s, int backlog, const std::shared_ptr<SocketDescription>& description = {});
 Socket Accept(Socket s, Address* peer);
-int GetSockName(Socket s, Address* address);
-int GetPeerName(Socket s, Address* address);
-int Shutdown(Socket s, bool read, bool write);
-int Available(Socket s, int* bytes);  // FIONREAD
+int GetSockName(Socket s, Address* address, const std::shared_ptr<SocketDescription>& description = {});
+int GetPeerName(Socket s, Address* address, const std::shared_ptr<SocketDescription>& description = {});
+int Shutdown(Socket s, bool read, bool write, const std::shared_ptr<SocketDescription>& description = {});
+int Available(Socket s, int* bytes, const std::shared_ptr<SocketDescription>& description = {});  // FIONREAD
 int BindInterface(Socket s, uint32_t ifindex);
 int BoundInterface(Socket s, uint32_t* ifindex);
 int SetProcessInterface(uint32_t ifindex);
@@ -343,6 +364,7 @@ struct SocketFd {
   bool initial_nonblocking = false;  // registration hint; live flags are shared
   // Open-description lifetime: dup/dup2 retain the same connect lifecycle.
   std::shared_ptr<ws::SocketDescription> description;
+  bool initial_relay_eligible = true;
 };
 
 // Immutable operation dependencies for real CI barriers. The POSIX entries
@@ -391,5 +413,6 @@ int RegisterSocket(const SocketFd& state);
 int RegisterNetlinkSocket(bool nonblocking, int sock_type);
 // False if fd is not a socket.
 bool LookupSocket(int fd, SocketFd* state);
+bool HasNativeListener(const ws::Address& target, const std::shared_ptr<ws::SocketDescription>& exclude);
 
 }  // namespace gesher

@@ -152,6 +152,24 @@ class Registry {
            WaitForSingleObject(peer->process.get(), 0) == WAIT_TIMEOUT;
   }
 
+  // A local TCP destination may be a native listener in another process of
+  // this app. Until its listener namespace is completely accounted for, the
+  // caller must keep the original AppContainer connect path. Unknown state
+  // only removes broker authority; it never grants network access.
+  bool HasOtherApplicationPeer(const Lease& peer) {
+    if (!peer) return true;
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto issuer = peers_.find(peer->generation.pid);
+    if (!active_ || issuer == peers_.end() || issuer->second != peer ||
+        WaitForSingleObject(peer->process.get(), 0) != WAIT_TIMEOUT) return true;
+    for (const auto& entry : peers_) {
+      if (entry.second == peer || entry.second->role != Role::kApplication ||
+          entry.second->installation != peer->installation) continue;
+      if (WaitForSingleObject(entry.second->process.get(), 0) == WAIT_TIMEOUT) return true;
+    }
+    return false;
+  }
+
   Lease FindGeneration(DWORD pid, uint64_t birth, Role role) {
     std::lock_guard<std::mutex> lock(mutex_);
     auto found = peers_.find(pid);

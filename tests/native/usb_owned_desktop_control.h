@@ -4,11 +4,24 @@
 // No production launcher or existing window-station/desktop policy is changed.
 namespace owned_desktop_control {
 constexpr wchar_t kReportName[] = L"owned-desktop-control.bin";
-constexpr DWORD kMagic = 0x474f4443, kVersion = 1;
+constexpr DWORD kMagic = 0x474f4443, kVersion = 2;
 constexpr DWORD kStationAccess = STANDARD_RIGHTS_REQUIRED | 0x037f;
 constexpr DWORD kDesktopAccess = STANDARD_RIGHTS_REQUIRED | 0x01ff;
+constexpr DWORD kStationMinimum = 0x0327, kDesktopMinimum = 0x00c7;
+struct Variant { const wchar_t* leaf; const char* name; bool current_station; DWORD station, desktop; };
+constexpr Variant kVariants[]{
+  {kReportName, "original", false, kStationAccess, kDesktopAccess},
+  {L"owned-matrix-current-min.bin", "current-station/minimum-desktop", true, kStationMinimum, kDesktopMinimum},
+  {L"owned-matrix-current-read.bin", "current-station/read-control-desktop", true, kStationMinimum, kDesktopMinimum | READ_CONTROL},
+  {L"owned-matrix-current-full.bin", "current-station/full-desktop", true, kStationMinimum, kDesktopAccess},
+  {L"owned-matrix-fresh-min.bin", "owned-minimum-station/minimum-desktop", false, kStationMinimum, kDesktopMinimum},
+  {L"owned-matrix-fresh-station.bin", "owned-read-control-station/minimum-desktop", false, kStationMinimum | READ_CONTROL, kDesktopMinimum},
+  {L"owned-matrix-fresh-desktop.bin", "owned-minimum-station/read-control-desktop", false, kStationMinimum, kDesktopMinimum | READ_CONTROL},
+  {L"owned-matrix-fresh-both.bin", "owned-read-control-station/read-control-desktop", false, kStationMinimum | READ_CONTROL, kDesktopMinimum | READ_CONTROL},
+};
 struct Request {
   DWORD magic = kMagic, version = kVersion, size = sizeof(Request), session = 0;
+  DWORD variant = 0;
   ULONGLONG deadline = 0;
   ULONG_PTR private_token = 0, lowbox_token = 0, job = 0, report = 0;
   DWORD private_bytes = 0, package_bytes = 0;
@@ -19,6 +32,8 @@ struct Row { DWORD create = ERROR_NOT_READY, resume = ERROR_NOT_READY, wait = ER
 struct Report {
   DWORD magic = kMagic, version = kVersion, size = sizeof(Report), setup = ERROR_NOT_READY;
   DWORD station_created = 0, desktop_created = 0, security_verified = 0, session = 0;
+  DWORD variant = 0;
+  DWORD station_access[2]{}, desktop_access[2]{};
   Row rows[4]{}; // private/default, lowbox/default, private/owned, lowbox/owned
   DWORD restore = ERROR_NOT_READY, desktop_close = ERROR_NOT_READY, station_close = ERROR_NOT_READY;
 };
@@ -50,9 +65,11 @@ void CheckToken(HANDLE token, const Request& request, bool lowbox) {
             const_cast<BYTE*>(request.package_sid)), "owned-desktop-token-package", ERROR_ACCESS_DENIED);
   }
 }
-void VerifyObject(HANDLE object, const Request& request, DWORD mask) {
+void VerifyObject(HANDLE object, const Request& request, DWORD mask, DWORD all,
+                  DWORD* effective = nullptr, bool owned = true) {
   DWORD size = 0;
   SECURITY_INFORMATION information = DACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION;
+  if (effective) information |= OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION;
   GetUserObjectSecurity(object, &information, nullptr, 0, &size);
   Require(size && size <= 65536, "owned-desktop-object-security-size", ERROR_INVALID_DATA);
   std::vector<BYTE> data(size);
@@ -61,13 +78,13 @@ void VerifyObject(HANDLE object, const Request& request, DWORD mask) {
   PACL acl = nullptr; BOOL present = FALSE, defaulted = FALSE;
   Require(GetSecurityDescriptorDacl(data.data(), &present, &acl, &defaulted) && present && acl && IsValidAcl(acl),
       "owned-desktop-object-dacl", ERROR_INVALID_ACL);
-  for (PSID subject : {const_cast<BYTE*>(request.private_sid), const_cast<BYTE*>(request.package_sid)}) {
+  if (owned) for (PSID subject : {const_cast<BYTE*>(request.private_sid), const_cast<BYTE*>(request.package_sid)}) {
     bool found = false;
     for (DWORD i = 0; i < acl->AceCount; ++i) {
       void* raw = nullptr; Require(GetAce(acl, i, &raw), "owned-desktop-object-ace");
       const auto* ace = static_cast<ACCESS_ALLOWED_ACE*>(raw);
       if (ace->Header.AceType == ACCESS_ALLOWED_ACE_TYPE && EqualSid(const_cast<DWORD*>(&ace->SidStart), subject) &&
-          (ace->Mask & mask) == mask) found = true;
+          ace->Mask == mask) found = true;
     }
     Require(found, "owned-desktop-object-full-access", ERROR_ACCESS_DENIED);
   }
@@ -83,6 +100,19 @@ void VerifyObject(HANDLE object, const Request& request, DWORD mask) {
         ace->Mask == SYSTEM_MANDATORY_LABEL_NO_WRITE_UP) low = true;
   }
   Require(low, "owned-desktop-object-low-label", ERROR_ACCESS_DENIED);
+  if (!effective) return;
+  const ULONG_PTR tokens[]{request.private_token, request.lowbox_token};
+  for (unsigned i = 0; i < std::size(tokens); ++i) {
+    HANDLE raw = nullptr;
+    Require(DuplicateTokenEx(reinterpret_cast<HANDLE>(tokens[i]), TOKEN_QUERY, nullptr,
+        SecurityImpersonation, TokenImpersonation, &raw), "owned-desktop-check-token");
+    const Handle token(raw);
+    for (DWORD bits = all; bits; bits &= bits - 1) {
+      const DWORD bit = bits & (~bits + 1u);
+      effective[i] |= SessionAllowed(data.data(), token.get(), bit);
+    }
+    Require(effective[i] == mask, "owned-desktop-effective-access", ERROR_ACCESS_DENIED);
+  }
 }
 Row Probe(HANDLE token, const wchar_t* desktop, const Request& request, HANDLE child_job, bool selftest) {
   Row result; Handle process, thread;
@@ -142,7 +172,8 @@ Row Probe(HANDLE token, const wchar_t* desktop, const Request& request, HANDLE c
   return result;
 }
 Report Execute(const Request& request, bool selftest = false) {
-  Report report; report.session = request.session;
+  Report report; report.session = request.session; report.variant = request.variant;
+  const Variant& variant = kVariants[request.variant];
   HWINSTA station = nullptr;
   HDESK desktop = nullptr;
   const HWINSTA previous = GetProcessWindowStation();
@@ -168,13 +199,17 @@ Report Execute(const Request& request, bool selftest = false) {
     // Ordinary selftests cannot create named stations. Their positive result
     // covers only a fresh desktop under the unchanged current station.
     std::wstring desktop_name = L"Probe";
-    if (selftest) {
+    if (selftest || variant.current_station) {
       wchar_t actual[512]{}; DWORD needed = 0;
       Require(GetUserObjectInformationW(previous, UOI_NAME, actual, sizeof(actual), &needed) &&
           needed && needed <= sizeof(actual) && std::wmemchr(actual, 0, std::size(actual)) &&
           !std::wcschr(actual, L'\\'), "owned-desktop-current-station-name");
       name = actual;
       desktop_name = L"Gesher.DesktopProbe." + std::wstring(suffix);
+      if (!selftest) {
+        Require(_wcsicmp(actual, L"WinSta0") == 0, "owned-desktop-matrix-interactive-station", ERROR_ACCESS_DENIED);
+        VerifyObject(previous, request, variant.station, kStationAccess, report.station_access, false);
+      }
     } else {
       station = CreateWindowStationW(name.c_str(), CWF_CREATE_ONLY, kStationAccess, &security);
       Require(station != nullptr, "owned-desktop-create-exclusive-station"); report.station_created = 1;
@@ -186,7 +221,8 @@ Report Execute(const Request& request, bool selftest = false) {
     Require(desktop != nullptr && created_status != ERROR_ALREADY_EXISTS,
         "owned-desktop-create-exclusive-desktop", created_status);
     report.desktop_created = 1;
-    Require(SetProcessWindowStation(previous) && SetThreadDesktop(previous_desktop), "owned-desktop-restore-before-launch");
+    Require((!station || SetProcessWindowStation(previous)) && SetThreadDesktop(previous_desktop),
+        "owned-desktop-restore-before-launch");
     const auto grant = [&](HANDLE object, DWORD mask) {
       wchar_t access[16]{};
       Require(std::swprintf(access, std::size(access), L"0x%08lx", mask) > 0, "owned-desktop-access-text");
@@ -201,11 +237,15 @@ Report Execute(const Request& request, bool selftest = false) {
       SECURITY_INFORMATION info = DACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION;
       Require(SetUserObjectSecurity(object, &info, full.get()), "owned-desktop-set-owned-security");
     };
-    if (station) { grant(station, kStationAccess); VerifyObject(station, request, kStationAccess); }
-    grant(desktop, kDesktopAccess); VerifyObject(desktop, request, kDesktopAccess);
+    if (station) {
+      grant(station, variant.station);
+      VerifyObject(station, request, variant.station, kStationAccess, request.variant ? report.station_access : nullptr);
+    }
+    grant(desktop, variant.desktop);
+    VerifyObject(desktop, request, variant.desktop, kDesktopAccess, request.variant ? report.desktop_access : nullptr);
     report.security_verified = 1;
     const std::wstring destination = name + L"\\" + desktop_name;
-    for (unsigned i = 0; i < 4; ++i) {
+    for (unsigned i = request.variant ? 2u : 0u; i < 4; ++i) {
       if (selftest && (i & 1)) continue;
       report.rows[i] = Probe(reinterpret_cast<HANDLE>((i & 1) ? request.lowbox_token : request.private_token),
           i < 2 ? L"winsta0\\default" : destination.c_str(), request, job.get(), selftest);
@@ -219,7 +259,8 @@ Report Execute(const Request& request, bool selftest = false) {
     all_children_dead = QueryInformationJobObject(job.get(), JobObjectBasicAccountingInformation, &accounting, sizeof(accounting), nullptr) &&
         accounting.ActiveProcesses == 0;
   }
-  report.restore = SetProcessWindowStation(previous) && SetThreadDesktop(previous_desktop) ? ERROR_SUCCESS : GetLastError();
+  report.restore = (!station || SetProcessWindowStation(previous)) && SetThreadDesktop(previous_desktop)
+      ? ERROR_SUCCESS : GetLastError();
   // A failed death check is unavailable diagnostic evidence. Retain these
   // handles until helper process exit rather than claim pre-death cleanup.
   if (all_children_dead) {
@@ -270,6 +311,7 @@ DWORD Helper(const wchar_t* name, const wchar_t* pid_argument, const wchar_t* bi
   }
   DWORD session = 0;
   if (request.magic != kMagic || request.version != kVersion || request.size != sizeof(request) || request.deadline != deadline ||
+      request.variant >= std::size(kVariants) ||
       !ProcessIdToSessionId(GetCurrentProcessId(), &session) || !session || session != request.session ||
       !Remaining(request.deadline, 1) || request.deadline - GetTickCount64() > 5000 ||
       request.private_bytes > sizeof(request.private_sid) || request.package_bytes > sizeof(request.package_sid) ||
@@ -294,29 +336,34 @@ DWORD Helper(const wchar_t* name, const wchar_t* pid_argument, const wchar_t* bi
       ? ERROR_SUCCESS : (GetLastError() ? GetLastError() : ERROR_WRITE_FAULT);
 }
 void Print(const Report& report) {
+  if (report.variant) {
+    std::printf("Owned desktop matrix: variant=%s effective station=%#lx/%#lx desktop=%#lx/%#lx\n",
+        kVariants[report.variant].name, report.station_access[0], report.station_access[1],
+        report.desktop_access[0], report.desktop_access[1]);
+  }
   std::printf("Owned desktop diagnostic: setup=%lu session=%lu created=%lu/%lu verified=%lu restore=%lu close=%lu/%lu\n",
       report.setup, report.session, report.station_created, report.desktop_created, report.security_verified,
       report.restore, report.desktop_close, report.station_close);
-  for (unsigned i = 0; i < 4; ++i) {
+  for (unsigned i = report.variant ? 2u : 0u; i < 4; ++i) {
     const auto& row = report.rows[i];
     std::printf("Owned desktop diagnostic: row=%u create=%lu resume=%lu wait=%lu exit=0x%08lx stop=%lu\n",
         i, row.create, row.resume, row.wait, row.exit, row.stop);
   }
 }
-void PrintStored(const std::wstring& directory) {
+void PrintStored(const std::wstring& directory, DWORD variant = 0) {
   try {
-    const auto bytes = Read(directory + L"\\" + kReportName, sizeof(Report));
+    const auto bytes = Read(directory + L"\\" + kVariants[variant].leaf, sizeof(Report));
     Report report;
     Require(bytes.size() == sizeof(report), "owned-desktop-stored-size", ERROR_INVALID_DATA);
     std::memcpy(&report, bytes.data(), sizeof(report));
     DWORD session = 0;
     Require(report.magic == kMagic && report.version == kVersion && report.size == sizeof(report) &&
-        ProcessIdToSessionId(GetCurrentProcessId(), &session) && report.session == session &&
+        report.variant == variant && ProcessIdToSessionId(GetCurrentProcessId(), &session) && report.session == session &&
         report.station_created <= 1 && report.desktop_created <= 1 && report.security_verified <= 1,
         "owned-desktop-stored-shape", ERROR_INVALID_DATA);
     Print(report);
   } catch (const Failure& failure) {
-    std::printf("Owned desktop diagnostic report unavailable: win32=%lu\n", failure.status);
+    std::printf("Owned desktop diagnostic report unavailable: variant=%s win32=%lu\n", kVariants[variant].name, failure.status);
   } catch (...) { std::puts("Owned desktop diagnostic report unavailable: allocation failure"); }
 }
 DWORD SelfTest() {
@@ -348,15 +395,16 @@ DWORD SelfTest() {
       report.rows[2].create || report.rows[2].exit || report.rows[2].stop ? ERROR_DLL_INIT_FAILED : ERROR_SUCCESS;
 }
 void Observe(HANDLE source, HANDLE lowbox, const storage::AuthorityLaunchSpec& spec,
-             PSID private_user, PSID package, GuestLoaderTrace* trace) {
+             PSID private_user, PSID package, GuestLoaderTrace* trace, DWORD variant = 0) {
   Report report;
   report.session = spec.desktop_session;
+  report.variant = variant;
   DWORD helper_status = ERROR_NOT_READY;
   Handle process, thread, report_file;
   std::wstring report_path;
   try {
     Require(SystemCaller(), "owned-desktop-parent-system", ERROR_ACCESS_DENIED);
-    report_path = config.directory + L"\\" + kReportName;
+    report_path = config.directory + L"\\" + kVariants[variant].leaf;
     const Local descriptor = Security();
     SECURITY_ATTRIBUTES file_security{sizeof(file_security), descriptor.get(), FALSE};
     report_file.reset(CreateFileW(report_path.c_str(), GENERIC_WRITE | FILE_READ_ATTRIBUTES, FILE_SHARE_READ,
@@ -364,6 +412,7 @@ void Observe(HANDLE source, HANDLE lowbox, const storage::AuthorityLaunchSpec& s
     Require(report_file.get() != INVALID_HANDLE_VALUE, "owned-desktop-parent-report-create");
     Request request;
     request.session = spec.desktop_session;
+    request.variant = variant;
     request.deadline = std::min(config.worker_deadline, GetTickCount64() + 5000);
     Require(Remaining(request.deadline, 1), "owned-desktop-parent-deadline", ERROR_TIMEOUT);
     request.private_bytes = GetLengthSid(private_user); request.package_bytes = GetLengthSid(package);
@@ -483,7 +532,8 @@ void Observe(HANDLE source, HANDLE lowbox, const storage::AuthorityLaunchSpec& s
     Require(bytes.size() == sizeof(report), "owned-desktop-parent-report-size", ERROR_INVALID_DATA);
     std::memcpy(&report, bytes.data(), sizeof(report));
     Require(report.magic == kMagic && report.version == kVersion && report.size == sizeof(report) &&
-        report.session == request.session && report.station_created <= 1 && report.desktop_created <= 1 && report.security_verified <= 1,
+        report.session == request.session && report.variant == variant &&
+        report.station_created <= 1 && report.desktop_created <= 1 && report.security_verified <= 1,
         "owned-desktop-parent-report-shape", ERROR_INVALID_DATA);
   } catch (const Failure& failure) { report.setup = failure.status; }
     catch (...) { report.setup = ERROR_NOT_ENOUGH_MEMORY; }
@@ -500,6 +550,7 @@ void Observe(HANDLE source, HANDLE lowbox, const storage::AuthorityLaunchSpec& s
         WriteFile(report_file.get(), &report, sizeof(report), &written, nullptr) && written == sizeof(report))
       SetEndOfFile(report_file.get());
   }
+  if (variant) return; // matrix evidence stays in its separate bounded reports
   char text[768]{};
   int count = std::snprintf(text, sizeof(text), "Owned desktop control: setup=%lu helper=%lu session=%lu objects=%lu/%lu verified=%lu restore=%lu close=%lu/%lu; context-only, not ACL cause\n",
       report.setup, helper_status, report.session, report.station_created, report.desktop_created,

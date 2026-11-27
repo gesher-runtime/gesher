@@ -382,7 +382,7 @@ int ioctl(int fd, unsigned long request, ...) {
     if (state.description->netlink) return errno = EACCES, -1;
     if (!argp && (request == FIONREAD || request == FIONBIO)) return errno = EFAULT, -1;
     if (request == FIONREAD) {
-      if (gesher::ws::Available(state.socket, argp) != 0) return -1;
+      if (gesher::ws::Available(state.socket, argp, state.description) != 0) return -1;
       // An AF_UNIX datagram pair's payload, without its framing (ADR 0088).
       if (state.description->unix_datagram_pair.load()) *argp = gesher::ws::UnixDatagramPayload(*argp);
       return 0;

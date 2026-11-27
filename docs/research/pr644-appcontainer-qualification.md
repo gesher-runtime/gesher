@@ -254,3 +254,78 @@ does not qualify the entire current runtime. The new visible diagnostic and
 composed correction do not replace the original RTL assertions or establish a
 green hosted matrix. Separate private-runtime, interactive and default-enable
 qualification remains open.
+
+## Numeric loopback TCP relay qualification
+
+The contained runtime now retains a host-side TCP endpoint for numeric IPv4,
+IPv6 and mapped loopback destinations; it transfers bounded bytes and typed
+options over authenticated Binder record pipes. It does not hand a host socket
+to the app. Ordinary external sockets retain the application's actual Windows
+network identity. Socket creation checks the real AppContainer capabilities,
+including rejection when a no-INTERNET APK spoofs the old environment flag.
+
+The source-generation/PID-birth admission, bounded stream credits, module and
+fork lifetime, same-application listener controls, and actual native option
+results were reviewed independently. Two subsequent QA findings were repaired:
+final close explicitly retires inbound credit when the peer writes before
+reading, and AF_UNSPEC replays acknowledged native option values before
+publishing a disconnected descriptor. A replay error keeps the original relay
+attached and propagates the actual failure. An isolated Windows probe then
+injects WSAENOTSOCK on the second native replay: the exact extracted production
+functions retain the relay, its acknowledged options and actual bidirectional
+traffic, then a retry restores native options and detaches it. Its immutable
+receipt is `out/qa314/network-replay-failure-probe/qualified/inventory.json`.
+This fault control uses a fixture no-op for poller wakeups and is not a complete
+ART/admission fault injection.
+
+The immutable TCP-v2 inventory contains 53 artifacts, including all 18
+capture-time source snapshots and actual Android application logs. The final
+commit removes one extra trailing empty line from each of three new files;
+`out/qa314/tcp-final-style/changes.json` binds the exact before/after hashes.
+Their earlier immutable evidence was retained, not repinned. Its native fixture passes
+nine groups and 27 framing controls. A peer first writes 1 MiB, then receives
+all bytes accepted from the app plus EOF; an omission control times out. A
+separate five-second receiver stall preserves accepted data, while restoring
+the old 1.5-second truncation semantics fails. These are explicit semantic
+negative controls, not full historical-source execution claims.
+
+After including main through 7beab9a3a, the actual runtime and protected Binder
+admission targets rebuilt successfully. Admission and 1,340 broker lifetime
+checks pass with zero retained allocations; both relay fixtures pass. Fresh
+installed APK and DEX executions verify Socket/NIO, refusal, cancellation,
+typed options and two AF_UNSPEC reconnects, including a native option change
+while disconnected. The no-INTERNET APK still receives EACCES. Their 37 copied
+artifacts and exact new runtime identities are preserved separately in
+`out/qa314/network-main-sync-qa/qualified/inventory.json`; the earlier immutable
+TCP-v2 evidence was not overwritten.
+
+This qualifies the numeric loopback TCP slice for draft CI. It does not qualify
+explicit source/interface binding, UDP, WebView, positive SO_LINGER, the private
+service route or the shipping default. Unsupported operations retain explicit
+failure instead of fabricated success. The historical source transition adds
+only the three now-modified socket inputs to the original 48, each bound to its
+actual immutable Git predecessor; all earlier predecessors, archived
+measurements and rejection controls remain in force.
+
+## Owned desktop mask matrix follow-up
+
+Hosted run 46006971740 on both Windows versions passed setup and cleanup of
+all original owned-object controls. The same private and lowbox subjects fail
+USER32 on WinSta0/Default but load it successfully on the new full-grant station
+and desktop. This localizes the difference to object/context policy; it does
+not establish which access bit or original-object property is responsible.
+
+Seven additional diagnostic cases now isolate a fresh GUID desktop under the
+unchanged current station (old mask, READ_CONTROL added, full mask), and fresh
+station/desktop pairs with the original effective masks and READ_CONTROL added
+to either or both. Each case reads back exact effective per-token rights and
+low integrity on owned objects. Existing WinSta0/Default security is only read;
+it is never granted, restored or switched. The original four rows and all real
+launch gates remain intact. Separate fixed reports do not displace the bounded
+original USER32/GDI trace.
+
+Strict MSVC compilation and ordinary desktop mechanics, non-SYSTEM rejection,
+and missing-image cleanup controls pass. The 18-artifact receipt is
+`out/qa314/owned-desktop-matrix/final-inputs.json`; actual private/lowbox matrix
+execution remains pending hosted CI. Ordinary mechanics do not qualify that
+matrix, the service UI, physical USB or default enablement.

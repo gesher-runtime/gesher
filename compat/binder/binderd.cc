@@ -38,6 +38,7 @@
 #include <string.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <deque>
@@ -61,6 +62,8 @@
 #include "../posix/src/binder_sg.h"
 #include "launch_channel.h"
 #include "shared_storage_broker.h"
+#include "brokered_network.h"
+#include "loopback_relay.h"
 #include "../posix/include/gesher/capture_policy.h"
 #include <gesher/directory_reopen.h>
 #ifdef GESHER_AUDIO_RENDER_BROKER
@@ -272,6 +275,25 @@ uint32_t g_next_proc_id = 1;
 // GESHER_SANDBOX=appcontainer (ADR 0090): set once in main, before the first client.
 bool g_sandbox = false;
 std::unique_ptr<gesher::binder_peer::Registry> g_peer_registry;
+std::mutex g_loopback_admission_mutex;
+std::map<std::array<uint8_t, 16>, unsigned> g_loopback_applications;
+std::atomic<unsigned> g_loopback_queries{0};
+struct LoopbackApplicationLane {
+  explicit LoopbackApplicationLane(const peer::Registry::Lease& peer) : installation(peer->installation) {
+    std::lock_guard lock(g_loopback_admission_mutex);
+    const auto found = g_loopback_applications.find(installation);
+    if (found != g_loopback_applications.end() && found->second >= 32) return;
+    ++g_loopback_applications[installation];
+    admitted = true;
+  }
+  ~LoopbackApplicationLane() {
+    if (!admitted) return;
+    std::lock_guard lock(g_loopback_admission_mutex);
+    if (--g_loopback_applications[installation] == 0) g_loopback_applications.erase(installation);
+  }
+  std::array<uint8_t, 16> installation;
+  bool admitted = false;
+};
 uint64_t g_next_buffer_id = 1;
 int g_next_debug_id = 1;
 
@@ -2876,6 +2898,40 @@ void Serve(HANDLE pipe) {
         ServeEnrollChild(pipe, in);
       } else if (op == wire::kDropWorker) {
         ServeDropWorker(pipe, in);
+      } else if (op == wire::kLoopbackNamespace) {
+        uint32_t version = 0;
+        const auto caller = g_peer_registry ? g_peer_registry->Authenticate(pipe) : nullptr;
+        if (caller && caller->role == peer::Role::kApplication &&
+            in.Get(&version) && version == wire::kVersion && in.p == in.end) {
+          if (g_loopback_queries.fetch_add(1) < 128) {
+            struct Query { ~Query() { g_loopback_queries.fetch_sub(1); } } query;
+            LoopbackApplicationLane lane(caller);
+            DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
+            if (lane.admitted && SetNamedPipeHandleState(pipe, &mode, nullptr, nullptr)) {
+              WireReply reply;
+              reply.Put<uint32_t>(g_peer_registry->HasOtherApplicationPeer(caller) ? 1 : 0);
+              if (WriteMessage(pipe, reply)) {
+                uint32_t receipt[2]{};
+                launch::Transfer(pipe, receipt, sizeof(receipt), false, GetTickCount64() + 250);
+              }
+            }
+          } else g_loopback_queries.fetch_sub(1);  // overload closes immediately
+        }
+      } else if (op == wire::kLoopbackConnect) {
+        uint32_t version = 0;
+        gesher::loopback_relay::Request request{};
+        const auto caller = g_peer_registry ? g_peer_registry->Authenticate(pipe) : nullptr;
+        if (caller && caller->role == peer::Role::kApplication &&
+            in.Get(&version) && version == wire::kVersion &&
+            in.Get(&request) && in.p == in.end) {
+          LoopbackApplicationLane lane(caller);
+          if (lane.admitted) {
+            const bool internet = gesher::network_broker::HasInternetCapabilities(caller->process.get()) &&
+                !g_peer_registry->HasOtherApplicationPeer(caller);
+            gesher::loopback_relay::Serve(pipe, request,
+                [&] { return internet && g_peer_registry->Live(caller); });
+          }
+        }
 #ifdef GESHER_RECORD_LOCK_BROKER
       } else if (op == wire::kReopenDirectory) {
         ServeReopenDirectory(pipe, in);

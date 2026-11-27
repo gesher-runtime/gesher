@@ -49,8 +49,10 @@ def main():
                        '-D_WIN32_WINNT=0x0A00',
                        '-I' + str(ROOT / 'compat/posix/include'), '-idirafter', str(args.aosp_dir / 'bionic/libc/kernel/uapi'),
                        # binderd's sandbox mode (ADR 0090): its pipe descriptor and client checks.
-                       str(source), str(ROOT / 'compat/framework/app_container.cc'), '-o', str(binary),
-                       '-lbcrypt', '-ladvapi32', '-lole32'], check=True, timeout=90)
+                       str(source), str(ROOT / 'compat/framework/app_container.cc'),
+                       str(ROOT / 'compat/binder/brokered_network.cc'),
+                       str(ROOT / 'compat/binder/loopback_relay.cc'), '-o', str(binary),
+                       '-lbcrypt', '-ladvapi32', '-lole32', '-lws2_32'], check=True, timeout=90)
         if not args.compile_only:
             subprocess.run([str(binary)], check=True, timeout=45)
 

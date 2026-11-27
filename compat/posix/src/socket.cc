@@ -15,6 +15,7 @@
 #include <vector>
 
 #include <gesher/inet.h>
+#include <gesher/binder_endpoint.h>
 
 #include <atomic>
 #include <stdlib.h>
@@ -25,6 +26,7 @@
 #include "netlink_internal.h"
 #include "socket_internal.h"
 #include "record_lock_descriptors.h"
+#include "../../binder/brokered_network.h"
 
 namespace ws = gesher::ws;
 using gesher::SocketFd;
@@ -49,7 +51,7 @@ bool Lookup(int fd, SocketFd* state) {
   return false;
 }
 
-int RegisterNew(ws::Socket s, bool nonblocking) {
+int RegisterNew(ws::Socket s, bool nonblocking, bool relay_eligible = true) {
   // accept does not inherit O_NONBLOCK on Linux. Normalize both directions
   // before publishing the new open description and its shared status flag.
   if (ws::SetNonBlocking(s, nonblocking) < 0) {
@@ -61,6 +63,7 @@ int RegisterNew(ws::Socket s, bool nonblocking) {
   SocketFd state;
   state.socket = s;
   state.initial_nonblocking = nonblocking;
+  state.initial_relay_eligible = relay_eligible;
   return gesher::RegisterSocket(state);
 }
 
@@ -135,6 +138,9 @@ bool MapUnixPath(ws::Address* address, bool binding) {
 
 // Android's INTERNET permission (<gesher/inet.h>): -1 until first asked, then 0 or 1.
 static std::atomic<int> g_inet_allowed{-1};
+// The kernel token is immutable for this process (including native fork).
+// A guest environment flag cannot add an absent Android INTERNET capability.
+static std::atomic<int> g_token_inet_allowed{-1};
 
 namespace gesher {
 int ConnectWithObserver(int fd, const void* raw, uint32_t length, ConnectObserver observer, void* context) {
@@ -145,6 +151,42 @@ int ConnectWithObserver(int fd, const void* raw, uint32_t length, ConnectObserve
   }
   ws::Address address;
   if (!ToAddress(static_cast<const sockaddr*>(raw), length, &address) || !MapUnixPath(&address, false)) return -1;
+  if (ws::HasLoopbackRelay(state.description)) {
+    record_locks::DescriptorGuard descriptor_guard;
+    SocketFd current;
+    if (!LookupSocket(fd, &current) || current.description != state.description) return errno = EBADF, -1;
+    if (address.family == ws::Family::kUnspec) return ws::DisconnectLoopbackRelay(state.socket, state.description);
+    const auto connection = state.description->state.load();
+    if (connection == ws::ConnectState::kConnecting) return errno = EALREADY, -1;
+    if (connection == ws::ConnectState::kConnected) return errno = EISCONN, -1;
+    if (ws::DisconnectLoopbackRelay(state.socket, state.description) < 0) return -1;
+  }
+  // Namespace IPC may wait for a bounded broker response. Do it without any
+  // descriptor/native-call lock, then revalidate the exact fd description.
+  if (!observer && state.description->relay_eligible && ws::IsLoopbackRelayTarget(address) &&
+      !binder_endpoint::LoopbackUsesNativeNamespace()) {
+    int admitted;
+    {
+      record_locks::DescriptorGuard descriptor_guard;
+      SocketFd current;
+      if (!LookupSocket(fd, &current) || current.description != state.description) return errno = EBADF, -1;
+      admitted = ws::StartLoopbackRelay(state.socket, address, state.description);
+    }
+    if (admitted < 0) return -1;
+    if (admitted > 0) {
+      int result, saved;
+      // Match native connect cancellation: the caller releases its snapshot;
+      // the descriptor retains the independently progressing real operation.
+      std::shared_ptr<ws::ConnectOperation> unused;
+      ConnectCallerReferences references{&state, &unused};
+      pthread_cleanup_push(ReleaseCanceledConnectReferences, &references);
+      result = ws::AwaitLoopbackRelay(state.description, state.description->nonblocking.load());
+      saved = errno;
+      pthread_cleanup_pop(0);
+      errno = saved;
+      return result;
+    }
+  }
   if (state.description->provider == ws::Provider::kNativeIpv4Tcp && address.family == ws::Family::kInet) {
     std::shared_ptr<ws::ConnectOperation> operation;
     bool nonblocking;
@@ -229,13 +271,29 @@ int gesher_inet_allowed(void) {
     g_inet_allowed.compare_exchange_strong(expected, allowed);
     allowed = g_inet_allowed;
   }
-  return allowed;
+  if (!allowed) return 0;
+  int kernel = g_token_inet_allowed.load();
+  if (kernel < 0) {
+    HANDLE token = nullptr;
+    DWORD container = 0, bytes = 0;
+    bool inspected = OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token) != FALSE;
+    if (inspected) {
+      inspected = GetTokenInformation(token, TokenIsAppContainer, &container, sizeof(container), &bytes) != FALSE;
+      CloseHandle(token);
+    }
+    kernel = inspected && (!container || gesher::network_broker::HasInternetCapabilities(GetCurrentProcess())) ? 1 : 0;
+    int expected = -1;
+    g_token_inet_allowed.compare_exchange_strong(expected, kernel);
+    kernel = g_token_inet_allowed.load();
+  }
+  return kernel;
 }
 
 int gesher_bind_socket_interface(int fd, uint32_t if_index) {
   SocketFd state;
   if (!Lookup(fd, &state)) return errno;
   if (state.description->netlink) return EOPNOTSUPP;
+  if (ws::HasLoopbackRelay(state.description)) return EOPNOTSUPP;
   return ws::BindInterface(state.socket, if_index) == 0 ? 0 : errno;
 }
 
@@ -443,7 +501,7 @@ int getsockname(int fd, struct sockaddr* addr, socklen_t* len) {
   if (!Lookup(fd, &state)) return -1;
   if (state.description->netlink) return NetlinkName(*state.description->netlink, addr, len, false);
   ws::Address address;
-  if (ws::GetSockName(state.socket, &address) < 0) return -1;
+  if (ws::GetSockName(state.socket, &address, state.description) < 0) return -1;
   FromAddress(address, addr, len);
   return 0;
 }
@@ -453,7 +511,7 @@ int getpeername(int fd, struct sockaddr* addr, socklen_t* len) {
   if (!Lookup(fd, &state)) return -1;
   if (state.description->netlink) return NetlinkName(*state.description->netlink, addr, len, true);
   ws::Address address;
-  if (ws::GetPeerName(state.socket, &address) < 0) return -1;
+  if (ws::GetPeerName(state.socket, &address, state.description) < 0) return -1;
   FromAddress(address, addr, len);
   return 0;
 }
@@ -463,7 +521,7 @@ int shutdown(int fd, int how) {
   if (!Lookup(fd, &state)) return -1;
   if (state.description->netlink) return errno = EOPNOTSUPP, -1;
   if (how != SHUT_RD && how != SHUT_WR && how != SHUT_RDWR) return errno = EINVAL, -1;
-  return ws::Shutdown(state.socket, how != SHUT_WR, how != SHUT_RD);
+  return ws::Shutdown(state.socket, how != SHUT_WR, how != SHUT_RD, state.description);
 }
 
 }  // extern "C"
@@ -1020,6 +1078,15 @@ int setsockopt(int fd, int level, int name, const void* value, socklen_t len) {
     return gesher::NetlinkSetSockOpt(*state.description->netlink, level, name, value,
                                      static_cast<uint32_t>(len));
   }
+  if (ws::HasLoopbackRelay(state.description) &&
+      !(level == SOL_SOCKET && (name == SO_RCVTIMEO || name == SO_SNDTIMEO || name == SO_REUSEADDR))) {
+    int relay_value = 0;
+    if (ToIntOption(level, name, &option)) {
+      if (!ReadInt(value, len, &relay_value)) return -1;
+      return ws::LoopbackRelayOption(state.description, option, true, &relay_value);
+    }
+    return errno = EOPNOTSUPP, -1;
+  }
   int v;
   if (ToIntOption(level, name, &option)) {
     if (!ReadInt(value, len, &v)) return -1;
@@ -1132,12 +1199,17 @@ int getsockopt(int fd, int level, int name, void* value, socklen_t* len) {
       std::lock_guard<std::mutex> lock(state.description->error_mutex);
       // ConnectEx reports its failure on the owned completion channel. Always
       // read native SO_ERROR as well, including identical later native codes.
-      if (ws::GetOption(state.socket, option, &v) < 0) return -1;
+      v = 0;
+      if (!state.description->relay && ws::GetOption(state.socket, option, &v) < 0) return -1;
       if (!WriteInt(v != 0 ? v : state.description->connect_error, value, len)) return -1;
       if (v == 0) state.description->connect_error = 0;
       return 0;
     }
-    if (ws::GetOption(state.socket, option, &v) < 0) return -1;
+    v = 0;
+    if (ws::HasLoopbackRelay(state.description) && option != ws::Option::kType &&
+        option != ws::Option::kAcceptConn) {
+      if (ws::LoopbackRelayOption(state.description, option, false, &v) < 0) return -1;
+    } else if (ws::GetOption(state.socket, option, &v) < 0) return -1;
     return WriteInt(v, value, len) ? 0 : -1;
   }
   if (level == SOL_SOCKET && name == SO_REUSEADDR) {
@@ -1245,7 +1317,7 @@ bool gesher::TransferSocket(int fd, uintptr_t* socket, uint64_t* metadata) {
   SocketFd state;
   if (!gesher::LookupSocket(fd, &state)) return false;
   const ws::SocketDescription& d = *state.description;
-  if (d.netlink) return false;
+  if (d.netlink || ws::HasLoopbackRelay(state.description)) return false;
   uint64_t m = kTransferredSocket;
   if (d.unix_datagram_pair.load()) m |= kTransferUnixDatagram;
   if (d.unix_stream_pair.load()) m |= kTransferUnixStream;
@@ -1270,7 +1342,7 @@ int gesher::AdoptSocket(uintptr_t socket, uint64_t metadata) {
     ws::Close(socket);
     return errno = saved, -1;
   }
-  int fd = RegisterNew(socket, (metadata & kTransferNonBlocking) != 0);
+  int fd = RegisterNew(socket, (metadata & kTransferNonBlocking) != 0, false);
   if (fd < 0) return -1;
   SocketFd end;
   if (gesher::LookupSocket(fd, &end)) {

@@ -12,6 +12,7 @@
 
 namespace gesher::record_locks { struct LinuxFlock; }
 namespace gesher::rooted_storage_wire { struct Filesystem; struct Request; struct Reply; }
+namespace gesher::loopback_relay { struct Request; }
 
 namespace gesher::binder_endpoint {
 
@@ -144,6 +145,11 @@ HANDLE OpenAudioRender(const std::u16string& label);
 HANDLE OpenAudioCapture(bool info_only);
 HANDLE OpenCamera(bool info_only);
 HANDLE OpenDropWorker();
+// The host retains the exact PC-local endpoint. The returned byte/half-close
+// request pipe is authenticated and owned by the caller; no socket crosses it.
+HANDLE OpenLoopbackRelay(const loopback_relay::Request& request);
+// True on unknown/denied state too. This only removes relay authority.
+bool LoopbackUsesNativeNamespace();
 int QueryAndroidDataCapacity(rooted_storage_wire::Filesystem* capacity);
 int InstalledMedia(const rooted_storage_wire::Request& operation, const std::wstring& path,
                    const std::wstring& target, rooted_storage_wire::Reply* result);
