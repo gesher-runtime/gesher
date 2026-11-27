@@ -53,7 +53,7 @@ def main():
         require(digest(members[path]) == expected['sha256'], 'member digest: ' + path)
         require(len(members[path]) == expected['bytes'], 'member size: ' + path)
     from scandir_consolidation import historical_sources
-    source_bytes = historical_sources(ROOT, report, members, '2f67b83a6c1a90fea66171e850a5aa82854a03bb28569be9f96e826f85fcff61')
+    source_bytes = historical_sources(ROOT, report, members, 'aaab03e09a33a46b605039c94a6bef87f666308ee501c44c84bc398c19044332')
     for path, expected in report['sources'].items():
         require(digest(source_bytes[path]) == expected, 'current source: ' + path)
         require(digest(members['repo/' + path]) == expected, 'archived source: ' + path)

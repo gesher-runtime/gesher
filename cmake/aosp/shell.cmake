@@ -13,7 +13,9 @@ target_link_libraries(framework_runtime PUBLIC ole32 uuid advapi32)
 # click start (Windows subsystem: no console window flashes; it hands on the
 # foreground to the app's window; a launch shows a splash window until the
 # app's window is up: GDI, shell32's CommandLineToArgvW, COM for the windows'
-# property stores). gesher_shellext.dll: the .apk file type's icon handler,
+# property stores; a double-clicked .apk is installed only after its
+# confirmation dialog, compat/shell/apk_info_file.h reading `gesher-app
+# apk-info`). gesher_shellext.dll: the .apk file type's icon handler,
 # loaded by Explorer (linked statically, as everything here).
 configure_file(${CMAKE_SOURCE_DIR}/compat/shell/gesher_launch.rc.in
   ${CMAKE_CURRENT_BINARY_DIR}/gesher_launch.rc @ONLY)
@@ -27,7 +29,7 @@ add_executable(gesher-launch WIN32 ${CMAKE_SOURCE_DIR}/compat/shell/gesher_launc
   ${CMAKE_CURRENT_BINARY_DIR}/gesher_launch_icon.obj)
 target_compile_options(gesher-launch PRIVATE -Wall -Wextra -Werror -municode)
 target_link_options(gesher-launch PRIVATE -municode)
-target_link_libraries(gesher-launch PRIVATE user32 gdi32 shell32 ole32)
+target_link_libraries(gesher-launch PRIVATE user32 gdi32 shell32 ole32 advapi32)
 add_library(gesher_shellext SHARED
   ${CMAKE_SOURCE_DIR}/compat/shell/gesher_shellext.cc
   ${CMAKE_SOURCE_DIR}/compat/shell/gesher_shellext.def)
