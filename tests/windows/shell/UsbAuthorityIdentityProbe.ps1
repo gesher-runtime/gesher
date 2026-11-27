@@ -15,7 +15,7 @@ try {
         throw 'The private-token probe requires the production authority caller, LocalSystem.'
     }
     $requestData = Get-Content -LiteralPath $Request -Raw | ConvertFrom-Json
-    if ($requestData.Operation -notin 'WriteRuntimeFixture', 'QueryGuestUsers') {
+    if ($requestData.Operation -notin 'WriteRuntimeFixture', 'QueryGuestUsers', 'VerifyLegacyArchive') {
         throw 'Unknown identity-probe operation.'
     }
     $serviceName = 'GesherProtectedRuntime'
@@ -131,6 +131,23 @@ public sealed class GesherSystemIdentityProbe : IDisposable {
             if (!RevertToSelf()) Environment.FailFast("RevertToSelf(private SCM token) failed");
         }
     }
+    public int OpenAsAppContainer(string path, uint access) {
+        if (!canImpersonate) throw new InvalidOperationException("This probe has no primary-token duplicate right.");
+        VerifyLive();
+        IntPtr lowbox = QueryToken(29); // TokenIsAppContainer
+        try {
+            if (Marshal.ReadInt32(lowbox) != 1) throw new InvalidOperationException("Expected an AppContainer primary token.");
+        } finally { Marshal.FreeHGlobal(lowbox); }
+        Require(ImpersonateLoggedOnUser(token), "ImpersonateLoggedOnUser(exact guest AppContainer primary token)");
+        try {
+            IntPtr file = CreateFile(path, access, 7, IntPtr.Zero, 3, 0x00200000, IntPtr.Zero); // OPEN_EXISTING | OPEN_REPARSE_POINT
+            if (file == new IntPtr(-1)) return Marshal.GetLastWin32Error();
+            CloseHandle(file);
+            return 0;
+        } finally {
+            if (!RevertToSelf()) Environment.FailFast("RevertToSelf(guest AppContainer token) failed");
+        }
+    }
     public void Dispose() {
         if (token != IntPtr.Zero) CloseHandle(token);
         if (process != IntPtr.Zero) CloseHandle(process);
@@ -177,6 +194,60 @@ public sealed class GesherSystemIdentityProbe : IDisposable {
         if ($result.WriteError -ne 0) {
             throw "CreateFile(GENERIC_WRITE|CREATE_NEW)/WriteFile as private runtime failed with Win32 $($result.WriteError)."
         }
+    } elseif ($requestData.Operation -eq 'VerifyLegacyArchive') {
+        $desktopSid = [Security.Principal.SecurityIdentifier]::new([string]$requestData.DesktopSid).Value
+        if ($desktopSid -notmatch '^S-1-5-21-(?:[0-9]+-){3}[0-9]+$') { throw 'Expected the disposable desktop user SID.' }
+        $androidRoot = Join-Path (Join-Path $env:ProgramData 'Gesher Protected Android') $desktopSid
+        $data = Join-Path $androidRoot 'data'
+        $packages = Join-Path $data 'data'
+        $package = Join-Path $packages 'com.cardwake.otgroot'
+        $system = Join-Path $data 'system'
+        $active = Join-Path $package '.gesher-keystore'
+        $archive = Join-Path $system 'legacy-key-archive'
+        foreach ($ancestor in (Split-Path -Parent $androidRoot), $androidRoot, $data, $packages, $package, $system, $archive) {
+            $entry = Get-Item -LiteralPath $ancestor -Force
+            if (-not $entry.PSIsContainer -or ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+                throw 'Expected ordinary directories in the disposable protected data tree.'
+            }
+        }
+        $bucket = @(Get-ChildItem -LiteralPath $archive -Directory -Force)
+        if ($bucket.Count -ne 1 -or $bucket[0].Name -cnotmatch '^[0-9a-f]{64}$' -or
+            ($bucket[0].Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+            throw 'Expected one protected binding directory for the single seeded legacy store.'
+        }
+        $saved = @(Get-ChildItem -LiteralPath $bucket[0].FullName -File -Force)
+        if ($saved.Count -ne 1 -or
+            $saved[0].Name -cne '3f448a67d9bd63e996a0a4c2935f44e6824460053d345f324295aa7f642a4a7e.gks' -or
+            ($saved[0].Attributes -band [IO.FileAttributes]::ReparsePoint) -or $saved[0].Length -ne 39 -or
+            [Convert]::ToBase64String([IO.File]::ReadAllBytes($saved[0].FullName)) -cne
+                'R0tTMQAAAAEAA29sZAEAAAAAAAAAAQADQUVTAAAABBEiM0QAAAAA') {
+            throw 'LocalSystem archive did not retain the exact seeded GKS1 record.'
+        }
+        $activeFile = Get-Item -LiteralPath $active -Force
+        if (($activeFile.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $activeFile.Length -ne 36 -or
+            [Convert]::ToBase64String([IO.File]::ReadAllBytes($active)) -cne
+                'R0tTMgAAAAEAA29sZAEAAAAAAAAAAQADQUVTAgAAAAAAAAAA') {
+            throw 'App-visible store did not retain exactly the blocked metadata with no key payload.'
+        }
+        $ids = @($requestData.GuestProcessIds)
+        if ($ids.Count -lt 2 -or $ids.Count -gt 64) { throw 'Expected the bounded retained protected guests.' }
+        $app = @(Get-CimInstance Win32_Process | Where-Object {
+            $_.ProcessId -in $ids -and $_.ExecutablePath -ieq $guestImage -and
+                $_.CommandLine -match ' android\.app\.GesherAppProcess --package "?com\.cardwake\.otgroot"? --start-seq [1-9]'
+        })
+        if ($app.Count -ne 1) { throw 'Expected one retained admitted CardWake app process.' }
+        $guest = [GesherSystemIdentityProbe]::new([uint32]$app[0].ProcessId, $guestImage, $true)
+        try {
+            if ($guest.UserSid -ne $expectedSid) { throw 'The retained CardWake app has the wrong TokenUser.' }
+            $read = $guest.OpenAsAppContainer($active, [uint32]0x80000000L)
+            $archiveRead = $guest.OpenAsAppContainer($saved[0].FullName, [uint32]0x80000000L)
+            $archiveChangeAcl = $guest.OpenAsAppContainer($saved[0].FullName, [uint32]0x00040000)
+            $guest.VerifyLive()
+            if ($read -ne 0 -or $archiveRead -ne 5 -or $archiveChangeAcl -ne 5) {
+                throw "Expected active-store read and archive ACCESS_DENIED for read/WRITE_DAC; Win32 $read/$archiveRead/$archiveChangeAcl."
+            }
+        } finally { $guest.Dispose() }
+        $result.LegacyArchiveVerified = $true
     } else {
         $ids = @($requestData.GuestProcessIds)
         if ($ids.Count -lt 2 -or $ids.Count -gt 64 -or @($ids | Select-Object -Unique).Count -ne $ids.Count) {

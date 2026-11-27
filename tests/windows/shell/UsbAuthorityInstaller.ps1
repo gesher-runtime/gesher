@@ -82,16 +82,17 @@ public static class GesherIdentityProbe {
             throw new Win32Exception(error, operation + " failed with Win32 " + error);
         }
     }
-    static SecurityAttributes ProbeSecurity(bool directory) {
+    static SecurityAttributes ProbeSecurity(bool directory, bool lowIntegrity = false) {
         IntPtr descriptor;
         string flags = directory ? "OICI" : "";
         Require(ConvertStringSecurityDescriptorToSecurityDescriptor(
-            "O:BAG:BAD:P(A;" + flags + ";FA;;;SY)(A;" + flags + ";FA;;;BA)",
+            "O:BAG:BAD:P(A;" + flags + ";FA;;;SY)(A;" + flags + ";FA;;;BA)" +
+                (lowIntegrity ? "S:(ML;OICI;NW;;;LW)" : ""),
             1, out descriptor, IntPtr.Zero), "ConvertStringSecurityDescriptorToSecurityDescriptor(test fixture)");
         return new SecurityAttributes { Size=Marshal.SizeOf(typeof(SecurityAttributes)), Descriptor=descriptor, Inherit=0 };
     }
-    public static void CreatePrivateDirectory(string path) {
-        var security = ProbeSecurity(true);
+    public static void CreatePrivateDirectory(string path, bool lowIntegrity = false) {
+        var security = ProbeSecurity(true, lowIntegrity);
         try { Require(CreateDirectory(path, ref security), "CreateDirectory(protected test ancestor)"); }
         finally { LocalFree(security.Descriptor); }
     }
@@ -164,11 +165,11 @@ public static class GesherIdentityProbe {
 '@
 
 function New-ProtectedProbeDirectory([string]$Path) {
-    [GesherIdentityProbe]::CreatePrivateDirectory($Path)
+    [GesherIdentityProbe]::CreatePrivateDirectory($Path, $false)
 }
 
 function Invoke-SystemIdentityProbe([string]$Operation, [uint32]$HolderProcessId,
-    [string]$FixturePath = '', [uint32[]]$GuestProcessIds = @()) {
+    [string]$FixturePath = '', [uint32[]]$GuestProcessIds = @(), [string]$DesktopSid = '') {
     $probeName = 'GesherIdentityProbe-' + [guid]::NewGuid().ToString('N')
     # Program Files prevents an ordinary desktop process replacing an ancestor
     # while the SYSTEM task starts. The copied helper, request and result have
@@ -189,6 +190,7 @@ function Invoke-SystemIdentityProbe([string]$Operation, [uint32]$HolderProcessId
             HolderProcessId = $HolderProcessId
             FixturePath = $FixturePath
             GuestProcessIds = @($GuestProcessIds)
+            DesktopSid = $DesktopSid
         } | ConvertTo-Json -Depth 4
         [GesherIdentityProbe]::WritePrivateFile($requestPath, [Text.Encoding]::UTF8.GetBytes($requestBody))
         foreach ($path in $probeDirectory, $helperPath, $requestPath) {
@@ -454,6 +456,17 @@ try {
         } else {
             if ($privateRootExisted) { throw 'Original APK boot requires an empty disposable protected-data root.' }
             Stop-Authority
+            $desktopSid = $identity.User.Value
+            $freshAndroidRoot = Join-Path $privateRoot $desktopSid
+            $freshData = Join-Path $freshAndroidRoot 'data'
+            foreach ($path in $privateRoot, $freshAndroidRoot, $freshData) {
+                [GesherIdentityProbe]::CreatePrivateDirectory($path, $true)
+            }
+            $legacyAppData = Join-Path $freshData 'data\com.cardwake.otgroot'
+            $null = New-Item -ItemType Directory -Path $legacyAppData
+            # GKS1, one synthetic AES record "old" with a 4-byte payload.
+            $rawLegacy = [Convert]::FromBase64String('R0tTMQAAAAEAA29sZAEAAAAAAAAAAQADQUVTAAAABBEiM0QAAAAA')
+            [IO.File]::WriteAllBytes((Join-Path $legacyAppData '.gesher-keystore'), $rawLegacy)
             [GesherIdentityProbe]::WritePrivateFile($launchStdout, [byte[]]@())
             [GesherIdentityProbe]::WritePrivateFile($launchStderr, [byte[]]@())
             $launch = Start-Process -FilePath $exe -ArgumentList ('launch-apk-no-media "' + $apk + '"') `
@@ -466,7 +479,9 @@ try {
                 if ($launch.ExitCode -ne 0) { throw "Protected original APK native startup failed with Win32 status $($launch.ExitCode)." }
             } finally { $launch.Dispose() }
             $roots = @(Get-ChildItem -LiteralPath $privateRoot -Directory)
-            if ($roots.Count -ne 1) { throw 'Protected startup did not produce one desktop-private Android root.' }
+            if ($roots.Count -ne 1 -or $roots[0].FullName -ine $freshAndroidRoot) {
+                throw 'Protected startup did not use the seeded desktop-private Android root.'
+            }
             $androidRoot = $roots[0].FullName
             foreach ($relative in '', 'data', 'stage', 'tmp', 'tmp\server', 'tmp\com.cardwake.otgroot') {
                 $path = if ($relative) { Join-Path $androidRoot $relative } else { $androidRoot }
@@ -517,6 +532,9 @@ try {
             if (-not $windowShown -or -not $webViewLoaded) {
                 throw "Original CardWake UI readiness failed: shown frame=$windowShown, original asset WebView=$webViewLoaded."
             }
+            $archiveProbe = Invoke-SystemIdentityProbe 'VerifyLegacyArchive' ([uint32]$runtimeConfiguration.ProcessId) '' $guestIds $desktopSid
+            if (-not $archiveProbe.LegacyArchiveVerified) { throw 'The LocalSystem legacy archive probe did not attest the result.' }
+            Write-Output 'PASS: protected launcher archived the exact legacy record and scrubbed the active store; the retained CardWake lowbox could read its store and was denied archive read and WRITE_DAC'
             if ((Get-FileHash -LiteralPath $apk -Algorithm SHA256).Hash -ine $expectedHash) { throw 'The original APK changed during execution.' }
             Write-Output 'PASS: original pinned CardWake APK, protected native boot, real desktop frame and original WebView asset load; production Android data rejects ordinary desktop writes'
             Write-Output 'LIMITATION: no storage grant was issued; physical reader/card, media write, disconnect, card replacement and real-card revocation were not exercised.'
