@@ -174,6 +174,12 @@ struct NamespaceCollisionEvidence {
   wchar_t security[2048]{};
   char stage[96] = "not-attempted";
 };
+constexpr const wchar_t* kGuestLoaderProbes[] = {L"guest-kernel32.exe", L"guest-user32.exe"};
+struct GuestLoaderEvidence {
+  DWORD attempted = 0, prepare_status = ERROR_SUCCESS, start_status = ERROR_NOT_READY, resume_status = ERROR_NOT_READY;
+  DWORD wait_status = ERROR_NOT_READY, exit_code = ERROR_NOT_READY, stop_status = ERROR_NOT_READY;
+  char stage[96] = "not-attempted";
+};
 struct Evidence {
   DWORD magic = 0x47504c54;
   DWORD status = ERROR_SUCCESS;
@@ -192,6 +198,7 @@ struct Evidence {
   SessionObjectsEvidence app_container_objects;
   PackageLeafEvidence package_leaf;
   NamespaceCollisionEvidence namespace_collision;
+  GuestLoaderEvidence guest_loader[std::size(kGuestLoaderProbes)]{};
   lowbox_trace::LowboxIatTraceEvidence lowbox_trace;
   EquivalentTokenEvidence equivalent;
   profile_control::ScmProfileControlEvidence scm_control;
@@ -2644,6 +2651,45 @@ void PrintSessionObjects(const char* root, DWORD private_grant, const SessionObj
     }
   }
 }
+void ObserveGuestLoader(HANDLE token, const storage::AuthorityLaunchSpec& original,
+                        const storage::AuthorityLaunch& first,
+                        GuestLoaderEvidence (&evidence)[std::size(kGuestLoaderProbes)]) {
+  // Bounded diagnostic only. It cannot change the original launch or cleanup
+  // result, even if an optional probe cannot start or complete.
+  const ULONGLONG deadline = std::min(config.worker_deadline, GetTickCount64() + 5000);
+  for (size_t i = 0; i < std::size(kGuestLoaderProbes); ++i) {
+    auto& row = evidence[i];
+    if (GetTickCount64() >= deadline) break;
+    row.attempted = 1;
+    if (row.prepare_status != ERROR_SUCCESS) continue;
+    try {
+      const std::wstring image = config.directory + L"\\" + kGuestLoaderProbes[i];
+      auto spec = original;
+      spec.executable = image.c_str();
+      spec.arguments = {};
+      spec.termination_error = nullptr;
+      spec.expected_package_objects = first.package_objects();
+      std::unique_ptr<storage::AuthorityLaunch> probe;
+      const char* stage = "not-started";
+      row.start_status = storage::AuthorityLaunch::Create(token, spec, &probe, &stage);
+      std::snprintf(row.stage, sizeof(row.stage), "%s", stage ? stage : "<null>");
+      if (row.start_status != ERROR_SUCCESS || !probe) continue;
+      row.resume_status = probe->Resume();
+      if (row.resume_status == ERROR_SUCCESS) {
+        const ULONGLONG now = GetTickCount64();
+        const DWORD wait = now < deadline ? static_cast<DWORD>(std::min<ULONGLONG>(1500, deadline - now)) : 0;
+        row.wait_status = WaitForSingleObject(probe->process(), wait);
+        if (row.wait_status == WAIT_OBJECT_0 && !GetExitCodeProcess(probe->process(), &row.exit_code)) {
+          row.exit_code = GetLastError();
+        }
+      }
+      row.stop_status = probe->Stop(500);
+    } catch (...) {
+      row.start_status = ERROR_NOT_ENOUGH_MEMORY;
+    }
+  }
+}
+
 Evidence RunSystem() {
   Evidence evidence;
   bool installed = false;
@@ -2705,6 +2751,14 @@ Evidence RunSystem() {
     for (PSID reader : {identity->sid(), capability.value, desktop_user}) {
       Check(container::Grant(config.directory, reader, FILE_GENERIC_READ | FILE_GENERIC_EXECUTE, true), "fixture-execute-acl");
       Check(container::Grant(config.image, reader, FILE_GENERIC_READ | FILE_GENERIC_EXECUTE, false), "fixture-image-execute-acl");
+      if (config.lowbox_iat_trace) {
+        for (size_t i = 0; i < std::size(kGuestLoaderProbes); ++i) {
+          auto& row = evidence.guest_loader[i];
+          if (row.prepare_status == ERROR_SUCCESS)
+            row.prepare_status = container::Grant(config.directory + L"\\" + kGuestLoaderProbes[i], reader,
+                FILE_GENERIC_READ | FILE_GENERIC_EXECUTE, false);
+        }
+      }
     }
     DesktopHelper(desktop.get(), service_job.get(), identity->sid(), capability.value);
     const std::wstring temporary = config.directory + L"\\private-data";
@@ -2956,6 +3010,8 @@ Evidence RunSystem() {
     Require(WaitForSingleObject(child->process(), 10000) == WAIT_OBJECT_0, "guest-completion", ERROR_TIMEOUT);
     DWORD code = 0;
     Require(GetExitCodeProcess(child->process(), &code), "guest-exit-query");
+    if (code == 0xc0000142 && config.lowbox_iat_trace)
+      ObserveGuestLoader(identity->token(), spec, *child, evidence.guest_loader);
     Check(code, "guest-private-environment-witness");
     Check(child->Stop(0), "idempotent-exited-stop");
     Require(child->Resume() == ERROR_PROCESS_ABORTED, "deny-resume-after-stop", ERROR_INVALID_DATA);
@@ -3123,8 +3179,21 @@ DWORD Controller(bool explicit_scm_control, bool explicit_lowbox_trace) {
     PrivateDirectory(directory);
     own_directory = true;
     image = directory + L"\\probe.exe";
-    const auto binary = Read(Image(), 64 * 1024 * 1024);
+    const std::wstring controller_image = Image();
+    const auto binary = Read(controller_image, 64 * 1024 * 1024);
     WriteNew(image, binary.data(), static_cast<DWORD>(binary.size()));
+    if (explicit_lowbox_trace) {
+      const std::wstring source = controller_image.substr(0, controller_image.find_last_of(L'\\') + 1);
+      for (const auto* name : kGuestLoaderProbes) {
+        try {
+          const auto probe = Read(source + name, 1024 * 1024);
+          WriteNew(directory + L"\\" + name, probe.data(), static_cast<DWORD>(probe.size()));
+        } catch (const Failure& error) {
+          std::printf("Protected guest loader staging: image=%ls win32=%lu stage=%s\n",
+              name, static_cast<unsigned long>(error.status), error.stage);
+        }
+      }
+    }
     const Service manager(OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT | SC_MANAGER_CREATE_SERVICE));
     Require(!!manager, "controller-open-scm");
     const std::wstring name = L"GesherLaunchTest-" + std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(GetTickCount64());
@@ -3186,6 +3255,16 @@ DWORD Controller(bool explicit_scm_control, bool explicit_lowbox_trace) {
         static_cast<unsigned long>(evidence.system_caller_token_access));
     std::printf("Protected launch: stage=%s win32=%lu cleanup_win32=%lu cleanup_stage=%s\n", evidence.stage,
         static_cast<unsigned long>(evidence.status), static_cast<unsigned long>(evidence.cleanup), evidence.cleanup_stage);
+    for (size_t i = 0; i < std::size(kGuestLoaderProbes); ++i) {
+      const auto& probe = evidence.guest_loader[i];
+      if (probe.attempted)
+        std::printf("Protected guest loader: image=%ls prepare=%lu start=%lu stage=%.*s resume=%lu wait=0x%08lx exit=0x%08lx stop=%lu\n",
+            kGuestLoaderProbes[i], static_cast<unsigned long>(probe.prepare_status),
+            static_cast<unsigned long>(probe.start_status),
+            static_cast<int>(sizeof(probe.stage)), probe.stage, static_cast<unsigned long>(probe.resume_status),
+            static_cast<unsigned long>(probe.wait_status), static_cast<unsigned long>(probe.exit_code),
+            static_cast<unsigned long>(probe.stop_status));
+    }
     std::printf("Protected launch: profile-identity-created=%lu own-unload-attempted=%lu own-unload-win32=%lu privilege-restore-win32=%lu\n",
         static_cast<unsigned long>(evidence.profile_identity_created), static_cast<unsigned long>(evidence.profile_unload_attempted),
         static_cast<unsigned long>(evidence.profile_unload_status), static_cast<unsigned long>(evidence.profile_privilege_restore_status));
@@ -3345,6 +3424,8 @@ DWORD Controller(bool explicit_scm_control, bool explicit_lowbox_trace) {
           if (error != ERROR_FILE_NOT_FOUND && error != ERROR_PATH_NOT_FOUND) record_cleanup(error, "delete-fixture-private-data");
         }
         remove_file(directory + L"\\result.bin", "delete-fixture-evidence");
+        for (const auto* name : kGuestLoaderProbes)
+          remove_file(directory + L"\\" + name, "delete-fixture-loader-probe");
         remove_file(image, "delete-fixture-image");
         if (!RemoveDirectoryW(directory.c_str())) record_cleanup(GetLastError(), "delete-fixture-directory");
       } else if (retained_windows_profile) {
