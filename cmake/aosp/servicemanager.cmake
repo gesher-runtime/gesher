@@ -59,6 +59,12 @@ add_executable(loopback_relay_frames_test EXCLUDE_FROM_ALL
 set_target_properties(loopback_relay_frames_test PROPERTIES LINK_LIBRARIES "ws2_32")
 target_compile_options(loopback_relay_frames_test PRIVATE -Wall -Wextra -Werror)
 
+add_executable(canonical_file_name_test EXCLUDE_FROM_ALL
+  ${CMAKE_SOURCE_DIR}/tests/native/canonical_file_name_test.cc)
+target_include_directories(canonical_file_name_test PRIVATE ${CMAKE_SOURCE_DIR}/compat/posix/include)
+target_compile_options(canonical_file_name_test PRIVATE -Wall -Wextra -Werror)
+target_link_options(canonical_file_name_test PRIVATE -municode)
+
 # servicemanager, as vndservicemanager is built (no VINTF, no perfetto), with
 # libcutils' multiuser.cpp (not in libcutils' Windows set) and a main of its
 # own (compat/binder/servicemanager_main.cc).

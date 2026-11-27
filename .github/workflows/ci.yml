@@ -473,6 +473,32 @@ jobs:
           cl /nologo /std:c++20 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /DNOMINMAX tests\native\protected_profile_name_test.cc /Fe:protected_profile_name_test.exe bcrypt.lib
           if errorlevel 1 exit /b 1
           protected_profile_name_test.exe
+      - name: Protected installation owner, retirement and inherited ACL contracts
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          $ownerContractRoot = Join-Path $env:RUNNER_TEMP ('gesher-owner-' + [guid]::NewGuid().ToString('N'))
+          New-Item -ItemType Directory -Path $ownerContractRoot -ErrorAction Stop | Out-Null
+          $compileFlags = @('/nologo', '/std:c++20', '/EHsc', '/W4', '/WX', '/D_WIN32_WINNT=0x0A00', '/DNOMINMAX')
+          $containerObject = Join-Path $ownerContractRoot 'container.obj'
+          & cl @compileFlags /c compat/framework/app_container.cc "/Fo:$containerObject"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          foreach ($kind in 'journal', 'marker', 'revocation', 'wire', 'job') {
+            $source = "tests/native/protected_owner_${kind}_test.cc"
+            $binary = Join-Path $ownerContractRoot ($kind + '.exe')
+            $object = Join-Path $ownerContractRoot ($kind + '.obj')
+            $arguments = $compileFlags + @($source, "/Fo:$object", "/Fe:$binary", 'bcrypt.lib')
+            if ($kind -eq 'revocation') { $arguments += @($containerObject, 'advapi32.lib', 'ole32.lib', 'userenv.lib') }
+            & cl @arguments
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            if ($kind -in 'journal', 'marker', 'revocation') {
+              & $binary (Join-Path $ownerContractRoot ($kind + '-state'))
+            } else {
+              & $binary
+            }
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+
       - name: Protected USB observation bounds, identity epochs and malformed metadata
         if: ${{ !cancelled() }}
         shell: cmd
@@ -1385,7 +1411,7 @@ jobs:
           ninja -C out thread_watch_clock_test dlopen_errors_test
           ninja -C out
           # Native fixtures are CI-only; none is installed by gesher.iss.
-          ninja -C out install_pipe_test account_chooser_test window_promotion_test permission_dialog_test binder_protected_admission_test loopback_relay_test loopback_relay_frames_test window_frame_test
+          ninja -C out install_pipe_test account_chooser_test window_promotion_test permission_dialog_test binder_protected_admission_test loopback_relay_test loopback_relay_frames_test canonical_file_name_test window_frame_test
           ninja -C out arm64_numeric_return_host arm64_numeric_fenv_test
           ninja -C out font_environment_test
 
@@ -1940,6 +1966,16 @@ jobs:
           }
           & .\dist\gesher-exec.exe --elf "$PWD\exec-input\locale-info-x86_64" locale-info
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Canonical file identity and case preservation
+        if: ${{ !cancelled() && steps.build_installer.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          $canonicalRoot = Join-Path $env:RUNNER_TEMP ('gesher-canonical-' + [guid]::NewGuid().ToString('N'))
+          New-Item -ItemType Directory -Path $canonicalRoot -ErrorAction Stop | Out-Null
+          & .\dist\canonical_file_name_test.exe $canonicalRoot
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Remove-Item -LiteralPath $canonicalRoot -ErrorAction Stop
 
       - name: Upstream filesystem programs on isolated broker-backed media
         if: ${{ !cancelled() && steps.build_installer.outcome == 'success' }}
