@@ -3322,6 +3322,8 @@ void AppendGdiTrace(const GuestLoaderTrace& gdi, GuestLoaderTrace* trace) {
   trace->bytes = static_cast<DWORD>(kept + added);
 }
 
+#include "usb_owned_desktop_control.h"
+
 Evidence RunSystem() {
   Evidence evidence;
   bool installed = false;
@@ -3681,6 +3683,8 @@ Evidence RunSystem() {
         ObserveGuestLoaderTrace(identity->token(), spec, *child, identity->sid(), capability.value,
             desktop_user, &gdi, true);
         AppendGdiTrace(gdi, &evidence.guest_loader_trace);
+        owned_desktop_control::Observe(identity->token(), guest_token.get(), spec,
+            identity->sid(), package.value, &evidence.guest_loader_trace);
       }
     }
     Check(code, "guest-private-environment-witness");
@@ -3973,6 +3977,7 @@ DWORD Controller(bool explicit_scm_control, bool explicit_lowbox_trace) {
       }
     }
     if (explicit_lowbox_trace && evidence.status == 0xc0000142) {
+      owned_desktop_control::PrintStored(directory);
       const auto& trace = evidence.guest_loader_trace;
       if (trace.attempted) {
         std::printf("Protected guest loader trace: setup=%lu launch=%lu attach=%lu resume=%lu wait=%lu detach=%lu "
@@ -4170,6 +4175,7 @@ DWORD Controller(bool explicit_scm_control, bool explicit_lowbox_trace) {
           remove_file(directory + L"\\" + name, "delete-fixture-heap-report");
         remove_file(directory + L"\\user32-cfg.bin", "delete-fixture-user32-metadata");
         remove_file(directory + L"\\gdi32full-cfg.bin", "delete-fixture-gdi-metadata");
+        remove_file(directory + L"\\" + owned_desktop_control::kReportName, "delete-fixture-owned-desktop-report");
         remove_file(image, "delete-fixture-image");
         if (!RemoveDirectoryW(directory.c_str())) record_cleanup(GetLastError(), "delete-fixture-directory");
       } else if (retained_windows_profile) {
@@ -4193,6 +4199,16 @@ DWORD Controller(bool explicit_scm_control, bool explicit_lowbox_trace) {
 }  // namespace
 
 int wmain(int argc, wchar_t** argv) {
+  if (argc == 6 && std::wstring_view(argv[1]) == L"--owned-desktop-control") {
+    try { return static_cast<int>(owned_desktop_control::Helper(argv[2], argv[3], argv[4], argv[5])); }
+    catch (const Failure& failure) { return static_cast<int>(failure.status); }
+    catch (...) { return ERROR_NOT_ENOUGH_MEMORY; }
+  }
+  if (argc == 2 && std::wstring_view(argv[1]) == L"--owned-desktop-selftest") {
+    try { return static_cast<int>(owned_desktop_control::SelfTest()); }
+    catch (const Failure& failure) { return static_cast<int>(failure.status); }
+    catch (...) { return ERROR_NOT_ENOUGH_MEMORY; }
+  }
   DWORD control_exit = ERROR_INVALID_PARAMETER;
   if (profile_control::DispatchScmProfileControlService(argc, argv, &control_exit)) return static_cast<int>(control_exit);
   if (argc == 2 && std::wstring_view(argv[1]) == L"runtime-identity") return storage::RunRuntimeIdentityService();

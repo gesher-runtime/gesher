@@ -166,3 +166,61 @@ continues to complete in eight events. Preparation retains the original seven
 USER32 and four PE controls and passes nine GDI controls. The full fixture
 compiles with MSVC `/W4 /WX`. Private-token execution of this follow-up remains
 pending; neither the ordinary run nor the new map is a USER32 repair.
+
+## Kernel initialization result and an owned desktop control
+
+The `2a0f23f208b1528ebed3a2c83d8d15bda0ee7e2e` hosted run completed
+the extended observer on Windows 2025 in 17 events with setup/error/cleanup
+zero. The actual `win32u!NtGdiInit2` import at `0x8a10c` returned raw RAX zero;
+the branch at `0x8a128` selected `0x8a170`, which returned
+`STATUS_NO_MEMORY`. Windows 2022 again returned zero from its actual
+`NtGdiInit` call at `0x1436b`. These observations identify the failing kernel
+initialization result; they do not identify its underlying cause. The original
+protected-launch witness still failed.
+
+An additional test-only control compares the unchanged Default desktop with
+a newly owned noninteractive window station and desktop. The Session0 service
+cannot create these objects in the interactive session: the documented
+[window-station API](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-createwindowstationw)
+uses the calling process's session. A separate SYSTEM helper therefore runs
+in the already verified target session, under the existing fixture job and
+deadline. Windows forbids cross-session handle inheritance, so the helper starts
+suspended with inheritance disabled. Exact token, report and job handles are
+duplicated directly into the retained helper process. A fresh first-instance,
+SYSTEM-only named pipe delivers their values in a fixed bounded request. The
+service checks the live retained client PID and session; the helper checks the
+server PID, birth time and real SYSTEM identity. The request and both sides
+share the original absolute deadline. No process memory is patched and no
+production desktop-selection option is added.
+
+The helper creates a GUID station with `CWF_CREATE_ONLY` and initially permits
+only SYSTEM and administrators. It creates its own desktop there, then grants
+the actual private user and package full rights and a low mandatory label on
+those two new objects only. It reads back both descriptors. Matched additional
+private and lowbox probes use the same existing tokens, token default ACL,
+SYSTEM-only process/thread policy, environment and mitigation on Default and
+the owned desktop. A nested kill-on-close job bounds these children. The helper
+restores its station/thread desktop and closes its owned objects only after
+confirmed child termination. An unconfirmed termination is reported as a
+cleanup failure, with remaining owned handles retained until helper exit.
+Existing station and desktop permissions are unchanged.
+
+The controller reads the separate fixed report from the protected fixture
+directory. A summary is appended to the existing diagnostic tail only if it
+fits; it never evicts an original USER32 or GDI observation. The original IPC
+payload size, original three loader rows, gate result and observer-free
+condition are unchanged. A zero helper exit means report delivery, not successful USER32
+initialization. A positive owned-desktop result would localize the desktop or
+station context; it would not prove an ACL-mask cause, because heap and other
+desktop state differ too.
+
+Local MSVC `/W4 /WX` compilation passes. The ordinary identity selftest covers
+only a new desktop under its unchanged current station: both the original
+Default and owned-desktop late loaders exited zero, descriptor verification
+and cleanup succeeded. Removing only the private test copy of the executable
+produced the real missing-file error for both probes, a nonzero selftest exit
+and successful object cleanup. The real SYSTEM helper rejects this ordinary
+identity with access denied before accepting any handle. Named station
+creation is unavailable under this non-admin local token; an unnamed
+`CREATE_ONLY` attempt also refused an existing object without changing it.
+Actual SYSTEM-helper, private-token and lowbox rows remain pending hosted CI.
