@@ -329,7 +329,7 @@ public final class Services {
                 new StorageStatsService(pm, atm::authenticatedPackageCodeForPid)).asBinder());
         pm.deviceAdminPolicy().configure(atm::authenticatedPackageCodeForPid, persistentAccounts,
                 intent -> am.sendBroadcastFor(null, intent, null));
-        services.put(Context.DEVICE_POLICY_SERVICE, StandIn.of(
+        services.put(Context.DEVICE_POLICY_SERVICE, StandIn.ofStrictDefaults(
                 android.app.admin.IDevicePolicyManager.class,
                 pm.deviceAdminPolicy()).asBinder());
         // Telephony over the host's cellular modem, if Windows reported one at boot

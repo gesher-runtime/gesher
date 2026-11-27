@@ -24,7 +24,7 @@ $adminPolicyCode = $LASTEXITCODE
 Check 'services: device administrator real APK policy, identity, revocation and update contracts' {
   $global:LASTEXITCODE = $adminPolicyCode
   $adminPolicyOut
-} @('DeviceAdminPolicyRuntimeTest: 30 checks passed; host lock not executed')
+} @('DeviceAdminPolicyRuntimeTest: 36 checks passed; host lock not executed')
 
 # Native enrollment controls do not grant policy or submit a session lock.
 $deviceAdminDialogOut = RunTimed "$Dir/device_admin_dialog_test.exe" @() 90

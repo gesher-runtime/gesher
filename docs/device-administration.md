@@ -21,6 +21,12 @@ Other policy sets are refused with an explanation rather than being recorded as
 granted. No Android device-admin or managed-user feature is advertised as a
 result of this limited implementation.
 
+The device-policy Binder rejects methods it has not implemented with
+`UnsupportedOperationException`, even in the normal non-strict runtime mode.
+An inherited AIDL default cannot report success for an unsupported policy
+mutation. This restriction applies only to the device-policy service; implemented
+enrollment, owner, encryption and policy queries retain their documented answers.
+
 `lockNow()` with flags zero locks the current Windows session using the real
 `LockWorkStation` API. The server checks the attached application's current
 installed identity and its approved receiver policy before the operation.

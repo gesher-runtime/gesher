@@ -67,6 +67,17 @@ public final class StandInDispatchTest {
         StandIn.setStrict(false);
         StandIn<Sample> wrapper = StandIn.of(Sample.class, new Impl());
         Sample proxy = wrapper.asInterface();
+        Sample strictInstance = StandIn.ofStrictDefaults(Sample.class, new Impl()).asInterface();
+        try { strictInstance.missing(); throw new AssertionError("Per-service strict defaults ignored"); }
+        catch (UnsupportedOperationException expected) { checks++; }
+        check(strictInstance.ping() == 17 && strictInstance.inherited() == 23,
+                "Per-service strict defaults preserve own and inherited implementations");
+        StandIn.setStrict(true);
+        StandIn.setStrict(false);
+        try { strictInstance.missing(); throw new AssertionError("Global mode disabled per-service strict defaults"); }
+        catch (UnsupportedOperationException expected) { checks++; }
+        check(StandIn.of(Sample.class, new Impl()).asInterface().missing() == 7,
+                "Per-service strict defaults do not alter unrelated ordinary wrappers");
         check(proxy.equals(proxy) && !proxy.equals(new Object()), "Proxy equals remains identity-based");
         check(proxy.hashCode() == System.identityHashCode(proxy), "Proxy identity hash");
         check("StandIn{Sample}".equals(proxy.toString()), "Proxy descriptive string");
