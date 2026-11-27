@@ -2904,6 +2904,9 @@ Evidence RunSystem() {
       } catch (const Failure& failure) {
         evidence.desktop_snapshot_status = failure.status;
         desktop_snapshot.clear();
+      } catch (...) {
+        evidence.desktop_snapshot_status = ERROR_NOT_ENOUGH_MEMORY;
+        desktop_snapshot.clear();
       }
     }
     DesktopHelper(desktop.get(), service_job.get(), identity->sid(), capability.value, desktop_snapshot);
