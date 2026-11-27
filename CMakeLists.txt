@@ -113,6 +113,8 @@ include(compat/credentials/credentials.cmake)
 include(compat/install/install.cmake)
 # Framework natives real apps need: SQLite, android.database, animators (docs/e2e.md).
 include(cmake/aosp/framework_e2e.cmake)
+target_link_libraries(rooted_storage_host_probe PRIVATE sqlite)
+target_link_libraries(appcontainer_installed_media_probe PRIVATE sqlite)
 # gesher: Start menu shortcuts and AppUserModelIDs for installed apps (shell track).
 include(cmake/aosp/shell.cmake)
 # gesher: the device-state services' Windows side: alarms, clipboard, toasts, power (devsvc track).

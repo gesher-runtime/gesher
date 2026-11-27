@@ -3450,10 +3450,21 @@ index 2b7556da0..3f2e18a3d 100644
  // Returns a Linux error number, or0 on success. Caller retains its fd lock,
  // anchor and registry transaction throughout; commits only a successful
 diff --git a/compat/posix/src/sqlite_path.cc b/compat/posix/src/sqlite_path.cc
-index 4d91f3f74..c89cfa9da 100644
+index 4d91f3f74..b6604d138 100644
 --- a/compat/posix/src/sqlite_path.cc
 +++ b/compat/posix/src/sqlite_path.cc
-@@ -43,7 +43,9 @@ extern "C" int gesher_sqlite_full_pathname(
+@@ -11,7 +11,9 @@
+ // no knowledge of the eventual read/write/create/delete request.
+ extern "C" int gesher_sqlite_path_allowed(const char* path, int access) {
+   std::wstring windows;
+-  if (!gesher::DiskPath(path, &windows, EINVAL)) return 0;
++  // The Win32 VFS syscalls still authorize and perform operations on rooted
++  // paths through the broker. This policy preflight only classifies the name.
++  if (!gesher::DiskPath(path, &windows, EINVAL, true)) return 0;
+   const auto kind = access == SQLITE_ACCESS_READWRITE ? gesher::AccessKind::kWrite
+       : access == SQLITE_ACCESS_READ ? gesher::AccessKind::kRead : gesher::AccessKind::kStat;
+   return gesher::CheckExternalStorageAccess(windows, kind) ? 1 : 0;
+@@ -43,7 +45,9 @@ extern "C" int gesher_sqlite_full_pathname(
    // SQLite examines the output even when xFullPathname fails.
    full[0] = '\0';
    std::wstring windows;
@@ -3531,7 +3542,7 @@ index 9a9d28455..413d9b36e 100644
        Clear(buf);
        buf->st_mode = S_IFIFO | 0600;
 diff --git a/compat/posix/src/storage_policy.cc b/compat/posix/src/storage_policy.cc
-index fca36f326..9481316ae 100644
+index fca36f326..612d840a3 100644
 --- a/compat/posix/src/storage_policy.cc
 +++ b/compat/posix/src/storage_policy.cc
 @@ -2,6 +2,7 @@
@@ -3734,12 +3745,17 @@ index fca36f326..9481316ae 100644
    return CheckCanonicalPath(identity, CanonicalizeWindowsPath(windows_path), kind);
  }
 
-@@ -573,8 +489,24 @@ bool CheckExternalStorageHandle(HANDLE handle, AccessKind kind) {
+@@ -573,8 +489,29 @@ bool CheckExternalStorageHandle(HANDLE handle, AccessKind kind) {
    wchar_t path[32768];
    DWORD length = GetFinalPathNameByHandleW(handle, path, 32768,
                                             FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
 +  if (length && length < 32768) {
 +    return CheckCanonicalPath(identity, LexicalCanonicalize(std::wstring(path, length)), kind);
++  }
++  // Standalone roots have their own sealed NT identities. The actual handle
++  // can be resolved through one of those roots even without a media NT root.
++  if (auto rooted = storage_root::DescriptorPath(handle); !rooted.empty()) {
++    return CheckCanonicalPath(identity, LexicalCanonicalize(std::move(rooted)), kind);
 +  }
 +  const auto& root = identity.media_nt_root;
 +  if (identity.media_root.empty() || !StartsWithIgnoreCase(root, L"\\Device\\")) {
