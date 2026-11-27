@@ -1,6 +1,8 @@
 # gesher-base: the Linux/POSIX interfaces AOSP code expects, on Win32.
 # Headers in include/ shadow or extend mingw's; implementations in src/.
 add_library(gesher_posix STATIC
+  ${CMAKE_CURRENT_LIST_DIR}/../binder/brokered_network.cc
+  ${CMAKE_CURRENT_LIST_DIR}/../binder/loopback_relay.cc
   ${CMAKE_CURRENT_LIST_DIR}/../binder/protected_data_client.cc
   ${CMAKE_CURRENT_LIST_DIR}/../usb_storage/block_broker_client.cc
   ${CMAKE_CURRENT_LIST_DIR}/../usb_storage/protected_runtime_client.cc

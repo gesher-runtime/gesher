@@ -155,6 +155,11 @@ enum Op : uint32_t {
   // Reopen an already held directory-list capability; no guest path input.
   kReopenDirectory = 27,
   kInstalledMedia = 28,
+  // Numeric PC-loopback TCP connect. The host retains its socket; only framed
+  // byte/half-close traffic crosses the authenticated pipe.
+  kLoopbackConnect = 29,
+  // Conservative same-installation native listener namespace preflight.
+  kLoopbackNamespace = 30,
 };
 
 // The descriptor broker's protocol version (kHelloRights), apart from kVersion:

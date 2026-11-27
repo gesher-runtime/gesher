@@ -279,6 +279,9 @@ bool DepositRights(const std::vector<int>& fds, uint64_t queue, uint64_t positio
     DescriptorSnapshotPtr snapshot;
     {
       record_locks::DescriptorGuard guard;
+      SocketFd socket_state;
+      if (LookupSocket(fd, &socket_state) && ws::HasLoopbackRelay(socket_state.description))
+        return errno = EOPNOTSUPP, false;
       // A completed native fence travels as its typed read-only event, not as
       // the NUL reservation behind its descriptor (which cannot be shared).
       fence = TransferNativeFence(fd, &handle, &metadata);

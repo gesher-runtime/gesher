@@ -266,6 +266,7 @@ int RegisterSocket(const SocketFd& state) {
     registered.description = std::make_shared<ws::SocketDescription>();
     registered.description->provider = ws::ClassifyProvider(state.socket);
     registered.description->nonblocking.store(state.initial_nonblocking);
+    registered.description->relay_eligible = state.initial_relay_eligible;
     const int datagram = ws::ConfigureOwnedDatagram(state.socket);
     if (datagram < 0) {
       const int saved = errno;
@@ -304,6 +305,20 @@ bool LookupSocket(int fd, SocketFd* state) {
   if (it == table.end()) return false;
   *state = it->second;
   return true;
+}
+
+bool HasNativeListener(const ws::Address& target, const std::shared_ptr<ws::SocketDescription>& exclude) {
+  std::vector<SocketFd> sockets;
+  {
+    std::lock_guard lock(table_mutex);
+    for (const auto& entry : table) {
+      if (entry.second.description != exclude) sockets.push_back(entry.second);
+    }
+  }
+  for (const auto& socket : sockets) {
+    if (ws::NativeListenerMatches(socket.socket, target, socket.description)) return true;
+  }
+  return false;
 }
 
 
@@ -934,6 +949,7 @@ static int PollFdsImpl(pollfd* fds, nfds_t nfds, int timeout, HANDLE interrupt, 
   auto& fences = scratch.fences;
   auto& fence_index = scratch.fence_index;
   bool waiting_files = false;  // a pipe that may become readable
+  bool waiting_relay = false;
   for (nfds_t i = 0; i < nfds; ++i) {
     pollfd* p = &fds[i];
     p->revents = 0;
@@ -948,6 +964,7 @@ static int PollFdsImpl(pollfd* fds, nfds_t nfds, int timeout, HANDLE interrupt, 
       eventfds.push_back(std::move(e));
       eventfd_index.push_back(i);
     } else if (LookupSocket(p->fd, &state)) {
+      waiting_relay |= ws::HasLoopbackRelay(state.description);
       int events = ((p->events & kIn) != 0 ? ws::kPollIn : 0) |
                    ((p->events & kOut) != 0 ? ws::kPollOut : 0) |
                    ((p->events & POLLPRI) != 0 ? ws::kPollPri : 0);
@@ -981,7 +998,7 @@ static int PollFdsImpl(pollfd* fds, nfds_t nfds, int timeout, HANDLE interrupt, 
   // the registration woke nobody, so the first round only looks.
   std::optional<WaiterRegistration> registration;
   if (ready == 0 && timeout != 0 &&
-      (interrupt != nullptr || waiting_files || !fences.empty() || (!sockets.empty() && !eventfds.empty()))) {
+      (interrupt != nullptr || waiting_files || waiting_relay || !fences.empty() || (!sockets.empty() && !eventfds.empty()))) {
     registration.emplace(!sockets.empty());
   }
   PollWaiter* waiter = registration ? registration->get() : nullptr;

@@ -1261,10 +1261,10 @@ def check_appcontainer_donor_receipts():
 # ends of each changed file are exact, and no runtime pass is granted here.
 APPCONTAINER_INTEGRATION_BASE = 'ff2c1870053c9d0332e6abef07a25fc282d384b5'
 # Independent historical endpoint pin remains fixed when the live side is refreshed.
-APPCONTAINER_INTEGRATION_PREVIOUS_SHA256 = '754be6b93d9a81d2d3e04541af036bedde7b45ef3b6e86d3eeb48514fceda2f9'
+APPCONTAINER_INTEGRATION_PREVIOUS_SHA256 = '377e062070c4bb266a8998466e18410929e94a26aa7fde572b607d274bc136d3'
 APPCONTAINER_INTEGRATION_PATCH = 'tools/net-tcp-priority/qualified/appcontainer-integration-source.patch'
 APPCONTAINER_INTEGRATION_QUALIFICATION = 'tools/net-tcp-priority/qualified/appcontainer-integration-source.json'
-APPCONTAINER_INTEGRATION_QUALIFICATION_SHA256 = 'c8271021ae71fa12d46de940a387d08c8d3e6774197b4762dbc101c77d38ab64'
+APPCONTAINER_INTEGRATION_QUALIFICATION_SHA256 = '8ab0c6bfabbb9885a62b77f9c2c6b1780f98d4ac112fc6f8b24240a9c2ae8d8d'
 # In addition to the donor identity surface, the merged startup/fork path
 # intersects the exact USB and child-wait source qualification.
 APPCONTAINER_INTEGRATION_PATHS = sorted(APPCONTAINER_IDENTITY_SOURCE_SHA256.keys() | {
@@ -1272,6 +1272,8 @@ APPCONTAINER_INTEGRATION_PATHS = sorted(APPCONTAINER_IDENTITY_SOURCE_SHA256.keys
  'compat/elf/exec/exec.cmake', 'compat/elf/exec/gesher_tools.cc',
  # Preserve the exact USB shell inputs before replaying their historical proof.
  'compat/elf/exec/gesher_shell.cc', 'compat/elf/exec/shell_execute.inc',
+ # Restore the exact socket inputs before replaying their historical proofs.
+ 'compat/posix/src/socket.cc', 'compat/posix/src/socket_internal.h', 'compat/posix/src/winsock.cc',
  'compat/posix/src/binder_transport.cc', 'compat/posix/src/process.cc', 'compat/posix/src/storage_policy.cc',
  'compat/posix/src/storage_policy.h',
  # Host-only legacy-key archiving extends the contained runtime. Reconstruct
