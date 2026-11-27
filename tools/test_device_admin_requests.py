@@ -14,12 +14,14 @@ STUBS = {
 'android/content/ComponentName.java': 'package android.content; public record ComponentName(String p,String c) { public String getPackageName(){return p;} public String getClassName(){return c;} public String flattenToShortString(){return p+"/"+c;} }',
 'android/content/Intent.java': """package android.content; public class Intent {
  public static final String CATEGORY_DEFAULT="android.intent.category.DEFAULT";
- public ComponentName component; public Intent selector; public String pkg,action,type,data; public java.util.Set<String> cats; public Object extra; public CharSequence explanation;
+ public static final int FLAG_ACTIVITY_NEW_TASK=0x10000000;
+ public ComponentName component; public Intent selector; public String pkg,action,type,data; public java.util.Set<String> cats; public Object extra; public CharSequence explanation; public int flags;
  public ComponentName getComponent(){return component;} public Intent getSelector(){return selector;}
  public String getPackage(){return pkg;} public String getAction(){return action;} public String getType(){return type;}
  public String getData(){return data;} public java.util.Set<String> getCategories(){return cats;}
  public <T> T getParcelableExtra(String k,Class<T> t){return t.cast(extra);}
  public CharSequence getCharSequenceExtra(String k){return explanation;}
+ public int getFlags(){return flags;}
  }""",
 'android/content/IntentFilter.java': 'package android.content; public class IntentFilter { public static final int MATCH_CATEGORY_EMPTY=0x100000,MATCH_ADJUSTMENT_NORMAL=0x8000; public IntentFilter(String a){} public void addCategory(String a){} public void setPriority(int p){} }',
 'android/content/pm/ApplicationInfo.java': 'package android.content.pm; public class ApplicationInfo { public static final int FLAG_SYSTEM=1,FLAG_INSTALLED=2; public String packageName; public int uid,flags,targetSdkVersion; public boolean enabled; }',
@@ -79,7 +81,7 @@ public class EnrollmentQueueTest {
   Intent malformed=intent();malformed.extra="wrong type";requests.request(malformed,()->{},results::add);
   check(results.remove(0)==Activity.RESULT_CANCELED,"malformed extra cancels cleanly");
   pm.policy.request=r;pm.policy.active=false;decision[0]=false;
-  Intent outer=intent();outer.action="outer.action";outer.selector=new Intent();outer.selector.action=DeviceAdminRequests.ACTION;
+  Intent outer=intent();outer.selector=new Intent();outer.selector.action=DeviceAdminRequests.ACTION;
   outer.explanation="Reason from app {0}";
   check(DeviceAdminRequests.handles(outer,null),"selector resolves enrollment without replacing original extras");
   requests.request(outer,()->{},results::add);queue.remove().run();
@@ -87,6 +89,34 @@ public class EnrollmentQueueTest {
   outer.explanation="x".repeat(5000);
   requests.request(outer,()->{},results::add);queue.remove().run();results.clear();
   check(description[0].length()<4200 && description[0].endsWith("\u2026"),"app explanation is bounded and marked truncated");
+  decision[0]=true;
+  for(boolean active:new boolean[]{false,true}) {
+   pm.policy.active=active;
+   for(boolean selector:new boolean[]{false,true}) {
+    Intent owner=intent();owner.action="android.app.action.SET_PROFILE_OWNER";
+    if(selector){owner.selector=new Intent();owner.selector.action=DeviceAdminRequests.ACTION;}
+    else owner.component=new ComponentName(DeviceAdminRequests.PACKAGE,DeviceAdminRequests.ACTIVITY);
+    check(DeviceAdminRequests.handles(owner,null),"unsupported operation can address the Settings target");
+    int dialogsBefore=shown[0],activationsBefore=pm.policy.activations;
+    check(requests.request(owner,()->{throw new AssertionError("owner action must not open legacy UI");},results::add),"unsupported original action completes safely");
+    check(results.remove(0)==Activity.RESULT_CANCELED && queue.isEmpty()
+      && shown[0]==dialogsBefore && pm.policy.activations==activationsBefore,
+      "explicit or selected owner provisioning never becomes successful legacy enrollment, even if active");
+   }
+  }
+  Intent noAction=intent();noAction.action=null;noAction.component=new ComponentName(DeviceAdminRequests.PACKAGE,DeviceAdminRequests.ACTIVITY);
+  requests.request(noAction,()->{},results::add);
+  check(results.remove(0)==Activity.RESULT_CANCELED && queue.isEmpty(),"missing original enrollment action never grants administration");
+  for(boolean active:new boolean[]{false,true}) {
+   pm.policy.active=active;
+   Intent unparented=intent();unparented.flags=Intent.FLAG_ACTIVITY_NEW_TASK;
+   int dialogsBefore=shown[0],activationsBefore=pm.policy.activations;
+   requests.request(unparented,()->{throw new AssertionError("NEW_TASK enrollment must not open UI");},results::add);
+   check(results.remove(0)==Activity.RESULT_CANCELED && queue.isEmpty()
+     && shown[0]==dialogsBefore && pm.policy.activations==activationsBefore,
+     "NEW_TASK enrollment cancels without changing authority even if already active");
+  }
+  pm.policy.active=false;decision[0]=false;
   pm.policy.request=r;for(int i=0;i<16;i++)check(requests.request(intent(),()->{},results::add),"bounded admission");
   check(!requests.request(intent(),()->{},results::add),"17th concurrent request rejected");
   while(!queue.isEmpty())queue.remove().run();

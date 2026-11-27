@@ -96,6 +96,15 @@ final class DeviceAdminRequests {
         return result;
     }
     boolean request(Intent intent, Runnable beforeOpen, IntConsumer completed) {
+        // Explicit components and selectors affect resolution, never the
+        // operation delivered to Settings. Owner provisioning is a different
+        // action and must not succeed merely because legacy admin is active.
+        // AOSP DeviceAdminAdd also refuses an unparented NEW_TASK enrollment.
+        if (intent == null || !ACTION.equals(intent.getAction())
+                || (intent.getFlags() & Intent.FLAG_ACTIVITY_NEW_TASK) != 0) {
+            completed.accept(Activity.RESULT_CANCELED);
+            return true;
+        }
         final ComponentName admin;
         final String explanation;
         try {

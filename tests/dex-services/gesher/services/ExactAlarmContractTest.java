@@ -742,6 +742,27 @@ public final class ExactAlarmContractTest {
                 check(order.indexOf("ResumeActivityItem") > order.indexOf("ActivityResultItem")
                         && get(source, "state").toString().equals("RESUMED") && (int)get(source, "exactAlarmSettings") == 0,
                         "Enrollment completion sends result before resume and releases its task cover");
+                order.clear(); delivered.clear();
+                runAs(EXACT_UID, EXACT_PID, () -> {
+                    int result = ((android.app.IActivityTaskManager)h.atm).startActivity(h.thread, EXACT_PKG,
+                            null, new Intent("android.app.action.ADD_DEVICE_ADMIN"), null,
+                            null, null, -1, 0, null, null);
+                    check(result == ActivityManager.START_SUCCESS, "Unparented enrollment finishes safely without a launch exception");
+                });
+                check(adminQueue.isEmpty() && delivered.isEmpty()
+                        && get(source, "state").toString().equals("RESUMED") && (int)get(source, "exactAlarmSettings") == 0,
+                        "A direct caller without origin cannot enqueue enrollment or retain a task cover even without NEW_TASK flag");
+                order.clear(); delivered.clear();
+                runAs(EXACT_UID, EXACT_PID, () -> {
+                    int result = ((android.app.IActivityTaskManager)h.atm).startActivity(h.thread, EXACT_PKG,
+                            null, new Intent("android.app.action.ADD_DEVICE_ADMIN").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), null,
+                            (IBinder)get(source, "token"), "new-task-enrollment", 45, 0, null, null);
+                    check(result == ActivityManager.START_SUCCESS, "Parented NEW_TASK enrollment finishes without a launch exception");
+                });
+                check(adminQueue.isEmpty() && delivered.size() == 1
+                        && delivered.get(0).mResultCode == android.app.Activity.RESULT_CANCELED
+                        && delivered.get(0).mRequestCode == 45 && (int)get(source, "exactAlarmSettings") == 0,
+                        "NEW_TASK enrollment reports canceled to its parent without opening UI or retaining a cover");
             } finally { set(h.pm, "mDeviceAdminRequests", previousAdminRequests); }
 
             // startActivity without a result token still covers the visible activity.

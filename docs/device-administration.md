@@ -6,6 +6,13 @@ explanation and the authority being requested, and lets the user reject the
 request. Closing or rejecting the window leaves the app inactive and returns
 `RESULT_CANCELED`. Acceptance returns `RESULT_OK` only after the grant is saved
 for that installation. No device or profile owner is created.
+An explicit Settings component or an intent selector cannot change the requested
+operation: only the original `ACTION_ADD_DEVICE_ADMIN` action enrolls a legacy
+administrator. Owner provisioning actions are canceled without an enrollment
+prompt or a successful result, even when that receiver is already active.
+Like AOSP's enrollment activity, a request with `FLAG_ACTIVITY_NEW_TASK` is
+canceled without a prompt or a grant; the shared routing for other Settings
+screens is unaffected.
 
 Currently supported administrators must request exactly the legacy `force-lock`
 policy. A valid receiver must require `android.permission.BIND_DEVICE_ADMIN`,
@@ -49,7 +56,11 @@ Android's [ACTION_ADD_DEVICE_ADMIN contract](https://developer.android.com/refer
 requires a user flow for granting or rejecting the named receiver, including
 renewed consent for newly requested policies. The
 [legacy device administration guide](https://developer.android.com/work/device-admin)
-describes receiver metadata and user activation. Microsoft's
+describes receiver metadata and user activation. AOSP's
+[DeviceAdminAdd activity](https://android.googlesource.com/platform/packages/apps/Settings/+/refs/heads/master/src/com/android/settings/applications/specialaccess/deviceadmin/DeviceAdminAdd.java)
+branches profile-owner provisioning separately from legacy enrollment; its
+already-active success path applies specifically to `ACTION_ADD_DEVICE_ADMIN`.
+Microsoft's
 [LockWorkStation contract](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-lockworkstation)
 explicitly distinguishes a submitted asynchronous request from a locked session;
 Gesher's existing WTS session query is used for confirmation.

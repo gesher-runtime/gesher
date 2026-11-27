@@ -2629,6 +2629,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         final ActivityRecord covered;
         final ExactAlarmSettingsSession session;
         final boolean cancelResult;
+        final boolean cancelEnrollment;
         final ActivityResultRoute resultRoute;
         List<ActivityRecord> toStop = new ArrayList<>();
         boolean pauseCovered = false;
@@ -2652,6 +2653,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                     || (intent.getFlags() & Intent.FLAG_ACTIVITY_NEW_TASK) != 0
                     || origin != null && origin.info.launchMode == ActivityInfo.LAUNCH_SINGLE_INSTANCE
                     || resultRoute.recipient == null && (intent.getFlags() & Intent.FLAG_ACTIVITY_NEW_DOCUMENT) != 0;
+            cancelEnrollment = deviceAdmin && newTask;
             cancelResult = resultRoute.recipient != null && newTask;
             int taskId = launchTaskId >= 0 && topOf(launchTaskId) != null ? launchTaskId
                     : !newTask ? origin.taskId : -1;
@@ -2691,6 +2693,12 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                     (intent.getFlags() & Intent.FLAG_ACTIVITY_NO_USER_ACTION) == 0);
             for (ActivityRecord activity : toStop) stop(activity);
             updateTopResumed();
+            // Enrollment requires an existing activity task. Check the actual
+            // route too: a direct Binder caller can omit the NEW_TASK flag.
+            if (cancelEnrollment) {
+                complete.accept(android.app.Activity.RESULT_CANCELED);
+                return ActivityManager.START_SUCCESS;
+            }
             Runnable beforeOpen = () -> {
                 // Preserve pause-before-Settings ordering without holding a Binder
                 // transaction open. Android also bounds a missing pause acknowledgment.
