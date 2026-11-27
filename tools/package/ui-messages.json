@@ -1203,6 +1203,50 @@
     "install_done_button": {
       "en": "Done",
       "he": "סיום"
+    },
+    "account_not_found": {
+      "en": "Account not found: {0}",
+      "he": "החשבון לא נמצא: {0}"
+    },
+    "cp_btn_manage_accounts": {
+      "en": "Manage Accounts",
+      "he": "ניהול חשבונות"
+    },
+    "cp_accounts_title": {
+      "en": "Accounts",
+      "he": "חשבונות"
+    },
+    "cp_accounts_desc": {
+      "en": "Remove a saved account from this Gesher device.",
+      "he": "הסרת חשבון שמור מסביבת גשר זו."
+    },
+    "cp_accounts_loading": {
+      "en": "Loading accounts...",
+      "he": "טוען חשבונות..."
+    },
+    "cp_accounts_empty": {
+      "en": "No accounts are currently signed in.",
+      "he": "אין כרגע חשבונות מחוברים."
+    },
+    "cp_accounts_error": {
+      "en": "Could not load accounts. Make sure the Gesher device can start and try again.",
+      "he": "לא ניתן לטעון את החשבונות. ודא שסביבת גשר פעילה ונסה שוב."
+    },
+    "cp_btn_remove_account": {
+      "en": "Remove",
+      "he": "הסר"
+    },
+    "cp_remove_account_title": {
+      "en": "Remove Account",
+      "he": "הסרת חשבון"
+    },
+    "cp_remove_account_confirm": {
+      "en": "Remove account {0} ({1}) from Gesher? Apps using this account will be signed out.",
+      "he": "להסיר את החשבון {0} ({1}) מגשר? אפליקציות המשתמשות בחשבון זה יתנתקו ממנו."
+    },
+    "cp_remove_account_failed": {
+      "en": "Could not remove account {0}.",
+      "he": "לא ניתן להסיר את החשבון {0}."
     }
   }
 }

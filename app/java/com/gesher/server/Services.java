@@ -67,6 +67,7 @@ public final class Services {
         final ActivityTaskManagerService atm;
         final ActivityManagerService am;
         final ClipboardService clipboard;
+        AccountManagerService accounts;
         final Map<String, IBinder> services;
 
         Created(PackageManagerService pm, ActivityTaskManagerService atm,
@@ -305,6 +306,7 @@ public final class Services {
         // accounts), through their authenticators. Sync settings left for the Google
         // account Gesher once reported without an authenticator are retired (#335).
         AccountManagerService accounts = new AccountManagerService(am, pm, persistentAccounts);
+        created.accounts = accounts;
         accounts.setSyncRetirement(sync::accountsRemoved);
         accounts.retireSyntheticAccountResidue();
         services.put(Context.ACCOUNT_SERVICE, StandIn.of(android.accounts.IAccountManager.class,
