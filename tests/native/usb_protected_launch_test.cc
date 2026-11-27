@@ -119,10 +119,17 @@ struct SessionObjectsEvidence {
   SessionSubjectEvidence subjects[4]{};
 };
 struct LeafOpenEvidence { DWORD called = 0, status = ERROR_NOT_READY, opened = 0; };
+struct ChildEventEvidence {
+  DWORD called = 0, status = ERROR_NOT_READY, opened = 0;
+  DWORD signaled = 0, signal_error = ERROR_SUCCESS;
+  DWORD waited = WAIT_FAILED, wait_error = ERROR_SUCCESS;
+  DWORD type_matches = 0, name_matches = 0, granted_access = 0;
+};
 struct PackageLeafEvidence {
   DWORD absent_before_launch = 0, captured = 0, control = 0, status = ERROR_NOT_READY;
   DWORD policy_verified = 0, launch_pin_verified = 0;
   DWORD object_created = 0, subdirectory_created = 0;
+  ChildEventEvidence event_creation;
   DWORD expected_reuse = 0, null_pin_reuse = 0, independent_pin_lifetime = 0;
   DWORD wrong_type_rejected = 0, wrong_object_rejected = 0, changed_policy_rejected = 0;
   DWORD sacl_mutation_denials = 0, unprotected_reuse_rejected = 0, audit_reuse_rejected = 0;
@@ -1506,21 +1513,24 @@ void CreatePackageChildren(const std::wstring& path, HANDLE guest, HANDLE other,
   const NTSTATUS directory_status = directory_create(&directory_raw, 0x000f000f, &attributes);
   if (!RevertToSelf()) std::abort();
   Handle event(event_raw), directory(directory_raw);
-  const bool event_type_ok = event && SessionObjectText(event.get(), ObjectTypeInformation) == L"Event";
-  const bool event_name_ok = event &&
-      SessionObjectText(event.get(), static_cast<OBJECT_INFORMATION_CLASS>(1)) == path + L"\\" + event_name;
-  const ACCESS_MASK event_access = event ? SessionObjectAccess(event.get()) : 0;
-  const bool event_ok = event_status == 0 && event && signaled && waited == WAIT_OBJECT_0 &&
-      event_type_ok && event_name_ok && event_access == EVENT_ALL_ACCESS;
-  if (!event_ok) {
-    std::fprintf(stderr, "Protected child event: status=0x%08lx handle=%d signal=%d signal-error=%lu "
-        "wait=0x%08lx wait-error=%lu type-match=%d name-match=%d access=0x%08lx expected=0x%08lx\n",
-        static_cast<unsigned long>(event_status), event ? 1 : 0, static_cast<int>(signaled),
-        static_cast<unsigned long>(signal_error), static_cast<unsigned long>(waited),
-        static_cast<unsigned long>(wait_error), event_type_ok ? 1 : 0, event_name_ok ? 1 : 0,
-        static_cast<unsigned long>(event_access), static_cast<unsigned long>(EVENT_ALL_ACCESS));
+  auto& observed = evidence->event_creation;
+  observed.called = 1;
+  observed.status = static_cast<DWORD>(event_status);
+  observed.opened = event ? 1 : 0;
+  observed.signaled = signaled != FALSE;
+  observed.signal_error = signal_error;
+  observed.waited = waited;
+  observed.wait_error = wait_error;
+  if (event) {
+    observed.type_matches = SessionObjectText(event.get(), ObjectTypeInformation) == L"Event";
+    observed.name_matches = SessionObjectText(event.get(), static_cast<OBJECT_INFORMATION_CLASS>(1)) ==
+        path + L"\\" + event_name;
+    observed.granted_access = SessionObjectAccess(event.get());
   }
-  Require(event_ok, "package-leaf-actual-event-creation-use-and-inherited-access", ERROR_ACCESS_DENIED);
+  Require(observed.status == 0 && observed.opened && observed.signaled &&
+      observed.waited == WAIT_OBJECT_0 && observed.type_matches && observed.name_matches &&
+      observed.granted_access == EVENT_ALL_ACCESS,
+      "package-leaf-actual-event-creation-use-and-inherited-access", ERROR_ACCESS_DENIED);
   evidence->object_created = 1;
   Require(directory_status == 0 && directory &&
       SessionObjectText(directory.get(), ObjectTypeInformation) == L"Directory" &&
@@ -2423,6 +2433,15 @@ void PrintPackageNamespace(const PackageLeafEvidence& leaf, const NamespaceColli
       static_cast<unsigned long>(leaf.status), static_cast<unsigned long>(leaf.control), NamespacePathForPrint(leaf.path));
   if (leaf.captured && std::wmemchr(leaf.security, L'\0', std::size(leaf.security)))
     std::printf("Protected package leaf: owner-group-dacl-label=%ls\n", leaf.security);
+  const auto& event = leaf.event_creation;
+  if (event.called)
+    std::printf("Protected child event: status=0x%08lx handle=%lu signal=%lu signal-error=%lu "
+        "wait=0x%08lx wait-error=%lu type-match=%lu name-match=%lu access=0x%08lx expected=0x%08lx\n",
+        static_cast<unsigned long>(event.status), static_cast<unsigned long>(event.opened),
+        static_cast<unsigned long>(event.signaled), static_cast<unsigned long>(event.signal_error),
+        static_cast<unsigned long>(event.waited), static_cast<unsigned long>(event.wait_error),
+        static_cast<unsigned long>(event.type_matches), static_cast<unsigned long>(event.name_matches),
+        static_cast<unsigned long>(event.granted_access), static_cast<unsigned long>(EVENT_ALL_ACCESS));
   std::printf("Protected package admission: exact-policy=%lu launch-readonly-pin=%lu actual-event=%lu actual-subdirectory=%lu expected-pin-reuse=%lu null-pin-reuse=%lu independent-pin-lifetime=%lu wrong-type-rejected=%lu wrong-object-rejected=%lu changed-policy-rejected=%lu\n",
       static_cast<unsigned long>(leaf.policy_verified), static_cast<unsigned long>(leaf.launch_pin_verified),
       static_cast<unsigned long>(leaf.object_created), static_cast<unsigned long>(leaf.subdirectory_created),
