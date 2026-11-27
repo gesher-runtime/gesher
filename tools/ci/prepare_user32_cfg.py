@@ -82,13 +82,47 @@ def gdi_root(image):
     return target
 
 
+def gdi_child(image, decoder):
+    """One immediate initializer helper that really imports NtGdiInit2.
+
+    Some builds inline this initialization in the export; others call a small
+    helper. Do not choose an arbitrary function or follow a recursive call graph.
+    """
+    first, end = image.function(gdi_root(image))
+    slots = imports(image)
+    choices = []
+    for call in decoder.disasm(image.bytes(first, end - first), first):
+        if (not call.group(capstone.CS_GRP_CALL) or len(call.operands) != 1 or
+                call.operands[0].type != x86.X86_OP_IMM):
+            continue
+        target = call.operands[0].imm
+        candidates = [(a, b) for a, b, _ in image.functions if a == target]
+        if not candidates:
+            continue
+        start, stop = candidates[0]
+        for instruction in decoder.disasm(image.bytes(start, stop - start), start):
+            if not instruction.group(capstone.CS_GRP_CALL) or len(instruction.operands) != 1:
+                continue
+            operand = instruction.operands[0]
+            if operand.type == x86.X86_OP_MEM and operand.mem.base == x86.X86_REG_RIP and not operand.mem.index:
+                slot = instruction.address + instruction.size + operand.mem.disp
+                if slots.get(slot) == ('win32u.dll', 'NtGdiInit2'):
+                    choices.append((call.address, target))
+                    break
+    assert len(choices) <= 1, 'ambiguous GDI initialization helper'
+    return choices[0] if choices else None
+
+
 def generate(blob, gdi=False):
     assert capstone.__version__ == VERSION, 'unreviewed decoder version'
     image = Image(blob)
     decoder = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_64)
     decoder.detail = True
     root = gdi_root(image) if gdi else image.entry
+    child = gdi_child(image, decoder) if gdi else None
     pending = [root]
+    if child:
+        pending.append(child[1])
     visited = set()
     rows = {}
     while pending:
@@ -122,7 +156,8 @@ def generate(blob, gdi=False):
             elif instruction.group(capstone.CS_GRP_INT):
                 kind = 5
             assert 1 <= instruction.size <= 15 and 0 <= target < image.size
-            rows[position] = (position, target, instruction.size, kind, condition, 0,
+            rows[position] = (position, target, instruction.size, kind, condition,
+                              int(child is not None and position == child[0]),
                               bytes(instruction.bytes).ljust(16, b'\0'), end)
             position += instruction.size
             assert len(rows) <= LIMIT
@@ -134,7 +169,7 @@ def generate(blob, gdi=False):
         if kind in (0, 1, 2):
             assert rva + size in rows and rva + size < end, 'missing fallthrough boundary'
     table = b''.join(ROW.pack(*rows[rva]) for rva in sorted(rows))
-    header = HEADER.pack(MAGIC, 1, image.size, root, len(rows), image.entry if gdi else 0,
+    header = HEADER.pack(MAGIC, 2 if child else 1, image.size, root, len(rows), image.entry if gdi else 0,
                          hashlib.sha256(blob).digest(), ROW.size, 128, hashlib.sha256(table).digest())
     output = header + table
     verify(output, blob, gdi)
@@ -145,21 +180,25 @@ def verify(metadata, blob, gdi=False):
     assert len(metadata) >= HEADER.size
     magic, version, size, entry, count, reserved, digest, row_size, budget, table_digest = HEADER.unpack_from(metadata)
     image = Image(blob)
+    assert version == 1 or (gdi and version == 2), 'unexpected map version'
     assert (magic, version, size, entry, reserved, row_size, budget) == (
-        MAGIC, 1, image.size, gdi_root(image) if gdi else image.entry,
+        MAGIC, version, image.size, gdi_root(image) if gdi else image.entry,
         image.entry if gdi else 0, ROW.size, 128)
     assert digest == hashlib.sha256(blob).digest(), 'DLL digest mismatch'
     assert table_digest == hashlib.sha256(metadata[HEADER.size:]).digest(), 'instruction map digest mismatch'
     assert 0 < count <= LIMIT and len(metadata) == HEADER.size + count * ROW.size
     decoder = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_64)
     decoder.detail = True
+    child = gdi_child(image, decoder) if version == 2 else None
+    assert version != 2 or child, 'missing GDI initialization helper'
     previous = -1
     known = set()
     records = []
     for i in range(count):
         row = ROW.unpack_from(metadata, HEADER.size + i * ROW.size)
         rva, target, length, kind, condition, reserved, code, end = row
-        assert previous < rva < end <= size and 1 <= length <= 15 and kind <= 5 and not reserved
+        assert previous < rva < end <= size and 1 <= length <= 15 and kind <= 5
+        assert reserved == int(child is not None and rva == child[0]), 'unexpected helper marker'
         assert image.function(rva)[1] == end
         assert code[length:] == bytes(16 - length)
         assert code[:length] == image.bytes(rva, length), 'instruction bytes differ from DLL'
@@ -178,6 +217,8 @@ def verify(metadata, blob, gdi=False):
         assert target == expected_target
         known.add(rva); previous = rva; records.append(row)
     assert entry in known
+    if child:
+        assert child[0] in known and child[1] in known, 'missing helper boundary'
     for rva, target, length, kind, _, _, _, end in records:
         if kind in (2, 3): assert target in known
         if kind in (0, 1, 2): assert rva + length in known and rva + length < end
@@ -188,6 +229,9 @@ def controls(metadata, blob, gdi=False):
                (HEADER.size + 12, 1), (HEADER.size + 10, 1), (HEADER.size + 8, 16)]
     if gdi:
         changes.append((20, 1))  # GDI's PE entry must be attested separately from the trace root.
+        if HEADER.unpack_from(metadata)[1] == 2:
+            marker = next(i for i, row in enumerate(ROW.iter_unpack(metadata[HEADER.size:])) if row[5])
+            changes.append((HEADER.size + marker * ROW.size + 11, 1))
     for offset, change in changes:
         changed = bytearray(metadata); changed[offset] ^= change
         if offset >= HEADER.size:

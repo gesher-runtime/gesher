@@ -41,7 +41,11 @@ def main() -> int:
                                capture_output=True, text=True, check=True).stdout)
 
     trace = re.sub(r"^\s*#(?:include|pragma).*\n", "", read("compat/devices/camera_trace.h"), flags=re.MULTILINE)
-    capture = section(read("compat/devices/camera_mf.h"), "class Capture {", "// Opens `id`")
+    header = read("compat/devices/camera_mf.h")
+    # Keep Capture's real typed state with its declaration. Historical sources
+    # predate backend provenance and still start at the class itself.
+    capture = section(header, "enum class CaptureBackend" if "enum class CaptureBackend" in header
+                      else "class Capture {", "// Opens `id`")
     native = section(read("compat/devices/devices_jni.cc"), "jint WindowsCamera_read(", "void WindowsCamera_close(")
     fixture = (ROOT / "tests/media/camera_capture_allocations_host.cc.in").read_text()
     fixture = fixture.replace("@TRACE@", trace)
