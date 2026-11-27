@@ -18,21 +18,25 @@ namespace gesher::usb_storage::test {
 class User32CfgDebugTrace {
  public:
   User32CfgDebugTrace(HANDLE process, DWORD thread, std::span<char> tail, DWORD* bytes,
-                      const std::wstring& metadata, ULONGLONG deadline = 0)
+                      const std::wstring& metadata, ULONGLONG deadline = 0, bool gdi = false)
       : process_(process), thread_(thread), tail_(tail), bytes_(bytes),
-        deadline_(deadline ? deadline : GetTickCount64() + 5000) { Load(metadata); }
+        deadline_(deadline ? deadline : GetTickCount64() + 5000), gdi_(gdi) { Load(metadata); }
   ~User32CfgDebugTrace() {
     const DWORD cleanup = Clear();
     char line[256]{};
     int length = std::snprintf(line, sizeof(line),
-        "USER32 CFG: setup=%lu error=%lu cleanup=%lu events=%lu finished=%lu raw-return=0x%08lx\n",
-        setup_, error_, cleanup, events_, finished_ ? 1ul : 0ul, final_);
+        "%s CFG: setup=%lu error=%lu cleanup=%lu events=%lu finished=%lu raw-return=0x%08lx\n",
+        gdi_ ? "GDI32FULL" : "USER32", setup_, error_, cleanup, events_, finished_ ? 1ul : 0ul, final_);
     Append(std::string_view(line, static_cast<size_t>(length)));
-    for (size_t n = 0; n < used_; ++n) {
+    const size_t first_printed = gdi_ && used_ > 8 ? used_ - 8 : 0;
+    for (size_t n = first_printed; n < used_; ++n) {
       const auto& r = records_[(first_ + n) % records_.size()];
-      length = std::snprintf(line, sizeof(line),
+      length = gdi_ ? std::snprintf(line, sizeof(line),
+          "GDI32FULL CFG: kind=%lu rva=0x%08lx target=0x%08lx rax=0x%016llx eflags=0x%08lx taken=%lu\n",
+          r.kind, r.rva, r.target, r.rax, r.flags, r.taken)
+          : std::snprintf(line, sizeof(line),
           "USER32 CFG: kind=%lu rva=0x%08lx target=0x%08lx eax=0x%08lx eflags=0x%08lx taken=%lu\n",
-          r.kind, r.rva, r.target, r.eax, r.flags, r.taken);
+          r.kind, r.rva, r.target, static_cast<DWORD>(r.rax), r.flags, r.taken);
       Append(std::string_view(line, static_cast<size_t>(length)));
     }
   }
@@ -55,7 +59,8 @@ class User32CfgDebugTrace {
     if (path.starts_with(L"\\\\?\\")) path.erase(0, 4);
     size = GetSystemDirectoryW(system.data(), static_cast<UINT>(system.size()));
     if (!size || size >= system.size()) return;
-    const std::wstring expected = std::wstring(system.data(), size) + L"\\user32.dll";
+    const std::wstring expected = std::wstring(system.data(), size) +
+        (gdi_ ? L"\\gdi32full.dll" : L"\\user32.dll");
     if (CompareStringOrdinal(path.c_str(), -1, expected.c_str(), -1, TRUE) != CSTR_EQUAL) return;
     setup_ = ERROR_INVALID_DATA;
     if (GetTickCount64() >= deadline_) { setup_ = ERROR_TIMEOUT; return; }
@@ -72,6 +77,7 @@ class User32CfgDebugTrace {
     if (GetTickCount64() >= deadline_) { setup_ = ERROR_TIMEOUT; return; }
     if (!hashed || digest != header_.digest) { setup_ = ERROR_CRC; return; }
     base_ = reinterpret_cast<uintptr_t>(event.u.LoadDll.lpBaseOfDll);
+    if (gdi_ && !VerifyGdiRoot()) { setup_ = ERROR_INVALID_DATA; return; }
     for (const auto& row : rows_) {
       if (GetTickCount64() >= deadline_) { setup_ = ERROR_TIMEOUT; return; }
       std::array<std::byte, 16> bytes{};
@@ -137,7 +143,7 @@ class User32CfgDebugTrace {
   struct Header { DWORD magic, version, image_size, entry, count, reserved; std::array<BYTE, 32> digest; DWORD row_size, budget; std::array<BYTE, 32> table_digest; } header_{};
   struct Row { DWORD rva, target; BYTE length, kind, condition, reserved; std::array<BYTE, 16> code; DWORD end; };
   static_assert(sizeof(Header) == 96 && sizeof(Row) == 32);
-  struct Observation { DWORD kind, rva, target, eax, flags, taken; };
+  struct Observation { DWORD kind, rva, target; unsigned long long rax; DWORD flags, taken; };
   enum class Action { kEntry, kTerminator, kCallReturn } action_ = Action::kEntry;
   template<class T> static std::span<std::byte> Bytes(T& item) { return std::as_writable_bytes(std::span(&item, 1)); }
   bool VerifyImageHeader(HANDLE file) const {
@@ -154,10 +160,78 @@ class User32CfgDebugTrace {
         at(nt, Bytes(signature)) && signature == IMAGE_NT_SIGNATURE &&
         at(nt + 4, Bytes(machine)) && machine == IMAGE_FILE_MACHINE_AMD64 &&
         at(nt + 24, Bytes(optional)) && optional == IMAGE_NT_OPTIONAL_HDR64_MAGIC &&
-        at(nt + 24 + 16, Bytes(entry)) && entry == header_.entry &&
+        at(nt + 24 + 16, Bytes(entry)) && entry == (gdi_ ? header_.reserved : header_.entry) &&
         at(nt + 24 + 56, Bytes(image_size)) && image_size == header_.image_size;
     LARGE_INTEGER zero{};
     return SetFilePointerEx(file, zero, nullptr, FILE_BEGIN) && ok;
+  }
+  bool ReadImage(DWORD rva, std::span<std::byte> bytes) const {
+    return rva < header_.image_size && bytes.size() <= header_.image_size - rva &&
+        GetTickCount64() < deadline_ && Read(base_ + rva, bytes);
+  }
+  bool VerifyGdiRoot() const {
+    DWORD nt = 0;
+    IMAGE_NT_HEADERS64 pe{};
+    if (!ReadImage(60, Bytes(nt)) || !ReadImage(nt, Bytes(pe)) ||
+        pe.Signature != IMAGE_NT_SIGNATURE || pe.FileHeader.Machine != IMAGE_FILE_MACHINE_AMD64 ||
+        pe.OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR64_MAGIC ||
+        pe.OptionalHeader.NumberOfRvaAndSizes <= IMAGE_DIRECTORY_ENTRY_EXCEPTION ||
+        pe.OptionalHeader.SizeOfImage != header_.image_size ||
+        pe.OptionalHeader.AddressOfEntryPoint != header_.reserved) return false;
+    const auto& exports = pe.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
+    const auto& exceptions = pe.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXCEPTION];
+    IMAGE_EXPORT_DIRECTORY table{};
+    if (exports.VirtualAddress >= header_.image_size ||
+        exports.Size > header_.image_size - exports.VirtualAddress || exports.Size < sizeof(table) ||
+        !ReadImage(exports.VirtualAddress, Bytes(table)) ||
+        !table.NumberOfFunctions || table.NumberOfFunctions > 8192 ||
+        table.NumberOfNames > table.NumberOfFunctions) return false;
+    std::vector<DWORD> names(table.NumberOfNames), functions(table.NumberOfFunctions);
+    std::vector<WORD> ordinals(table.NumberOfNames);
+    if (!ReadImage(table.AddressOfNames, std::as_writable_bytes(std::span(names))) ||
+        !ReadImage(table.AddressOfFunctions, std::as_writable_bytes(std::span(functions))) ||
+        !ReadImage(table.AddressOfNameOrdinals, std::as_writable_bytes(std::span(ordinals)))) return false;
+    DWORD exported = 0;
+    constexpr char name[] = "GdiDllInitialize";
+    for (size_t i = 0; i < names.size(); ++i) {
+      std::array<char, sizeof(name)> actual{};
+      if (!ReadImage(names[i], std::as_writable_bytes(std::span(actual)))) return false;
+      if (std::memcmp(actual.data(), name, sizeof(name)) != 0) continue;
+      if (exported || ordinals[i] >= functions.size()) return false;
+      exported = functions[ordinals[i]];
+    }
+    if (!exported || exported >= header_.image_size ||
+        (exports.VirtualAddress <= exported && exported - exports.VirtualAddress < exports.Size) ||
+        !exceptions.Size || exceptions.Size % sizeof(RUNTIME_FUNCTION) ||
+        exceptions.Size / sizeof(RUNTIME_FUNCTION) > 65536) return false;
+    std::vector<RUNTIME_FUNCTION> unwind(exceptions.Size / sizeof(RUNTIME_FUNCTION));
+    if (!ReadImage(exceptions.VirtualAddress, std::as_writable_bytes(std::span(unwind)))) return false;
+    const auto entry = [&](DWORD rva) {
+      return std::lower_bound(unwind.begin(), unwind.end(), rva,
+          [](const RUNTIME_FUNCTION& record, DWORD target) { return record.BeginAddress < target; });
+    };
+    DWORD root = exported;
+    const auto direct = entry(exported);
+    if (direct == unwind.end() || direct->BeginAddress != exported) {
+      if (direct != unwind.begin() && (direct - 1)->EndAddress > exported) return false;
+      std::array<std::byte, 5> thunk{};
+      int32_t relative = 0;
+      if (!ReadImage(exported, thunk) || thunk[0] != std::byte{0xe9}) return false;
+      std::memcpy(&relative, thunk.data() + 1, sizeof(relative));
+      const int64_t target = static_cast<int64_t>(exported) + 5 + relative;
+      if (target <= 0 || target >= header_.image_size) return false;
+      root = static_cast<DWORD>(target);
+    }
+    if (root != header_.entry) return false;
+    const auto start = entry(root);
+    if (start == unwind.end() || start->BeginAddress != root) return false;
+    for (const Row& row : rows_) {
+      if (GetTickCount64() >= deadline_) return false;
+      const auto after = std::upper_bound(unwind.begin(), unwind.end(), row.rva,
+          [](DWORD rva, const RUNTIME_FUNCTION& record) { return rva < record.BeginAddress; });
+      if (after == unwind.begin() || (after - 1)->EndAddress != row.end) return false;
+    }
+    return true;
   }
   static bool HashBytes(std::span<const std::byte> input, std::array<BYTE, 32>* digest) {
     HCRYPTPROV provider = 0; HCRYPTHASH hash = 0;
@@ -202,7 +276,8 @@ class User32CfgDebugTrace {
     CloseHandle(file);
     if (ok) {
       std::memcpy(Bytes(header_).data(), data.data(), Bytes(header_).size());
-      ok = header_.magic == 0x31434655 && header_.version == 1 && !header_.reserved &&
+      ok = header_.magic == 0x31434655 && header_.version == 1 &&
+          (gdi_ ? header_.reserved && header_.reserved < header_.image_size : !header_.reserved) &&
           header_.row_size == 32 && header_.budget == 128 && header_.count && header_.count <= 4096 &&
           header_.image_size <= 32 * 1024 * 1024 && header_.entry < header_.image_size &&
           data.size() == sizeof(Header) + header_.count * 32;
@@ -267,7 +342,7 @@ class User32CfgDebugTrace {
   void Record(DWORD kind, DWORD rva, DWORD target, const CONTEXT& c, DWORD taken) {
     size_t index = (first_ + used_) % records_.size();
     if (used_ == records_.size()) first_ = (first_ + 1) % records_.size(); else ++used_;
-    records_[index] = {kind, rva, target, static_cast<DWORD>(c.Rax), c.EFlags, taken};
+    records_[index] = {kind, rva, target, c.Rax, c.EFlags, taken};
   }
   bool Read(uintptr_t address, std::span<std::byte> output) const {
     SIZE_T copied = 0;
@@ -298,6 +373,7 @@ class User32CfgDebugTrace {
     std::memcpy(tail_.data() + *bytes_, text.data(), text.size()); *bytes_ += static_cast<DWORD>(text.size());
   }
   HANDLE process_; DWORD thread_; std::span<char> tail_; DWORD* bytes_; ULONGLONG deadline_;
+  bool gdi_;
   std::vector<Row> rows_; uintptr_t base_ = 0, root_return_ = 0, root_stack_ = 0;
   DWORD setup_ = ERROR_NOT_READY, error_ = 0, events_ = 0, final_ = 0;
   bool ready_ = false, armed_ = false, finished_ = false; Row pending_{};

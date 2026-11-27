@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0
-"""Prepare a DLL-bound, diagnostic-only USER32 initializer instruction map.
+"""Prepare DLL-bound, diagnostic-only USER32 and GDI32FULL instruction maps.
 
 The decoder never executes the DLL. Ordinary applications never see this file.
 Only x64 PE unwind-described functions, exact instruction bytes and direct
@@ -68,12 +68,27 @@ class Image:
         return matches[0]
 
 
-def generate(blob):
+def gdi_root(image):
+    exported = initializer_export(image)
+    assert exported.startswith('0x'), 'GdiDllInitialize must be an actual image export'
+    address = int(exported, 16)
+    if any(first == address for first, _, _ in image.functions):
+        return address
+    assert not any(first < address < end for first, end, _ in image.functions), 'export is inside an unwind function'
+    thunk = image.bytes(address, 5)
+    assert thunk[0] == 0xe9, 'GdiDllInitialize leaf must be a direct rel32 thunk'
+    target = address + 5 + struct.unpack_from('<i', thunk, 1)[0]
+    assert image.function(target)[0] == target, 'GDI target must be an unwind function entry'
+    return target
+
+
+def generate(blob, gdi=False):
     assert capstone.__version__ == VERSION, 'unreviewed decoder version'
     image = Image(blob)
     decoder = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_64)
     decoder.detail = True
-    pending = [image.entry]
+    root = gdi_root(image) if gdi else image.entry
+    pending = [root]
     visited = set()
     rows = {}
     while pending:
@@ -112,26 +127,27 @@ def generate(blob):
             position += instruction.size
             assert len(rows) <= LIMIT
         assert position == end, 'decoder did not cover complete unwind function'
-    assert image.entry in rows
+    assert root in rows
     for rva, target, size, kind, condition, _, _, end in rows.values():
         if kind in (2, 3):
             assert target in rows, 'branch target lacks an exact instruction boundary'
         if kind in (0, 1, 2):
             assert rva + size in rows and rva + size < end, 'missing fallthrough boundary'
     table = b''.join(ROW.pack(*rows[rva]) for rva in sorted(rows))
-    header = HEADER.pack(MAGIC, 1, image.size, image.entry, len(rows), 0,
+    header = HEADER.pack(MAGIC, 1, image.size, root, len(rows), image.entry if gdi else 0,
                          hashlib.sha256(blob).digest(), ROW.size, 128, hashlib.sha256(table).digest())
     output = header + table
-    verify(output, blob)
+    verify(output, blob, gdi)
     return output
 
 
-def verify(metadata, blob):
+def verify(metadata, blob, gdi=False):
     assert len(metadata) >= HEADER.size
     magic, version, size, entry, count, reserved, digest, row_size, budget, table_digest = HEADER.unpack_from(metadata)
     image = Image(blob)
     assert (magic, version, size, entry, reserved, row_size, budget) == (
-        MAGIC, 1, image.size, image.entry, 0, ROW.size, 128)
+        MAGIC, 1, image.size, gdi_root(image) if gdi else image.entry,
+        image.entry if gdi else 0, ROW.size, 128)
     assert digest == hashlib.sha256(blob).digest(), 'DLL digest mismatch'
     assert table_digest == hashlib.sha256(metadata[HEADER.size:]).digest(), 'instruction map digest mismatch'
     assert 0 < count <= LIMIT and len(metadata) == HEADER.size + count * ROW.size
@@ -167,9 +183,11 @@ def verify(metadata, blob):
         if kind in (0, 1, 2): assert rva + length in known and rva + length < end
 
 
-def controls(metadata, blob):
+def controls(metadata, blob, gdi=False):
     changes = [(24, 1), (0, 1), (16, 255), (HEADER.size, 1),
                (HEADER.size + 12, 1), (HEADER.size + 10, 1), (HEADER.size + 8, 16)]
+    if gdi:
+        changes.append((20, 1))  # GDI's PE entry must be attested separately from the trace root.
     for offset, change in changes:
         changed = bytearray(metadata); changed[offset] ^= change
         if offset >= HEADER.size:
@@ -177,12 +195,12 @@ def controls(metadata, blob):
             # integrity must not accidentally stand in for decoder validation.
             changed[64:96] = hashlib.sha256(changed[HEADER.size:]).digest()
         try:
-            verify(changed, blob)
+            verify(changed, blob, gdi)
         except (AssertionError, ValueError, struct.error, KeyError):
             pass
         else:
             raise AssertionError('corrupted metadata accepted: ' + str(offset))
-    print('USER32_CFG_INTEGRITY_CONTROLS_PASS cases=' + str(len(changes)))
+    print(('GDI32FULL' if gdi else 'USER32') + '_CFG_INTEGRITY_CONTROLS_PASS cases=' + str(len(changes)))
 
 
 def bounded_string(image, rva, limit=512):
@@ -290,24 +308,25 @@ def diagnostic_controls(blob):
     print('USER32_PE_DIAGNOSTIC_CONTROLS_PASS cases=' + str(cases))
 
 
-def explain(log, blob, metadata, directory):
-    verify(metadata, blob)
+def explain(log, blob, metadata, directory, gdi=False):
+    verify(metadata, blob, gdi)
     image = Image(blob)
     assert log.stat().st_size <= 2 * 1024 * 1024
     text = log.read_text(encoding='utf-8', errors='replace')
     addresses = []
     known = {row[0] for row in ROW.iter_unpack(metadata[HEADER.size:])}
-    for number, match in enumerate(re.finditer(r'USER32 CFG: kind=\d+ rva=0x([0-9a-fA-F]{8})', text)):
+    prefix = 'GDI32FULL' if gdi else 'USER32'
+    for number, match in enumerate(re.finditer(prefix + r' CFG: kind=\d+ rva=0x([0-9a-fA-F]{8})', text)):
         assert number < 128, 'CFG log event bound'
         address = int(match[1], 16)
         assert address in known, 'CFG log instruction outside verified metadata'
         if address in addresses: addresses.remove(address)
         addresses.append(address)
-    print('USER32_CFG_EXPLAIN dll_sha256=' + hashlib.sha256(blob).hexdigest() + ' pdb=' + pdb_identity(image))
+    print(prefix + '_CFG_EXPLAIN dll_sha256=' + hashlib.sha256(blob).hexdigest() + ' pdb=' + pdb_identity(image))
     # Bind the next investigation to these actual local System32 images. Never
     # upload Windows DLLs and never infer that a standalone heap result proves
     # which internal GDI operation failed.
-    for name in ('gdi32.dll', 'gdi32full.dll'):
+    for name in (() if gdi else ('gdi32.dll', 'gdi32full.dll')):
         source = (directory / name).read_bytes()
         assert len(source) <= 32 * 1024 * 1024
         dependency = Image(source)
@@ -325,16 +344,16 @@ def explain(log, blob, metadata, directory):
                 slot = instruction.address + instruction.size + operand.mem.disp
                 if slot in import_slots:
                     dll, name = import_slots[slot]
-                    print('USER32_CFG_IMPORT rva=' + hex(address) + ' iat=' + hex(slot) + ' dll=' + dll + ' name=' + name)
+                    print(prefix + '_CFG_IMPORT rva=' + hex(address) + ' iat=' + hex(slot) + ' dll=' + dll + ' name=' + name)
     for address in addresses[-6:]:
         first, end = image.function(address)
         instructions = list(decoder.disasm(image.bytes(first, end - first), first))
         positions = [i for i, instruction in enumerate(instructions) if instruction.address == address]
         assert len(positions) == 1
         index = positions[0]
-        print('USER32_CFG_SITE rva=' + hex(address))
+        print(prefix + '_CFG_SITE rva=' + hex(address))
         for instruction in instructions[max(0, index - 3):index + 3]:
-            print('USER32_CFG_CODE ' + hex(instruction.address) + ' ' + instruction.mnemonic + ' ' + instruction.op_str)
+            print(prefix + '_CFG_CODE ' + hex(instruction.address) + ' ' + instruction.mnemonic + ' ' + instruction.op_str)
 
 
 def main():
@@ -351,6 +370,11 @@ def main():
     assert len(blob) <= 32 * 1024 * 1024
     if args.explain_log:
         explain(args.explain_log, blob, args.metadata.read_bytes(), args.dll.parent)
+        gdi_metadata = args.metadata.with_name('gdi32full-cfg.bin')
+        if gdi_metadata.is_file():
+            gdi = (args.dll.parent / 'gdi32full.dll').read_bytes()
+            assert len(gdi) <= 32 * 1024 * 1024
+            explain(args.explain_log, gdi, gdi_metadata.read_bytes(), args.dll.parent, True)
         return
     metadata = generate(blob)
     if args.selftest:
@@ -359,6 +383,23 @@ def main():
     args.output.write_bytes(metadata)
     print('USER32_CFG_PREPARED decoder=' + VERSION + ' dll_sha256=' + hashlib.sha256(blob).hexdigest() +
           ' instructions=' + str((len(metadata) - HEADER.size) // ROW.size) + ' event_budget=128')
+    if args.dll.name.lower() == 'user32.dll' and args.output.name == 'user32-cfg.bin':
+        gdi_output = args.output.with_name('gdi32full-cfg.bin')
+        gdi_output.unlink(missing_ok=True)
+        try:
+            gdi = (args.dll.parent / 'gdi32full.dll').read_bytes()
+            assert len(gdi) <= 32 * 1024 * 1024, 'GDI image exceeds the diagnostic bound'
+            gdi_metadata = generate(gdi, True)
+        except (AssertionError, OSError, KeyError, ValueError, struct.error) as error:
+            # An unfamiliar GDI image cannot arm a trace. Keep the original
+            # prepared USER32 map and witness available on the same runner.
+            print('GDI32FULL_CFG_UNAVAILABLE ' + (str(error) or type(error).__name__))
+            return
+        if args.selftest:
+            controls(gdi_metadata, gdi, True)
+        gdi_output.write_bytes(gdi_metadata)
+        print('GDI32FULL_CFG_PREPARED dll_sha256=' + hashlib.sha256(gdi).hexdigest() +
+              ' initializer_root=' + hex(gdi_root(Image(gdi))) + ' event_budget=128')
 
 
 if __name__ == '__main__': main()
