@@ -26,3 +26,5 @@ with tempfile.TemporaryDirectory(prefix="gesher-clipboard-native-") as temporary
                     str(ROOT / "compat/devsvc/clipboard_access.cc"),
                     str(ROOT / "tests/clipboard/access_boundary_test.cc"), "-o", str(output)], check=True)
     subprocess.run([str(output)], check=True, timeout=10)
+    subprocess.run([str(output), "app"], check=True, timeout=10)
+    subprocess.run([str(output), "unknown"], check=True, timeout=10)

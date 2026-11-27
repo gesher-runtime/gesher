@@ -59,6 +59,8 @@ bool ForegroundProcess(uint32_t* pid, uint64_t* created);
 int SessionLockState();
 // True only after Windows reports this session locked, never just request submission.
 bool LockWorkstation();
+// Actual Win32 main-class role, captured during native registration; apps cannot lock.
+bool DeviceAdminServer();
 
 // --- alarms ----------------------------------------------------------------------------
 // Waits until the wall clock reaches `utc_ms` (milliseconds since 1970, a

@@ -27,7 +27,8 @@ silently succeeding.
 Grants are written atomically to `system/device-admin-grants`, bound to the
 installer's per-installation owner UUID. Reinstalling a package cannot inherit
 its previous administrator grant. A pending consent request cannot activate
-replacement code. Standalone services use transient grants. Active administrators
+replacement code. Enrollment and native locking require the actual system-server
+process; an ordinary standalone app cannot obtain host-lock authority. Active administrators
 block ordinary uninstall until deactivation; applications can remove their own
 administrator through `removeActiveAdmin`. The trusted Control Center also offers
 deactivation so the user does not depend on the app to revoke its authority.
@@ -96,3 +97,10 @@ The native backend has a dedicated availability probe, so an older runtime
 without the lock implementation cannot activate an administrator merely because
 its clipboard backend exists. Grants are valid only while the current receiver
 still requests the exact supported policy set.
+
+The native lock backend also checks the process's actual Windows launch main
+class, captured when native methods register. Only Gesher's system server can
+submit a lock; calling the host helper directly from an application cannot
+bypass consent. Classpath values, application extras and mutable UID/environment
+values cannot confer that role. Native boundary tests exercise both unauthorized
+direct calls and asynchronous lock confirmation without locking the workstation.

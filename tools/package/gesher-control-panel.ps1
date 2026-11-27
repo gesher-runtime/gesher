@@ -1666,11 +1666,18 @@ function Initialize-PanelDeviceAdminControls($dialog, [string] $pkg) {
     $button.Content = Get-GesherText 'cp_admin_revoke'
     $state = @{ Worker = $null; Revoking = $false; Closed = $false }
     $orphanWorkers = $script:OrphanSpecialAccessWorkers
+    # GetNewClosure owns a dynamic module. Bind the panel's commands before
+    # entering it so callbacks retain the script's helpers for -Command callers.
+    $startWorker = Get-Command Start-PanelSpecialAccess
+    $workerDone = Get-Command Test-PanelSpecialAccessDone
+    $receiveWorker = Get-Command Receive-PanelSpecialAccess
+    $uiText = Get-Command Get-GesherText
+    $panelLog = Get-Command Write-PanelLog
     $timer = [System.Windows.Threading.DispatcherTimer]::new()
     $timer.Interval = [TimeSpan]::FromMilliseconds(100)
     $timer.Add_Tick({
-        if ($state.Closed -or -not $state.Worker -or -not (Test-PanelSpecialAccessDone $state.Worker)) { return }
-        $result = Receive-PanelSpecialAccess $state.Worker
+        if ($state.Closed -or -not $state.Worker -or -not (& $workerDone $state.Worker)) { return }
+        $result = & $receiveWorker $state.Worker
         $state.Worker = $null
         $answer = @($result.Lines | Where-Object { $_ -cmatch '^device-admin\t(active|inactive)$' })
         if ($result.ExitCode -eq 0 -and $answer.Count -eq 1) {
@@ -1679,12 +1686,12 @@ function Initialize-PanelDeviceAdminControls($dialog, [string] $pkg) {
             $button.IsEnabled = $active
             $status.Visibility = 'Collapsed'
             if ($state.Revoking -and $active) {
-                $status.Text = Get-GesherText 'cp_admin_failed'
+                $status.Text = & $uiText 'cp_admin_failed'
                 $status.Visibility = 'Visible'
             }
         } elseif ($result.ExitCode -ne 4 -and $result.ExitCode -ne 3) {
             $button.IsEnabled = $true
-            $status.Text = Get-GesherText 'cp_admin_failed'
+            $status.Text = & $uiText 'cp_admin_failed'
             $status.Visibility = 'Visible'
         }
         $state.Revoking = $false
@@ -1694,17 +1701,17 @@ function Initialize-PanelDeviceAdminControls($dialog, [string] $pkg) {
         $button.IsEnabled = $false
         $status.Visibility = 'Collapsed'
         try {
-            $state.Worker = Start-PanelSpecialAccess @($pkg, 'revoke') 'device-admin'
+            $state.Worker = & $startWorker @($pkg, 'revoke') 'device-admin'
             $state.Revoking = $true
         } catch {
             $button.IsEnabled = $true
-            $status.Text = Get-GesherText 'cp_admin_failed'
+            $status.Text = & $uiText 'cp_admin_failed'
             $status.Visibility = 'Visible'
         }
     }.GetNewClosure())
     $dialog.Add_Loaded({
-        try { $state.Worker = Start-PanelSpecialAccess @($pkg) 'device-admin'; $timer.Start() }
-        catch { Write-PanelLog "device admin: $($_.Exception.Message)" }
+        try { $state.Worker = & $startWorker @($pkg) 'device-admin'; $timer.Start() }
+        catch { & $panelLog "device admin: $($_.Exception.Message)" }
     }.GetNewClosure())
     $dialog.Add_Closed({
         $state.Closed = $true

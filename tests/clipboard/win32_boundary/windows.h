@@ -24,3 +24,5 @@ BOOL ProcessIdToSessionId(DWORD, DWORD*);
 BOOL LockWorkStation();
 ULONGLONG GetTickCount64();
 void Sleep(DWORD);
+LPWSTR GetCommandLineW();
+void* LocalFree(void*);

@@ -267,7 +267,7 @@ jint WindowsHost_sessionLockState(JNIEnv*, jclass) {
 }
 
 jboolean WindowsHost_deviceAdminAvailable(JNIEnv*, jclass) {
-  return JNI_TRUE;
+  return dev::DeviceAdminServer() ? JNI_TRUE : JNI_FALSE;
 }
 
 jboolean WindowsHost_lockWorkstation(JNIEnv*, jclass) {
@@ -592,6 +592,8 @@ const JNINativeMethod gRevocableFileDescriptorMethods[] = {
 }  // namespace
 
 int register_gesher_WindowsHost(JNIEnv* env) {
+  // Freeze the actual launch role before untrusted application code can run.
+  (void)gesher::devsvc::DeviceAdminServer();
   if (RegisterGesherNatives(env, "com/gesher/server/RevocableFileDescriptors", gRevocableFileDescriptorMethods,
                             NELEM(gRevocableFileDescriptorMethods)) < 0) return -1;
   RegisterGesherNatives(env, "sun/nio/ch/FileDispatcherImpl", gFileDispatcherMethods,
