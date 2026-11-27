@@ -351,6 +351,11 @@ namespace gesher {
 namespace record_locks { struct DescriptorGuard { ~DescriptorGuard() {} }; }
 // Sender fixtures use plain handles. Received socket fixtures model the
 // separate socket owner, which consumes one native handle, not an OFD section.
+struct SocketFd { decltype(nullptr) description = nullptr; };
+bool LookupSocket(int, SocketFd*) { return false; }
+// Relay-backed sender descriptors require the native socket owner and cannot
+// enter this fixture. Fail if the production path tries to inspect one here.
+namespace ws { bool HasLoopbackRelay(decltype(nullptr)) { std::abort(); } }
 bool TransferSocket(int, uintptr_t*, uint64_t*) { return false; }
 int AdoptSocket(uintptr_t owned, uint64_t metadata) {
   fixture::Check((metadata & 1) != 0, "socket adoption retains socket metadata");
