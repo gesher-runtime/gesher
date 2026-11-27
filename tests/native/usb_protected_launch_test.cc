@@ -2384,7 +2384,8 @@ void ObserveNamespaceCollision(storage::ProtectedIdentity& identity, HANDLE desk
   evidence->explicit_label = present && label;
   using PolicyStage = storage::AuthorityNamespacePolicyStage;
   evidence->policy_stage = static_cast<DWORD>(namespace_result.directory_policy.stage);
-  Require(evidence->launch_status == (evidence->explicit_label ? ERROR_ACCESS_DENIED : ERROR_INVALID_SECURITY_DESCR) &&
+  const DWORD expected_rejection = evidence->explicit_label ? ERROR_ACCESS_DENIED : ERROR_INVALID_SECURITY_DESCR;
+  Require(evidence->launch_status == expected_rejection &&
       namespace_result.directory_policy.stage == (evidence->explicit_label ? PolicyStage::kPolicy : PolicyStage::kLabel) &&
       !evidence->returned_child && stage && std::strcmp(stage, "lowbox.verify-package-namespace") == 0,
       "deny-desktop-owned-namespace-collision", ERROR_ACCESS_DENIED);
