@@ -72,8 +72,12 @@ class Client {
   struct Session;
   // open must authenticate the broker, send the fixed Request, and return an
   // owned pipe. open and wake run on a worker; wake must outlive the Client.
+  // thread_leaving registers the actual thread with its native fork exit gate,
+  // after all captured callbacks are destroyed but before Windows TLS teardown.
+  // Pass nullptr explicitly only when the caller has no native fork facility.
   static std::shared_ptr<Client> Start(Request request,
-      std::function<HANDLE(const Request&)> open, std::function<void()> wake);
+      std::function<HANDLE(const Request&)> open, std::function<void()> wake,
+      void (*thread_leaving)());
   ~Client();
   Snapshot State() const;
   bool WaitForChange(uint64_t revision, DWORD milliseconds);

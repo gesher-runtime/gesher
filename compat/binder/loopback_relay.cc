@@ -701,7 +701,7 @@ Client::~Client() {
 }
 
 std::shared_ptr<Client> Client::Start(Request request, std::function<HANDLE(const Request&)> open,
-                                     std::function<void()> wake) {
+                                     std::function<void()> wake, void (*thread_leaving)()) {
   std::unique_lock creation(fork_creation_gate);
   auto session = std::make_shared<Session>(request, std::move(open), std::move(wake));
   auto owner = std::shared_ptr<Client>(new Client(session));
@@ -711,15 +711,21 @@ std::shared_ptr<Client> Client::Start(Request request, std::function<HANDLE(cons
   struct Worker {
     std::shared_ptr<Session> session;
     HMODULE module;
+    void (*thread_leaving)();
     static DWORD WINAPI Run(LPVOID parameter) {
       HMODULE module;
+      void (*exit_hook)();
       {
         std::unique_ptr<Worker> context(static_cast<Worker*>(parameter));
         module = context->module;
+        exit_hook = context->thread_leaving;
         context->session->Run();
       }
-      // No relay state, locks or callbacks survive this release. The only
-      // remaining instruction enters the kernel's module/thread release.
+      // Session/std::function destruction can still take native locks. Finish
+      // it before entering the fork exit gate, then keep the worker counted
+      // until that gate records its actual Windows thread lifetime. TLS/FLS
+      // callbacks must never overlap a fork that already holds their locks.
+      if (exit_hook) exit_hook();
       worker_count.fetch_sub(1, std::memory_order_release);
       FreeLibraryAndExitThread(module, 0);
     }
@@ -731,7 +737,7 @@ std::shared_ptr<Client> Client::Start(Request request, std::function<HANDLE(cons
     session->Fail(WSAENOBUFS);
     return owner;
   }
-  auto* context = new (std::nothrow) Worker{session, module};
+  auto* context = new (std::nothrow) Worker{session, module, thread_leaving};
   worker_count.fetch_add(1, std::memory_order_release);
   HANDLE worker = context ? CreateThread(nullptr, 0, &Worker::Run, context, 0, nullptr) : nullptr;
   creation.unlock();

@@ -520,7 +520,13 @@ int StartLoopbackRelay(Socket socket, const Address& target,
   if (description->connect_generation == UINT64_MAX) return errno = EOVERFLOW, -1;
   auto relay = loopback_relay::Client::Start(request,
       [](const auto& operation) { return binder_endpoint::OpenLoopbackRelay(operation); },
-      [] { gesher::WakePollers(); });
+      [] { gesher::WakePollers(); },
+#ifdef GESHER_FORK_LOCK
+      &gesher::ThreadLeaving
+#else
+      nullptr
+#endif
+      );
   if (!relay) return errno = ENOMEM, -1;
   ++description->connect_generation;
   description->connect_error = description->connect_result = 0;

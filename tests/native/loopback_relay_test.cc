@@ -49,7 +49,7 @@ class Lane {
         }, [counter = notified_, wake = std::move(wake)] {
           counter->fetch_add(1);
           if (wake) wake();
-        });
+        }, nullptr);
   }
   ~Lane() {
     client->Close();
@@ -152,7 +152,7 @@ void ForkAdmission() {
   Require(entering && published && release, "create fork witness events");
   std::thread concurrent([&] {
     SetEvent(entering);
-    auto client = relay::Client::Start({}, [](const relay::Request&) { return INVALID_HANDLE_VALUE; }, {});
+    auto client = relay::Client::Start({}, [](const relay::Request&) { return INVALID_HANDLE_VALUE; }, {}, nullptr);
     SetEvent(published);
     WaitForSingleObject(release, 4000);
   });
