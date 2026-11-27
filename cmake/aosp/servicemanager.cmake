@@ -25,7 +25,10 @@ target_compile_definitions(binderd PRIVATE GESHER_RECORD_LOCK_BROKER=1)
 target_compile_options(binderd PRIVATE -Wall -Wextra -Werror "SHELL:-idirafter ${_uapi}")
 # The descriptor broker's tokens (ADR 0088) come from BCryptGenRandom; the
 # sandboxed pipe's security descriptor (ADR 0090) from app_container.cc.
-target_link_libraries(binderd PRIVATE bcrypt advapi32 ole32 shell32 uuid mincore)
+# Resolve ordinary imports before mincore's umbrella API-set library. Only
+# precise interrupt-time APIs require mincore; keep the broker's explicit
+# system-DLL contract identical to the rest of gesher_posix.
+target_link_libraries(binderd PRIVATE bcrypt advapi32 ole32 shell32 uuid kernel32 powrprof mincore)
 
 add_executable(binder_protected_admission_test EXCLUDE_FROM_ALL
   ${CMAKE_SOURCE_DIR}/tests/native/binder_protected_admission_test.cc
