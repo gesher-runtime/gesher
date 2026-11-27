@@ -19,7 +19,7 @@ BASELINE = '3a309b747fc604f84fa20a42bbd875d706116d6d'
 MANIFEST = 'tools/net-tcp-priority/qualified/scandir-consolidation-source.json'
 PATCH = 'tools/net-tcp-priority/qualified/scandir-consolidation-source.patch'
 ADAPTER = 'tools/scandir_consolidation.py'
-MANIFEST_SHA256 = '33d1c05e39176823e20668de4184e6e05af02235294902fa1f22c4d67b4e2b1e'
+MANIFEST_SHA256 = 'c4208c92754bd163088cd92db799c15b77308a40dec473a181387c39af168ee5'
 ORIGINAL_ADAPTER_SHA256 = 'f6bfd6c916300cbf95b31a6de4ad394b3c6da13cdd189339c0fc823a167481cd'
 
 
