@@ -7,6 +7,7 @@
 #include "../../compat/usb_storage/protected_storage_policy.h"
 #include "../../compat/framework/app_container.h"
 #include "usb_lowbox_iat_trace.h"
+#include "usb_user32_debug_trace.h"
 #include "usb_scm_profile_control.h"
 #include <aclapi.h>
 #include <securityappcontainer.h>
@@ -3062,6 +3063,8 @@ void AppendGuestLoaderMessage(HANDLE process, const OUTPUT_DEBUG_STRING_INFO& in
 
 void ReadGuestLoaderEvents(const storage::AuthorityLaunch& probe, ULONGLONG deadline, GuestLoaderTrace* trace) {
   bool breakpoint = false;
+  gesher::usb_storage::test::User32NativeDebugTrace native_trace(
+      probe.process(), probe.main_thread_id(), std::span(trace->tail), &trace->bytes);
   for (;;) {
     const ULONGLONG now = GetTickCount64();
     if (now >= deadline) {
@@ -3076,17 +3079,23 @@ void ReadGuestLoaderEvents(const storage::AuthorityLaunch& probe, ULONGLONG dead
     DWORD disposition = DBG_CONTINUE;
     const bool owned = event.dwProcessId == probe.pid();
     if (event.dwDebugEventCode == CREATE_PROCESS_DEBUG_EVENT) Close{}(event.u.CreateProcessInfo.hFile);
-    if (event.dwDebugEventCode == LOAD_DLL_DEBUG_EVENT) Close{}(event.u.LoadDll.hFile);
+    if (event.dwDebugEventCode == LOAD_DLL_DEBUG_EVENT) {
+      if (owned) native_trace.Loaded(event);
+      Close{}(event.u.LoadDll.hFile);
+    }
     if (event.dwDebugEventCode == EXCEPTION_DEBUG_EVENT) {
       if (owned && !breakpoint && event.u.Exception.dwFirstChance &&
           event.u.Exception.ExceptionRecord.ExceptionCode == EXCEPTION_BREAKPOINT) {
         breakpoint = true;  // The first breakpoint notifies this debugger of its own attach.
-      } else {
+        native_trace.InitialBreakpoint();
+      } else if (!(owned && native_trace.Exception(event))) {
         disposition = DBG_EXCEPTION_NOT_HANDLED;
       }
     }
-    if (owned && event.dwDebugEventCode == OUTPUT_DEBUG_STRING_EVENT)
+    if (owned && event.dwDebugEventCode == OUTPUT_DEBUG_STRING_EVENT) {
+      native_trace.EntryMarker(event.u.DebugString);
       AppendGuestLoaderMessage(probe.process(), event.u.DebugString, trace);
+    }
     if (!ContinueDebugEvent(event.dwProcessId, event.dwThreadId, disposition)) {
       trace->wait = GetLastError();
       return;

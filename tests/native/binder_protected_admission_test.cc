@@ -302,7 +302,7 @@ void Test() {
       auto identity = AdmitProtected(listener, peers);
       if (identity) {
         ++accepted;
-        workers.emplace_back(ServeConnection, listener, std::move(identity));
+        workers.emplace_back(ServeUsbProtectedConnection, listener, std::move(identity));
       } else {
         ++rejected;
       }
