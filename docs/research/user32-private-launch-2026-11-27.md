@@ -139,3 +139,30 @@ different PE entry and opcode mismatch with refreshed table hash) were
 rejected before hardware events; each loader still exited zero. These runs
 validate the observer and leave the failing private branch unresolved until
 the new control runs on the elevated Windows 2022 and 2025 fixtures.
+
+Run `45988836731`, head `c75196f35855a4e007439a459712ba70f4efe2b7`,
+provided that observation. Windows 2022 returned zero from the actual
+`win32u!NtGdiInit` import at RVA `0x1436b`, then selected the explicit
+`STATUS_NO_MEMORY` branch. Windows 2025 entered the alternate direct helper at
+`0x8a0bc`, which returned `STATUS_NO_MEMORY`. Its body was not observed in that
+run, so the Windows 2022 result does not establish its internal failing call.
+
+The follow-up map preserves the original exported initializer root and may
+include one immediate direct child containing the actual `NtGdiInit2` import.
+The decoder rejects ambiguous children. A version-2 marker identifies that
+one call; the native observer additionally checks its original root function,
+direct-call opcode and target, exact child unwind entry and unique marker.
+The observer enters only that child, observes its own calls at their real
+returns and resumes observation at the original caller. It retains the
+original root stack, 128-event limit, five-second deadline and IPC payload.
+No Windows code, result, permission or production launch policy is changed.
+
+On the matching ordinary-desktop Windows 2025 image, the extended observation
+completed in 23 events, returned zero and left the real loader exit zero.
+Four live mutations (removed marker, downgraded map, extra marker and retargeted
+marker), each with a recomputed map digest, were rejected before any hardware
+event while the loader still exited zero. The original version-1 root map
+continues to complete in eight events. Preparation retains the original seven
+USER32 and four PE controls and passes nine GDI controls. The full fixture
+compiles with MSVC `/W4 /WX`. Private-token execution of this follow-up remains
+pending; neither the ordinary run nor the new map is a USER32 repair.

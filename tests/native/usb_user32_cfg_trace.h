@@ -225,13 +225,25 @@ class User32CfgDebugTrace {
     if (root != header_.entry) return false;
     const auto start = entry(root);
     if (start == unwind.end() || start->BeginAddress != root) return false;
+    unsigned children = 0;
     for (const Row& row : rows_) {
       if (GetTickCount64() >= deadline_) return false;
       const auto after = std::upper_bound(unwind.begin(), unwind.end(), row.rva,
           [](DWORD rva, const RUNTIME_FUNCTION& record) { return rva < record.BeginAddress; });
       if (after == unwind.begin() || (after - 1)->EndAddress != row.end) return false;
+      if (row.reserved) {
+        const auto child = entry(row.target);
+        int32_t relative = 0;
+        std::memcpy(&relative, row.code.data() + 1, sizeof(relative));
+        if (header_.version != 2 || ++children != 1 || row.reserved != 1 ||
+            row.kind != 1 || row.length != 5 || row.code[0] != 0xe8 ||
+            row.rva < start->BeginAddress || row.rva >= start->EndAddress ||
+            static_cast<int64_t>(row.rva) + 5 + relative != row.target ||
+            child == unwind.end() || child->BeginAddress != row.target ||
+            row.target == root || !Find(row.target)) return false;
+      }
     }
-    return true;
+    return children == (header_.version == 2 ? 1u : 0u);
   }
   static bool HashBytes(std::span<const std::byte> input, std::array<BYTE, 32>* digest) {
     HCRYPTPROV provider = 0; HCRYPTHASH hash = 0;
@@ -276,7 +288,8 @@ class User32CfgDebugTrace {
     CloseHandle(file);
     if (ok) {
       std::memcpy(Bytes(header_).data(), data.data(), Bytes(header_).size());
-      ok = header_.magic == 0x31434655 && header_.version == 1 &&
+      ok = header_.magic == 0x31434655 &&
+          (header_.version == 1 || (gdi_ && header_.version == 2)) &&
           (gdi_ ? header_.reserved && header_.reserved < header_.image_size : !header_.reserved) &&
           header_.row_size == 32 && header_.budget == 128 && header_.count && header_.count <= 4096 &&
           header_.image_size <= 32 * 1024 * 1024 && header_.entry < header_.image_size &&
@@ -293,7 +306,8 @@ class User32CfgDebugTrace {
         for (const auto& row : rows_) {
           if (!(previous < row.rva && row.rva < row.end && row.end <= header_.image_size &&
               row.length && row.length <= 15 && row.length <= row.end - row.rva && row.kind <= 5 &&
-              row.condition <= 15 && !row.reserved && row.target < header_.image_size)) { ok = false; break; }
+              row.condition <= 15 && row.reserved <= (gdi_ && header_.version == 2 ? 1 : 0) &&
+              row.target < header_.image_size)) { ok = false; break; }
           previous = row.rva;
         }
         if (!Find(header_.entry)) ok = false;
@@ -320,6 +334,14 @@ class User32CfgDebugTrace {
     }
     if (!row || row->kind == 5) { error_ = ERROR_NOT_SUPPORTED; Finish(context); return; }
     if (row->kind == 1) {
+      if (row->reserved) {
+        // Only the one image-bound direct child of the exported initializer
+        // may be entered. Its own calls are observed at their real returns.
+        if (child_active_) { error_ = ERROR_INVALID_DATA; Finish(context); return; }
+        child_call_ = *row; child_active_ = true;
+        context.Dr0 = base_ + row->target; context.Dr7 |= 1;
+        action_ = Action::kTerminator; return;
+      }
       // No branch lies between the current block start and this call. Observe
       // its real return directly, without another event at the call itself.
       pending_ = *row; context.Dr0 = base_ + row->rva + row->length;
@@ -335,7 +357,11 @@ class User32CfgDebugTrace {
       Arm(context, taken ? row->target : row->rva + row->length, false);
     } else {
       Record(4, row->rva, 0, context, 0);
-      context.Dr0 = 0; context.Dr7 &= ~DWORD64{1};
+      if (child_active_) {
+        child_active_ = false; pending_ = child_call_;
+        context.Dr0 = base_ + child_call_.rva + child_call_.length;
+        context.Dr7 |= 1; action_ = Action::kCallReturn;
+      } else { context.Dr0 = 0; context.Dr7 &= ~DWORD64{1}; }
     }
   }
   void Finish(CONTEXT& context) { context.Dr0 = 0; context.Dr1 = 0; context.Dr7 &= ~DWORD64{0xf}; }
@@ -377,6 +403,7 @@ class User32CfgDebugTrace {
   std::vector<Row> rows_; uintptr_t base_ = 0, root_return_ = 0, root_stack_ = 0;
   DWORD setup_ = ERROR_NOT_READY, error_ = 0, events_ = 0, final_ = 0;
   bool ready_ = false, armed_ = false, finished_ = false; Row pending_{};
+  bool child_active_ = false; Row child_call_{};
   std::array<Observation, 12> records_{}; size_t first_ = 0, used_ = 0;
 };
 }  // namespace gesher::usb_storage::test

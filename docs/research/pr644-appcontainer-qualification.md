@@ -168,3 +168,24 @@ That does not resolve its hosted callback failure. WebView networking, the
 isolated Windows 2022 native task-menu failure, private USER32 and the earlier
 installer/default/interactive gates still require qualification. No criterion
 was weakened to count these local results as a green integrated matrix.
+
+## Cross-volume document selection follow-up
+
+The hosted SAF cancellation was reproduced with an existing document on D:
+and the process working directory on C:. The original guard checked real
+ancestors correctly, then treated the synthetic `/mnt` namespace prefix as a
+filesystem ancestor. Its failed identity query canceled the ordinary selection.
+The repaired guard shares the provider's existing drive/UNC-root predicate,
+checks the real volume root and stops before synthetic parents. Identity errors
+on real objects still fail closed; Android data, obb and sandbox descendants
+remain blocked before URI grants or document creation.
+
+Matched original and repaired ART runs reproduced the failed callback and
+successful real document URI respectively. The repaired focused run passed 84
+checks. The complete updated native Binder corpus passed 1,216 checks with each
+of the real C: and D: working directories, including three actual persistence
+restarts per run. Protected descendants, aliases, parent traversal and absent
+objects retained cancellation without a grant. Source, JAR/DEX, runtime and log
+identities are in `out/qa314/saf-hosted/final-inputs.json`. Temporary SUBST
+experiments were removed and are not the before/after proof. Actual UNC-share
+execution remains unavailable and the hosted rerun remains required.
