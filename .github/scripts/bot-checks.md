@@ -40,6 +40,23 @@ also checked. The previous implementation incorrectly required this omitted
 field, which was confirmed by live run `45991130949` on 2026-11-27. The QA flag
 was restored to unset after that validation failure, pending this correction.
 
+The subsequent activation failed readback again in run `46001151940`, while a
+read-only replay accepted a settled live receipt. The immediate failing
+response was not logged, so delayed visibility is a hypothesis rather than a
+proven diagnosis of that particular response. `GESHER_APP_QA_STATUS` was set
+to `false` on 2026-11-27; CI reporting remains enabled and Required rules remain
+unchanged.
+
+Immediately after its own POST, the QA writer now permits up to six combined
+reads, one second apart, only while the context is missing or has an older
+numeric status ID. It requests cache revalidation and never repeats the POST.
+The exact authenticated receipt must become current before it proceeds. A newer
+ID, conflicting receipt metadata, invalid ID/head/source, or API error still fails
+closed. Later pre-release checks do not retry a previously confirmed receipt.
+An exhausted/mismatched readback reports the expected and observed ID/state for
+diagnosis. Tests simulate lag, exhaustion, replacement during a retry and QA
+revocation during publication. A new live rollout is still required after merge.
+
 ## Deployment
 
 1. Merge the workflow/scripts through the existing protected PR process. Keep
