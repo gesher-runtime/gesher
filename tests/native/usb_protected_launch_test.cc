@@ -119,6 +119,9 @@ struct SessionObjectsEvidence {
   SessionSubjectEvidence subjects[4]{};
 };
 struct LeafOpenEvidence { DWORD called = 0, status = ERROR_NOT_READY, opened = 0; };
+constexpr DWORD kChildEventUseAccess = EVENT_ALL_ACCESS & ~(WRITE_DAC | WRITE_OWNER);
+constexpr DWORD kChildDirectoryAllAccess = 0x000f000f;
+constexpr DWORD kChildDirectoryUseAccess = kChildDirectoryAllAccess & ~(WRITE_DAC | WRITE_OWNER);
 struct ChildEventEvidence {
   DWORD called = 0, status = ERROR_NOT_READY, opened = 0;
   DWORD signaled = 0, signal_error = ERROR_SUCCESS;
@@ -1502,7 +1505,11 @@ void CreatePackageChildren(const std::wstring& path, HANDLE guest, HANDLE other,
   attributes.Attributes = 0x00001000;  // No OPENIF, INHERIT or PERMANENT.
   HANDLE event_raw = nullptr, directory_raw = nullptr;
   Require(ImpersonateLoggedOnUser(guest), "package-child-create-lowbox-context");
-  const NTSTATUS event_status = event_create(&event_raw, EVENT_ALL_ACCESS, &attributes, NativeEventType::notification, FALSE);
+  // Owning a protected child requires operational access, not Windows
+  // permission to change its owner or DACL. Windows can remove those rights
+  // from an AppContainer creator's handle even when it creates the object.
+  const NTSTATUS event_status = event_create(&event_raw, kChildEventUseAccess,
+      &attributes, NativeEventType::notification, FALSE);
   const BOOL signaled = event_status == 0 && event_raw ? SetEvent(event_raw) : FALSE;
   const DWORD signal_error = event_status == 0 && event_raw && !signaled ? GetLastError() : ERROR_SUCCESS;
   const DWORD waited = signaled ? WaitForSingleObject(event_raw, 0) : WAIT_FAILED;
@@ -1510,7 +1517,7 @@ void CreatePackageChildren(const std::wstring& path, HANDLE guest, HANDLE other,
   name.Buffer = directory_name;
   name.Length = static_cast<USHORT>(sizeof(directory_name) - sizeof(wchar_t));
   name.MaximumLength = sizeof(directory_name);
-  const NTSTATUS directory_status = directory_create(&directory_raw, 0x000f000f, &attributes);
+  const NTSTATUS directory_status = directory_create(&directory_raw, kChildDirectoryUseAccess, &attributes);
   if (!RevertToSelf()) std::abort();
   Handle event(event_raw), directory(directory_raw);
   auto& observed = evidence->event_creation;
@@ -1529,13 +1536,13 @@ void CreatePackageChildren(const std::wstring& path, HANDLE guest, HANDLE other,
   }
   Require(observed.status == 0 && observed.opened && observed.signaled &&
       observed.waited == WAIT_OBJECT_0 && observed.type_matches && observed.name_matches &&
-      observed.granted_access == EVENT_ALL_ACCESS,
+      observed.granted_access == kChildEventUseAccess,
       "package-leaf-actual-event-creation-use-and-inherited-access", ERROR_ACCESS_DENIED);
   evidence->object_created = 1;
   Require(directory_status == 0 && directory &&
       SessionObjectText(directory.get(), ObjectTypeInformation) == L"Directory" &&
       SessionObjectText(directory.get(), static_cast<OBJECT_INFORMATION_CLASS>(1)) == path + L"\\" + directory_name &&
-      SessionObjectAccess(directory.get()) == 0x000f000f,
+      SessionObjectAccess(directory.get()) == kChildDirectoryUseAccess,
       "package-leaf-actual-subdirectory-creation-and-inherited-access", ERROR_ACCESS_DENIED);
   evidence->subdirectory_created = 1;
   // Temporary named objects would disappear at last close. Independent
@@ -1555,7 +1562,8 @@ void CreatePackageChildren(const std::wstring& path, HANDLE guest, HANDLE other,
 
   const std::wstring child_names[] = {path + L"\\" + event_name, path + L"\\" + directory_name};
   const HANDLE pins[] = {event_pin.get(), directory_pin.get()}, subjects[] = {guest, other, desktop};
-  const DWORD rights[] = {EVENT_ALL_ACCESS, 0x000f000f};
+  const DWORD use_rights[] = {kChildEventUseAccess, kChildDirectoryUseAccess};
+  const DWORD all_rights[] = {EVENT_ALL_ACCESS, kChildDirectoryAllAccess};
   const OpenNative openers[] = {event_open, SessionDirectoryOpen()};
   const auto reopen = [&](size_t kind, DWORD access, HANDLE subject, DWORD* observed) {
     UNICODE_STRING child_name{};
@@ -1576,11 +1584,12 @@ void CreatePackageChildren(const std::wstring& path, HANDLE guest, HANDLE other,
   for (size_t kind = 0; kind < 2; ++kind) {
     for (size_t actor = 0; actor < 3; ++actor) {
       auto& row = evidence->child_opens[kind][actor]; row.called = 1;
-      const Handle opened = reopen(kind, rights[kind], subjects[actor], &row.status);
+      const DWORD requested = actor == 0 ? use_rights[kind] : all_rights[kind];
+      const Handle opened = reopen(kind, requested, subjects[actor], &row.status);
       row.opened = static_cast<DWORD>(static_cast<bool>(opened));
       if (actor == 0) {
         Require(row.status == 0 && opened && SameSessionObject(opened.get(), pins[kind]) &&
-            SessionObjectAccess(opened.get()) == rights[kind],
+            SessionObjectAccess(opened.get()) == requested,
             "package-child-own-reopen-exact-object", ERROR_ACCESS_DENIED);
         Require(ImpersonateLoggedOnUser(guest), "package-child-use-reopened-lowbox-context");
         BOOL used = FALSE;
@@ -1596,7 +1605,7 @@ void CreatePackageChildren(const std::wstring& path, HANDLE guest, HANDLE other,
           nested_attributes.RootDirectory = opened.get();
           nested_attributes.ObjectName = &nested;
           nested_attributes.Attributes = 0x00001000;
-          const NTSTATUS nested_status = event_create(&nested_raw, EVENT_ALL_ACCESS, &nested_attributes,
+          const NTSTATUS nested_status = event_create(&nested_raw, kChildEventUseAccess, &nested_attributes,
               NativeEventType::notification, FALSE);
           used = nested_status == 0 && nested_raw && SetEvent(nested_raw) && WaitForSingleObject(nested_raw, 0) == WAIT_OBJECT_0;
         }
@@ -2441,7 +2450,7 @@ void PrintPackageNamespace(const PackageLeafEvidence& leaf, const NamespaceColli
         static_cast<unsigned long>(event.signaled), static_cast<unsigned long>(event.signal_error),
         static_cast<unsigned long>(event.waited), static_cast<unsigned long>(event.wait_error),
         static_cast<unsigned long>(event.type_matches), static_cast<unsigned long>(event.name_matches),
-        static_cast<unsigned long>(event.granted_access), static_cast<unsigned long>(EVENT_ALL_ACCESS));
+        static_cast<unsigned long>(event.granted_access), static_cast<unsigned long>(kChildEventUseAccess));
   std::printf("Protected package admission: exact-policy=%lu launch-readonly-pin=%lu actual-event=%lu actual-subdirectory=%lu expected-pin-reuse=%lu null-pin-reuse=%lu independent-pin-lifetime=%lu wrong-type-rejected=%lu wrong-object-rejected=%lu changed-policy-rejected=%lu\n",
       static_cast<unsigned long>(leaf.policy_verified), static_cast<unsigned long>(leaf.launch_pin_verified),
       static_cast<unsigned long>(leaf.object_created), static_cast<unsigned long>(leaf.subdirectory_created),
