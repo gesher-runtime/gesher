@@ -23,10 +23,29 @@ env:
   LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
 
 jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      selected: ${{ steps.selection.outputs.selected }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: ${{ github.event_name == 'pull_request' && '0' || '1' }}
+          sparse-checkout: |
+            .github/workflows
+            tools/ci
+      - name: Select checks for this change
+        id: selection
+        run: |
+          python3 -m pip install PyYAML==6.0.3
+          python3 tools/ci/select_pr_jobs.py plan --workflow arm64-windows
   source-identity:
     uses: ./.github/workflows/source-identity.yml
   build:
-    needs: [source-identity]
+    needs: [plan, source-identity]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'build') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -97,10 +116,28 @@ jobs:
   arm64-required:
     name: arm64-required
     if: always()
-    needs: [source-identity, build]
+    needs: [plan, source-identity, build]
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
-      - name: Require every production CI job
+      - uses: actions/checkout@v4
+        if: github.event_name == 'pull_request'
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            .github/workflows
+            tools/ci
+      - name: Require successful selected jobs and intentional skips
+        if: github.event_name == 'pull_request'
+        env:
+          SELECTED: ${{ needs.plan.outputs.selected }}
+          JOB_RESULTS: ${{ toJSON(needs) }}
+        run: |
+          python3 -m pip install PyYAML==6.0.3
+          python3 tools/ci/select_pr_jobs.py verify --workflow arm64-windows
+      # Keep the full-run verdict in the workflow definition used by the release publisher.
+      - name: Require every job on push or manual runs
+        if: github.event_name != 'pull_request'
         env:
           JOB_RESULTS: ${{ toJSON(needs) }}
         run: |
