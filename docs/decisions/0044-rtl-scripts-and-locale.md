@@ -62,13 +62,12 @@ They may not be redistributed.
   older) are separate families; a family holds one font per style.
 - **The folder** is `%WINDIR%\Fonts` (`GetSystemWindowsDirectoryW`, natives in
   `compat/hwui/text/text_natives.cc`), or `$GESHER_WINDOWS_FONTS` (`none`
-  turns Windows' fonts off). It must be reachable as a drive-less path
+  turns Windows' fonts off). It must be reachable as an absolute Gesher path
   ([0010](0010-paths.md)): `SystemFonts` maps each font by
   `File.getAbsolutePath()`, the font map's SharedMemory form stores that path
   and the reader maps the file again by it, and Java treats `C:/...` as
-  relative. An installed Gesher runs on Windows' drive (its launcher already
-  assumes one drive); a test root on another drive (CI's `D:`) names a
-  junction to the folder with `$GESHER_WINDOWS_FONTS`. When neither works,
+  relative. The native emits `/mnt/<drive>/...` for another drive
+  ([0045](0045-posix-paths-tz-procfs.md)). If the directory cannot be opened,
   the map is built without Windows' fonts and the log says why.
 - **Color emoji** are Segoe UI Emoji's COLR/CPAL layers, drawn by Skia's
   FreeType backend (Fontations is not built, docs/graphics.md); minikin prefers the
@@ -121,4 +120,4 @@ are seen by the next process (no configuration change is sent).
 - Text and layouts follow the user's Windows language without app changes;
   an RTL Windows mirrors RTL-aware apps.
 - Tests (`tests/windows/tracks/32-fonts.ps1`, `39-rtl.ps1`) run Windows'
-  fonts through a junction on the test root's drive.
+  fonts through the alternate-drive path when CI runs on another drive.

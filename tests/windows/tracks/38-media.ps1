@@ -326,9 +326,9 @@ public static class GesherMediaCapture {
     $bcpVideo = (('core-oj', 'core-libart', 'core-icu4j', 'framework', 'gesher-app') | ForEach-Object { NoDrive "$Dir/$_.jar" }) -join ':'
     $dvmVideo = @("-Xbootclasspath:$bcpVideo", "-Ximage:$(NoDrive "$root/system")/framework/boot.art", '-Xusejit:false')
     $log = Join-Path $mediaTmp "videoapp-$tag.log"
-    $env:GESHER_AUDIO_CAPTURE = Join-Path $mediaTmp "video-$tag"
-    $captureDir = $env:GESHER_AUDIO_CAPTURE
-    New-Item -ItemType Directory -Force $env:GESHER_AUDIO_CAPTURE | Out-Null
+    $captureDir = Join-Path $mediaTmp "video-$tag"
+    New-Item -ItemType Directory -Force $captureDir | Out-Null
+    $env:GESHER_AUDIO_CAPTURE = $captureDir
     $appLog = $null
     $entry = @('com.gesher.app.Main', (NoDrive "$Dir/videoapp.apk"), '--hidden-window')
     if ($device) {
@@ -337,6 +337,11 @@ public static class GesherMediaCapture {
       $appLog = Join-Path $root 'logs/com.gesher.videoapp.log'
       # The package log normally appends: never accept an earlier run's lines.
       if (Test-Path -LiteralPath $appLog) { Remove-Item -LiteralPath $appLog -Force }
+      # The child can write its own CE directory. The runner's artifact
+      # directory is outside its grants and stays host-only.
+      $deviceCaptureDir = Join-Path $root "data/data/com.gesher.videoapp/video-$tag"
+      New-Item -ItemType Directory -Force $deviceCaptureDir | Out-Null
+      $env:GESHER_AUDIO_CAPTURE = $deviceCaptureDir
       $entry = @('com.gesher.app.Launcher', 'launch', (NoDrive "$Dir/videoapp.apk"), '--hidden-window')
     }
     # hwui's SkiaGL pipeline over ANGLE for the 'gl' run (docs/angle.md).
@@ -381,6 +386,14 @@ public static class GesherMediaCapture {
     $capturePath = if ($captureMatch.Success) { $captureMatch.Groups[1].Value } else { $null }
     $code = if ($timedOut) { -1 } else { $p.ExitCode }
     if ($device) {
+      if ($capturePath -and (Test-Path -LiteralPath $capturePath -PathType Leaf) -and
+          [IO.Path]::GetFullPath((Split-Path -Parent $capturePath)) -eq [IO.Path]::GetFullPath($deviceCaptureDir)) {
+        $artifact = Join-Path $captureDir (Split-Path -Leaf $capturePath)
+        Copy-Item -LiteralPath $capturePath -Destination $artifact
+        $capturePath = $artifact
+      } else {
+        $capturePath = $null
+      }
       # This fixture installs its APK. Leave the package registry as it was
       # before this run so later install/list/uninstall checks stay isolated.
       $cleanup = & "$Dir/dalvikvm.exe" @($dvmVideo + 'com.gesher.app.Launcher', 'uninstall', 'com.gesher.videoapp') 2>&1 | Out-String

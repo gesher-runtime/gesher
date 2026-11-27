@@ -324,7 +324,7 @@ if ($LASTEXITCODE -ne 0) { throw "Devices remote installation prerequisite faile
 $remotePermissions = DevRun "$Dir/dalvikvm.exe" ($dvmDev + '-cp', (NoDrive "$Dir/services-tests.dex"),
   'gesher.services.FixturePermissionSetup', '--remote', [string]$devicesUid, 'com.gesher.devices',
   'android.permission.ACCESS_COARSE_LOCATION', 'android.permission.ACCESS_FINE_LOCATION',
-  'android.permission.CAMERA') 90 '' @{ GESHER_UID = '1000'; GESHER_BINDER_UID = '1000' }
+  'android.permission.CAMERA') 90 '' @{ GESHER_UID = '2000'; GESHER_BINDER_UID = '2000' }
 if ($LASTEXITCODE -ne 0 -or -not $remotePermissions.Contains('FixturePermissionSetup live installed grants verified') -or
     -not $remotePermissions.Contains("FixturePermissionSetup remote UID $devicesUid package com.gesher.devices source ")) {
   throw "Devices remote permission prerequisites failed: $remotePermissions"
@@ -344,7 +344,7 @@ LegacyCameraCheck 'Gesher device' $out $code
 # to its provider's EXTRA_OUTPUT (Gesher Camera's auto-capture extra takes them).
 $remoteCameraPermission = DevRun "$Dir/dalvikvm.exe" ($dvmDev + '-cp', (NoDrive "$Dir/services-tests.dex"),
   'gesher.services.FixturePermissionSetup', '--remote', [string]$cameraUid, 'com.gesher.camera',
-  'android.permission.CAMERA') 90 '' @{ GESHER_UID = '1000'; GESHER_BINDER_UID = '1000' }
+  'android.permission.CAMERA') 90 '' @{ GESHER_UID = '2000'; GESHER_BINDER_UID = '2000' }
 if ($LASTEXITCODE -ne 0 -or -not $remoteCameraPermission.Contains('FixturePermissionSetup live installed grants verified') -or
     -not $remoteCameraPermission.Contains("FixturePermissionSetup remote UID $cameraUid package com.gesher.camera source ")) {
   throw "Installed camera app permission prerequisite failed: $remoteCameraPermission"

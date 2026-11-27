@@ -77,6 +77,7 @@ public final class BroadcastLifecycleTest {
         final Class<?> processType;
         final Method hasReceivers;
         final Method broadcast;
+        final Object packageCode;
         final String owner;
         final int receiverCount;
         final List<Object> processes;
@@ -85,6 +86,7 @@ public final class BroadcastLifecycleTest {
 
         @SuppressWarnings("unchecked")
         Harness(Object apk, long timeoutMillis) throws Exception {
+            packageCode = apk;
             Class<?> packageType = Class.forName("com.gesher.server.PackageManagerService");
             atmType = Class.forName("com.gesher.server.ActivityTaskManagerService");
             Class<?> amType = Class.forName("com.gesher.server.ActivityManagerService");
@@ -113,6 +115,7 @@ public final class BroadcastLifecycleTest {
                     atm, Binder.getCallingPid(), thread);
             field(processType, "packageName").set(app, owner);
             field(processType, "processName").set(app, owner);
+            field(processType, "packageCode").set(app, packageCode);
             field(processType, "ready").setBoolean(app, true);
             synchronized (atm) { processes.add(app); }
         }

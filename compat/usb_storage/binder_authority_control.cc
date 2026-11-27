@@ -257,7 +257,8 @@ DWORD BinderAuthorityControl::CreateLocator(std::wstring* locator) {
 DWORD BinderAuthorityControl::Connect(AuthorityLaunch& broker,
     const std::wstring& registration_locator, const std::wstring& listener_locator, HANDLE stop,
     std::unique_ptr<BinderAuthorityControl>* registration,
-    std::unique_ptr<BinderAuthorityControl>* listeners) {
+    std::unique_ptr<BinderAuthorityControl>* listeners, std::optional<DWORD>* broker_exit) {
+  if (broker_exit) broker_exit->reset();
   if (!registration || *registration || !listeners || *listeners || registration == listeners ||
       !stop || stop == INVALID_HANDLE_VALUE || !ValidLocator(registration_locator) ||
       !ValidLocator(listener_locator) || registration_locator == listener_locator) {
@@ -283,7 +284,15 @@ DWORD BinderAuthorityControl::Connect(AuthorityLaunch& broker,
   // Each channel retains its own authenticated SCM handle. No new AppContainer
   // connection needs query access after both handshakes have finished.
   if (status == ERROR_SUCCESS) status = service_query.Retire();
-  if (status != ERROR_SUCCESS) return admission->FailClosed(status);
+  if (status != ERROR_SUCCESS) {
+    // Observe only an already exited child; FailClosed can itself terminate it.
+    DWORD exit_code = 0;
+    if (broker_exit && WaitForSingleObject(broker.process(), 0) == WAIT_OBJECT_0 &&
+        GetExitCodeProcess(broker.process(), &exit_code)) {
+      *broker_exit = exit_code;
+    }
+    return admission->FailClosed(status);
+  }
   *registration = std::move(admission);
   *listeners = std::move(factory);
   return ERROR_SUCCESS;

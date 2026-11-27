@@ -18,6 +18,7 @@ import com.gesher.server.AppOpsService;
 import com.gesher.server.CallerIdentity;
 import com.gesher.server.Device;
 import com.gesher.server.PackageManagerService;
+import com.gesher.server.Zygote;
 import java.lang.reflect.Method;
 import java.util.Collections;
 import java.util.List;
@@ -49,9 +50,17 @@ public final class FixtureSettingsSetup {
         }
         String root = System.getenv("ANDROID_ROOT");
         Main.bootstrap("fixture-write-settings", root + "/build.prop", root + "/framework/framework-res.apk");
-        if (Process.myUid() != Process.SYSTEM_UID) throw new SecurityException("Special-access operator requires system UID");
+        int expectedUid = remote ? Process.SHELL_UID : Process.SYSTEM_UID;
+        if (Process.myUid() != expectedUid) throw new SecurityException("Special-access fixture has the wrong operator UID");
         if (remote) {
             require(Device.alive(state, Device.SYSTEM_SERVER) && Device.alive(state, Device.BINDERD), "Real fixture device generation is stale");
+            if ("true".equals(state.getProperty(Device.STATE_PROTECTED))) {
+                // The actual desktop token must attach as the shell before any
+                // Binder use. Neither environment UID nor package metadata can
+                // stand in for this exact broker process-generation check.
+                require(Zygote.nativePrepareProtectedOperator(Device.pid(state, Device.BINDERD),
+                        Device.startTime(state, Device.BINDERD)), "Protected special-access operator admission failed");
+            }
             int uid = Integer.parseInt(args[1]); String name = args[2];
             int mode = args.length == 3 ? AppOpsManager.MODE_ALLOWED : Integer.parseInt(args[3]);
             require(mode == AppOpsManager.MODE_ALLOWED || mode == AppOpsManager.MODE_IGNORED

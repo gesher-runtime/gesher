@@ -1,5 +1,5 @@
 diff --git a/compat/binder/binderd.cc b/compat/binder/binderd.cc
-index 9516fa91c..021198d97 100644
+index 9516fa9..021198d 100644
 --- a/compat/binder/binderd.cc
 +++ b/compat/binder/binderd.cc
 @@ -54,9 +54,25 @@
@@ -1209,7 +1209,7 @@ index 9516fa91c..021198d97 100644
      if (error != ERROR_SUCCESS) {
        Log("GESHER_SANDBOX=appcontainer: no pipe security descriptor: %lu", error);
 diff --git a/compat/bionic/process_bionic.cc b/compat/bionic/process_bionic.cc
-index 33e275d38..77b0f40af 100644
+index 33e275d..77b0f40 100644
 --- a/compat/bionic/process_bionic.cc
 +++ b/compat/bionic/process_bionic.cc
 @@ -22,6 +22,7 @@
@@ -1322,7 +1322,7 @@ index 33e275d38..77b0f40af 100644
      return errno = EAGAIN, -1;
    }
 diff --git a/compat/credentials/account_crypto.c b/compat/credentials/account_crypto.c
-index f437e1743..bfe5075bc 100644
+index f437e17..bfe5075 100644
 --- a/compat/credentials/account_crypto.c
 +++ b/compat/credentials/account_crypto.c
 @@ -300,6 +300,29 @@ Java_com_gesher_server_AccountManagerService_nativeConfirmToken(JNIEnv* env, jcl
@@ -1356,7 +1356,7 @@ index f437e1743..bfe5075bc 100644
  Java_com_gesher_server_WindowsLocation_nativePromptEnable(JNIEnv* env, jclass cls,
      jstring app_label) {
 diff --git a/compat/elf/exec/exec.cmake b/compat/elf/exec/exec.cmake
-index 92424e9a4..655de2a90 100644
+index 92424e9..655de2a 100644
 --- a/compat/elf/exec/exec.cmake
 +++ b/compat/elf/exec/exec.cmake
 @@ -75,6 +75,34 @@ target_include_directories(appcontainer_probe PRIVATE
@@ -1395,7 +1395,7 @@ index 92424e9a4..655de2a90 100644
  target_compile_options(exec3_property_host_probe PRIVATE -Wall -Wextra -Werror)
  target_link_libraries(exec3_property_host_probe PRIVATE utils)
 diff --git a/compat/elf/exec/exec_spawn.cc b/compat/elf/exec/exec_spawn.cc
-index a3851ce39..c35a8c666 100644
+index a3851ce..c35a8c6 100644
 --- a/compat/elf/exec/exec_spawn.cc
 +++ b/compat/elf/exec/exec_spawn.cc
 @@ -4,7 +4,10 @@
@@ -1502,7 +1502,7 @@ index a3851ce39..c35a8c666 100644
    return error;
  } catch (const std::bad_alloc&) {
 diff --git a/compat/elf/exec/gesher_tools.cc b/compat/elf/exec/gesher_tools.cc
-index 8e1e42421..b03ea38d3 100644
+index 8e1e424..b03ea38 100644
 --- a/compat/elf/exec/gesher_tools.cc
 +++ b/compat/elf/exec/gesher_tools.cc
 @@ -7,6 +7,7 @@
@@ -1528,7 +1528,7 @@ index 8e1e42421..b03ea38d3 100644
    Launch launch;
    int error = PrepareLaunch(command, Narrow(directory), &launch);
 diff --git a/compat/posix/include/gesher/file_description.h b/compat/posix/include/gesher/file_description.h
-index b14282837..3a8deeef8 100644
+index b142828..3a8deee 100644
 --- a/compat/posix/include/gesher/file_description.h
 +++ b/compat/posix/include/gesher/file_description.h
 @@ -4,6 +4,7 @@
@@ -1548,7 +1548,7 @@ index b14282837..3a8deeef8 100644
  // retains its reference; the new slot owns an explicit native duplicate.
  int AttachFileDescription(const DescriptorSnapshotPtr& snapshot, bool close_on_exec);
 diff --git a/compat/posix/include/gesher/system_properties.h b/compat/posix/include/gesher/system_properties.h
-index 3516cd627..78b746609 100644
+index 3516cd6..78b7466 100644
 --- a/compat/posix/include/gesher/system_properties.h
 +++ b/compat/posix/include/gesher/system_properties.h
 @@ -19,6 +19,9 @@ struct WaitTimeout { int64_t seconds; int64_t nanoseconds; };
@@ -1562,7 +1562,7 @@ index 3516cd627..78b746609 100644
  // A process-local area identity plus its published generation. Area identities
  // remain valid for the process lifetime. An empty identity must not be cached.
 diff --git a/compat/posix/posix.cmake b/compat/posix/posix.cmake
-index ef1df5da9..384c7da34 100644
+index ef1df5d..384c7da 100644
 --- a/compat/posix/posix.cmake
 +++ b/compat/posix/posix.cmake
 @@ -6,6 +6,7 @@ add_library(gesher_posix STATIC
@@ -1600,7 +1600,7 @@ index ef1df5da9..384c7da34 100644
  target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_protected_runtime_anchor)
  target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_storage_policy_anchor_v1)
 diff --git a/compat/posix/src/binder.cc b/compat/posix/src/binder.cc
-index 7c19a8175..ea7641179 100644
+index 7c19a81..ea76411 100644
 --- a/compat/posix/src/binder.cc
 +++ b/compat/posix/src/binder.cc
 @@ -27,18 +27,21 @@
@@ -2000,7 +2000,7 @@ index 7c19a8175..ea7641179 100644
    hello.Put<uint32_t>(wire::kVersion);
    hello.Put<uint32_t>(GetCurrentProcessId());
 diff --git a/compat/posix/src/binder_transport.cc b/compat/posix/src/binder_transport.cc
-index 6e91b7280..bb78a5d31 100644
+index 6e91b72..bb78a5d 100644
 --- a/compat/posix/src/binder_transport.cc
 +++ b/compat/posix/src/binder_transport.cc
 @@ -4,6 +4,9 @@
@@ -2047,7 +2047,7 @@ index 6e91b7280..bb78a5d31 100644
 +GESHER_FORK_LOCK(gesher::kForkOrderSubsystem, std::mutex, gesher::g_routing.mutex);
 +#endif
 diff --git a/compat/posix/src/binder_wire.h b/compat/posix/src/binder_wire.h
-index 049f1e455..c0c03462f 100644
+index 049f1e4..c0c0346 100644
 --- a/compat/posix/src/binder_wire.h
 +++ b/compat/posix/src/binder_wire.h
 @@ -117,7 +117,44 @@ enum Op : uint32_t {
@@ -2105,7 +2105,7 @@ index 049f1e455..c0c03462f 100644
  // FILE_WRITE_ATTRIBUTES. Not GENERIC_WRITE: for a pipe its FILE_APPEND_DATA is
  // FILE_CREATE_PIPE_INSTANCE, which binderd grants AppContainer clients no more
 diff --git a/compat/posix/src/dirent.cc b/compat/posix/src/dirent.cc
-index 5441ebedc..41a6fd167 100644
+index 5441ebe..c7ec7f5 100644
 --- a/compat/posix/src/dirent.cc
 +++ b/compat/posix/src/dirent.cc
 @@ -13,6 +13,9 @@
@@ -2232,7 +2232,21 @@ index 5441ebedc..41a6fd167 100644
      // A directory removed while open has no name left: still a directory.
      FILE_STANDARD_INFO standard;
      if (GetFileInformationByHandleEx(h, FileStandardInfo, &standard, sizeof(standard)) &&
-@@ -329,6 +398,13 @@ bool OpenDirectory(HANDLE fd_handle, std::atomic<HANDLE>* slot, bool* gone) {
+@@ -140,13 +209,6 @@ bool DirectoryOfHandle(HANDLE h, std::string* path, bool* on_disk) {
+   return true;
+ }
+
+-bool DirectoryOfFd(int fd, std::string* path) {
+-  HANDLE h = gesher::HandleFromFd(fd);
+-  if (h == INVALID_HANDLE_VALUE) return errno = EBADF, false;
+-  bool on_disk;
+-  return DirectoryOfHandle(h, path, &on_disk);
+-}
+-
+ // A directory entry's d_type, from its attributes and reparse tag.
+ unsigned char EntryType(DWORD attributes, DWORD reparse_tag) {
+   if ((attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0 &&
+@@ -329,6 +391,13 @@ bool OpenDirectory(HANDLE fd_handle, std::atomic<HANDLE>* slot, bool* gone) {
      *gone = true;
      return false;
    }
@@ -2246,31 +2260,41 @@ index 5441ebedc..41a6fd167 100644
    FILE_ID_DESCRIPTOR id = {};
    id.dwSize = sizeof(id);
    id.Type = ExtendedFileIdType;
-@@ -530,10 +606,23 @@ DIR* opendir(const char* name) { return Open(name, -1); }
+@@ -530,13 +599,27 @@ DIR* opendir(const char* name) { return Open(name, -1); }
  DIR* fdopendir(int fd) {
    auto snapshot = gesher::CaptureDescriptor(fd);
    if (!snapshot) return nullptr;
 +  if (gesher::FileDescriptionFlags(snapshot) & O_PATH) return errno = EBADF, nullptr;
    if (snapshot->description && !snapshot->description->virtual_directory.empty()) {
-     const std::string name = gesher::procfs::LinuxName(snapshot->description->virtual_directory);
-     return Open(name.c_str(), fd);
-   }
-+  if (gesher::binder_endpoint::Current().IsGuest()) {
-+    BY_HANDLE_FILE_INFORMATION info{};
-+    if (!GetFileInformationByHandle(snapshot->handle, &info) ||
-+        !(info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) return errno = ENOTDIR, nullptr;
-+    auto dir = std::make_unique<gesher_DIR>();
-+    dir->rooted = std::make_unique<gesher_DIR::RootedScan>();
-+    dir->fd = fd;
-+    return dir.release();
+-    const std::string name = gesher::procfs::LinuxName(snapshot->description->virtual_directory);
+-    return Open(name.c_str(), fd);
+-  }
+-  std::string path;
+-  if (!DirectoryOfFd(fd, &path)) return nullptr;
+-  return Open(path.c_str(), fd);
++    if (gesher::procfs::Type(snapshot->description->virtual_directory) != S_IFDIR)
++      return errno = ENOENT, nullptr;
++  } else {
++    std::string path;
++    bool on_disk;
++    if (!DirectoryOfHandle(snapshot->handle, &path, &on_disk)) return nullptr;
++    // Guest enumeration reopens only the already-held capability through its
++    // authenticated authority. Ordinary app callers retain the permission
++    // check previously performed by Open(path), against this actual object.
++    if (on_disk && !gesher::binder_endpoint::Current().IsGuest() &&
++        !gesher::CheckExternalStorageHandle(snapshot->handle, gesher::AccessKind::kRead)) return nullptr;
 +  }
-+  auto scoped = gesher::DropDescriptorPath(snapshot);
-+  if (scoped.empty()) scoped = gesher::storage_root::DescriptorPath(snapshot->handle);
-+  if (!scoped.empty()) return Open(gesher::LinuxPath(scoped.c_str()).c_str(), fd);
-   std::string path;
-   if (!DirectoryOfFd(fd, &path)) return nullptr;
-   return Open(path.c_str(), fd);
-@@ -544,6 +633,7 @@ ssize_t getdents64(int fd, void* buffer, size_t size) {
++  const auto position = lseek(fd, 0, SEEK_CUR);
++  if (position < 0) return nullptr;  // Failure does not consume the caller's fd.
++  auto dir = std::make_unique<gesher_DIR>();
++  dir->rooted = std::make_unique<gesher_DIR::RootedScan>();
++  dir->fd = fd;
++  dir->position = position;
++  return dir.release();
+ }
+
+ ssize_t getdents64(int fd, void* buffer, size_t size) {
+@@ -544,6 +627,7 @@ ssize_t getdents64(int fd, void* buffer, size_t size) {
    // cannot turn this call to another file (Linux pins it with fdget_pos).
    gesher::DescriptorSnapshotPtr snapshot = gesher::CaptureDescriptor(fd);
    if (!snapshot) return errno == 0 ? (errno = EBADF, -1) : -1;
@@ -2278,7 +2302,7 @@ index 5441ebedc..41a6fd167 100644
    if (snapshot->description && !snapshot->description->virtual_directory.empty() &&
        gesher::procfs::Type(snapshot->description->virtual_directory) != S_IFDIR) {
      return errno = ENOENT, -1;  // The USB authority/session no longer exposes this directory.
-@@ -657,6 +747,7 @@ ssize_t getdents64(int fd, void* buffer, size_t size) {
+@@ -657,6 +741,7 @@ ssize_t getdents64(int fd, void* buffer, size_t size) {
  }
 
  struct dirent* readdir(DIR* dir) {
@@ -2287,7 +2311,7 @@ index 5441ebedc..41a6fd167 100644
    if (dir->is_virtual) {
      if (dir->position >= static_cast<long long>(dir->entries.size())) return nullptr;
 diff --git a/compat/posix/src/errno.cc b/compat/posix/src/errno.cc
-index 8b90d580b..c2d782802 100644
+index 8b90d58..c2d7828 100644
 --- a/compat/posix/src/errno.cc
 +++ b/compat/posix/src/errno.cc
 @@ -69,7 +69,7 @@ extern "C" int gesher_errno_from_crt(int crt_errno) {
@@ -2300,7 +2324,7 @@ index 8b90d580b..c2d782802 100644
  }
 
 diff --git a/compat/posix/src/fd.cc b/compat/posix/src/fd.cc
-index 04c8ed665..720352851 100644
+index 04c8ed6..a8db43b 100644
 --- a/compat/posix/src/fd.cc
 +++ b/compat/posix/src/fd.cc
 @@ -39,6 +39,8 @@
@@ -2464,8 +2488,21 @@ index 04c8ed665..720352851 100644
    }
    if (snapshot && snapshot->kind == gesher::DescriptorKind::kUnshareable) return false;
    // Validate status and transfer through one capture. Looking the fd up again
+@@ -331,6 +416,12 @@ bool NativeFileIo(int fd, void* buffer, unsigned int count, bool writing, int* r
+     *result = (errno = EBADF, -1);
+     return true;
+   }
++  // Virtual directories use a regular placeholder handle for the CRT slot.
++  // Reject data I/O only after checking the captured descriptor's access mode.
++  if (snapshot->description && !snapshot->description->virtual_directory.empty()) {
++    *result = (errno = EISDIR, -1);
++    return true;
++  }
+   if (writing && gesher::FileDescriptionIsMemfd(snapshot)) {
+     const int error = gesher::MemfdWriteHandleError(snapshot->handle, true, 0, count, (flags & O_APPEND) != 0);
+     if (error) { *result = (errno = error, -1); return true; }
 diff --git a/compat/posix/src/fsops.cc b/compat/posix/src/fsops.cc
-index 4b6254d6b..9973aa11a 100644
+index 4b6254d..3532faf 100644
 --- a/compat/posix/src/fsops.cc
 +++ b/compat/posix/src/fsops.cc
 @@ -26,10 +26,12 @@
@@ -2596,7 +2633,16 @@ index 4b6254d6b..9973aa11a 100644
    bool link;
    DWORD attributes = AttributesNoFollow(windows, &link);
    bool directory = attributes != INVALID_FILE_ATTRIBUTES &&
-@@ -622,6 +682,9 @@ int fchdir(int fd) {
+@@ -591,6 +651,8 @@ int remove(const char* path) {
+
+ int unlinkat(int dirfd, const char* path, int flags) {
+   if ((flags & ~AT_REMOVEDIR) != 0) return errno = EINVAL, -1;
++  int result;
++  if (gesher::DeleteAtObject(dirfd, path, (flags & AT_REMOVEDIR) != 0, &result)) return result;
+   std::string resolved;
+   if (!gesher::ResolveAt(dirfd, path, &resolved)) return -1;
+   return (flags & AT_REMOVEDIR) != 0 ? rmdir(resolved.c_str()) : unlink(resolved.c_str());
+@@ -622,6 +684,9 @@ int fchdir(int fd) {
    wchar_t path[32768];
    DWORD n = GetFinalPathNameByHandleW(h, path, 32768, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
    if (n == 0 || n >= 32768) return errno = ENOTDIR, -1;
@@ -2606,7 +2652,7 @@ index 4b6254d6b..9973aa11a 100644
    return SetCurrent(path);
  }
 
-@@ -850,6 +913,9 @@ FILE* gesher_freopen_state(const char* path, const char* mode, FILE* stream, int
+@@ -850,6 +915,9 @@ FILE* gesher_freopen_state(const char* path, const char* mode, FILE* stream, int
                  windows, is_write ? gesher::AccessKind::kWrite : gesher::AccessKind::kRead)) {
            return fail_reopen(errno);
          }
@@ -2617,7 +2663,7 @@ index 4b6254d6b..9973aa11a 100644
        }
        case PathKind::kNull:
 diff --git a/compat/posix/src/internal.h b/compat/posix/src/internal.h
-index b65ab5ac2..7e8a415f1 100644
+index b65ab5a..cc3f6aa 100644
 --- a/compat/posix/src/internal.h
 +++ b/compat/posix/src/internal.h
 @@ -95,7 +95,8 @@ std::string LinuxPath(const wchar_t* windows);
@@ -2630,8 +2676,20 @@ index b65ab5ac2..7e8a415f1 100644
 
  // unlink (directory false) and rmdir (true) of a mapped path (path.cc).
  int PosixDelete(const std::wstring& windows, bool directory);
+@@ -105,6 +106,11 @@ int PosixDelete(const std::wstring& windows, bool directory);
+ // not a directory.
+ bool ResolveAt(int dirfd, const char* path, std::string* out);
+
++// Physical directory-relative operations use the captured directory object,
++// including after rename. False leaves virtual/absolute paths to ResolveAt.
++bool OpenAtObject(int dirfd, const char* path, int flags, int* result);
++bool DeleteAtObject(int dirfd, const char* path, bool directory, int* result);
++
+ // Virtual files and directories (procfs.cc), named as MapPath's kVirtual.
+ extern "C" const unsigned char* gesher_auxv_random(void);
+ extern "C" const char* gesher_auxv_platform(void);
 diff --git a/compat/posix/src/ofd.cc b/compat/posix/src/ofd.cc
-index 3e16f60fd..73cf92fdf 100644
+index 3e16f60..73cf92f 100644
 --- a/compat/posix/src/ofd.cc
 +++ b/compat/posix/src/ofd.cc
 @@ -2,6 +2,7 @@
@@ -2679,7 +2737,7 @@ index 3e16f60fd..73cf92fdf 100644
    const auto* owner = Owner();
    return owner ? owner->attach(snapshot, close_on_exec) : -1;
 diff --git a/compat/posix/src/ofd_internal.h b/compat/posix/src/ofd_internal.h
-index f656ad2d2..8fa6a1d4a 100644
+index f656ad2..8fa6a1d 100644
 --- a/compat/posix/src/ofd_internal.h
 +++ b/compat/posix/src/ofd_internal.h
 @@ -57,6 +57,8 @@ struct OpenFileDescription {
@@ -2692,7 +2750,7 @@ index f656ad2d2..8fa6a1d4a 100644
    int Flags() const;
    void SetFlags(int flags);
 diff --git a/compat/posix/src/path.cc b/compat/posix/src/path.cc
-index 289354492..c580267ca 100644
+index 2893544..f373a9e 100644
 --- a/compat/posix/src/path.cc
 +++ b/compat/posix/src/path.cc
 @@ -26,6 +26,11 @@
@@ -2813,7 +2871,182 @@ index 289354492..c580267ca 100644
    if (h == INVALID_HANDLE_VALUE) return FailWithLastError();
    int fd = FdFromHandle(h, flags);
    if (fd >= 0 && kind == PathKind::kZero) RegisterDevice(fd, Device::kZero);
-@@ -418,8 +486,7 @@ bool ResolveAt(int dirfd, const char* path, std::string* out) {
+@@ -402,6 +470,174 @@ int OpenPath(const char* path, int flags, mode_t mode) {
+
+ }  // namespace
+
++namespace {
++
++// Return a held parent rather than replaying its pathname. The kernel checks
++// the caller's token on the relative open; no host authority or ACL is added.
++bool RelativeParent(int dirfd, const char* path, DescriptorSnapshotPtr* parent, int* result) {
++  if (path == nullptr || dirfd == AT_FDCWD || IsAbsolute(path)) return false;
++  // This fast path only opens an existing single leaf. Keep creation,
++  // special path components and multi-component traversal on the established
++  // resolver, which preserves their authorization and symlink semantics.
++  if (!*path || !strcmp(path, ".") || !strcmp(path, "..") || strpbrk(path, "/\\")) return false;
++  *parent = CaptureDescriptor(dirfd);
++  if (!*parent) { *result = -1; return true; }
++  if ((*parent)->description && !(*parent)->description->virtual_directory.empty()) return false;
++  if (!DropDescriptorPath(*parent).empty() || !storage_root::DescriptorPath((*parent)->handle).empty())
++    return false;  // The existing resolver selects the authenticated broker.
++  unsigned type;
++  std::string name;
++  if (procfs::DescribeHandle((*parent)->handle, &type, &name)) return false;
++  BY_HANDLE_FILE_INFORMATION info{};
++  if (FileDescriptionIsRevocable(*parent) ||
++      !GetFileInformationByHandle((*parent)->handle, &info) ||
++      !(info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
++    *result = (errno = ENOTDIR, -1);
++    parent->reset();
++  }
++  return true;
++}
++
++HANDLE OpenRelativeObject(HANDLE parent, const char* path, DWORD access, ULONG options,
++                          bool inherit, AccessKind kind) {
++  if (*path == '\0') return errno = ENOENT, INVALID_HANDLE_VALUE;
++  if (!CheckExternalStorageHandle(parent, kind)) return INVALID_HANDLE_VALUE;
++  std::wstring wide = Widen(path);
++  for (auto& character : wide) if (character == L'/') character = L'\\';
++  reserved_names::Encode(&wide);
++  if (wide.size() > (USHRT_MAX / sizeof(wchar_t))) return errno = ENAMETOOLONG, INVALID_HANDLE_VALUE;
++  using Create = NTSTATUS(NTAPI*)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, PIO_STATUS_BLOCK,
++      PLARGE_INTEGER, ULONG, ULONG, ULONG, ULONG, PVOID, ULONG);
++  using Translate = ULONG(WINAPI*)(NTSTATUS);
++  const HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
++  const auto create = reinterpret_cast<Create>(reinterpret_cast<void*>(GetProcAddress(ntdll, "NtCreateFile")));
++  const auto translate = reinterpret_cast<Translate>(reinterpret_cast<void*>(GetProcAddress(ntdll, "RtlNtStatusToDosError")));
++  if (!create || !translate) return errno = ENOSYS, INVALID_HANDLE_VALUE;
++  UNICODE_STRING name{static_cast<USHORT>(wide.size() * sizeof(wchar_t)),
++      static_cast<USHORT>(wide.size() * sizeof(wchar_t)), wide.data()};
++  OBJECT_ATTRIBUTES attributes{};
++  InitializeObjectAttributes(&attributes, &name, OBJ_CASE_INSENSITIVE | (inherit ? OBJ_INHERIT : 0), parent, nullptr);
++  IO_STATUS_BLOCK io{};
++  HANDLE opened = INVALID_HANDLE_VALUE;
++  const NTSTATUS status = create(&opened, access | SYNCHRONIZE, &attributes, &io, nullptr,
++      FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, FILE_OPEN,
++      options | FILE_SYNCHRONOUS_IO_NONALERT, nullptr, 0);
++  if (status < 0) {
++    const DWORD error = translate(status);
++    // A FIFO's LX reparse tag cannot be followed by NTFS. Open the tag
++    // itself solely to hand it to the existing FIFO endpoint implementation.
++    if (error == ERROR_CANT_ACCESS_FILE && !(options & FILE_OPEN_REPARSE_POINT)) {
++      HANDLE probe = OpenRelativeObject(parent, path, FILE_READ_ATTRIBUTES,
++          options | FILE_OPEN_REPARSE_POINT, inherit, kind);
++      if (probe != INVALID_HANDLE_VALUE) {
++        if (IsFifoHandle(probe)) return probe;
++        CloseHandle(probe);
++      }
++    }
++    errno = ErrnoFromWin32(error);
++    return INVALID_HANDLE_VALUE;
++  }
++  if (!CheckExternalStorageHandle(opened, kind)) {
++    const int error = errno;
++    CloseHandle(opened);
++    return errno = error, INVALID_HANDLE_VALUE;
++  }
++  return opened;
++}
++}  // namespace
++
++bool OpenAtObject(int dirfd, const char* path, int flags, int* result) {
++  if ((flags & O_CREAT) != 0) return false;
++  DescriptorSnapshotPtr parent;
++  if (!RelativeParent(dirfd, path, &parent, result)) return false;
++  if (!parent) return true;
++  if ((flags & O_TMPFILE) == O_TMPFILE) { *result = (errno = EOPNOTSUPP, -1); return true; }
++  if ((flags & O_PATH) == 0 && (flags & (O_DIRECT | O_NOATIME)) != 0) {
++    *result = (errno = (flags & O_DIRECT) ? EINVAL : EOPNOTSUPP, -1); return true;
++  }
++  const bool metadata = (flags & O_PATH) != 0;
++  const bool writes = !metadata && ((flags & O_ACCMODE) != O_RDONLY || (flags & (O_CREAT | O_TRUNC | O_APPEND)));
++  const AccessKind kind = metadata ? AccessKind::kStat : writes ? AccessKind::kWrite : AccessKind::kRead;
++  // Keep the existing symlink/FIFO-following implementation for a final
++  // symbolic link. In particular, a link to an LX FIFO must reach its queue,
++  // not fail an NTFS reparse request or expose the marker's bytes.
++  if (!(flags & O_NOFOLLOW)) {
++    HANDLE probe = OpenRelativeObject(parent->handle, path, FILE_READ_ATTRIBUTES,
++        FILE_OPEN_REPARSE_POINT, false, AccessKind::kStat);
++    if (probe != INVALID_HANDLE_VALUE) {
++      const bool link = IsSymlinkHandle(probe);
++      CloseHandle(probe);
++      if (link) return false;
++    }
++  }
++  ULONG options = (flags & O_DIRECTORY) ? FILE_DIRECTORY_FILE : 0;
++  if (flags & O_NOFOLLOW) options |= FILE_OPEN_REPARSE_POINT;
++  if (!metadata && (flags & O_DSYNC)) options |= FILE_WRITE_THROUGH;
++  HANDLE opened = OpenRelativeObject(parent->handle, path,
++      metadata ? FILE_READ_ATTRIBUTES : Access(flags) | FILE_READ_ATTRIBUTES, options,
++      (flags & O_CLOEXEC) == 0, kind);
++  *result = -1;
++  if (opened == INVALID_HANDLE_VALUE) return true;
++  if (IsFifoHandle(opened)) {
++    if ((flags & O_DIRECTORY) != 0) { CloseHandle(opened); errno = ENOTDIR; return true; }
++    *result = metadata ? FdFromHandle(opened, flags) : OpenFifoHandle(opened, flags);
++    return true;
++  }
++  if (!metadata && (flags & O_NOFOLLOW) && IsSymlinkHandle(opened)) errno = ELOOP;
++  else if (writes && system_linker::IsFileHandle(opened)) errno = EROFS;
++  else {
++    BY_HANDLE_FILE_INFORMATION info{};
++    if (!GetFileInformationByHandle(opened, &info)) FailWithLastError();
++    else if (writes && (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) errno = EISDIR;
++    else if ((flags & O_TRUNC) && !metadata && !SetEndOfFile(opened)) FailWithLastError();
++    else { *result = FdFromHandle(opened, flags | (metadata ? 0 : O_LARGEFILE)); return true; }
++  }
++  const int error = errno;
++  CloseHandle(opened);
++  errno = error;
++  return true;
++}
++
++bool DeleteAtObject(int dirfd, const char* path, bool directory, int* result) {
++  DescriptorSnapshotPtr parent;
++  if (!RelativeParent(dirfd, path, &parent, result)) return false;
++  if (!parent) return true;
++  HANDLE opened = OpenRelativeObject(parent->handle, path, DELETE | FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES,
++      FILE_OPEN_REPARSE_POINT, false, AccessKind::kWrite);
++  *result = -1;
++  if (opened == INVALID_HANDLE_VALUE) return true;
++  BY_HANDLE_FILE_INFORMATION info{};
++  if (!GetFileInformationByHandle(opened, &info)) FailWithLastError();
++  else if (((info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0 && !IsSymlinkHandle(opened)) != directory)
++    errno = directory ? ENOTDIR : EISDIR;
++  else if (system_linker::IsFileHandle(opened)) errno = EACCES;
++  else {
++    FILE_DISPOSITION_INFO_EX disposition{FILE_DISPOSITION_FLAG_DELETE | FILE_DISPOSITION_FLAG_POSIX_SEMANTICS |
++        FILE_DISPOSITION_FLAG_IGNORE_READONLY_ATTRIBUTE};
++    BOOL removed = SetFileInformationByHandle(opened, static_cast<FILE_INFO_BY_HANDLE_CLASS>(21),
++        &disposition, sizeof(disposition));
++    DWORD error = GetLastError();
++    if (!removed && error != ERROR_DIR_NOT_EMPTY) {
++      // Keep PosixDelete's fallback on volumes without POSIX disposition.
++      FILE_BASIC_INFO basic{};
++      if (GetFileInformationByHandleEx(opened, FileBasicInfo, &basic, sizeof(basic)) &&
++          (basic.FileAttributes & FILE_ATTRIBUTE_READONLY)) {
++        basic.FileAttributes &= ~FILE_ATTRIBUTE_READONLY;
++        SetFileInformationByHandle(opened, FileBasicInfo, &basic, sizeof(basic));
++      }
++      FILE_DISPOSITION_INFO classic{TRUE};
++      removed = SetFileInformationByHandle(opened, FileDispositionInfo, &classic, sizeof(classic));
++      error = GetLastError();
++    }
++    if (!removed) SetLastError(error);
++    *result = removed ? 0 : FailWithLastError();
++  }
++  const int error = errno;
++  CloseHandle(opened);
++  errno = error;
++  return true;
++}
++
+ // Joins a path relative to dirfd onto that directory's path; absolute paths
+ // and AT_FDCWD pass unchanged. False (errno set) if dirfd is not a directory.
+ bool ResolveAt(int dirfd, const char* path, std::string* out) {
+@@ -418,8 +654,7 @@ bool ResolveAt(int dirfd, const char* path, std::string* out) {
      *out = "/" + Narrow(directory.c_str()) + "/" + path;
      return true;
    }
@@ -2823,7 +3056,7 @@ index 289354492..c580267ca 100644
    BY_HANDLE_FILE_INFORMATION info;
    if (!GetFileInformationByHandle(h, &info)) return errno = ENOTDIR, false;
    unsigned proc_type;
-@@ -432,11 +499,15 @@ bool ResolveAt(int dirfd, const char* path, std::string* out) {
+@@ -432,11 +667,15 @@ bool ResolveAt(int dirfd, const char* path, std::string* out) {
      return true;
    }
    if ((info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) return errno = ENOTDIR, false;
@@ -2844,7 +3077,7 @@ index 289354492..c580267ca 100644
    *out = LinuxPath(dir.c_str());
    if (out->back() != '/') *out += '/';
    *out += path;
-@@ -557,6 +628,12 @@ bool ExternalStoragePath(const char* path, std::wstring* windows) {
+@@ -557,6 +796,12 @@ bool ExternalStoragePath(const char* path, std::wstring* windows) {
  }
 
  PathKind MapPath(const char* path, std::wstring* windows) {
@@ -2857,7 +3090,7 @@ index 289354492..c580267ca 100644
    // "//name" is left to Windows as a UNC path; POSIX lets an implementation
    // give a leading "//" its own meaning. A name with a character Windows
    // reserves (':' and the like) is stored encoded (gesher/reserved_names.h).
-@@ -600,11 +677,15 @@ std::wstring NativeFontWindowsPath(const std::string& path) {
+@@ -600,11 +845,15 @@ std::wstring NativeFontWindowsPath(const std::string& path) {
    return MapPath(path.c_str(), &windows) == PathKind::kFile ? windows : std::wstring();
  }
 
@@ -2874,7 +3107,7 @@ index 289354492..c580267ca 100644
        return true;
      case PathKind::kMissing:
        return errno = ENOENT, false;
-@@ -670,6 +751,10 @@ std::string LinuxPath(const wchar_t* windows) {
+@@ -670,6 +919,10 @@ std::string LinuxPath(const wchar_t* windows) {
  // removed itself, by unlink, also when it points to a directory.
  int PosixDelete(const std::wstring& windows, bool directory) {
    if (!CheckExternalStorageAccess(windows, AccessKind::kWrite)) return -1;
@@ -2885,7 +3118,33 @@ index 289354492..c580267ca 100644
    HANDLE h = INVALID_HANDLE_VALUE;
    for (int attempt = 0; attempt < 20; ++attempt) {
      h = CreateFileW(windows.c_str(), DELETE | FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES,
-@@ -894,6 +979,14 @@ int utimensat(int dirfd, const char* path, const struct timespec times[2], int f
+@@ -744,6 +997,8 @@ int openat(int dirfd, const char* path, int flags, ...) {
+     mode = static_cast<mode_t>(va_arg(args, int));
+     va_end(args);
+   }
++  int result;
++  if (gesher::OpenAtObject(dirfd, path, flags, &result)) return result;
+   std::string resolved;
+   if (!gesher::ResolveAt(dirfd, path, &resolved)) return -1;
+   return gesher::OpenPath(resolved.c_str(), flags, mode);
+@@ -757,6 +1012,16 @@ int creat(const char* path, int mode) {
+
+ int fstatat(int dirfd, const char* path, struct stat* buf, int flags) {
+   if ((flags & AT_EMPTY_PATH) != 0 && path != nullptr && path[0] == '\0') return fstat(dirfd, buf);
++  int descriptor;
++  if (gesher::OpenAtObject(dirfd, path, O_PATH | O_CLOEXEC |
++      ((flags & AT_SYMLINK_NOFOLLOW) ? O_NOFOLLOW : 0), &descriptor)) {
++    if (descriptor < 0) return -1;
++    const int result = fstat(descriptor, buf);
++    const int error = errno;
++    close(descriptor);
++    errno = error;
++    return result;
++  }
+   std::string resolved;
+   if (!gesher::ResolveAt(dirfd, path, &resolved)) return -1;
+   return (flags & AT_SYMLINK_NOFOLLOW) != 0 ? lstat(resolved.c_str(), buf)
+@@ -894,6 +1159,14 @@ int utimensat(int dirfd, const char* path, const struct timespec times[2], int f
    switch (gesher::MapPath(resolved.c_str(), &windows)) {
      case PathKind::kFile: {
        if (!gesher::CheckExternalStorageAccess(windows, gesher::AccessKind::kWrite)) return -1;
@@ -2900,7 +3159,7 @@ index 289354492..c580267ca 100644
        HANDLE h = gesher::CreateFileFollowingFifo(windows.c_str(), 0,
                               FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                               FILE_FLAG_BACKUP_SEMANTICS |
-@@ -951,9 +1044,14 @@ int mkdir(const char* path) {
+@@ -951,9 +1224,14 @@ int mkdir(const char* path) {
    if (path == nullptr) return errno = EFAULT, -1;
    std::wstring windows;
    switch (path[0] != '\0' ? gesher::MapPath(path, &windows) : PathKind::kMissing) {
@@ -2916,7 +3175,7 @@ index 289354492..c580267ca 100644
      case PathKind::kMissing:
        return errno = ENOENT, -1;
      default:
-@@ -964,7 +1062,7 @@ int mkdir(const char* path) {
+@@ -964,7 +1242,7 @@ int mkdir(const char* path) {
  int unlink(const char* path) {
    if (gesher::system_linker::RefuseChange(path) != 0) return -1;
    std::wstring windows;
@@ -2926,7 +3185,7 @@ index 289354492..c580267ca 100644
  }
 
 diff --git a/compat/posix/src/pipe_io.cc b/compat/posix/src/pipe_io.cc
-index 2c5158fbd..b44d75fea 100644
+index 2c5158f..b44d75f 100644
 --- a/compat/posix/src/pipe_io.cc
 +++ b/compat/posix/src/pipe_io.cc
 @@ -18,6 +18,7 @@
@@ -2960,7 +3219,7 @@ index 2c5158fbd..b44d75fea 100644
      name[prefix + 2 * i] = hex[nonce[i] >> 4];
      name[prefix + 2 * i + 1] = hex[nonce[i] & 15];
 diff --git a/compat/posix/src/process.cc b/compat/posix/src/process.cc
-index 39abaebf0..82625ee68 100644
+index 39abaeb..82625ee 100644
 --- a/compat/posix/src/process.cc
 +++ b/compat/posix/src/process.cc
 @@ -38,6 +38,7 @@
@@ -2998,10 +3257,29 @@ index 39abaebf0..82625ee68 100644
    if (h == nullptr) return 1;
    FILETIME parent_created, own_created, exited, kernel, user;
 diff --git a/compat/posix/src/procfs.cc b/compat/posix/src/procfs.cc
-index 3071f5ff6..37765fd5d 100644
+index 3071f5f..5dc3ad2 100644
 --- a/compat/posix/src/procfs.cc
 +++ b/compat/posix/src/procfs.cc
-@@ -1458,6 +1458,10 @@ bool ReadLink(const std::wstring& name, std::string* target) {
+@@ -461,6 +461,7 @@ std::string MappedFile(void* address) {
+   DWORD n = GetMappedFileNameW(GetCurrentProcess(), address, device_path, MAX_PATH * 4);
+   if (n == 0) return "";
+   std::wstring path(device_path, n);
++  if (system_linker::IsMappedNtName(path)) return system_linker::kPath;
+   // \Device\HarddiskVolumeN\... to a drive letter.
+   struct DriveMapping {
+     std::wstring target;
+@@ -1312,6 +1313,10 @@ bool FdTarget(int fd, std::string* target) {
+     case FILE_TYPE_DISK: {
+       unsigned type, mode;
+       if (DescribeHandle(h, &type, target, &mode)) return true;  // "/proc/<pid>/maps"
++      if (system_linker::IsFileHandle(h)) {
++        *target = system_linker::kPath;
++        return true;
++      }
+       wchar_t buf[32768];
+       DWORD n = GetFinalPathNameByHandleW(h, buf, 32768, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+       if (n == 0) return FailWithLastError(), false;
+@@ -1458,6 +1463,10 @@ bool ReadLink(const std::wstring& name, std::string* target) {
        *target = "anon_inode:[gesher-revocable]";
        return true;
      }
@@ -3012,7 +3290,7 @@ index 3071f5ff6..37765fd5d 100644
      return FdTarget(n.fd, target);
    }
    wchar_t buf[32768];
-@@ -1503,6 +1507,9 @@ int Open(const std::wstring& name, int flags) {
+@@ -1503,6 +1512,9 @@ int Open(const std::wstring& name, int flags) {
        auto snapshot = CaptureDescriptor(n.fd);
        if (!snapshot) return -1;
        if (FileDescriptionIsRevocable(snapshot)) return ReopenRevocableFileDescription(snapshot, flags);
@@ -3023,7 +3301,7 @@ index 3071f5ff6..37765fd5d 100644
        // through ReOpenFile. Fail rather than returning an alias with a
        // different access direction or shared O_NONBLOCK state.
 diff --git a/compat/posix/src/record_lock_descriptors.cc b/compat/posix/src/record_lock_descriptors.cc
-index ab2623f10..51f0e4a68 100644
+index ab2623f..51f0e4a 100644
 --- a/compat/posix/src/record_lock_descriptors.cc
 +++ b/compat/posix/src/record_lock_descriptors.cc
 @@ -1,6 +1,7 @@
@@ -3298,7 +3576,7 @@ index ab2623f10..51f0e4a68 100644
 
  }  // namespace gesher::record_locks
 diff --git a/compat/posix/src/record_lock_descriptors.h b/compat/posix/src/record_lock_descriptors.h
-index 22a04c5c7..297031ba0 100644
+index 22a04c5..297031b 100644
 --- a/compat/posix/src/record_lock_descriptors.h
 +++ b/compat/posix/src/record_lock_descriptors.h
 @@ -20,6 +20,12 @@ class DescriptorGuard {
@@ -3323,7 +3601,7 @@ index 22a04c5c7..297031ba0 100644
    File file_{};
    RegistryState* staged_ = nullptr;
 diff --git a/compat/posix/src/record_lock_duplicate.cc b/compat/posix/src/record_lock_duplicate.cc
-index be199b5ef..71ee788f0 100644
+index be199b5..71ee788 100644
 --- a/compat/posix/src/record_lock_duplicate.cc
 +++ b/compat/posix/src/record_lock_duplicate.cc
 @@ -2,6 +2,7 @@
@@ -3344,7 +3622,7 @@ index be199b5ef..71ee788f0 100644
      // Retain ownership even if flag setup fails; do not forget a live handle.
      nul_identity = candidate;
 diff --git a/compat/posix/src/record_lock_operation.cc b/compat/posix/src/record_lock_operation.cc
-index bf7cdb703..3e90c3e1b 100644
+index bf7cdb7..3e90c3e 100644
 --- a/compat/posix/src/record_lock_operation.cc
 +++ b/compat/posix/src/record_lock_operation.cc
 @@ -42,7 +42,7 @@ int WriteUser(void* destination, const void* source, size_t bytes) {
@@ -3424,7 +3702,7 @@ index bf7cdb703..3e90c3e1b 100644
 
  }  // namespace gesher::record_locks
 diff --git a/compat/posix/src/record_lock_operation.h b/compat/posix/src/record_lock_operation.h
-index 2b7556da0..3f2e18a3d 100644
+index 2b7556d..3f2e18a 100644
 --- a/compat/posix/src/record_lock_operation.h
 +++ b/compat/posix/src/record_lock_operation.h
 @@ -20,16 +20,18 @@ struct PreparedOperation {
@@ -3450,7 +3728,7 @@ index 2b7556da0..3f2e18a3d 100644
  // Returns a Linux error number, or0 on success. Caller retains its fd lock,
  // anchor and registry transaction throughout; commits only a successful
 diff --git a/compat/posix/src/sqlite_path.cc b/compat/posix/src/sqlite_path.cc
-index 4d91f3f74..b6604d138 100644
+index 4d91f3f..b6604d1 100644
 --- a/compat/posix/src/sqlite_path.cc
 +++ b/compat/posix/src/sqlite_path.cc
 @@ -11,7 +11,9 @@
@@ -3476,7 +3754,7 @@ index 4d91f3f74..b6604d138 100644
    const std::string native = gesher::Narrow(windows.c_str());
    if (native.empty()) return SQLITE_CANTOPEN;
 diff --git a/compat/posix/src/stat.cc b/compat/posix/src/stat.cc
-index 9a9d28455..413d9b36e 100644
+index 9a9d284..413d9b3 100644
 --- a/compat/posix/src/stat.cc
 +++ b/compat/posix/src/stat.cc
 @@ -12,6 +12,8 @@
@@ -3542,7 +3820,7 @@ index 9a9d28455..413d9b36e 100644
        Clear(buf);
        buf->st_mode = S_IFIFO | 0600;
 diff --git a/compat/posix/src/storage_policy.cc b/compat/posix/src/storage_policy.cc
-index fca36f326..612d840a3 100644
+index fca36f3..612d840 100644
 --- a/compat/posix/src/storage_policy.cc
 +++ b/compat/posix/src/storage_policy.cc
 @@ -2,6 +2,7 @@
@@ -3777,7 +4055,7 @@ index fca36f326..612d840a3 100644
 
  }  // namespace gesher
 diff --git a/compat/posix/src/storage_policy.h b/compat/posix/src/storage_policy.h
-index 2cedd4fe6..8a2e7382e 100644
+index 2cedd4f..8a2e738 100644
 --- a/compat/posix/src/storage_policy.h
 +++ b/compat/posix/src/storage_policy.h
 @@ -23,4 +23,8 @@ bool CheckExternalStorageAccess(const std::wstring& windows_path, AccessKind kin
@@ -3790,7 +4068,7 @@ index 2cedd4fe6..8a2e7382e 100644
 +
  }  // namespace gesher
 diff --git a/compat/posix/src/system.cc b/compat/posix/src/system.cc
-index 3f9268368..07a61c0c8 100644
+index 3f92683..07a61c0 100644
 --- a/compat/posix/src/system.cc
 +++ b/compat/posix/src/system.cc
 @@ -27,6 +27,7 @@
@@ -3894,7 +4172,7 @@ index 3f9268368..07a61c0c8 100644
  }
 
 diff --git a/compat/posix/src/system_properties.cc b/compat/posix/src/system_properties.cc
-index 406ce51fd..4389a9179 100644
+index 406ce51..4389a91 100644
 --- a/compat/posix/src/system_properties.cc
 +++ b/compat/posix/src/system_properties.cc
 @@ -6,6 +6,7 @@
@@ -4101,7 +4379,7 @@ index 406ce51fd..4389a9179 100644
    Area* area = Current();
    if (!area || area->read_only) return false;
 diff --git a/compat/posix/src/unistd.cc b/compat/posix/src/unistd.cc
-index 2497370f3..de1ce7107 100644
+index 2497370..de1ce71 100644
 --- a/compat/posix/src/unistd.cc
 +++ b/compat/posix/src/unistd.cc
 @@ -23,6 +23,8 @@
@@ -4183,7 +4461,7 @@ index 2497370f3..de1ce7107 100644
      if (!ok) return nullptr;
    } else if (kind != gesher::PathKind::kVirtual) {
 diff --git a/compat/posix/src/unix_rights.cc b/compat/posix/src/unix_rights.cc
-index e5b6f589a..a1b4707a6 100644
+index e5b6f58..a1b4707 100644
 --- a/compat/posix/src/unix_rights.cc
 +++ b/compat/posix/src/unix_rights.cc
 @@ -25,6 +25,8 @@
@@ -4217,7 +4495,7 @@ index e5b6f589a..a1b4707a6 100644
    hello.Put<uint32_t>(wire::kHelloRights);
    hello.Put<uint32_t>(wire::kMagic);
 diff --git a/compat/usb_storage/CMakeLists.txt b/compat/usb_storage/CMakeLists.txt
-index f22470a04..23308fc2b 100644
+index f22470a..23308fc 100644
 --- a/compat/usb_storage/CMakeLists.txt
 +++ b/compat/usb_storage/CMakeLists.txt
 @@ -7,6 +7,7 @@ add_executable(gesher-usb-authority
@@ -4228,8 +4506,61 @@ index f22470a04..23308fc2b 100644
    protected_usb_observation.cc
    ${CMAKE_CURRENT_LIST_DIR}/../devsvc/usb_storage_observation.cc
    ${CMAKE_CURRENT_LIST_DIR}/../devsvc/usb_winusb.cc
+diff --git a/compat/usb_storage/binder_authority_control.cc b/compat/usb_storage/binder_authority_control.cc
+index 3dc43f7..2fea1c6 100644
+--- a/compat/usb_storage/binder_authority_control.cc
++++ b/compat/usb_storage/binder_authority_control.cc
+@@ -257,7 +257,8 @@ DWORD BinderAuthorityControl::CreateLocator(std::wstring* locator) {
+ DWORD BinderAuthorityControl::Connect(AuthorityLaunch& broker,
+     const std::wstring& registration_locator, const std::wstring& listener_locator, HANDLE stop,
+     std::unique_ptr<BinderAuthorityControl>* registration,
+-    std::unique_ptr<BinderAuthorityControl>* listeners) {
++    std::unique_ptr<BinderAuthorityControl>* listeners, std::optional<DWORD>* broker_exit) {
++  if (broker_exit) broker_exit->reset();
+   if (!registration || *registration || !listeners || *listeners || registration == listeners ||
+       !stop || stop == INVALID_HANDLE_VALUE || !ValidLocator(registration_locator) ||
+       !ValidLocator(listener_locator) || registration_locator == listener_locator) {
+@@ -283,7 +284,15 @@ DWORD BinderAuthorityControl::Connect(AuthorityLaunch& broker,
+   // Each channel retains its own authenticated SCM handle. No new AppContainer
+   // connection needs query access after both handshakes have finished.
+   if (status == ERROR_SUCCESS) status = service_query.Retire();
+-  if (status != ERROR_SUCCESS) return admission->FailClosed(status);
++  if (status != ERROR_SUCCESS) {
++    // Observe only an already exited child; FailClosed can itself terminate it.
++    DWORD exit_code = 0;
++    if (broker_exit && WaitForSingleObject(broker.process(), 0) == WAIT_OBJECT_0 &&
++        GetExitCodeProcess(broker.process(), &exit_code)) {
++      *broker_exit = exit_code;
++    }
++    return admission->FailClosed(status);
++  }
+   *registration = std::move(admission);
+   *listeners = std::move(factory);
+   return ERROR_SUCCESS;
+diff --git a/compat/usb_storage/binder_authority_control.h b/compat/usb_storage/binder_authority_control.h
+index 1cf49da..415b4aa 100644
+--- a/compat/usb_storage/binder_authority_control.h
++++ b/compat/usb_storage/binder_authority_control.h
+@@ -6,6 +6,7 @@
+
+ #include <cstdint>
+ #include <memory>
++#include <optional>
+ #include <string>
+
+ #include "../binder/protected_bootstrap_wire.h"
+@@ -27,7 +28,8 @@ class BinderAuthorityControl {
+   static DWORD Connect(AuthorityLaunch& broker, const std::wstring& registration_locator,
+                        const std::wstring& listener_locator, HANDLE stop,
+                        std::unique_ptr<BinderAuthorityControl>* registration,
+-                       std::unique_ptr<BinderAuthorityControl>* listeners);
++                       std::unique_ptr<BinderAuthorityControl>* listeners,
++                       std::optional<DWORD>* broker_exit = nullptr);
+   ~BinderAuthorityControl();
+   BinderAuthorityControl(const BinderAuthorityControl&) = delete;
+   BinderAuthorityControl& operator=(const BinderAuthorityControl&) = delete;
 diff --git a/compat/usb_storage/protected_runtime_client.cc b/compat/usb_storage/protected_runtime_client.cc
-index d3ebcfd4c..a583f75cb 100644
+index d3ebcfd..a583f75 100644
 --- a/compat/usb_storage/protected_runtime_client.cc
 +++ b/compat/usb_storage/protected_runtime_client.cc
 @@ -288,6 +288,22 @@ uint32_t ProtectedLogMutex(uint64_t* handle) {
@@ -4256,7 +4587,7 @@ index d3ebcfd4c..a583f75cb 100644
      std::vector<std::byte>* output) try {
    if (!output || !output->empty()) return ERROR_INVALID_PARAMETER;
 diff --git a/compat/usb_storage/protected_runtime_client.h b/compat/usb_storage/protected_runtime_client.h
-index 566cd0bb4..ec09fa959 100644
+index 566cd0b..ec09fa9 100644
 --- a/compat/usb_storage/protected_runtime_client.h
 +++ b/compat/usb_storage/protected_runtime_client.h
 @@ -25,6 +25,11 @@ uint32_t ProtectedPropertyMutex(uint64_t* handle);
@@ -4272,7 +4603,7 @@ index 566cd0bb4..ec09fa959 100644
  // Copies one bounded, read-only descriptor snapshot from the authority. Only
  // authenticated system_server can call this; device handles never cross it.
 diff --git a/compat/usb_storage/protected_runtime_session.cc b/compat/usb_storage/protected_runtime_session.cc
-index 77392f44c..43540afd7 100644
+index 77392f4..230e50a 100644
 --- a/compat/usb_storage/protected_runtime_session.cc
 +++ b/compat/usb_storage/protected_runtime_session.cc
 @@ -5,6 +5,7 @@
@@ -4291,7 +4622,53 @@ index 77392f44c..43540afd7 100644
 
  #include <aclapi.h>
  #include <bcrypt.h>
-@@ -430,6 +432,7 @@ class Session {
+@@ -36,6 +38,7 @@
+ #include <map>
+ #include <mutex>
+ #include <new>
++#include <optional>
+ #include <string_view>
+ #include <system_error>
+ #include <thread>
+@@ -197,7 +200,8 @@ DWORD PrivateDirectory(const std::wstring& path, PSID runtime_user = nullptr) {
+ // Do not accept a caller-selected filename, export resources, or change the
+ // actual startup result if writing diagnostics fails.
+ void RecordStartup(const std::wstring& directory, const char* stage, DWORD status,
+-                   const ProtectedIdentityCleanup& cleanup = {}, const char* launch_stage = "none") noexcept {
++                   const ProtectedIdentityCleanup& cleanup = {}, const char* launch_stage = "none",
++                   std::optional<DWORD> broker_exit = std::nullopt) noexcept {
+   struct PreserveError {
+     DWORD value = GetLastError();
+     ~PreserveError() { SetLastError(value); }
+@@ -233,11 +237,16 @@ void RecordStartup(const std::wstring& directory, const char* stage, DWORD statu
+       if (!IsWellKnownSid(principal, WinLocalSystemSid) &&
+           !IsWellKnownSid(principal, WinBuiltinAdministratorsSid)) return;
+     }
+-    char record[256]{};
++    char broker[32]{};
++    if (broker_exit) {
++      std::snprintf(broker, sizeof(broker), " broker_exit=0x%08lx",
++                    static_cast<unsigned long>(*broker_exit));
++    }
++    char record[320]{};
+     const int length = std::snprintf(record, sizeof(record),
+-        "Gesher protected startup: stage=%s win32=%lu profile_cleanup_win32=%lu privilege_restore_win32=%lu launch_stage=%s\r\n",
++        "Gesher protected startup: stage=%s win32=%lu profile_cleanup_win32=%lu privilege_restore_win32=%lu launch_stage=%s%s\r\n",
+         stage, static_cast<unsigned long>(status), static_cast<unsigned long>(cleanup.profile_error.load()),
+-        static_cast<unsigned long>(cleanup.privilege_restore_error), launch_stage);
++        static_cast<unsigned long>(cleanup.privilege_restore_error), launch_stage, broker);
+     if (length <= 0 || static_cast<size_t>(length) >= sizeof(record)) return;
+     LARGE_INTEGER zero{};
+     if (!SetFilePointerEx(file.get(), zero, nullptr, FILE_BEGIN) || !SetEndOfFile(file.get())) return;
+@@ -421,6 +430,7 @@ class Session {
+   DWORD Run(const std::wstring& executable, std::unique_ptr<HostDisk> selected);
+   const char* startup_stage() const { return startup_stage_; }
+   const char* launch_stage() const { return launch_stage_; }
++  std::optional<DWORD> broker_exit() const { return broker_exit_; }
+  private:
+   DWORD PrepareData(HANDLE desktop, const std::wstring& executable);
+   DWORD CreateProfile(const std::wstring& name, std::shared_ptr<Profile>* profile);
+@@ -430,6 +440,7 @@ class Session {
    void Reap();
    DWORD TerminateTree(Entry& entry, DWORD code);
    DWORD Dispatch(Entry& entry, const wire::Request& request, const std::vector<std::byte>& payload, wire::Reply* reply);
@@ -4299,7 +4676,15 @@ index 77392f44c..43540afd7 100644
    DWORD Spawn(Entry& requester, const wire::Request& request, const std::vector<std::byte>& payload, wire::Reply* reply);
    DWORD SpawnCommand(Entry& requester, const wire::Request& request, const std::vector<std::byte>& payload, wire::Reply* reply);
    DWORD Initialize(Entry& entry, wire::Reply* reply);
-@@ -1011,6 +1014,42 @@ DWORD Session::Dispatch(Entry& entry, const wire::Request& request,
+@@ -472,6 +483,7 @@ class Session {
+   std::unique_ptr<HostDisk> selected_;
+   uint64_t next_id_ = 3;
+   bool application_started_ = false;
++  std::optional<DWORD> broker_exit_;
+   const char* startup_stage_ = "runtime.begin";
+   const char* launch_stage_ = "none";
+ };
+@@ -1011,6 +1023,42 @@ DWORD Session::Dispatch(Entry& entry, const wire::Request& request,
    }
  }
 
@@ -4342,7 +4727,7 @@ index 77392f44c..43540afd7 100644
  DWORD Session::ValidateUsbObservation(const Entry& entry, const wire::Request& request,
      const std::vector<std::byte>& payload, UsbQuery* query) try {
    if (WaitForSingleObject(stop_, 0) != WAIT_TIMEOUT) return ERROR_OPERATION_ABORTED;
-@@ -1116,6 +1155,8 @@ void Session::Serve(Entry& entry) {
+@@ -1116,6 +1164,8 @@ void Session::Serve(Entry& entry) {
          reply.status = ValidateUsbObservation(entry, request, payload, &query);
        }
        if (reply.status == ERROR_SUCCESS) reply.status = ObserveUsb(entry, query, &reply);
@@ -4351,8 +4736,45 @@ index 77392f44c..43540afd7 100644
      } else {
        std::lock_guard lock(mutex_);
        reply.status = Dispatch(entry, request, payload, &reply);
+@@ -1264,7 +1314,8 @@ DWORD Session::Run(const std::wstring& executable, std::unique_ptr<HostDisk> sel
+   status = BinderListenerFactory::Create(*broker_, binder_data_, packages, &factory_);
+   if (status != ERROR_SUCCESS) return status;
+   startup_stage_ = "runtime.binder-authority-connect";
+-  status = BinderAuthorityControl::Connect(*broker_, registration, listeners, stop_, &registration_, &listeners_);
++  status = BinderAuthorityControl::Connect(*broker_, registration, listeners, stop_, &registration_,
++                                            &listeners_, &broker_exit_);
+   if (status != ERROR_SUCCESS) return status;
+   listener_worker_ = std::thread([this] { listeners_->ServeListeners(*factory_); SetEvent(stop_); });
+   const std::wstring manager_image = runtime_ + L"\\servicemanager.exe";
+@@ -1598,6 +1649,7 @@ DWORD RunProtectedAndroid(const std::wstring& directory, const std::wstring& exe
+   ProtectedIdentityCleanup cleanup;
+   const char* stage = "runtime.import-selection";
+   const char* launch_stage = "none";
++  std::optional<DWORD> broker_exit;
+   DWORD status = ERROR_SUCCESS;
+   try {
+     std::unique_ptr<HostDisk> selected;
+@@ -1607,6 +1659,7 @@ DWORD RunProtectedAndroid(const std::wstring& directory, const std::wstring& exe
+       status = session.Run(executable, std::move(selected));
+       stage = session.startup_stage();
+       launch_stage = session.launch_stage();
++      broker_exit = session.broker_exit();
+     }  // Guest teardown and profile unload finish before reporting the status.
+   } catch (const std::bad_alloc&) {
+     stage = "runtime.allocation-failure";
+@@ -1616,7 +1669,9 @@ DWORD RunProtectedAndroid(const std::wstring& directory, const std::wstring& exe
+     status = ERROR_NOT_READY;
+   }
+   if (status != ERROR_SUCCESS || cleanup.profile_error.load() != ERROR_SUCCESS ||
+-      cleanup.privilege_restore_error != ERROR_SUCCESS) RecordStartup(directory, stage, status, cleanup, launch_stage);
++      cleanup.privilege_restore_error != ERROR_SUCCESS) {
++    RecordStartup(directory, stage, status, cleanup, launch_stage, broker_exit);
++  }
+   if (status != ERROR_SUCCESS) return status;
+   const DWORD profile_error = cleanup.profile_error.load();
+   return profile_error != ERROR_SUCCESS ? profile_error : cleanup.privilege_restore_error;
 diff --git a/compat/usb_storage/protected_runtime_wire.h b/compat/usb_storage/protected_runtime_wire.h
-index dcede6249..6581ec06c 100644
+index dcede62..6581ec0 100644
 --- a/compat/usb_storage/protected_runtime_wire.h
 +++ b/compat/usb_storage/protected_runtime_wire.h
 @@ -16,7 +16,7 @@ inline constexpr uint32_t kVersion = 3;
@@ -4365,7 +4787,7 @@ index dcede6249..6581ec06c 100644
  struct Request {
    uint32_t magic = kMagic;
 diff --git a/tests/native/ofd_transfer_host_test.cc.in b/tests/native/ofd_transfer_host_test.cc.in
-index 5b20c7cf9..e2ba05f8c 100644
+index 5b20c7c..e2ba05f 100644
 --- a/tests/native/ofd_transfer_host_test.cc.in
 +++ b/tests/native/ofd_transfer_host_test.cc.in
 @@ -83,7 +83,8 @@ constexpr DWORD GENERIC_READ = 0x80000000, GENERIC_WRITE = 0x40000000,
@@ -4426,7 +4848,7 @@ index 5b20c7cf9..e2ba05f8c 100644
  // boundary separately. No ordinary descriptor may be registered as a memfd.
  static bool FileHasMemfdSeals(HANDLE) { return false; }
 diff --git a/tools/test_ofd_transfer_contracts.py b/tools/test_ofd_transfer_contracts.py
-index 17667bdeb..0b1f14efc 100644
+index 17667bd..0b1f14e 100644
 --- a/tools/test_ofd_transfer_contracts.py
 +++ b/tools/test_ofd_transfer_contracts.py
 @@ -24,6 +24,31 @@ def without_includes(source):
@@ -4482,7 +4904,7 @@ index 17667bdeb..0b1f14efc 100644
      print("Production SpawnWithFds SHA256 " + hashlib.sha256(builder.encode()).hexdigest(), flush=True)
      with tempfile.TemporaryDirectory(prefix="gesher-ofd-transfer-") as temporary:
 diff --git a/tools/test_revocable_file_contracts.py b/tools/test_revocable_file_contracts.py
-index c2fe1eef5..79fc5e7c5 100644
+index c2fe1ee..79fc5e7 100644
 --- a/tools/test_revocable_file_contracts.py
 +++ b/tools/test_revocable_file_contracts.py
 @@ -15,6 +15,8 @@ import shlex

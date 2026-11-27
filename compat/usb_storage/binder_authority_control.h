@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 
 #include "../binder/protected_bootstrap_wire.h"
@@ -27,7 +28,8 @@ class BinderAuthorityControl {
   static DWORD Connect(AuthorityLaunch& broker, const std::wstring& registration_locator,
                        const std::wstring& listener_locator, HANDLE stop,
                        std::unique_ptr<BinderAuthorityControl>* registration,
-                       std::unique_ptr<BinderAuthorityControl>* listeners);
+                       std::unique_ptr<BinderAuthorityControl>* listeners,
+                       std::optional<DWORD>* broker_exit = nullptr);
   ~BinderAuthorityControl();
   BinderAuthorityControl(const BinderAuthorityControl&) = delete;
   BinderAuthorityControl& operator=(const BinderAuthorityControl&) = delete;

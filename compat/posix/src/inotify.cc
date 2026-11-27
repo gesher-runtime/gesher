@@ -58,6 +58,7 @@
 #include "event_internal.h"
 #include "internal.h"
 #include "storage_policy.h"
+#include <gesher/directory_reopen.h>
 
 namespace gesher {
 namespace {
@@ -869,18 +870,29 @@ int inotify_add_watch(int fd, const char* path, uint32_t mask) {
   DWORD open_flags = FILE_FLAG_BACKUP_SEMANTICS |
                      ((mask & IN_DONT_FOLLOW) != 0 ? FILE_FLAG_OPEN_REPARSE_POINT : 0);
   auto w = std::make_unique<Watch>();
-  HANDLE target = CreateFileW(windows.c_str(), FILE_READ_ATTRIBUTES,
+  HANDLE target = CreateFileW(windows.c_str(), FILE_READ_ATTRIBUTES | FILE_LIST_DIRECTORY | SYNCHRONIZE,
                               FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
                               OPEN_EXISTING, open_flags, nullptr);
   if (target == INVALID_HANDLE_VALUE) return gesher::FailWithLastError();
   w->identity = target;
+  if (!gesher::CheckExternalStorageHandle(target, gesher::AccessKind::kRead)) return -1;
   BY_HANDLE_FILE_INFORMATION info;
   wchar_t final_path[32768];
   DWORD n = 0;
-  bool ok = GetFileInformationByHandle(target, &info) &&
-            (n = GetFinalPathNameByHandleW(target, final_path, 32768,
-                                           FILE_NAME_NORMALIZED | VOLUME_NAME_DOS)) != 0 &&
-            n < 32768;
+  bool ok = GetFileInformationByHandle(target, &info);
+  if (ok) {
+    n = GetFinalPathNameByHandleW(target, final_path, 32768, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+    if (!n || n >= 32768)
+      n = GetFinalPathNameByHandleW(target, final_path, 32768, FILE_NAME_OPENED | VOLUME_NAME_DOS);
+    // A contained process can hold the directory without permission to
+    // translate its drive name. This is only a notification label: directory
+    // I/O below opens the exact held object, never this fallback name.
+    if ((!n || n >= 32768) && (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) && windows.size() < 32768) {
+      std::copy(windows.begin(), windows.end(), final_path);
+      n = static_cast<DWORD>(windows.size());
+    }
+    ok = n != 0 && n < 32768;
+  }
   DWORD error = GetLastError();
   if (!ok) {
     SetLastError(error);
@@ -911,7 +923,12 @@ int inotify_add_watch(int fd, const char* path, uint32_t mask) {
     w->dir = full.substr(0, slash);
     w->file = full.substr(slash + 1);
   }
-  w->handle = CreateFileW(w->dir.c_str(), FILE_LIST_DIRECTORY,
+  if (directory) {
+    // Retain rename/replacement identity and create a fresh asynchronous file
+    // object; DuplicateHandle would share the existing synchronous cursor.
+    const DWORD opened = gesher::directory_reopen::Open(target, &w->handle, true);
+    if (opened != ERROR_SUCCESS) { SetLastError(opened); return gesher::FailWithLastError(); }
+  } else w->handle = CreateFileW(w->dir.c_str(), FILE_LIST_DIRECTORY,
                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
                           OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED, nullptr);
   if (w->handle == INVALID_HANDLE_VALUE) return gesher::FailWithLastError();

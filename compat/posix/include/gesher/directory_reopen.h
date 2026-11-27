@@ -22,7 +22,7 @@ inline bool Identity(HANDLE file, FILE_ID_INFO* id) {
   return true;
 }
 
-inline DWORD Open(HANDLE source, HANDLE* result) {
+inline DWORD Open(HANDLE source, HANDLE* result, bool overlapped = false) {
   *result = INVALID_HANDLE_VALUE;
   constexpr DWORD access = FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | SYNCHRONIZE;
   if (GetFileType(source) != FILE_TYPE_DISK) return ERROR_INVALID_HANDLE;
@@ -60,7 +60,7 @@ inline DWORD Open(HANDLE source, HANDLE* result) {
   HANDLE reopened = INVALID_HANDLE_VALUE;
   const NTSTATUS status = create(&reopened, access, &attributes, &io, nullptr, FILE_ATTRIBUTE_NORMAL,
       FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, FILE_OPEN,
-      FILE_DIRECTORY_FILE | FILE_OPEN_REPARSE_POINT | FILE_SYNCHRONOUS_IO_NONALERT, nullptr, 0);
+      FILE_DIRECTORY_FILE | FILE_OPEN_REPARSE_POINT | (overlapped ? 0 : FILE_SYNCHRONOUS_IO_NONALERT), nullptr, 0);
   if (status < 0) return translate(status);
   BY_HANDLE_FILE_INFORMATION after{};
   FILE_ID_INFO actual{};

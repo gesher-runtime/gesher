@@ -172,13 +172,12 @@ examples. It is generic: every process, no package or packer is singled out.
   process runs and nothing has it mapped would truncate it before the
   identity check. The next process that uses the name writes it again, and
   maps only bytes equal to the image.
-- `/proc/self/maps` names the view `/system/bin/linker64` only when the data
-  directory is on a volume with a drive letter (`MappedFile` translates
-  device paths through drive letters).
-- With the AppContainer sandbox (0090, off by default) the container needs
-  read access to the file and write access only if it is missing; that is not
-  arranged yet, so a contained process may see no linker64 (as before this
-  change).
+- The trusted desktop AppContainer route prepares the linker image before it
+  launches the app and grants read access to that file alone. The guest
+  validates the image and maps it read-only. The kernel NT mapping name and
+  file identity allow procfs to name it even when the guest cannot query its
+  DOS path. The M1 fixture and the separate optional USB runtime do not use
+  this publication step.
 - **Tests:** `tests/native/system_linker_test.cc` (tracks/21-posix.ps1) reads
   the header through `open`, checks `stat`, `access`, the missing
   `/system/bin/linker`, other spellings of the name, `EROFS` from each

@@ -165,6 +165,19 @@ jobs:
         with:
           distribution: temurin
           java-version: '21.0.13'
+      - name: Prepare bounded USER32 diagnostic map from this Windows image
+        if: ${{ !cancelled() }}
+        # Diagnostic setup cannot replace the required native launch result.
+        continue-on-error: true
+        timeout-minutes: 3
+        shell: cmd
+        run: |
+          python -m venv out\user32-cfg-tool
+          if errorlevel 1 exit /b 1
+          out\user32-cfg-tool\Scripts\python.exe -m pip install --require-hashes --no-deps --only-binary=:all: -r tools\ci\user32-cfg-requirements.txt
+          if errorlevel 1 exit /b 1
+          out\user32-cfg-tool\Scripts\python.exe tools\ci\prepare_user32_cfg.py --output user32-cfg.bin --selftest
+          if errorlevel 1 exit /b 1
       - name: Actual protected runtime identity, AppContainer launch and bounded cleanup
         id: protected_launch_observed
         if: ${{ !cancelled() }}
@@ -197,6 +210,7 @@ jobs:
           usb_protected_launch_test.exe --scm-profile-control --lowbox-iat-trace >> usb-protected-launch.log 2>&1
           set "GESHER_PROTECTED_LAUNCH_NATIVE_EXIT=%errorlevel%"
           >> usb-protected-launch.log echo Protected launch native exit: %GESHER_PROTECTED_LAUNCH_NATIVE_EXIT%
+          if not "%GESHER_PROTECTED_LAUNCH_NATIVE_EXIT%"=="0" out\user32-cfg-tool\Scripts\python.exe tools\ci\prepare_user32_cfg.py --explain-log usb-protected-launch.log >> usb-protected-launch.log 2>&1
           if not "%GESHER_PROTECTED_LAUNCH_NATIVE_EXIT%"=="0" pwsh -NoLogo -NoProfile -NonInteractive -File tools\ci\protected_profile_diagnostics.ps1 -LogPath usb-protected-launch.log >> usb-protected-launch.log 2>&1
           type usb-protected-launch.log
           exit /b %GESHER_PROTECTED_LAUNCH_NATIVE_EXIT%
@@ -2030,7 +2044,7 @@ jobs:
           # The device's processes log how they execute (checked below, ADR 0081).
           $env:GESHER_LOG_EXECUTION = '1'
           # CardWake (#407) looks up UsbManager during Activity.onCreate.
-          $out = & "$app\gesher-app.cmd" "$app\lifecycle.apk" --ez com.gesher.lifecycle.CHECK_USB_SERVICE true --ez com.gesher.lifecycle.CHECK_ANDROID_DATA true 2>&1 | Out-String
+          $out = & "$app\gesher-app.cmd" "$app\lifecycle.apk" --ez com.gesher.lifecycle.CHECK_USB_SERVICE true --ez com.gesher.lifecycle.CHECK_ANDROID_DATA true --ez com.gesher.lifecycle.CHECK_SYSTEM_LINKER true 2>&1 | Out-String
           $code = $LASTEXITCODE
           Remove-Item Env:GESHER_LOG_EXECUTION
           Write-Host "gesher-app lifecycle.apk (exit $code):"
@@ -2038,7 +2052,8 @@ jobs:
           if ($code -ne 0 -or $out -notmatch 'gesher-app: done' -or $out -notmatch 'started the Gesher device' -or
               $out -notmatch 'installed com\.gesher\.lifecycle' -or $out -notmatch 'LifecycleActivity onResume' -or
               $out -notmatch 'LifecycleActivity onCreate: USB service available' -or
-              $out -notmatch 'LifecycleActivity Android data capacity and device-state isolation verified') {
+              $out -notmatch 'LifecycleActivity Android data capacity and device-state isolation verified' -or
+              $out -notmatch 'LifecycleActivity verified the read-only x86-64 system linker file and mapping') {
             Get-Content "$env:LOCALAPPDATA\Gesher\logs\*.log" -ErrorAction SilentlyContinue | Select-Object -Last 60 | Out-Host
             throw "The installed gesher-app did not run lifecycle.apk on the Gesher device (exit $code)"
           }

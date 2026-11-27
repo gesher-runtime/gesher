@@ -106,6 +106,11 @@ int PosixDelete(const std::wstring& windows, bool directory);
 // not a directory.
 bool ResolveAt(int dirfd, const char* path, std::string* out);
 
+// Physical directory-relative operations use the captured directory object,
+// including after rename. False leaves virtual/absolute paths to ResolveAt.
+bool OpenAtObject(int dirfd, const char* path, int flags, int* result);
+bool DeleteAtObject(int dirfd, const char* path, bool directory, int* result);
+
 // Virtual files and directories (procfs.cc), named as MapPath's kVirtual.
 extern "C" const unsigned char* gesher_auxv_random(void);
 extern "C" const char* gesher_auxv_platform(void);

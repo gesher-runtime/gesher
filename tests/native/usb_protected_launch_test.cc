@@ -7,7 +7,7 @@
 #include "../../compat/usb_storage/protected_storage_policy.h"
 #include "../../compat/framework/app_container.h"
 #include "usb_lowbox_iat_trace.h"
-#include "usb_user32_debug_trace.h"
+#include "usb_user32_cfg_trace.h"
 #include "usb_scm_profile_control.h"
 #include <aclapi.h>
 #include <securityappcontainer.h>
@@ -3063,8 +3063,9 @@ void AppendGuestLoaderMessage(HANDLE process, const OUTPUT_DEBUG_STRING_INFO& in
 
 void ReadGuestLoaderEvents(const storage::AuthorityLaunch& probe, ULONGLONG deadline, GuestLoaderTrace* trace) {
   bool breakpoint = false;
-  gesher::usb_storage::test::User32NativeDebugTrace native_trace(
-      probe.process(), probe.main_thread_id(), std::span(trace->tail), &trace->bytes);
+  gesher::usb_storage::test::User32CfgDebugTrace native_trace(
+      probe.process(), probe.main_thread_id(), std::span(trace->tail), &trace->bytes,
+      config.directory + L"\\user32-cfg.bin", deadline);
   for (;;) {
     const ULONGLONG now = GetTickCount64();
     if (now >= deadline) {
@@ -3705,7 +3706,8 @@ DWORD Controller(bool explicit_scm_control, bool explicit_lowbox_trace) {
     WriteNew(image, binary.data(), static_cast<DWORD>(binary.size()));
     if (explicit_lowbox_trace) {
       const std::wstring source = controller_image.substr(0, controller_image.find_last_of(L'\\') + 1);
-      for (const auto* name : kGuestLoaderProbes) {
+      for (const auto* name : {kGuestLoaderProbes[0], kGuestLoaderProbes[1],
+                              kGuestLoaderProbes[2], L"user32-cfg.bin"}) {
         try {
           const auto probe = Read(source + name, 1024 * 1024);
           WriteNew(directory + L"\\" + name, probe.data(), static_cast<DWORD>(probe.size()));
@@ -3989,6 +3991,7 @@ DWORD Controller(bool explicit_scm_control, bool explicit_lowbox_trace) {
         remove_file(directory + L"\\" + kDesktopAccessFile, "delete-fixture-desktop-snapshot");
         for (const auto* name : kGuestLoaderProbes)
           remove_file(directory + L"\\" + name, "delete-fixture-loader-probe");
+        remove_file(directory + L"\\user32-cfg.bin", "delete-fixture-user32-metadata");
         remove_file(image, "delete-fixture-image");
         if (!RemoveDirectoryW(directory.c_str())) record_cleanup(GetLastError(), "delete-fixture-directory");
       } else if (retained_windows_profile) {

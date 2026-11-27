@@ -2,7 +2,7 @@
 # ADR 0044). Dot-sourced by run-tests.ps1 after 34-windows.ps1, whose
 # WindowAppCheck and $dvmWindows it uses (and WindowChecks.ps1's GesherWin32 and
 # WaitForLog), and after 32-fonts.ps1, which installs the system fonts and
-# points $GESHER_WINDOWS_FONTS at Windows' fonts.
+# the fallback map for Windows' fonts.
 #
 # 1. LocaleTest (graphics-tests.dex): the locale list, first day of the week,
 #    24-hour time and number format SystemLocale gives, against Windows' own
@@ -272,10 +272,10 @@ function RtlAppPixels($px, [string] $Text, [bool] $Rtl, [string] $Resources) {
   # forced left to right.
   $m = $v['mirror']; $f = $v['forced']
   $redLeft = if ($Rtl) { 0x0000ff } else { 0xff0000 }
-  $out += @(Regions $px @(@('mirror row, left half', $m[0], $m[1], $m[0] + 200, $m[1] + $m[3], $redLeft),
-                          @('mirror row, right half', $m[0] + 200, $m[1], $m[0] + 400, $m[1] + $m[3], ($redLeft -bxor 0xff00ff)),
-                          @('forced LTR row, left half', $f[0], $f[1], $f[0] + 200, $f[1] + $f[3], 0xff0000),
-                          @('forced LTR row, right half', $f[0] + 200, $f[1], $f[0] + 400, $f[1] + $f[3], 0x0000ff)))
+  $out += @(Regions $px @(@('mirror row, left half', $m[0], $m[1], ($m[0] + 200), ($m[1] + $m[3]), $redLeft),
+                          @('mirror row, right half', ($m[0] + 200), $m[1], ($m[0] + 400), ($m[1] + $m[3]), ($redLeft -bxor 0xff00ff)),
+                          @('forced LTR row, left half', $f[0], $f[1], ($f[0] + 200), ($f[1] + $f[3]), 0xff0000),
+                          @('forced LTR row, right half', ($f[0] + 200), $f[1], ($f[0] + 400), ($f[1] + $f[3]), 0x0000ff)))
   # Colored runs: in logical order red then blue (Hebrew, Arabic); red, green, magenta,
   # blue mixing Hebrew with "ABC 123": drawn right to left, an LTR run inside.
   foreach ($n in 'hebrew', 'arabic', 'mixed') {
@@ -371,6 +371,26 @@ function RtlAppCursor([IntPtr] $Hwnd, [scriptblock] $ReadLog) {
   return $out
 }
 
+function RtlAppPointer([IntPtr] $Hwnd, [scriptblock] $ReadLog) {
+  $edit = (RtlViews "$(& $ReadLog)")['edit']
+  if (-not $edit) { return 'no position for the RTL EditText' }
+  $y = $edit[1] + [int]($edit[3] / 2)
+  $out = @()
+  foreach ($step in @(@('left', ($edit[0] + 3), '4-4'), @('right', ($edit[0] + $edit[2] - 3), '0-0'))) {
+    $pattern = 'RtlActivity selection ' + $step[2]
+    $before = ([regex]::Matches("$(& $ReadLog)", $pattern)).Count
+    [GesherWin32]::Click($Hwnd, $step[1], $y)
+    $deadline = (Get-Date).AddSeconds(10)
+    while ((Get-Date) -lt $deadline -and ([regex]::Matches("$(& $ReadLog)", $pattern)).Count -le $before) {
+      Start-Sleep -Milliseconds 200
+    }
+    if (([regex]::Matches("$(& $ReadLog)", $pattern)).Count -le $before) {
+      $out += "clicking the $($step[0]) edge of the RTL EditText did not select $($step[2])"
+    }
+  }
+  return $out
+}
+
 if (-not (Get-Command WindowAppCheck -ErrorAction SilentlyContinue)) {
   Write-Host 'FAIL  rtl: WindowAppCheck (34-windows.ps1) is not defined'
   $failed++
@@ -391,7 +411,7 @@ if (-not (Get-Command WindowAppCheck -ErrorAction SilentlyContinue)) {
   try {
     WindowAppCheck 'rtlapp.apk under he-IL: the layout mirrored (layoutDirection from the locale, supportsRtl), Hebrew resources, textAlignment viewStart on the right; arrow keys move the cursor through the RTL EditText as it looks (single process)' `
       rtlapp.apk @('com.gesher.app.Main', '--hidden-window', '--display', '400x800@160', (NoDrive "$Dir/rtlapp.apk")) `
-      { param($px, $hwnd, $text, $readLog) & $showLog $text; @(RtlAppPixels $px $text $true 'rtl-he') + @(RtlAppCursor $hwnd $readLog) } `
+      { param($px, $hwnd, $text, $readLog) & $showLog $text; @(RtlAppPixels $px $text $true 'rtl-he') + @(RtlAppPointer $hwnd $readLog) + @(RtlAppCursor $hwnd $readLog) } `
       ($rtlExpect + 'RtlActivity locales he-IL,en-US')
   } finally {
     Remove-Item Env:GESHER_LOCALES -ErrorAction SilentlyContinue
@@ -409,7 +429,7 @@ if (-not (Get-Command WindowAppCheck -ErrorAction SilentlyContinue)) {
   try {
     WindowAppCheck 'the Gesher device under ar-EG: rtlapp.apk''s app process gets the system server''s right-to-left configuration (mirrored layout, Arabic resources), its Hebrew and Arabic text drawn right to left' `
       rtlapp.apk @('com.gesher.app.Launcher', 'launch', (NoDrive "$Dir/rtlapp.apk"), '--hidden-window') `
-      { param($px, $hwnd, $text, $readLog) & $showLog $text; @(RtlAppPixels $px $text $true 'rtl-ar') } `
+      { param($px, $hwnd, $text, $readLog) & $showLog $text; @(RtlAppPixels $px $text $true 'rtl-ar') + @(RtlAppPointer $hwnd $readLog) } `
       @('gesher-app: app process for com.gesher.rtlapp: pid ', 'RtlActivity locales ar-EG', 'RtlActivity onResume',
         'closed by the user', 'RtlActivity onDestroy', 'gesher-app: the process of com.gesher.rtlapp ended (exit code 0)',
         'gesher-app: done')

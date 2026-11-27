@@ -416,6 +416,12 @@ bool NativeFileIo(int fd, void* buffer, unsigned int count, bool writing, int* r
     *result = (errno = EBADF, -1);
     return true;
   }
+  // Virtual directories use a regular placeholder handle for the CRT slot.
+  // Reject data I/O only after checking the captured descriptor's access mode.
+  if (snapshot->description && !snapshot->description->virtual_directory.empty()) {
+    *result = (errno = EISDIR, -1);
+    return true;
+  }
   if (writing && gesher::FileDescriptionIsMemfd(snapshot)) {
     const int error = gesher::MemfdWriteHandleError(snapshot->handle, true, 0, count, (flags & O_APPEND) != 0);
     if (error) { *result = (errno = error, -1); return true; }

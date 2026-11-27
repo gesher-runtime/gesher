@@ -470,6 +470,174 @@ int OpenPath(const char* path, int flags, mode_t mode) {
 
 }  // namespace
 
+namespace {
+
+// Return a held parent rather than replaying its pathname. The kernel checks
+// the caller's token on the relative open; no host authority or ACL is added.
+bool RelativeParent(int dirfd, const char* path, DescriptorSnapshotPtr* parent, int* result) {
+  if (path == nullptr || dirfd == AT_FDCWD || IsAbsolute(path)) return false;
+  // This fast path only opens an existing single leaf. Keep creation,
+  // special path components and multi-component traversal on the established
+  // resolver, which preserves their authorization and symlink semantics.
+  if (!*path || !strcmp(path, ".") || !strcmp(path, "..") || strpbrk(path, "/\\")) return false;
+  *parent = CaptureDescriptor(dirfd);
+  if (!*parent) { *result = -1; return true; }
+  if ((*parent)->description && !(*parent)->description->virtual_directory.empty()) return false;
+  if (!DropDescriptorPath(*parent).empty() || !storage_root::DescriptorPath((*parent)->handle).empty())
+    return false;  // The existing resolver selects the authenticated broker.
+  unsigned type;
+  std::string name;
+  if (procfs::DescribeHandle((*parent)->handle, &type, &name)) return false;
+  BY_HANDLE_FILE_INFORMATION info{};
+  if (FileDescriptionIsRevocable(*parent) ||
+      !GetFileInformationByHandle((*parent)->handle, &info) ||
+      !(info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+    *result = (errno = ENOTDIR, -1);
+    parent->reset();
+  }
+  return true;
+}
+
+HANDLE OpenRelativeObject(HANDLE parent, const char* path, DWORD access, ULONG options,
+                          bool inherit, AccessKind kind) {
+  if (*path == '\0') return errno = ENOENT, INVALID_HANDLE_VALUE;
+  if (!CheckExternalStorageHandle(parent, kind)) return INVALID_HANDLE_VALUE;
+  std::wstring wide = Widen(path);
+  for (auto& character : wide) if (character == L'/') character = L'\\';
+  reserved_names::Encode(&wide);
+  if (wide.size() > (USHRT_MAX / sizeof(wchar_t))) return errno = ENAMETOOLONG, INVALID_HANDLE_VALUE;
+  using Create = NTSTATUS(NTAPI*)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, PIO_STATUS_BLOCK,
+      PLARGE_INTEGER, ULONG, ULONG, ULONG, ULONG, PVOID, ULONG);
+  using Translate = ULONG(WINAPI*)(NTSTATUS);
+  const HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+  const auto create = reinterpret_cast<Create>(reinterpret_cast<void*>(GetProcAddress(ntdll, "NtCreateFile")));
+  const auto translate = reinterpret_cast<Translate>(reinterpret_cast<void*>(GetProcAddress(ntdll, "RtlNtStatusToDosError")));
+  if (!create || !translate) return errno = ENOSYS, INVALID_HANDLE_VALUE;
+  UNICODE_STRING name{static_cast<USHORT>(wide.size() * sizeof(wchar_t)),
+      static_cast<USHORT>(wide.size() * sizeof(wchar_t)), wide.data()};
+  OBJECT_ATTRIBUTES attributes{};
+  InitializeObjectAttributes(&attributes, &name, OBJ_CASE_INSENSITIVE | (inherit ? OBJ_INHERIT : 0), parent, nullptr);
+  IO_STATUS_BLOCK io{};
+  HANDLE opened = INVALID_HANDLE_VALUE;
+  const NTSTATUS status = create(&opened, access | SYNCHRONIZE, &attributes, &io, nullptr,
+      FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, FILE_OPEN,
+      options | FILE_SYNCHRONOUS_IO_NONALERT, nullptr, 0);
+  if (status < 0) {
+    const DWORD error = translate(status);
+    // A FIFO's LX reparse tag cannot be followed by NTFS. Open the tag
+    // itself solely to hand it to the existing FIFO endpoint implementation.
+    if (error == ERROR_CANT_ACCESS_FILE && !(options & FILE_OPEN_REPARSE_POINT)) {
+      HANDLE probe = OpenRelativeObject(parent, path, FILE_READ_ATTRIBUTES,
+          options | FILE_OPEN_REPARSE_POINT, inherit, kind);
+      if (probe != INVALID_HANDLE_VALUE) {
+        if (IsFifoHandle(probe)) return probe;
+        CloseHandle(probe);
+      }
+    }
+    errno = ErrnoFromWin32(error);
+    return INVALID_HANDLE_VALUE;
+  }
+  if (!CheckExternalStorageHandle(opened, kind)) {
+    const int error = errno;
+    CloseHandle(opened);
+    return errno = error, INVALID_HANDLE_VALUE;
+  }
+  return opened;
+}
+}  // namespace
+
+bool OpenAtObject(int dirfd, const char* path, int flags, int* result) {
+  if ((flags & O_CREAT) != 0) return false;
+  DescriptorSnapshotPtr parent;
+  if (!RelativeParent(dirfd, path, &parent, result)) return false;
+  if (!parent) return true;
+  if ((flags & O_TMPFILE) == O_TMPFILE) { *result = (errno = EOPNOTSUPP, -1); return true; }
+  if ((flags & O_PATH) == 0 && (flags & (O_DIRECT | O_NOATIME)) != 0) {
+    *result = (errno = (flags & O_DIRECT) ? EINVAL : EOPNOTSUPP, -1); return true;
+  }
+  const bool metadata = (flags & O_PATH) != 0;
+  const bool writes = !metadata && ((flags & O_ACCMODE) != O_RDONLY || (flags & (O_CREAT | O_TRUNC | O_APPEND)));
+  const AccessKind kind = metadata ? AccessKind::kStat : writes ? AccessKind::kWrite : AccessKind::kRead;
+  // Keep the existing symlink/FIFO-following implementation for a final
+  // symbolic link. In particular, a link to an LX FIFO must reach its queue,
+  // not fail an NTFS reparse request or expose the marker's bytes.
+  if (!(flags & O_NOFOLLOW)) {
+    HANDLE probe = OpenRelativeObject(parent->handle, path, FILE_READ_ATTRIBUTES,
+        FILE_OPEN_REPARSE_POINT, false, AccessKind::kStat);
+    if (probe != INVALID_HANDLE_VALUE) {
+      const bool link = IsSymlinkHandle(probe);
+      CloseHandle(probe);
+      if (link) return false;
+    }
+  }
+  ULONG options = (flags & O_DIRECTORY) ? FILE_DIRECTORY_FILE : 0;
+  if (flags & O_NOFOLLOW) options |= FILE_OPEN_REPARSE_POINT;
+  if (!metadata && (flags & O_DSYNC)) options |= FILE_WRITE_THROUGH;
+  HANDLE opened = OpenRelativeObject(parent->handle, path,
+      metadata ? FILE_READ_ATTRIBUTES : Access(flags) | FILE_READ_ATTRIBUTES, options,
+      (flags & O_CLOEXEC) == 0, kind);
+  *result = -1;
+  if (opened == INVALID_HANDLE_VALUE) return true;
+  if (IsFifoHandle(opened)) {
+    if ((flags & O_DIRECTORY) != 0) { CloseHandle(opened); errno = ENOTDIR; return true; }
+    *result = metadata ? FdFromHandle(opened, flags) : OpenFifoHandle(opened, flags);
+    return true;
+  }
+  if (!metadata && (flags & O_NOFOLLOW) && IsSymlinkHandle(opened)) errno = ELOOP;
+  else if (writes && system_linker::IsFileHandle(opened)) errno = EROFS;
+  else {
+    BY_HANDLE_FILE_INFORMATION info{};
+    if (!GetFileInformationByHandle(opened, &info)) FailWithLastError();
+    else if (writes && (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) errno = EISDIR;
+    else if ((flags & O_TRUNC) && !metadata && !SetEndOfFile(opened)) FailWithLastError();
+    else { *result = FdFromHandle(opened, flags | (metadata ? 0 : O_LARGEFILE)); return true; }
+  }
+  const int error = errno;
+  CloseHandle(opened);
+  errno = error;
+  return true;
+}
+
+bool DeleteAtObject(int dirfd, const char* path, bool directory, int* result) {
+  DescriptorSnapshotPtr parent;
+  if (!RelativeParent(dirfd, path, &parent, result)) return false;
+  if (!parent) return true;
+  HANDLE opened = OpenRelativeObject(parent->handle, path, DELETE | FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES,
+      FILE_OPEN_REPARSE_POINT, false, AccessKind::kWrite);
+  *result = -1;
+  if (opened == INVALID_HANDLE_VALUE) return true;
+  BY_HANDLE_FILE_INFORMATION info{};
+  if (!GetFileInformationByHandle(opened, &info)) FailWithLastError();
+  else if (((info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0 && !IsSymlinkHandle(opened)) != directory)
+    errno = directory ? ENOTDIR : EISDIR;
+  else if (system_linker::IsFileHandle(opened)) errno = EACCES;
+  else {
+    FILE_DISPOSITION_INFO_EX disposition{FILE_DISPOSITION_FLAG_DELETE | FILE_DISPOSITION_FLAG_POSIX_SEMANTICS |
+        FILE_DISPOSITION_FLAG_IGNORE_READONLY_ATTRIBUTE};
+    BOOL removed = SetFileInformationByHandle(opened, static_cast<FILE_INFO_BY_HANDLE_CLASS>(21),
+        &disposition, sizeof(disposition));
+    DWORD error = GetLastError();
+    if (!removed && error != ERROR_DIR_NOT_EMPTY) {
+      // Keep PosixDelete's fallback on volumes without POSIX disposition.
+      FILE_BASIC_INFO basic{};
+      if (GetFileInformationByHandleEx(opened, FileBasicInfo, &basic, sizeof(basic)) &&
+          (basic.FileAttributes & FILE_ATTRIBUTE_READONLY)) {
+        basic.FileAttributes &= ~FILE_ATTRIBUTE_READONLY;
+        SetFileInformationByHandle(opened, FileBasicInfo, &basic, sizeof(basic));
+      }
+      FILE_DISPOSITION_INFO classic{TRUE};
+      removed = SetFileInformationByHandle(opened, FileDispositionInfo, &classic, sizeof(classic));
+      error = GetLastError();
+    }
+    if (!removed) SetLastError(error);
+    *result = removed ? 0 : FailWithLastError();
+  }
+  const int error = errno;
+  CloseHandle(opened);
+  errno = error;
+  return true;
+}
+
 // Joins a path relative to dirfd onto that directory's path; absolute paths
 // and AT_FDCWD pass unchanged. False (errno set) if dirfd is not a directory.
 bool ResolveAt(int dirfd, const char* path, std::string* out) {
@@ -829,6 +997,8 @@ int openat(int dirfd, const char* path, int flags, ...) {
     mode = static_cast<mode_t>(va_arg(args, int));
     va_end(args);
   }
+  int result;
+  if (gesher::OpenAtObject(dirfd, path, flags, &result)) return result;
   std::string resolved;
   if (!gesher::ResolveAt(dirfd, path, &resolved)) return -1;
   return gesher::OpenPath(resolved.c_str(), flags, mode);
@@ -842,6 +1012,16 @@ int creat(const char* path, int mode) {
 
 int fstatat(int dirfd, const char* path, struct stat* buf, int flags) {
   if ((flags & AT_EMPTY_PATH) != 0 && path != nullptr && path[0] == '\0') return fstat(dirfd, buf);
+  int descriptor;
+  if (gesher::OpenAtObject(dirfd, path, O_PATH | O_CLOEXEC |
+      ((flags & AT_SYMLINK_NOFOLLOW) ? O_NOFOLLOW : 0), &descriptor)) {
+    if (descriptor < 0) return -1;
+    const int result = fstat(descriptor, buf);
+    const int error = errno;
+    close(descriptor);
+    errno = error;
+    return result;
+  }
   std::string resolved;
   if (!gesher::ResolveAt(dirfd, path, &resolved)) return -1;
   return (flags & AT_SYMLINK_NOFOLLOW) != 0 ? lstat(resolved.c_str(), buf)

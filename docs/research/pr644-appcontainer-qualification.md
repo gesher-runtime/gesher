@@ -52,3 +52,29 @@ Its `dalvikvm.exe` had SHA-256
 `d345ee97149869368621cbf596d3205b485a454f89605ca65aed58d72fd4028b`.
 The run logs and runtime hashes are under the local
 `out/qa314/roborock-startup-25652/` evidence directory.
+
+## Native and desktop follow-up checks, 2026-11-27
+
+These are local execution results for the candidate above `3c7fe0dd2`, with the
+explicit AppContainer setting and disposable profiles. They do not qualify the
+shipping default, the installer or the hosted matrix.
+
+| Check | Observed result and limit |
+| --- | --- |
+| Native2 directory operations | The exact x86 and ARM64 APKs downloaded from run `45946701754` reached `native2: all passed`, `onResume: all passed` and process exit 0. The held directory survives rename and replacement of its old name. The narrow relative-operation path leaves creation, complex paths, symbolic-link following and brokered storage on their established resolvers. |
+| Directory negative controls | An independently rebuilt runtime with the original Bionic adapter reached the actual APK's `remove_all` assertion and reproduced `EBADF`/`SIGABRT`. A separate live guest with an advanced directory descriptor reproduced the wrong seek cookie before the fix. Independent installed probes then verified the correct first entry and advancing cookie with isolation both on and off; all 61 physical/virtual Bionic assertions passed. A failure to start an app was not counted as a negative control. |
+| RTL and Windows fonts | The Windows font lookup used `/mnt/c/WINDOWS/Fonts` in a separate-volume run with the installed Arabic AppContainer app. The client-paint and window-DC captures each matched the 8,000 expected pixels per color region. Keyboard and injected Win32 mouse messages produced the expected selections. Full-content composed capture mirrored those regions in the RTL cases. Desktop screen capture was unavailable in the disconnected local session, leaving the orientation of the visibly composed client and caption unresolved. The test continues to require composed capture. |
+| Media | The protected video app exited 0. Its real PCM capture contained 880.0 Hz and 660.1 Hz tones, each lasting 2.005 seconds. The capture was written inside its own CE directory and copied to the host artifact directory before uninstalling the fixture. |
+| TSF | The protected app loaded the real test service from the read/execute runtime tree and completed composition and reconversion, including restricted-editor rejection. The local session had no foreground window, so only the local harness omitted that precondition. The tracked CI test retains its foreground requirement. |
+| Environment diagnostics | The existing native host regression passed with the rebuilt diagnostic JNI library. A missing child retained its failing result and recorded the actual child exit status. The diagnostic does not change fixture return codes, dump the environment or establish why the hosted APK failed. |
+
+Native source, runtime and APK hashes are retained in
+`out/qa314/native-ci-repair/final-inputs.json`; that snapshot includes Bionic
+SHA-256 `4b2a88eef3812a62d1b3722dcf9f1813fd9969992b82252ade062b49cb4d553f`.
+The corresponding guest and host logs are in that directory. Desktop proofs are
+under `out/qa314/matrix-local/`. Symlink creation was unavailable to the contained
+guest on this machine; the existing resolver for that operation was preserved.
+
+The private USB runtime USER32 initialization failure, installed CardWake and
+archive RPC, clean installation/upgrade, full hosted shards, final default
+launch routes and real Windows Hello consent/cancellation remain merge gates.
