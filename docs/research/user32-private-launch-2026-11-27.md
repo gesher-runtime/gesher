@@ -112,3 +112,30 @@ not establish the internal failing call. Static decoding also identifies an
 alternate initializer body, so the heap-failure branch is only a possible
 path. The next observation must identify the actual GDI initializer path;
 there is no evidence here supporting an ACL or memory-limit expansion.
+
+## Separate GDI32FULL initializer observation
+
+The preparation step keeps the original USER32 map and derives a second map
+from the runner's own System32 GDI32FULL image. The GDI target is the
+`GdiDllInitialize` export when it starts a verified unwind function, or the
+exact unwind entry reached by its single direct leaf thunk. The DLL's PE entry
+is checked independently. An unrecognized export shape produces an explicit
+unavailable diagnostic and the original USER32 witness can still execute.
+
+After the original loader rows, USER32 trace and heap controls, a separate
+disposable late loader runs under the same existing fixture policy. The
+observer verifies the loaded image, export and unwind bounds, map hash and
+opcodes before arming. Calls inside that initializer execute normally and
+only their returns are observed, including full RAX for GDI. The trace still
+stops at the original stack frame, 128 hardware events or the existing
+five-second deadline. Its last eight records fit beside the existing USER32
+summary without adding IPC fields or receiving any new guest write grant.
+
+With the matching local ordinary-desktop GDI32FULL image, the observer armed
+and completed in eight events with status zero and the loader exited zero.
+The actual root used the alternate helper at RVA `0x8a0bc`; the observer did
+not enter its body. Three live map mutations (different valid instruction root,
+different PE entry and opcode mismatch with refreshed table hash) were
+rejected before hardware events; each loader still exited zero. These runs
+validate the observer and leave the failing private branch unresolved until
+the new control runs on the elevated Windows 2022 and 2025 fixtures.

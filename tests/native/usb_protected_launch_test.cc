@@ -3173,11 +3173,12 @@ void AppendGuestLoaderMessage(HANDLE process, const OUTPUT_DEBUG_STRING_INFO& in
   trace->bytes += static_cast<DWORD>(length);
 }
 
-void ReadGuestLoaderEvents(const storage::AuthorityLaunch& probe, ULONGLONG deadline, GuestLoaderTrace* trace) {
+void ReadGuestLoaderEvents(const storage::AuthorityLaunch& probe, ULONGLONG deadline,
+                           GuestLoaderTrace* trace, bool gdi) {
   bool breakpoint = false;
   gesher::usb_storage::test::User32CfgDebugTrace native_trace(
       probe.process(), probe.main_thread_id(), std::span(trace->tail), &trace->bytes,
-      config.directory + L"\\user32-cfg.bin", deadline);
+      config.directory + (gdi ? L"\\gdi32full-cfg.bin" : L"\\user32-cfg.bin"), deadline, gdi);
   for (;;) {
     const ULONGLONG now = GetTickCount64();
     if (now >= deadline) {
@@ -3207,7 +3208,7 @@ void ReadGuestLoaderEvents(const storage::AuthorityLaunch& probe, ULONGLONG dead
     }
     if (owned && event.dwDebugEventCode == OUTPUT_DEBUG_STRING_EVENT) {
       native_trace.EntryMarker(event.u.DebugString);
-      AppendGuestLoaderMessage(probe.process(), event.u.DebugString, trace);
+      if (!gdi) AppendGuestLoaderMessage(probe.process(), event.u.DebugString, trace);
     }
     if (!ContinueDebugEvent(event.dwProcessId, event.dwThreadId, disposition)) {
       trace->wait = GetLastError();
@@ -3223,7 +3224,7 @@ void ReadGuestLoaderEvents(const storage::AuthorityLaunch& probe, ULONGLONG dead
 
 void ObserveGuestLoaderTrace(HANDLE token, const storage::AuthorityLaunchSpec& original,
                              const storage::AuthorityLaunch& first, PSID private_user, PSID capability,
-                             PSID desktop_user, GuestLoaderTrace* trace) {
+                             PSID desktop_user, GuestLoaderTrace* trace, bool gdi = false) {
   trace->attempted = 1;
   const ULONGLONG now = GetTickCount64();
   if (now >= config.worker_deadline) {
@@ -3282,7 +3283,7 @@ void ObserveGuestLoaderTrace(HANDLE token, const storage::AuthorityLaunchSpec& o
       if (trace->resume == ERROR_SUCCESS) {
         attached = DebugActiveProcess(probe->pid()) != FALSE;
         trace->attach = attached ? ERROR_SUCCESS : GetLastError();
-        if (attached) ReadGuestLoaderEvents(*probe, deadline, trace);
+        if (attached) ReadGuestLoaderEvents(*probe, deadline, trace, gdi);
       }
     }
   } catch (const Failure& failure) {
@@ -3298,6 +3299,27 @@ void ObserveGuestLoaderTrace(HANDLE token, const storage::AuthorityLaunchSpec& o
   if (owns_entry) trace->registry_cleanup = RegDeleteKeyExW(parent, basename.c_str(), KEY_WOW64_64KEY, 0);
   if (parent) RegCloseKey(parent);
   if (owns_image) trace->image_cleanup = DeleteFileW(image.c_str()) ? ERROR_SUCCESS : GetLastError();
+}
+
+void AppendGdiTrace(const GuestLoaderTrace& gdi, GuestLoaderTrace* trace) {
+  if (gdi.bytes > sizeof(gdi.tail) || trace->bytes > sizeof(trace->tail)) return;
+  char summary[256]{};
+  const int count = std::snprintf(summary, sizeof(summary),
+      "GDI32FULL trace: setup=%lu launch=%lu attach=%lu resume=%lu wait=%lu detach=%lu stop=%lu "
+      "exit=0x%08lx registry-cleanup=%lu image-cleanup=%lu\n",
+      gdi.setup, gdi.launch, gdi.attach, gdi.resume, gdi.wait, gdi.detach, gdi.stop,
+      gdi.exit_code, gdi.registry_cleanup, gdi.image_cleanup);
+  if (count <= 0 || static_cast<size_t>(count) >= sizeof(summary)) return;
+  const size_t added = static_cast<size_t>(count) + gdi.bytes;
+  if (added > sizeof(trace->tail)) return;
+  size_t discard = trace->bytes + added > sizeof(trace->tail)
+                     ? trace->bytes + added - sizeof(trace->tail) : 0;
+  while (discard != 0 && discard < trace->bytes && trace->tail[discard - 1] != '\n') ++discard;
+  const size_t kept = trace->bytes - discard;
+  std::memmove(trace->tail, trace->tail + discard, kept);
+  std::memcpy(trace->tail + kept, summary, static_cast<size_t>(count));
+  std::memcpy(trace->tail + kept + static_cast<size_t>(count), gdi.tail, gdi.bytes);
+  trace->bytes = static_cast<DWORD>(kept + added);
 }
 
 Evidence RunSystem() {
@@ -3640,8 +3662,10 @@ Evidence RunSystem() {
       ObservePrivateLoader(identity->token(), guest_token.get(), spec, evidence.private_loader);
       ObserveGuestLoader(identity->token(), spec, *child, evidence.guest_loader);
       const auto& late = evidence.guest_loader[2];
-      if (late.start_status == ERROR_SUCCESS && late.resume_status == ERROR_SUCCESS &&
-          late.wait_status == WAIT_OBJECT_0 && late.exit_read && late.exit_code == ERROR_DLL_INIT_FAILED) {
+      const bool late_failed = late.start_status == ERROR_SUCCESS &&
+          late.resume_status == ERROR_SUCCESS && late.wait_status == WAIT_OBJECT_0 &&
+          late.exit_read && late.exit_code == ERROR_DLL_INIT_FAILED;
+      if (late_failed) {
         ObserveGuestLoaderTrace(identity->token(), spec, *child, identity->sid(), capability.value,
             desktop_user, &evidence.guest_loader_trace);
       }
@@ -3652,6 +3676,12 @@ Evidence RunSystem() {
       HeapControlEvidence private_heaps[2]{}, guest_heap;
       ObservePrivateLoader(identity->token(), guest_token.get(), spec, private_heap_rows, private_heaps);
       ObserveGuestLoader(identity->token(), spec, *child, guest_heap_rows, &guest_heap);
+      if (late_failed) {
+        GuestLoaderTrace gdi{};
+        ObserveGuestLoaderTrace(identity->token(), spec, *child, identity->sid(), capability.value,
+            desktop_user, &gdi, true);
+        AppendGdiTrace(gdi, &evidence.guest_loader_trace);
+      }
     }
     Check(code, "guest-private-environment-witness");
     Check(child->Stop(0), "idempotent-exited-stop");
@@ -3826,7 +3856,7 @@ DWORD Controller(bool explicit_scm_control, bool explicit_lowbox_trace) {
     if (explicit_lowbox_trace) {
       const std::wstring source = controller_image.substr(0, controller_image.find_last_of(L'\\') + 1);
       for (const auto* name : {kGuestLoaderProbes[0], kGuestLoaderProbes[1],
-                              kGuestLoaderProbes[2], L"user32-cfg.bin"}) {
+                              kGuestLoaderProbes[2], L"user32-cfg.bin", L"gdi32full-cfg.bin"}) {
         try {
           const auto probe = Read(source + name, 1024 * 1024);
           WriteNew(directory + L"\\" + name, probe.data(), static_cast<DWORD>(probe.size()));
@@ -4139,6 +4169,7 @@ DWORD Controller(bool explicit_scm_control, bool explicit_lowbox_trace) {
         for (const auto* name : kHeapControlFiles)
           remove_file(directory + L"\\" + name, "delete-fixture-heap-report");
         remove_file(directory + L"\\user32-cfg.bin", "delete-fixture-user32-metadata");
+        remove_file(directory + L"\\gdi32full-cfg.bin", "delete-fixture-gdi-metadata");
         remove_file(image, "delete-fixture-image");
         if (!RemoveDirectoryW(directory.c_str())) record_cleanup(GetLastError(), "delete-fixture-directory");
       } else if (retained_windows_profile) {

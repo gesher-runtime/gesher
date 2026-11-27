@@ -106,3 +106,31 @@ because Maven returned HTTP 429 while fetching SQLite JDBC. This was a download
 failure, not evidence about the unexecuted Java tests. The full matrix remains
 required after these source changes, and all earlier outstanding merge gates
 remain in force.
+
+## Held-directory Inotify follow-up
+
+The local successful-write route now verifies full file identities for the
+writing object, the reopened single child and the retained watched directory.
+Its coarse identity index selects candidates only. When full identity is
+unavailable, it does not synthesize a directory event from pathname equality.
+Ordinary Windows notification close tracking remains available through a
+separate query-only generation handle and an exact-object `ReOpenFile` probe;
+it does not duplicate the writer's write-access file object.
+
+The final diagnostic-instrumented Windows projection ran both unchanged Native2
+APKs from the cached CI artifact. Both reached `native2 files: ok` and
+`native2: all passed`. A separate held-directory fixture closed its original
+writer before renaming the directory, retained the watch, rejected a write to
+the replacement at the old name, and observed modification and close through
+the moved directory. Its rename, no-wrong-event, close and cleanup fields all
+passed. This does not establish renaming a directory while its writer is open.
+The four source/fixture hashes, both APKs, Bionic input and runtime identity are
+recorded in `out/qa314/native-ci-repair/inotify-diagnostic/final-v2-inputs.json`.
+
+The whole-source host fixture adds deterministic lookup/rename/replacement,
+coarse identity collision, unavailable full identity and close-generation
+controls. Its Linux execution and sanitizer checks still require CI. The
+smaller record-state fixture retains all ten original assertions and passes
+when compiled on Windows; its declared query boundary does not prove actual
+handle or sharing semantics. Physical ReFS and new performance measurements
+are outside these local checks. Historical timings are unchanged.
