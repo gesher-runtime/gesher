@@ -255,7 +255,8 @@ if (Test-Path "$a64exec/libexectest.so") {
 # a child that forks, and 120 forks while four threads run translated code.
 Check 'arm64: guest fork, vfork and raw clone make real children; wait4 reports their status' {
   A64Run "$a64/gesher-exec.exe" @('--elf', "$a64/arm64-fork-exec", 'arm64-fork-exec', (NoDrive "$a64/arm64-fork-exec")) 300
-} @('arm64_fork_exec all passed', 'fork + execve: the program''s death by SIGTERM is the child''s',
+} @('arm64_fork_exec all passed', 'NETLINK_ROUTE replies and file status are shared across guest fork',
+      'fork + execve: the program''s death by SIGTERM is the child''s',
     'fork + posix_spawn in the child: it starts the program and waits for it')
 # Forks while other threads hold each system call path's locks (and threads
 # start and leave, holding ntdll's loader lock), signals sent at once, a fork

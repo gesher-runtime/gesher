@@ -720,6 +720,39 @@ PIPE_POLL_ERROR_REPLACEMENTS = (
 # exact main checkpoint before running EVERY original receipt and TCP check.
 # The helper pins bind the new references to their reviewed source bytes only:
 # neither this transition nor a passing source check qualifies native execution.
+# Route netlink extends the socket path covered by the existing receipts.
+# Reverse its exact delta before running those checks on their original inputs.
+NETLINK_PATCH='tools/net-tcp-priority/qualified/netlink-source.patch'
+NETLINK_RECEIPT='tools/net-tcp-priority/qualified/netlink-source.json'
+NETLINK_RECEIPT_SHA256='585c1908cd44fb873cf65f24f70c8b78f68ae15e170aae3134e7e4ae5b152ed1'
+
+def preceding_netlink_sources():
+ raw=(ROOT/NETLINK_RECEIPT).read_bytes()
+ assert hashlib.sha256(raw).hexdigest()==NETLINK_RECEIPT_SHA256,NETLINK_RECEIPT
+ receipt=json.loads(raw)
+ patch=(ROOT/NETLINK_PATCH).read_bytes()
+ assert hashlib.sha256(patch).hexdigest()==receipt['patch_sha256'],NETLINK_PATCH
+ paths=sorted(receipt['after_sha256'])
+ assert paths==sorted(receipt['before_sha256'])
+ assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==paths
+ current={path:(ROOT/path).read_bytes() for path in paths}
+ with tempfile.TemporaryDirectory(prefix='gesher-netlink-qualification-') as temporary:
+  work=Path(temporary)
+  for path,source in current.items():
+   assert hashlib.sha256(source).hexdigest()==receipt['after_sha256'][path],path
+   (work/path).parent.mkdir(parents=True,exist_ok=True)
+   (work/path).write_bytes(source)
+  subprocess.run(['git','apply','--reverse','--unidiff-zero','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
+  subprocess.run(['git','apply','--reverse','--unidiff-zero','-'],input=patch,cwd=work,check=True,capture_output=True)
+  before={path:(work/path).read_bytes() for path in paths}
+  for path,source in before.items():
+   assert hashlib.sha256(source).hexdigest()==receipt['before_sha256'][path],path
+   assert source==subprocess.check_output(['git','-C',str(ROOT),'show',receipt['baseline']+':'+path]),path
+  subprocess.run(['git','apply','--unidiff-zero','-'],input=patch,cwd=work,check=True,capture_output=True)
+  for path,source in current.items():
+   assert (work/path).read_bytes()==source,path
+ return before
+
 STORAGE_POLICY_QUALIFICATION='tools/net-tcp-priority/qualified/storage-policy-source.json'
 STORAGE_POLICY_PATCH='tools/net-tcp-priority/qualified/storage-policy-source.patch'
 STORAGE_POLICY_QUALIFICATION_SHA256='1274a14dce7607f2ea1a6eea833f4036a48a8fe306b58e799cb04080e613cc41'
@@ -742,7 +775,7 @@ STORAGE_POLICY_HELPERS=[
  'compat/posix/src/storage_policy.cc',
  'compat/posix/src/storage_policy.h',
 ]
-def preceding_storage_policy_sources():
+def preceding_storage_policy_sources(before_netlink):
  raw=(ROOT/STORAGE_POLICY_QUALIFICATION).read_bytes()
  assert hashlib.sha256(raw).hexdigest()==STORAGE_POLICY_QUALIFICATION_SHA256,'storage policy source qualification changed'
  qualification=json.loads(raw)
@@ -759,7 +792,8 @@ def preceding_storage_policy_sources():
  patch=(ROOT/STORAGE_POLICY_PATCH).read_bytes()
  assert hashlib.sha256(patch).hexdigest()==qualification['patch_sha256'],'storage policy transition patch changed'
  assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==STORAGE_POLICY_PATHS
- current={path:(ROOT/path).read_bytes() for path in STORAGE_POLICY_PATHS}
+ current={path:before_netlink[path] if path in before_netlink else (ROOT/path).read_bytes()
+          for path in STORAGE_POLICY_PATHS}
  baseline={path:subprocess.check_output(['git','-C',str(ROOT),'show',STORAGE_POLICY_BASELINE+':'+path]) for path in STORAGE_POLICY_PATHS}
  for path in STORAGE_POLICY_PATHS:
   assert hashlib.sha256(current[path]).hexdigest()==qualification['source_sha256'][path],path
@@ -861,6 +895,7 @@ def preceding_memrchr_source(qualification):
  return baseline
 
 def preceding_ofd_sources():
+ netlink=preceding_netlink_sources()
  stdio_main=preceding_stdio_feature_sources()
  historical=preceding_stdio_line_sources({path:subprocess.check_output(['git','-C',str(ROOT),'show',COMPOSED_STDIO_PRIOR_FEATURE+':'+path]) for path in COMPOSED_STDIO_PATHS})
  historical_scan=preceding_stdio_scan_source(subprocess.check_output(['git','-C',str(ROOT),'show',COMPOSED_SCAN_PRIOR_FEATURE+':'+COMPOSED_SCAN_PATHS[0]]))
@@ -888,10 +923,10 @@ def preceding_ofd_sources():
    assert current==expected,('current main misc endpoint changed',path)
   else:
    assert current==previous,('historical stdio and current-main normalization disagree',path)
- storage_policy=preceding_storage_policy_sources()
+ storage_policy=preceding_storage_policy_sources(netlink)
  assert memfd_lease.keys().isdisjoint(shared_stdio.keys()|stdio_main.keys()),'source qualifications overlap'
  assert storage_policy.keys().isdisjoint(memfd_lease.keys()|shared_stdio.keys()|stdio_main.keys()),'source qualifications overlap'
- preceding={**memfd_lease,**stdio_main,**shared_stdio,**storage_policy}
+ preceding={**netlink,**memfd_lease,**stdio_main,**shared_stdio,**storage_policy}
  for path,digest in qualification['source_sha256'].items():
   actual=preceding[path] if path in preceding else (ROOT/path).read_bytes()
   if path=='compat/binder/binderd.cc':actual=preceding_composed_binder_output_source()
@@ -919,7 +954,7 @@ def preceding_ofd_sources():
    'compat/posix/src/fd.cc':[b'bool Remove(',b'void Insert(',b'bool ReplaceSocket(',b'bool LookupSocket(',b'static int PollFdsImpl('],
    'compat/posix/src/system.cc':[b'bool SocketIo('],
  }.items():
-  current=(ROOT/path).read_bytes()
+  current=netlink.get(path,(ROOT/path).read_bytes())
   for marker in markers:
    actual=function(current,marker);expected=function(previous[path],marker)
    if marker==b'static int PollFdsImpl(':
@@ -1166,10 +1201,11 @@ def storage_policy_negative_controls():
  from unittest.mock import patch
  original=Path.read_bytes
  qualification=json.loads(original(ROOT/STORAGE_POLICY_QUALIFICATION))
+ before_netlink=preceding_netlink_sources()
  checked=repinned=0
  for name in STORAGE_POLICY_PATHS+STORAGE_POLICY_HELPERS+[STORAGE_POLICY_PATCH]:
   target=ROOT/name
-  source=original(target)
+  source=before_netlink.get(name,original(target))
   data=source.replace(b'@@',b'@x',1) if name==STORAGE_POLICY_PATCH else source+b'\n'
   assert data!=source,name
   for repin in (False,True) if name in STORAGE_POLICY_PATHS or name==STORAGE_POLICY_PATCH else (False,):
@@ -1188,7 +1224,7 @@ def storage_policy_negative_controls():
     return original(path)
    rejected=None
    with patch.object(Path,'read_bytes',reads),patch.dict(globals(),pins):
-    try:preceding_storage_policy_sources()
+    try:preceding_storage_policy_sources({path:source for path,source in before_netlink.items() if path!=name})
     except (AssertionError,subprocess.CalledProcessError) as error:rejected=error
    assert rejected is not None,'unqualified storage source accepted: '+name+' repin='+str(repin)
    if repin:
@@ -1203,7 +1239,7 @@ def storage_policy_negative_controls():
   def reads(path):return receipt if path==ROOT/STORAGE_POLICY_QUALIFICATION else original(path)
   rejected=None
   with patch.object(Path,'read_bytes',reads),patch.dict(globals(),{'STORAGE_POLICY_QUALIFICATION_SHA256':hashlib.sha256(receipt).hexdigest()}):
-   try:preceding_storage_policy_sources()
+   try:preceding_storage_policy_sources(before_netlink)
    except (AssertionError,subprocess.CalledProcessError) as error:rejected=error
   assert rejected is not None,'storage historical endpoint changed: '+field
   checked+=1
@@ -1269,6 +1305,8 @@ def transition_negative_controls():
   # #421's build.prop filter admits its exact reviewed delta only.
   ('compat/posix/src/system_properties.cc',b'if (!ServedBuildProperty(key, value)) continue;',b'if (!ServedBuildProperty(key, value)) {}'),
   (GLES_PROPERTY_PATCH,b'@@',b'@x'),
+  (NETLINK_PATCH,b'@@',b'@x'),
+  ('compat/posix/src/socket.cc',b'if (protocol != NETLINK_ROUTE)',b'if (protocol == NETLINK_ROUTE)'),
   # The memmem normalization admits its exact reviewed delta only. The old
   # whole-file digest must still reject any unrelated shim change afterwards.
   ('compat/bionic/shim.cc',b'size_t n = std::strlen(s) + 1;',b'size_t n = std::strlen(s) + 2;'),

@@ -1,0 +1,20 @@
+{
+  "baseline": "0dba7df18a10548df13d0c908d193ab507cb2eae",
+  "before_sha256": {
+    "compat/posix/posix.cmake": "5f6009b3513d7859c7c53af23c47a3497812b04fa81321efca299307c5d7b276",
+    "compat/posix/src/fd.cc": "9049cf0ee7b6be75de25b21a29e0d9742dce053062b563b5f6dad6dac9be6c3b",
+    "compat/posix/src/socket.cc": "049354ae6ec312aa487a1d040949a9b366e28c18e770f2ec21653d6a65fec2eb",
+    "compat/posix/src/socket_internal.h": "680e7b9decdac51f49b0ccc9e3c2f30390f8398830f3c15fc910126fd9d8b53d",
+    "compat/posix/src/system.cc": "22ffaa16d319618169c3fe8d01e2af155f4299e232943dc211e4ead9c4ebf1dd",
+    "compat/posix/src/winsock.cc": "d72db2409364d5fdc91cf30c8f33f35848a7970f34f4d603cfd7a4e63c7baac0"
+  },
+  "after_sha256": {
+    "compat/posix/posix.cmake": "12ea664b5f8603e3eb250171b727dffbc8bc0dc351126e7ba73beac225897854",
+    "compat/posix/src/fd.cc": "4806f3211c2304d26aaf35aeb30331db00059bd21fe18021538b1aaaab7c6a29",
+    "compat/posix/src/socket.cc": "da35ed62c3daeb9172c9e3c213946a9f36fa87b0edc4adc373bc5c290856073e",
+    "compat/posix/src/socket_internal.h": "c700107e5b0db67da879ce51d43514de79f9bc73950cd82e581bf178210a74bf",
+    "compat/posix/src/system.cc": "1e5d11307de07c4bd12cb796cfc90c2aadac0ad723209d96c66272b885b6aae6",
+    "compat/posix/src/winsock.cc": "0af582cd4c7970f9fccdbfba5081d7f94a632dae68554c82e5e13886fbe73efa"
+  },
+  "patch_sha256": "69825e4c1ff7096c7e94341f7568d41b0d882792d1752b6581e4233ac66a53d8"
+}
