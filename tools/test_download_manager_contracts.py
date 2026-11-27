@@ -32,7 +32,7 @@ PRODUCTION = ('DownloadTransfer', 'DownloadRequests', 'DownloadQueue', 'DeviceCo
               'SharedStorageOwnership')
 INPUTS = {
     'sqlite-jdbc-3.46.1.3.jar': (
-        'https://repo1.maven.org/maven2/org/xerial/sqlite-jdbc/3.46.1.3/sqlite-jdbc-3.46.1.3.jar',
+        'https://repo.maven.apache.org/maven2/org/xerial/sqlite-jdbc/3.46.1.3/sqlite-jdbc-3.46.1.3.jar',
         '4a4832720a65eaf7f4d6fd7ede52087b994dc5633c076f9e994dc0c8b4b0b4fa'),
     'SQLiteQueryBuilder.java': (
         'https://raw.githubusercontent.com/msft-mirror-aosp/platform.frameworks.base/'
