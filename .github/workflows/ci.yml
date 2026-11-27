@@ -92,7 +92,7 @@ jobs:
         with:
           node-version: 20
       - name: Label approval, fork and exact-head QA contracts
-        run: node --test .github/scripts/label-automerge.test.js
+        run: node --test .github/scripts/label-automerge.test.js .github/scripts/app-required-checks.test.js .github/scripts/app-automerge-check.test.js
       - name: Owner-only runner routing and source ancestry contracts
         run: node --test .github/actions/runner-route/route.test.cjs
       - name: Workflow coverage and failure propagation
@@ -304,7 +304,9 @@ jobs:
       - name: DownloadManager provider, queue and transfer contracts on a Windows JVM
         if: ${{ !cancelled() }}
         shell: bash
-        run: python tools/test_download_manager_contracts.py --java-home "$JAVA_HOME"
+        run: |
+          python -m unittest discover -s tools/tests -p test_jdbc_fixture_download.py
+          python tools/test_download_manager_contracts.py --java-home "$JAVA_HOME"
       - name: Build actual app identity restart implementation
         if: ${{ !cancelled() }}
         shell: cmd
@@ -1022,7 +1024,9 @@ jobs:
 
       - name: DownloadManager provider, queue and transfer over real HTTP sockets
         if: matrix.group == 'java'
-        run: python3 tools/test_download_manager_contracts.py --java-home "$JAVA_HOME"
+        run: |
+          python3 -m unittest discover -s tools/tests -p test_jdbc_fixture_download.py
+          python3 tools/test_download_manager_contracts.py --java-home "$JAVA_HOME"
 
       - name: Java DNS admission, cancellation, callback ownership and actual deadlines
         if: matrix.group == 'java'

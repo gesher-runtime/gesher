@@ -1,7 +1,7 @@
 {
   "baseline": "ff2c1870053c9d0332e6abef07a25fc282d384b5",
   "native_runtime_approval": false,
-  "patch_sha256": "2e9f43d9d8922dd3e95666092d69cd35027eec4c2712feb7e2f589b5d390d4d5",
+  "patch_sha256": "824f418e64638b9c6cc42e64d1665a55237c19dd586e94e91a93a9ea85a62ba0",
   "paths": [
     "compat/binder/binderd.cc",
     "compat/bionic/process_bionic.cc",
@@ -127,7 +127,7 @@
     "compat/posix/src/path.cc": "4ae1a791f312a16e3c6c79244b17246ac6ff4c09b35f85e9116f010ee4ee1dd9",
     "compat/posix/src/pipe_io.cc": "c437e5a8820ed9caf23e51c06f09a4756baffc07187c4dc174eb38b39ebc4079",
     "compat/posix/src/process.cc": "515248a43303c43f4579332ffb5f24953d4d867b5e5eea8ffe30d8d0ef4e5378",
-    "compat/posix/src/procfs.cc": "a60480f6194f2491e57e5ceb8599d83eec44c52028aaa0275fd653b2209f3661",
+    "compat/posix/src/procfs.cc": "578be861dc31d30cdc4d131a2704e4e019ff073939b43eea1272c8102069fc45",
     "compat/posix/src/record_lock_descriptors.cc": "c8bea59e8b345921e4f104ebac82c80c3c9633bb9838754baa42ecb8af5e9003",
     "compat/posix/src/record_lock_descriptors.h": "915a45d8232f44ae07d1cfefe9d0b9c128253e6b16cc6f9fef1e185fd52d6e63",
     "compat/posix/src/record_lock_duplicate.cc": "abef70af64712de119341bb4f2aa625a02833ab76f92391e444221081a306f8c",

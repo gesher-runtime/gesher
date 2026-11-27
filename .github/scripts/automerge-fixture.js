@@ -199,6 +199,7 @@ function world(over = {}) {
           return [...latest.values()];
         }, 'statuses')(args);
         response.data.sha = w.statusReadbackHead ?? args.ref;
+        if (w.combinedOmitsCreator) for (const status of response.data.statuses) delete status.creator;
         return response;
       },
       compareCommits: rec('compare', (args) => {
@@ -261,7 +262,9 @@ function world(over = {}) {
       state: r.state, submittedAt: r.submitted_at, lastEditedAt: null,
       commit: {oid: r.commit_id}, ...(bot ? w.approvalNodeOverride : w.reviewNodeOverride)} : null});
   };
-  const core = {info: () => {}, warning: (s) => w.warnings.push(s)};
+  w.outputs = {};
+  const core = {info: () => {}, warning: (s) => w.warnings.push(s),
+    setOutput: (key, value) => {w.outputs[key] = value;}};
   w.useApp = () => {w.prGithub = {rest: {...writes(APP_BOT, 'app-'),
     repos: {createCommitStatus: statusWrite(APP_BOT, 'app-status'),
       createDispatchEvent: rec('app-dispatch', args => {

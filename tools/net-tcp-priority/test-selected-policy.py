@@ -1264,7 +1264,7 @@ APPCONTAINER_INTEGRATION_BASE = 'ff2c1870053c9d0332e6abef07a25fc282d384b5'
 APPCONTAINER_INTEGRATION_PREVIOUS_SHA256 = '754be6b93d9a81d2d3e04541af036bedde7b45ef3b6e86d3eeb48514fceda2f9'
 APPCONTAINER_INTEGRATION_PATCH = 'tools/net-tcp-priority/qualified/appcontainer-integration-source.patch'
 APPCONTAINER_INTEGRATION_QUALIFICATION = 'tools/net-tcp-priority/qualified/appcontainer-integration-source.json'
-APPCONTAINER_INTEGRATION_QUALIFICATION_SHA256 = '9c25e2e013a292a0647fd26b3540752c807736f6fd35c35236fa60eb723dba5b'
+APPCONTAINER_INTEGRATION_QUALIFICATION_SHA256 = 'c8271021ae71fa12d46de940a387d08c8d3e6774197b4762dbc101c77d38ab64'
 # In addition to the donor identity surface, the merged startup/fork path
 # intersects the exact USB and child-wait source qualification.
 APPCONTAINER_INTEGRATION_PATHS = sorted(APPCONTAINER_IDENTITY_SOURCE_SHA256.keys() | {
@@ -1375,6 +1375,131 @@ def check_appcontainer_property_filter(source):
  assert loader.count(APPCONTAINER_PROPERTY_GLES_GUARD)==loader.count(publish)==1,APPCONTAINER_PROPERTY_SOURCE
  assert loader.index(APPCONTAINER_PROPERTY_GLES_GUARD)<loader.index(publish),APPCONTAINER_PROPERTY_SOURCE
 
+# Issue #649 changes only mapped-file directory spelling. Keep the complete
+# reviewed source endpoints immutable; do not repin or omit any OFD source bytes.
+# This normalization grants no runtime or supplier authorization.
+MAPPED_PATH_BASE='20a3836c68388cc617ea9dc12d2af2e0b8a9b198'
+MAPPED_PATH_SHA256='526af75490819e8e746d420832ddad15f3b85709de68ad2bd29d0f0d235ef877'
+MAPPED_PATH_SOURCE='compat/posix/src/procfs.cc'
+MAPPED_PATH_BEFORE=br'''      const std::wstring windows = dm.drive + path.substr(t);
+      // Gesher's ELF loader, by its Android name (system_linker.h).
+      if (system_linker::IsFile(windows)) return system_linker::kPath;
+      return LinuxPath(windows.c_str());
+'''
+MAPPED_PATH_AFTER=br'''      std::wstring windows = dm.drive + path.substr(t);
+      // Gesher's ELF loader, by its Android name (system_linker.h).
+      if (system_linker::IsFile(windows)) return system_linker::kPath;
+      // GetMappedFileNameW returns the long name even if mmap opened an 8.3
+      // alias. Native ART symbol resolvers commonly scan maps with sscanf's
+      // %s (ADR 0086), so a space in the Windows profile hides libart.so from
+      // them. Prefer the file's real, whitespace-free alias when one exists.
+      // Keep the long name if short names are unavailable: never invent a
+      // pathname that callers could not open. map_files uses this name too.
+      if (windows.find_first_of(L" \t\r\n\v\f") != std::wstring::npos) {
+        // Keep the basename: resolvers also match names longer than 8.3,
+        // such as libdexfile.so, which must not become LIBDEX~1.SO.
+        const size_t slash = windows.find_last_of(L'\\');
+        const std::wstring directory = windows.substr(0, slash);
+        const DWORD size = GetShortPathNameW(directory.c_str(), nullptr, 0);
+        if (size != 0) {
+          std::wstring short_name(size, L'\0');
+          const DWORD length = GetShortPathNameW(directory.c_str(), short_name.data(), size);
+          if (length != 0 && length < size) {
+            short_name.resize(length);
+            if (short_name.find_first_of(L" \t\r\n\v\f") == std::wstring::npos) {
+              windows = short_name + windows.substr(slash);
+            }
+          }
+        }
+      }
+      return LinuxPath(windows.c_str());
+'''
+def preceding_mapped_path_source(current,qualification):
+ assert hashlib.sha256(current).hexdigest()==MAPPED_PATH_SHA256,'mapped-path reviewed endpoint changed'
+ assert current.count(MAPPED_PATH_AFTER)==1 and MAPPED_PATH_BEFORE not in current,'mapped-path exact repair changed'
+ baseline=subprocess.check_output(['git','-C',str(ROOT),'show',MAPPED_PATH_BASE+':'+MAPPED_PATH_SOURCE])
+ assert hashlib.sha256(baseline).hexdigest()==qualification['source_sha256'][MAPPED_PATH_SOURCE],'mapped-path predecessor changed'
+ assert current!=baseline,'empty mapped-path transition'
+ assert current.replace(MAPPED_PATH_AFTER,MAPPED_PATH_BEFORE,1)==baseline,'mapped-path reverse endpoint changed'
+ return baseline
+
+def mapped_path_negative_controls(current=None):
+ from unittest.mock import patch
+ if current is None:current=(ROOT/MAPPED_PATH_SOURCE).read_bytes()
+ qualification=json.loads((ROOT/'tools/net-tcp-priority/qualified/ofd-stream-source.json').read_bytes())
+ baseline=preceding_mapped_path_source(current,qualification)
+ inside=b'windows = short_name + windows.substr(slash);'
+ outside=b'if (system_linker::IsFile(windows)) return system_linker::kPath;'
+ assert current.count(outside)==current.count(inside)==1
+ cases=[('missing repair',baseline,'mapped-path exact repair changed'),
+        ('duplicated repair',current+MAPPED_PATH_AFTER,'mapped-path exact repair changed'),
+        ('changed repair',current.replace(inside,b'windows = short_name;',1),'mapped-path exact repair changed'),
+        ('changed protected mapping',current.replace(b'if (n == 0) return "";',b'if (n == 1) return "";',1),'mapped-path reverse endpoint changed'),
+        ('extra source bytes',current+b'\n// undeclared source bytes\n','mapped-path reverse endpoint changed')]
+ for label,altered,expected in cases:
+  assert altered!=current,label
+  try:preceding_mapped_path_source(altered,qualification)
+  except AssertionError as error:assert str(error)=='mapped-path reviewed endpoint changed',(label,error)
+  else:raise AssertionError('mapped-path policy accepted '+label)
+  # Merely refreshing the outer current-source digest cannot authorize a
+  # changed repair fragment or any byte outside the reviewed transition.
+  with patch.dict(globals(),MAPPED_PATH_SHA256=hashlib.sha256(altered).hexdigest()):
+   try:preceding_mapped_path_source(altered,qualification)
+   except AssertionError as error:assert str(error)==expected,(label,error)
+   else:raise AssertionError('mapped-path policy accepted repinned '+label)
+ changed=dict(qualification,source_sha256=dict(qualification['source_sha256']))
+ changed['source_sha256'][MAPPED_PATH_SOURCE]='0'*64
+ try:preceding_mapped_path_source(current,changed)
+ except AssertionError as error:assert str(error)=='mapped-path predecessor changed',error
+ else:raise AssertionError('mapped-path policy accepted changed predecessor digest')
+ print('MAPPED_PATH_SOURCE_POLICY_PASS exact_repair=1 unchanged_ofd_digest=1 negative_controls='+str(2*len(cases)+1))
+
+# The raw AppContainer receipt includes main's repair as well as the reviewed
+# PR delta. Bind that live composition before its outer replay removes both.
+# This complete predecessor remains the already reviewed PR source, not a new
+# digest obtained by refreshing an outer receipt.
+MAPPED_PATH_INTEGRATION_PREVIOUS_SHA256='a60480f6194f2491e57e5ceb8599d83eec44c52028aaa0275fd653b2209f3661'
+
+def check_live_mapped_path_source(current):
+ assert current.count(MAPPED_PATH_AFTER)==1 and MAPPED_PATH_BEFORE not in current,'live mapped-path exact repair changed'
+ previous=current.replace(MAPPED_PATH_AFTER,MAPPED_PATH_BEFORE,1)
+ assert hashlib.sha256(previous).hexdigest()==MAPPED_PATH_INTEGRATION_PREVIOUS_SHA256,'live mapped-path reviewed PR predecessor changed'
+
+def composed_mapped_path_source(baseline,qualification):
+ # The unchanged USB replay has restored the original main predecessor. Apply
+ # only the exact incoming main delta there, then use main's complete endpoint
+ # and reverse-transition checks. No synthetic Git revision is substituted.
+ assert hashlib.sha256(baseline).hexdigest()==qualification['source_sha256'][MAPPED_PATH_SOURCE],'composed mapped-path predecessor changed'
+ assert baseline.count(MAPPED_PATH_BEFORE)==1 and MAPPED_PATH_AFTER not in baseline,'composed mapped-path repair boundary changed'
+ current=baseline.replace(MAPPED_PATH_BEFORE,MAPPED_PATH_AFTER,1)
+ assert preceding_mapped_path_source(current,qualification)==baseline,'composed mapped-path reverse endpoint changed'
+ return current
+
+def live_mapped_path_negative_controls():
+ from unittest.mock import patch
+ current=live_source(MAPPED_PATH_SOURCE)
+ check_live_mapped_path_source(current)
+ inside=b'windows = short_name + windows.substr(slash);'
+ cases=[('missing repair',current.replace(MAPPED_PATH_AFTER,MAPPED_PATH_BEFORE,1),'live mapped-path exact repair changed'),
+        ('duplicated repair',current+MAPPED_PATH_AFTER,'live mapped-path exact repair changed'),
+        ('changed repair',current.replace(inside,b'windows = short_name;',1),'live mapped-path exact repair changed'),
+        ('outside repair',current+b'\n// undeclared live mapping bytes\n','live mapped-path reviewed PR predecessor changed')]
+ qualification=json.loads(live_source(APPCONTAINER_INTEGRATION_QUALIFICATION))
+ for label,altered,expected in cases:
+  assert altered!=current,label
+  # Even a refreshed outer current-source receipt cannot authorize a missing,
+  # duplicated, changed main repair, or an unrelated byte in the live source.
+  repinned={**qualification,'source_sha256':{**qualification['source_sha256'],MAPPED_PATH_SOURCE:hashlib.sha256(altered).hexdigest()}}
+  raw=(json.dumps(repinned,indent=2,sort_keys=True)+'\n').encode()
+  overrides={ROOT/MAPPED_PATH_SOURCE:altered,ROOT/APPCONTAINER_INTEGRATION_QUALIFICATION:raw}
+  original=Path.read_bytes
+  def read(path):return overrides[path] if path in overrides else original(path)
+  with patch.object(Path,'read_bytes',read),patch.dict(globals(),APPCONTAINER_INTEGRATION_QUALIFICATION_SHA256=hashlib.sha256(raw).hexdigest()):
+   try:check_live(run_mapped_controls=False)
+   except AssertionError as error:assert str(error)==expected,(label,error)
+   else:raise AssertionError('live mapped-path policy accepted repinned '+label)
+ print('MAPPED_PATH_LIVE_COMPOSITION_NEGATIVE_CONTROLS_PASS cases='+str(len(cases))+' native_processes_started=0')
+
 def preceding_ofd_sources(read_source=live_source):
  stdio_main=preceding_stdio_feature_sources(read_source)
  historical=preceding_stdio_line_sources({path:subprocess.check_output(['git','-C',str(ROOT),'show',COMPOSED_STDIO_PRIOR_FEATURE+':'+path]) for path in COMPOSED_STDIO_PATHS})
@@ -1419,6 +1544,9 @@ def preceding_ofd_sources(read_source=live_source):
    actual=preceding_logging_property_source(actual,read_source(header))
   if path=='compat/bionic/shim.cc':actual=preceding_memmem_source(actual)
   if path==MEMRCHR_SOURCE:actual=preceding_memrchr_source(qualification,read_source)
+  if path==MAPPED_PATH_SOURCE:
+   current_mapped=composed_mapped_path_source(actual,qualification)
+   actual=preceding_mapped_path_source(current_mapped,qualification)
   assert hashlib.sha256(actual).hexdigest()==digest,path
  with tempfile.TemporaryDirectory(prefix='gesher-ofd-qualification-') as temporary:
   work=Path(temporary)
@@ -2064,13 +2192,20 @@ def native2_projection():
  previous=native2.project(current,baseline,manifest,delta)
  return previous,native2,current,baseline,manifest,delta
 
-def check_live():
+def check_live(run_mapped_controls=True):
+ check_live_mapped_path_source(live_source(MAPPED_PATH_SOURCE))
  check_appcontainer_donor_receipts()
  previous=preceding_appcontainer_integration_sources(APPCONTAINER_INTEGRATION_QUALIFICATION_SHA256)
  native2_previous,*_=native2_projection()
  previous.update(native2_previous)
  check_appcontainer_property_filter(live_source(APPCONTAINER_PROPERTY_SOURCE))
  check(lambda path:previous[path] if path in previous else live_source(path))
+ if run_mapped_controls:
+  folder=ROOT/'tools/net-tcp-priority/qualified'
+  usb=preceding_usb_block_sources(folder,lambda path:previous[path] if path in previous else live_source(path))
+  qualification=json.loads((folder/'ofd-stream-source.json').read_bytes())
+  mapped_path_negative_controls(composed_mapped_path_source(usb[MAPPED_PATH_SOURCE],qualification))
+  live_mapped_path_negative_controls()
  return previous
 
 def selftest(previous):

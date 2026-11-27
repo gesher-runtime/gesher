@@ -480,6 +480,52 @@ function bothStates(w, state) {
   assert.equal(lastStatus(w, appStatus.APP_STATUS)?.state, state);
 }
 
+test('real combined-status API shape authenticates the immutable App receipt without creator', async () => {
+  const w = appStatusWorld({combinedOmitsCreator: true});
+  await w.ciDone();
+  bothStates(w, 'success');
+  assert.equal(w.did('nativeMerge').length, 1);
+});
+
+test('omitted combined creator cannot hide a replacement status ID', async () => {
+  const w = appStatusWorld({combinedOmitsCreator: true});
+  let replaced = false;
+  w.hooks.statuses = () => {
+    const latest = lastStatus(w, appStatus.APP_STATUS);
+    if (!replaced && latest?.state === 'success') {
+      replaced = true;
+      w.statuses.unshift({...latest, id: w.nextStatusId++});
+    }
+  };
+  await assert.rejects(w.ciDone(), /missing, replaced or from a different source/);
+  assert.equal(w.did('nativeMerge').length, 0);
+});
+
+test('App automerge output records the actual protected merge without another API call', async () => {
+  const w = appStatusWorld();
+  await w.ciDone();
+  const result = JSON.parse(w.outputs['automerge-results']).at(-1);
+  assert.equal(result.head.sha, HEAD);
+  assert.equal(result.outcome, 'success');
+  assert.equal(w.did('nativeMerge').length, 1);
+  assert.equal(w.calls.at(-1)[0], 'nativeMerge');
+});
+
+test('App automerge waiting is neutral and never claims a merge happened', async () => {
+  const w = appStatusWorld({runs: [], checks: []});
+  await w.fire('workflow_dispatch', {inputs: {pull_request_number: '7'}});
+  assert.equal(JSON.parse(w.outputs['automerge-results']).at(-1).outcome, 'neutral');
+  assert.equal(w.did('nativeMerge').length, 0);
+});
+
+test('controller errors produce a failed App automerge check', async () => {
+  const w = appStatusWorld();
+  w.github.rest.actions.getWorkflow = async () => {throw new Error('CI API unavailable');};
+  await assert.rejects(w.fire('workflow_dispatch', {inputs: {pull_request_number: '7'}}));
+  assert.equal(JSON.parse(w.outputs['automerge-results']).at(-1).outcome, 'failure');
+  assert.equal(w.did('nativeMerge').length, 0);
+});
+
 for (const flag of [undefined, false]) {
   test('App status is opt-in; disabled value ' + flag + ' retains the Actions gate only', async () => {
     const w = appStatusWorld({appQaStatus: flag, appId: undefined, appInstallationId: undefined});
