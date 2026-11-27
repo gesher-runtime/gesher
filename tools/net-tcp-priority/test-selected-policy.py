@@ -918,6 +918,85 @@ def preceding_memrchr_source(qualification):
   assert (work/MEMRCHR_SOURCE).read_bytes()==current,'memrchr forward endpoint'
  return baseline
 
+# Issue #649 changes only mapped-file directory spelling. Keep the complete
+# reviewed source endpoints immutable; do not repin or omit any OFD source bytes.
+# This normalization grants no runtime or supplier authorization.
+MAPPED_PATH_BASE='20a3836c68388cc617ea9dc12d2af2e0b8a9b198'
+MAPPED_PATH_SHA256='526af75490819e8e746d420832ddad15f3b85709de68ad2bd29d0f0d235ef877'
+MAPPED_PATH_SOURCE='compat/posix/src/procfs.cc'
+MAPPED_PATH_BEFORE=br'''      const std::wstring windows = dm.drive + path.substr(t);
+      // Gesher's ELF loader, by its Android name (system_linker.h).
+      if (system_linker::IsFile(windows)) return system_linker::kPath;
+      return LinuxPath(windows.c_str());
+'''
+MAPPED_PATH_AFTER=br'''      std::wstring windows = dm.drive + path.substr(t);
+      // Gesher's ELF loader, by its Android name (system_linker.h).
+      if (system_linker::IsFile(windows)) return system_linker::kPath;
+      // GetMappedFileNameW returns the long name even if mmap opened an 8.3
+      // alias. Native ART symbol resolvers commonly scan maps with sscanf's
+      // %s (ADR 0086), so a space in the Windows profile hides libart.so from
+      // them. Prefer the file's real, whitespace-free alias when one exists.
+      // Keep the long name if short names are unavailable: never invent a
+      // pathname that callers could not open. map_files uses this name too.
+      if (windows.find_first_of(L" \t\r\n\v\f") != std::wstring::npos) {
+        // Keep the basename: resolvers also match names longer than 8.3,
+        // such as libdexfile.so, which must not become LIBDEX~1.SO.
+        const size_t slash = windows.find_last_of(L'\\');
+        const std::wstring directory = windows.substr(0, slash);
+        const DWORD size = GetShortPathNameW(directory.c_str(), nullptr, 0);
+        if (size != 0) {
+          std::wstring short_name(size, L'\0');
+          const DWORD length = GetShortPathNameW(directory.c_str(), short_name.data(), size);
+          if (length != 0 && length < size) {
+            short_name.resize(length);
+            if (short_name.find_first_of(L" \t\r\n\v\f") == std::wstring::npos) {
+              windows = short_name + windows.substr(slash);
+            }
+          }
+        }
+      }
+      return LinuxPath(windows.c_str());
+'''
+def preceding_mapped_path_source(current,qualification):
+ assert hashlib.sha256(current).hexdigest()==MAPPED_PATH_SHA256,'mapped-path reviewed endpoint changed'
+ assert current.count(MAPPED_PATH_AFTER)==1 and MAPPED_PATH_BEFORE not in current,'mapped-path exact repair changed'
+ baseline=subprocess.check_output(['git','-C',str(ROOT),'show',MAPPED_PATH_BASE+':'+MAPPED_PATH_SOURCE])
+ assert hashlib.sha256(baseline).hexdigest()==qualification['source_sha256'][MAPPED_PATH_SOURCE],'mapped-path predecessor changed'
+ assert current!=baseline,'empty mapped-path transition'
+ assert current.replace(MAPPED_PATH_AFTER,MAPPED_PATH_BEFORE,1)==baseline,'mapped-path reverse endpoint changed'
+ return baseline
+
+def mapped_path_negative_controls():
+ from unittest.mock import patch
+ current=(ROOT/MAPPED_PATH_SOURCE).read_bytes()
+ qualification=json.loads((ROOT/'tools/net-tcp-priority/qualified/ofd-stream-source.json').read_bytes())
+ baseline=preceding_mapped_path_source(current,qualification)
+ inside=b'windows = short_name + windows.substr(slash);'
+ outside=b'if (system_linker::IsFile(windows)) return system_linker::kPath;'
+ assert current.count(outside)==current.count(inside)==1
+ cases=[('missing repair',baseline,'mapped-path exact repair changed'),
+        ('duplicated repair',current+MAPPED_PATH_AFTER,'mapped-path exact repair changed'),
+        ('changed repair',current.replace(inside,b'windows = short_name;',1),'mapped-path exact repair changed'),
+        ('changed protected mapping',current.replace(b'if (n == 0) return "";',b'if (n == 1) return "";',1),'mapped-path reverse endpoint changed'),
+        ('extra source bytes',current+b'\n// undeclared source bytes\n','mapped-path reverse endpoint changed')]
+ for label,altered,expected in cases:
+  assert altered!=current,label
+  try:preceding_mapped_path_source(altered,qualification)
+  except AssertionError as error:assert str(error)=='mapped-path reviewed endpoint changed',(label,error)
+  else:raise AssertionError('mapped-path policy accepted '+label)
+  # Merely refreshing the outer current-source digest cannot authorize a
+  # changed repair fragment or any byte outside the reviewed transition.
+  with patch.dict(globals(),MAPPED_PATH_SHA256=hashlib.sha256(altered).hexdigest()):
+   try:preceding_mapped_path_source(altered,qualification)
+   except AssertionError as error:assert str(error)==expected,(label,error)
+   else:raise AssertionError('mapped-path policy accepted repinned '+label)
+ changed=dict(qualification,source_sha256=dict(qualification['source_sha256']))
+ changed['source_sha256'][MAPPED_PATH_SOURCE]='0'*64
+ try:preceding_mapped_path_source(current,changed)
+ except AssertionError as error:assert str(error)=='mapped-path predecessor changed',error
+ else:raise AssertionError('mapped-path policy accepted changed predecessor digest')
+ print('MAPPED_PATH_SOURCE_POLICY_PASS exact_repair=1 unchanged_ofd_digest=1 negative_controls='+str(2*len(cases)+1))
+
 def preceding_ofd_sources():
  netlink=preceding_netlink_sources()
  stdio_main=preceding_stdio_feature_sources()
@@ -958,6 +1037,7 @@ def preceding_ofd_sources():
   if path=='compat/posix/src/system_properties.cc':actual=preceding_logging_property_source()
   if path=='compat/bionic/shim.cc':actual=preceding_memmem_source(actual)
   if path==MEMRCHR_SOURCE:actual=preceding_memrchr_source(qualification)
+  if path==MAPPED_PATH_SOURCE:actual=preceding_mapped_path_source(actual,qualification)
   assert hashlib.sha256(actual).hexdigest()==digest,path
  with tempfile.TemporaryDirectory(prefix='gesher-ofd-qualification-') as temporary:
   work=Path(temporary)
@@ -1514,6 +1594,7 @@ def transition_negative_controls():
 if __name__=='__main__':
  import sys
  check()
+ mapped_path_negative_controls()
  if '--selftest' in sys.argv:
   storage_policy_negative_controls()
   transition_negative_controls()
