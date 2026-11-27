@@ -227,3 +227,30 @@ and exact cleanup. Sources, original header, binaries and logs are in
 `out/qa314/inotify-attributes/final-inputs.json`. The full Linux model and
 sanitizer rerun remain pending. Simultaneous DOS-name and coarse-identity
 failure, physical ReFS and a real reparse-file probe are outside this evidence.
+
+## RTL composed and visible evidence
+
+An actual active-desktop AppContainer window displayed all four expected color
+regions correctly, at 8,000 of 8,000 pixels each. The same retained window's
+composed `PrintWindow` readback was reflected. The shared graphics fixture now
+maps those composed rows to physical screen coordinates only when the actual
+production `GesherRtlFrame` window property equals one. It retains
+`PrintWindow(PW_CLIENTONLY | PW_RENDERFULLCONTENT)`, with no CPU-buffer fallback
+or changed pixel expectations. The optional hosted visible diagnostic checks
+the live process creation time, AppContainer token, foreground window, input
+desktop and bounded unobscured region; it records counts without saving screen
+pixels.
+
+The exact original three RTL cases pass with the corrected composed helper,
+including all six Hebrew cursor movements. A real APK with incorrectly mirrored
+forced-LTR content fails all three cases on the two incorrect row halves. The
+final receipt, `out/qa314/visible-rtl/final-composed-inputs.json`, binds 432
+independently verified artifacts and the earlier actual-display receipts.
+
+The final patched active-display repetition was unavailable after the session
+became inactive. The earlier visible run used an older portable runtime whose
+four relevant production and fixture sources match the reviewed sources; it
+does not qualify the entire current runtime. The new visible diagnostic and
+composed correction do not replace the original RTL assertions or establish a
+green hosted matrix. Separate private-runtime, interactive and default-enable
+qualification remains open.

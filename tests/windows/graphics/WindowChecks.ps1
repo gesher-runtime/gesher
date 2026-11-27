@@ -29,6 +29,8 @@ public static class GesherWin32 {
   [DllImport("ole32.dll")] static extern int PropVariantClear(ref PropVariant value);
   [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr hwnd, out RECT r);
   [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr hwnd, IntPtr hdc, uint flags);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
+  static extern IntPtr GetPropW(IntPtr hwnd, string name);
   [DllImport("user32.dll")] public static extern bool PostMessageW(IntPtr hwnd, uint msg, IntPtr w, IntPtr l);
   [DllImport("user32.dll")] public static extern IntPtr SendMessageW(IntPtr hwnd, uint msg, IntPtr w, IntPtr l);
   [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr hwnd);
@@ -174,6 +176,12 @@ public static class GesherWin32 {
         pixels[0] = w; pixels[1] = h;
         Marshal.Copy(bits, pixels, 2, w * h);
         for (int i = 2; i < pixels.Length; i++) pixels[i] &= 0xffffff;
+        // The composed readback for Gesher's RTL frame arrives reflected even
+        // though its visible client and input coordinates are physical LTR.
+        // Preserve the composed image and return its rows in screen order.
+        if (GetPropW(hwnd, "GesherRtlFrame") == new IntPtr(1)) {
+          for (int y = 0; y < h; ++y) Array.Reverse(pixels, 2 + y * w, w);
+        }
       }
       SelectObject(dc, old);
       DeleteObject(bmp);

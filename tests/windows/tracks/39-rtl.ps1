@@ -451,3 +451,96 @@ if (-not (Get-Command WindowAppCheck -ErrorAction SilentlyContinue)) {
   }
 }
 if ($null -ne $savedLocales) { $env:GESHER_LOCALES = $savedLocales }
+
+# Run a separate visible fixture on a disposable GitHub-hosted desktop. The
+# composed PrintWindow cases above are still the acceptance checks. Retain only
+# region counts from the screen; the fixture pixel array never leaves memory.
+function Write-RtlVisibleEvidence {
+  $startVm = {
+    param([string[]] $Arguments, [string] $Log)
+    $quoted = (@($dvmWindows) + 'com.gesher.app.Launcher' + $Arguments | ForEach-Object {
+      if ($_ -match '[\s"]') { '"' + $_ + '"' } else { $_ }
+    }) -join ' '
+    $psi = [Diagnostics.ProcessStartInfo]::new('cmd.exe', "/d /s /c `"`"$Dir/dalvikvm.exe`" $quoted > `"$Log`" 2>&1`"")
+    $psi.WorkingDirectory = $Dir
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.Environment['ANDROID_DATA'] = NoDrive "$probeRoot/data"
+    $psi.Environment['GESHER_LOGS'] = NoDrive "$probeRoot/logs"
+    $psi.Environment['GESHER_SANDBOX'] = 'appcontainer-trusted'
+    $psi.Environment['GESHER_LOCALES'] = 'ar-EG'
+    $psi.Environment['GESHER_SHORTCUTS'] = '0'
+    $psi.Environment['GESHER_WINDOW_DEBUG'] = '1'
+    return [Diagnostics.Process]::Start($psi)
+  }
+  $process = $null
+  $owner = $null
+  $stop = $null
+  try {
+    Add-Type -Path "$PSScriptRoot/../graphics/RtlVisibleEvidence.cs" -ErrorAction Stop
+    [RtlVisibleEvidence]::VerifyInputDesktop()
+    $probeRoot = Join-Path $root ('rtl-visible-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory "$probeRoot/data" -ErrorAction Stop | Out-Null
+    $log = Join-Path $probeRoot 'launch.log'
+    $notBefore = [DateTime]::UtcNow.ToFileTimeUtc()
+    $process = & $startVm @('launch', (NoDrive "$Dir/rtlapp.apk"), '--window', '--wait') $log
+    $deadline = [Diagnostics.Stopwatch]::StartNew()
+    do {
+      $appText = "$(Get-Content -LiteralPath $log -Raw -ErrorAction SilentlyContinue)"
+      $window = [regex]::Match($appText, 'window "Gesher RTL test" 400x800: first frame drawn \(\d+ presented\), \w+, hwnd 0x([0-9a-f]+)')
+      $reported = [regex]::Matches($appText, '(?m)^gesher-app: app process for com\.gesher\.rtlapp: pid (\d+), start seq \d+\s*$')
+      if ($reported.Count -gt 1) { throw 'fixture reported multiple app launches' }
+      if ($window.Success -and $reported.Count -eq 1) { break }
+      Start-Sleep -Milliseconds 250
+    } while ($deadline.ElapsedMilliseconds -lt 40000 -and !$process.HasExited)
+    if (!$window.Success -or $reported.Count -ne 1) { throw 'no visible Arabic fixture launch with a unique PID' }
+    $hwnd = [IntPtr][Convert]::ToInt64($window.Groups[1].Value, 16)
+    $processId = [uint32]$reported[0].Groups[1].Value
+    $owner = [RtlVisibleEvidence]::new($hwnd, $processId, $notBefore)
+    $deadline.Restart()
+    do {
+      $foreground = $owner.TryForeground()
+      if (!$foreground) { Start-Sleep -Milliseconds 250 }
+    } while (!$foreground -and $deadline.ElapsedMilliseconds -lt 4000)
+    if (!$foreground) { throw 'Windows did not foreground the owned fixture' }
+    Start-Sleep -Milliseconds 750
+    $appText = Get-Content -LiteralPath $log -Raw -ErrorAction Stop
+    $views = RtlViews $appText
+    if ($appText -notmatch 'RtlActivity locales ar-EG,[^\r\n]*layout direction rtl, root rtl, resources rtl-ar, supportsRtl true' -or
+        ($views['mirror'] -join ',') -ne '0,0,400,40' -or ($views['forced'] -join ',') -ne '0,40,400,40') {
+      throw 'fixture configuration or diagnostic rows differ from the known Arabic RTL layout'
+    }
+    $screen = $owner.Capture(0, 80)
+    Write-Host "INFO  RTL actual screen client: $($owner.Describe())"
+    $problems = @(Regions $screen @(@('screen mirror row left', 0, 0, 200, 40, 0x0000ff),
+      @('screen mirror row right', 200, 0, 400, 40, 0xff0000), @('screen forced LTR row left', 0, 40, 200, 80, 0xff0000),
+      @('screen forced LTR row right', 200, 40, 400, 80, 0x0000ff)))
+    if ($problems.Count) { Write-Host "INFO  RTL actual screen DIAGNOSTIC MISMATCH ($($problems -join '; '))" }
+    else { Write-Host 'INFO  RTL actual screen DIAGNOSTIC MATCH for the mirrored and forced-LTR rows' }
+  } catch {
+    Write-Host "INFO  RTL actual screen DIAGNOSTIC UNAVAILABLE ($($_.Exception.Message))"
+  } finally {
+    if ($null -ne $owner) {
+      try { $owner.CloseFixture() }
+      catch { Write-Host "INFO  RTL visible fixture close: $($_.Exception.Message)" }
+      finally { $owner.Dispose() }
+    }
+    if ($null -ne $process) {
+      try {
+        [void]$process.WaitForExit(4000)
+        $stop = & $startVm @('shutdown') (Join-Path $probeRoot 'shutdown.log')
+        if (!$stop.WaitForExit(12000)) { $stop.Kill($true); throw 'isolated device shutdown timed out' }
+        if ($stop.ExitCode -ne 0) { throw "isolated device shutdown returned $($stop.ExitCode)" }
+      } catch { Write-Host "INFO  RTL visible fixture cleanup: $($_.Exception.Message)" }
+      finally {
+        if ($null -ne $stop) { $stop.Dispose() }
+        try { if (!$process.WaitForExit(3000)) { $process.Kill($true) } }
+        catch { Write-Host "INFO  RTL visible fixture termination: $($_.Exception.Message)" }
+        finally { $process.Dispose() }
+      }
+    }
+  }
+}
+if ($env:GITHUB_ACTIONS -eq 'true' -and $env:RUNNER_ENVIRONMENT -eq 'github-hosted') {
+  Write-RtlVisibleEvidence
+}
