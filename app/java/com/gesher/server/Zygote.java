@@ -37,7 +37,7 @@ public final class Zygote {
     /** The host pins the data directory and archive ACL. No key bytes cross JNI. */
     static native int nativeArchiveLegacyKeys(String dataDirectory, String archiveRoot, String binding);
     static native int nativeSpawnProtected(String packageName, String processName, String apkPath,
-            String apkSha256, String signerSetSha256, int uid, int targetSdk, long startSeq,
+            String apkSha256, String signerSetSha256, String installationOwner, int uid, int targetSdk, long startSeq,
             String[] environment);
     static native int nativeSpawnInAppContainer(String commandLine, String[] setEnv,
             String[] unsetEnv, String logPath, String container, String displayName,

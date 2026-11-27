@@ -1,6 +1,7 @@
 // Copyright (C) 2026 The Gesher Authors
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
+#include "protected_runtime_wire.h"
 
 #include <windows.h>
 #include <bcrypt.h>
@@ -88,19 +89,26 @@ inline bool HashField(BCRYPT_HASH_HANDLE hash, std::wstring_view field) {
 
 }  // namespace protected_profile_name_detail
 
-// Reuse one Windows profile per desktop account and verified package/signer
-// identity. A launch/session ID or recyclable Android UID is not an input.
+inline bool ValidInstallationOwner(std::wstring_view owner) {
+  return runtime_wire::ValidInstallationOwner(owner);
+}
+
+// Applications retain their profile across an update of the same installation,
+// never across uninstall/reinstall. The owner is trusted installer metadata;
+// neither a launch/session ID nor a recyclable Android UID is an identity.
 // Both empty package and signer select the system-server profile; applications
 // require a valid package and the verified 64-character lowercase signer hash.
 // Success writes 61 ASCII characters; failure clears a non-null result.
-inline uint32_t ProtectedProfileName(std::wstring_view desktop_sid, std::wstring_view package,
-                                     std::wstring_view signer, std::wstring* result) {
+inline uint32_t ProtectedProfileNameHash(std::wstring_view desktop_sid, std::wstring_view package,
+    std::wstring_view signer, std::wstring_view installation, bool legacy, std::wstring* result) {
   if (!result) return ERROR_INVALID_PARAMETER;
   const auto fail = [result](uint32_t error) { result->clear(); return error; };
   const bool server = package.empty() && signer.empty();
   if (!protected_profile_name_detail::DesktopSid(desktop_sid) ||
+      (server && !installation.empty()) ||
       (!server && (!protected_profile_name_detail::Package(package) || signer.size() != 64 ||
-                   signer.find_first_not_of(L"0123456789abcdef") != std::wstring_view::npos))) {
+                   signer.find_first_not_of(L"0123456789abcdef") != std::wstring_view::npos ||
+                   (!legacy && !ValidInstallationOwner(installation))))) {
     return fail(ERROR_INVALID_PARAMETER);
   }
   BCRYPT_ALG_HANDLE algorithm = nullptr;
@@ -117,9 +125,12 @@ inline uint32_t ProtectedProfileName(std::wstring_view desktop_sid, std::wstring
     BCRYPT_HASH_HANDLE value;
     ~HashOwner() { BCryptDestroyHash(value); }
   } hash_owner{hash};
-  for (const auto field : {std::wstring_view(L"Gesher.ProtectedProfile.v1"), desktop_sid, package, signer}) {
+  const std::wstring_view domain = server || legacy ? L"Gesher.ProtectedProfile.v1" : L"Gesher.ProtectedProfile.v2";
+  for (const auto field : {domain, desktop_sid, package, signer}) {
     if (!protected_profile_name_detail::HashField(hash, field)) return fail(ERROR_GEN_FAILURE);
   }
+  if (!server && !legacy && !protected_profile_name_detail::HashField(hash, installation))
+    return fail(ERROR_GEN_FAILURE);
   std::array<UCHAR, 32> digest{};
   if (BCryptFinishHash(hash, digest.data(), static_cast<ULONG>(digest.size()), 0) < 0) {
     return fail(ERROR_GEN_FAILURE);
@@ -144,6 +155,27 @@ inline uint32_t ProtectedProfileName(std::wstring_view desktop_sid, std::wstring
     return fail(ERROR_NOT_ENOUGH_MEMORY);
   }
   return ERROR_SUCCESS;
+}
+
+inline uint32_t ProtectedProfileName(std::wstring_view desktop, std::wstring_view package,
+    std::wstring_view signer, std::wstring_view installation, std::wstring* result) {
+  return ProtectedProfileNameHash(desktop, package, signer, installation, false, result);
+}
+
+// The old signature remains valid only for the stable system-server identity.
+inline uint32_t ProtectedProfileName(std::wstring_view desktop, std::wstring_view package,
+    std::wstring_view signer, std::wstring* result) {
+  return ProtectedProfileName(desktop, package, signer, {}, result);
+}
+
+// Migration only: identify obsolete ACEs. Never use this identity to launch an app.
+inline uint32_t LegacyProtectedApplicationProfileName(std::wstring_view desktop,
+    std::wstring_view package, std::wstring_view signer, std::wstring* result) {
+  if (package.empty()) {
+    if (result) result->clear();
+    return ERROR_INVALID_PARAMETER;
+  }
+  return ProtectedProfileNameHash(desktop, package, signer, {}, true, result);
 }
 
 }  // namespace gesher::usb_storage

@@ -48,19 +48,20 @@ int main() {
   constexpr std::wstring_view sid = L"S-1-5-21-111-222-333-1001";
   constexpr std::wstring_view package = L"com.cardwake.otgroot";
   constexpr std::wstring_view signer = L"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+  constexpr std::wstring_view installation = L"11111111-2222-3333-4444-555555555555";
   // Independent reference generated with Python's hashlib and base64:
-  // fields = ('Gesher.ProtectedProfile.v1', sid, package, signer)
+  // application fields = ('Gesher.ProtectedProfile.v2', sid, package, signer, installation)
   // data = b''.join(struct.pack('<I',len(s.encode('utf-16le'))//2)
   //                 + s.encode('utf-16le') for s in fields)
   // base64.b32encode(hashlib.sha256(data).digest()).rstrip(b'=').lower()
   constexpr std::wstring_view expected_server =
       L"Gesher.S.l7cazcavodqulw2n3k4dx456ycftgxom5ab4fjmjcwqzenthl6kq";
   constexpr std::wstring_view expected_app =
-      L"Gesher.A.fi4pgktflbjprowt5v72bxawexbwafzkfol5out2va6ow2ndf2ma";
+      L"Gesher.A.hymmqhami2rdpbwzazwnieek55lfskq267eeunausppuxc3pilga";
   std::wstring server, app;
   Check(ProtectedProfileName(sid, {}, {}, &server) == ERROR_SUCCESS && server == expected_server,
         "server matches independent framed UTF-16 SHA256/base32 reference");
-  Check(ProtectedProfileName(sid, package, signer, &app) == ERROR_SUCCESS && app == expected_app,
+  Check(ProtectedProfileName(sid, package, signer, installation, &app) == ERROR_SUCCESS && app == expected_app,
         "application matches independent framed UTF-16 SHA256/base32 reference");
   Check(app.size() == 61 && server.size() == 61 && app != server &&
             app.find_first_not_of(L"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.-") == std::wstring::npos,
@@ -68,17 +69,17 @@ int main() {
   bool stable = true;
   for (unsigned i = 0; i < 128; ++i) {
     std::wstring repeated;
-    stable = stable && ProtectedProfileName(sid, package, signer, &repeated) == ERROR_SUCCESS && repeated == app;
+    stable = stable && ProtectedProfileName(sid, package, signer, installation, &repeated) == ERROR_SUCCESS && repeated == app;
   }
   Check(stable, "same desktop package and verified signer reuse the same identity across calls");
   std::wstring changed;
-  Check(ProtectedProfileName(L"S-1-5-21-111-222-333-1002", package, signer, &changed) == ERROR_SUCCESS && changed != app,
+  Check(ProtectedProfileName(L"S-1-5-21-111-222-333-1002", package, signer, installation, &changed) == ERROR_SUCCESS && changed != app,
         "different desktop accounts cannot share an application profile");
-  Check(ProtectedProfileName(sid, L"com.example.other", signer, &changed) == ERROR_SUCCESS && changed != app,
+  Check(ProtectedProfileName(sid, L"com.example.other", signer, installation, &changed) == ERROR_SUCCESS && changed != app,
         "different packages cannot share an application profile");
   std::wstring other_signer(signer);
   other_signer[0] = L'f';
-  Check(ProtectedProfileName(sid, package, other_signer, &changed) == ERROR_SUCCESS && changed != app,
+  Check(ProtectedProfileName(sid, package, other_signer, installation, &changed) == ERROR_SUCCESS && changed != app,
         "different verified signers cannot inherit the old application's profile");
   Check(ProtectedProfileName(L"S-1-5-21-111-222-333-1002", {}, {}, &changed) == ERROR_SUCCESS && changed != server,
         "server profile is also isolated by desktop account");
@@ -86,7 +87,7 @@ int main() {
   const auto invalid = [&](std::wstring_view desktop, std::wstring_view name,
                            std::wstring_view certificate, const char* description) {
     std::wstring output = L"stale-profile";
-    Check(ProtectedProfileName(desktop, name, certificate, &output) == ERROR_INVALID_PARAMETER && output.empty(),
+    Check(ProtectedProfileName(desktop, name, certificate, installation, &output) == ERROR_INVALID_PARAMETER && output.empty(),
           description);
   };
   invalid({}, package, signer, "empty desktop identity is rejected");
@@ -110,8 +111,19 @@ int main() {
   invalid(sid, package, other_signer, "signer must be canonical lowercase hex");
   other_signer.assign(signer); other_signer[1] = L'\0';
   invalid(sid, package, other_signer, "embedded signer NUL is rejected");
-  Check(ProtectedProfileName(sid, package, signer, nullptr) == ERROR_INVALID_PARAMETER,
+  Check(ProtectedProfileName(sid, package, signer, installation, nullptr) == ERROR_INVALID_PARAMETER,
         "null output is rejected");
+
+  Check(ProtectedProfileName(sid, package, signer, L"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", &changed) == ERROR_SUCCESS && changed != app,
+        "fresh installation owner cannot inherit the prior profile");
+  for (const std::wstring_view owner : {std::wstring_view{}, std::wstring_view(L"00000000-0000-0000-0000-000000000000"),
+       std::wstring_view(L"11111111-2222-3333-4444-55555555555A"), std::wstring_view(L"11111111222233334444555555555555")}) {
+    changed = L"stale";
+    Check(ProtectedProfileName(sid, package, signer, owner, &changed) == ERROR_INVALID_PARAMETER && changed.empty(),
+        "missing, zero or noncanonical installation owner fails closed");
+  }
+  Check(ProtectedProfileName(sid, package, signer, &changed) == ERROR_INVALID_PARAMETER && changed.empty(),
+        "old application signature cannot silently reuse legacy identity");
 
   // Independent hashlib vectors for two field sequences with identical raw
   // concatenation. Length framing must prevent a boundary from being moved.

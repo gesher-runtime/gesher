@@ -12,8 +12,22 @@
 
 namespace gesher::usb_storage::runtime_wire {
 inline constexpr uint32_t kMagic = 0x47525054;
-inline constexpr uint32_t kVersion = 3;
+inline constexpr uint32_t kVersion = 4;
 inline constexpr uint32_t kMaximumPayload = 64 * 1024;
+template <class Character>
+inline bool ValidInstallationOwner(std::basic_string_view<Character> owner) {
+  if (owner.size() != 36) return false;
+  bool nonzero = false;
+  for (size_t i = 0; i < owner.size(); ++i) {
+    if (i == 8 || i == 13 || i == 18 || i == 23) {
+      if (owner[i] != '-') return false;
+    } else {
+      if ((owner[i] < '0' || owner[i] > '9') && (owner[i] < 'a' || owner[i] > 'f')) return false;
+      nonzero |= owner[i] != '0';
+    }
+  }
+  return nonzero;
+}
 enum class Operation : uint32_t {
   kSpawn = 1, kStatus, kKill, kGrantBlock, kRevokeBlock, kInitialize, kSpawnCommand, kSignal,
   kUsbObservation, kArchiveLegacyKeys
@@ -98,4 +112,13 @@ class Reader {
   const std::vector<std::byte>& data_;
   size_t offset_ = 0;
 };
+
+struct SpawnIdentity {
+  std::u16string package, process, apk, digest, signer, installation;
+};
+inline bool ReadSpawnIdentity(Reader& reader, SpawnIdentity* identity) {
+  return identity && reader.Read(&identity->package) && reader.Read(&identity->process) &&
+      reader.Read(&identity->apk) && reader.Read(&identity->digest) && reader.Read(&identity->signer) &&
+      reader.Read(&identity->installation) && ValidInstallationOwner(std::u16string_view(identity->installation));
+}
 }  // namespace gesher::usb_storage::runtime_wire

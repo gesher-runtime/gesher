@@ -218,7 +218,7 @@ static jint Zygote_startProtectedRuntime(JNIEnv* env, jclass, jstring apk) {
 }
 
 static jint Zygote_spawnProtected(JNIEnv* env, jclass, jstring packageName,
-        jstring processName, jstring apkPath, jstring apkSha256, jstring signerSha256,
+        jstring processName, jstring apkPath, jstring apkSha256, jstring signerSha256, jstring installationOwner,
         jint uid, jint targetSdk, jlong startSequence, jobjectArray environment) {
     if (uid < 10000 || targetSdk <= 0 || startSequence <= 0) return -87;
     gesher::usb_storage::ProtectedSpawnSpec spec;
@@ -227,6 +227,7 @@ static jint Zygote_spawnProtected(JNIEnv* env, jclass, jstring packageName,
     spec.apk_path = ZygoteString(env, apkPath);
     spec.apk_sha256 = ZygoteString(env, apkSha256);
     spec.signer_sha256 = ZygoteString(env, signerSha256);
+    spec.installation_owner = ZygoteString(env, installationOwner);
     spec.uid = static_cast<uint32_t>(uid);
     spec.target_sdk = static_cast<uint32_t>(targetSdk);
     spec.start_sequence = static_cast<uint64_t>(startSequence);
@@ -1036,7 +1037,7 @@ static const JNINativeMethod gZygoteMethods[] = {
     {"nativeProtectedRuntimeEnabled", "()Z", GESHER_JNI(Zygote_protectedRuntimeEnabled)},
     {"nativeStartProtectedRuntime", "(Ljava/lang/String;)I", GESHER_JNI(Zygote_startProtectedRuntime)},
     {"nativeSpawnProtected",
-     "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;"
+     "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;"
      "IIJ[Ljava/lang/String;)I", GESHER_JNI(Zygote_spawnProtected)},
     {"nativeSpawn",
      "(Ljava/lang/String;[Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;Z)I",

@@ -391,12 +391,13 @@ uint32_t StartProtectedRuntime(const std::u16string& apk_path) {
 }
 
 uint32_t ProtectedSpawn(const ProtectedSpawnSpec& spec, ProtectedChild* child) try {
-  if (!child || child->pid || child->start_time || spec.environment.size() > 32) {
+  if (!child || child->pid || child->start_time || spec.environment.size() > 32 ||
+      !wire::ValidInstallationOwner(std::u16string_view(spec.installation_owner))) {
     return ERROR_INVALID_PARAMETER;
   }
   std::vector<std::byte> payload;
   for (const auto* value : {&spec.package_name, &spec.process_name, &spec.apk_path,
-                            &spec.apk_sha256, &spec.signer_sha256}) {
+                            &spec.apk_sha256, &spec.signer_sha256, &spec.installation_owner}) {
     if (!wire::Append(&payload, *value)) return ERROR_INVALID_PARAMETER;
   }
   for (const auto& entry : spec.environment) {

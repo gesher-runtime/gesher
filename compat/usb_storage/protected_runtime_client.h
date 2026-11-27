@@ -62,6 +62,8 @@ struct ProtectedSpawnSpec {
   // Android APK signature verification, never an application-supplied claim.
   std::u16string apk_sha256;
   std::u16string signer_sha256;
+  // Canonical UUID from the trusted installer's persistent owner record.
+  std::u16string installation_owner;
   uint32_t uid = 0;
   uint32_t target_sdk = 0;
   uint64_t start_sequence = 0;

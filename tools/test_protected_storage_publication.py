@@ -67,6 +67,12 @@ final class Zygote {
     static String windowsPath(String value) { return value; }
     static int nativeStartProtectedRuntime(String value) { return 0; }
     static int nativeSpawnProtected(String pkg, String process, String path, String digest,
+            String signer, String owner, int uid, int sdk, long sequence, String[] environment) throws IOException {
+        if (!ApkPackage.INSTALLATION.equals(owner))
+            throw new AssertionError("native admission lost the installed owner identity");
+        return nativeSpawnProtected(pkg, process, path, digest, signer, uid, sdk, sequence, environment);
+    }
+    static int nativeSpawnProtected(String pkg, String process, String path, String digest,
             String signer, int uid, int sdk, long sequence, String[] environment) throws IOException {
         ++calls;
         File policy = ExternalStorageAccess.policyFile(pkg);

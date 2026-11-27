@@ -66,6 +66,14 @@ DWORD Grant(const std::wstring& path, PSID trustee, DWORD access, bool inherit);
 // Removes any explicit ACE for `trustee` from the DACL of `path`.
 DWORD Revoke(const std::wstring& path, PSID trustee);
 
+// Migration of one verified current tree only. Pin and visit exact objects;
+// reject links, unreadable nodes and bounded-walk exhaustion. No propagation.
+DWORD RevokeTree(const std::wstring& path, PSID trustee);
+// A new install may not acquire an old install's still-canonical private tree.
+DWORD RequireNoGrantTree(const std::wstring& path, PSID trustee);
+// First migration must not assign another package/signer's private contents.
+DWORD RequireAppTrusteesTree(const std::wstring& path, const std::vector<PSID>& allowed);
+
 // Replaces this trustee's explicit access exactly (zero revokes), propagating
 // inheritance even on a downgrade. Storage objects are pinned and reparse
 // targets rejected; unlike Grant, a superset of the requested rights is not a

@@ -434,6 +434,127 @@ DWORD Grant(const std::wstring& path, PSID trustee, DWORD access, bool inherit) 
   return GrantExact(path, trustee, access, inherit, false);
 }
 
+namespace {
+DWORD CheckTreeTrustees(PACL dacl, PSID trustee, const std::vector<PSID>* allowed) {
+  if (!dacl) return ERROR_ACCESS_DENIED;
+  for (DWORD i = 0; i < dacl->AceCount; ++i) {
+    void* raw = nullptr;
+    if (!GetAce(dacl, i, &raw)) return GetLastError();
+    const auto* ace = static_cast<const ACCESS_ALLOWED_ACE*>(raw);
+    if (ace->Header.AceType == ACCESS_DENIED_ACE_TYPE) continue;
+    if (ace->Header.AceType != ACCESS_ALLOWED_ACE_TYPE) return ERROR_NOT_SUPPORTED;
+    PSID principal = const_cast<DWORD*>(&ace->SidStart);
+    if (!IsValidSid(principal)) return ERROR_INVALID_ACL;
+    if (allowed) {
+      constexpr SID_IDENTIFIER_AUTHORITY app = SECURITY_APP_PACKAGE_AUTHORITY;
+      if (std::memcmp(GetSidIdentifierAuthority(principal), &app, sizeof(app)) == 0 &&
+          std::none_of(allowed->begin(), allowed->end(),
+              [principal](PSID expected) { return EqualSid(principal, expected) != FALSE; }))
+        return ERROR_ACCESS_DENIED;
+    } else if (ace->Mask && EqualSid(principal, trustee)) return ERROR_ACCESS_DENIED;
+  }
+  return ERROR_SUCCESS;
+}
+
+DWORD RemoveHeldTreeGrants(HANDLE file, PSECURITY_DESCRIPTOR current, PACL dacl, PSID trustee) {
+  if (!dacl) return ERROR_ACCESS_DENIED;
+  std::vector<BYTE> bytes(dacl->AclSize);
+  std::memcpy(bytes.data(), dacl, bytes.size());
+  auto* updated = reinterpret_cast<PACL>(bytes.data());
+  for (DWORD i = updated->AceCount; i != 0; --i) {
+    void* raw = nullptr;
+    if (!GetAce(updated, i - 1, &raw)) return GetLastError();
+    auto* ace = static_cast<ACCESS_ALLOWED_ACE*>(raw);
+    if (ace->Header.AceType == ACCESS_DENIED_ACE_TYPE) continue;
+    if (ace->Header.AceType != ACCESS_ALLOWED_ACE_TYPE) return ERROR_NOT_SUPPORTED;
+    if (!IsValidSid(&ace->SidStart)) return ERROR_INVALID_ACL;
+    // REVOKE_ACCESS ignores inherited ACEs. Remove the exact allowed trustee
+    // ourselves, retaining every other ACE's bytes and relative order.
+    if (EqualSid(&ace->SidStart, trustee) && !DeleteAce(updated, i - 1)) return GetLastError();
+  }
+  SECURITY_DESCRIPTOR replacement{};
+  SECURITY_DESCRIPTOR_CONTROL control = 0;
+  DWORD revision = 0;
+  constexpr SECURITY_DESCRIPTOR_CONTROL preserved = SE_DACL_AUTO_INHERITED | SE_DACL_PROTECTED;
+  if (!GetSecurityDescriptorControl(current, &control, &revision) ||
+      !InitializeSecurityDescriptor(&replacement, SECURITY_DESCRIPTOR_REVISION) ||
+      !SetSecurityDescriptorDacl(&replacement, TRUE, updated, (control & SE_DACL_DEFAULTED) != 0) ||
+      !SetSecurityDescriptorControl(&replacement, preserved, control & preserved) ||
+      !SetKernelObjectSecurity(file, DACL_SECURITY_INFORMATION, &replacement)) return GetLastError();
+  return ERROR_SUCCESS;
+}
+
+DWORD RevokeTreeExact(const std::wstring& path, PSID trustee, unsigned depth, unsigned* remaining,
+                     bool remove, const std::vector<PSID>* allowed = nullptr) {
+  if (!depth || !*remaining) return ERROR_NOT_ENOUGH_QUOTA;
+  --*remaining;
+  HeldFile held;
+  bool directory = false;
+  DWORD error = OpenGrantTarget(path, FILE_SHARE_READ | FILE_SHARE_WRITE, false, &held, &directory);
+  if (error != ERROR_SUCCESS || !held.handle) return error != ERROR_SUCCESS ? error : ERROR_ACCESS_DENIED;
+  PACL dacl = nullptr;
+  PSECURITY_DESCRIPTOR descriptor = nullptr;
+  error = GetSecurityInfo(held.handle, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
+      nullptr, nullptr, &dacl, nullptr, &descriptor);
+  if (error != ERROR_SUCCESS) return error;
+  // Remove the parent first, so the kernel cannot regenerate the old inherited
+  // grant when each child's exact DACL is replaced. Never propagate implicitly.
+  error = remove ? RemoveHeldTreeGrants(held.handle, descriptor, dacl, trustee) :
+      CheckTreeTrustees(dacl, trustee, allowed);
+  LocalFree(descriptor);
+  if (error != ERROR_SUCCESS) return error;
+  if (directory) {
+    WIN32_FIND_DATAW entry{};
+    const std::wstring prefix = path.back() == L'\\' ? path : path + L'\\';
+    HANDLE search = FindFirstFileW((prefix + L"*").c_str(), &entry);
+    if (search == INVALID_HANDLE_VALUE) {
+      if (GetLastError() != ERROR_FILE_NOT_FOUND) return GetLastError();
+    } else {
+      do {
+        const std::wstring name(entry.cFileName);
+        if (name != L"." && name != L"..") error = RevokeTreeExact(prefix + name, trustee, depth - 1, remaining, remove, allowed);
+        if (error != ERROR_SUCCESS) break;
+      } while (FindNextFileW(search, &entry));
+      const DWORD last = GetLastError();
+      FindClose(search);
+      if (error != ERROR_SUCCESS) return error;
+      if (last != ERROR_NO_MORE_FILES) return last;
+    }
+  }
+  if (remove) {
+    descriptor = nullptr; dacl = nullptr;
+    error = GetSecurityInfo(held.handle, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
+        nullptr, nullptr, &dacl, nullptr, &descriptor);
+    if (error == ERROR_SUCCESS) error = CheckTreeTrustees(dacl, trustee, nullptr);
+    LocalFree(descriptor);
+  }
+  return error;
+}
+
+}  // namespace
+
+DWORD RevokeTree(const std::wstring& path, PSID trustee) {
+  if (!trustee || !IsValidSid(trustee)) return ERROR_INVALID_PARAMETER;
+  std::lock_guard<std::mutex> lock(g_acl_lock);
+  unsigned remaining = 100000;
+  return RevokeTreeExact(path, trustee, 64, &remaining, true);
+}
+
+DWORD RequireNoGrantTree(const std::wstring& path, PSID trustee) {
+  if (!trustee || !IsValidSid(trustee)) return ERROR_INVALID_PARAMETER;
+  std::lock_guard<std::mutex> lock(g_acl_lock);
+  unsigned remaining = 100000;
+  return RevokeTreeExact(path, trustee, 64, &remaining, false);
+}
+
+DWORD RequireAppTrusteesTree(const std::wstring& path, const std::vector<PSID>& allowed) {
+  if (allowed.empty() || std::any_of(allowed.begin(), allowed.end(), [](PSID sid) { return !sid || !IsValidSid(sid); }))
+    return ERROR_INVALID_PARAMETER;
+  std::lock_guard<std::mutex> lock(g_acl_lock);
+  unsigned remaining = 100000;
+  return RevokeTreeExact(path, nullptr, 64, &remaining, false, &allowed);
+}
+
 DWORD Revoke(const std::wstring& path, PSID trustee) {
   return SetStorageAccess(path, trustee, 0, false);
 }

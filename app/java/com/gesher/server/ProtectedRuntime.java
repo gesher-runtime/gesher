@@ -43,9 +43,10 @@ public final class ProtectedRuntime {
         String signerSet = String.join("\n", identity.currentSignerSha256());
         String signerDigest = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
                 .digest(signerSet.getBytes(StandardCharsets.UTF_8)));
+        String installationOwner = java.util.UUID.fromString(pkg.enabledStateOwner()).toString();
         int pid = Zygote.nativeSpawnProtected(pkg.packageName, processName,
                 Zygote.windowsPath(pkg.apkPath), identity.archives().get(0).sha256(), signerDigest,
-                pkg.uid(), targetSdk, startSeq, environment.stream()
+                installationOwner, pkg.uid(), targetSdk, startSeq, environment.stream()
                         // These are derived from the service's sealed realm and exact
                         // process record. The remaining presentation/network settings
                         // pass through its independently enforced allowlist.
