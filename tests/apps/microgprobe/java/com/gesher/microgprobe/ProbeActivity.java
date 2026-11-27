@@ -67,6 +67,10 @@ public final class ProbeActivity extends Activity {
                 "Probe did not run as its assigned app UID");
         pass("attached unprivileged application identity");
         AccountManager accounts = AccountManager.get(this);
+        if (getIntent().getBooleanExtra("account-continuation", false)) {
+            probeAccountContinuation(accounts);
+            return;
+        }
         Account hidden = new Account(HIDDEN, TYPE), visible = new Account(VISIBLE, TYPE);
         if (getIntent().getBooleanExtra("expect-token", false)) {
             String scope = getIntent().getStringExtra("token-type");
@@ -161,5 +165,24 @@ public final class ProbeActivity extends Activity {
         denied("host window mutation", () -> control.getMethod("setWindowMode", String.class, String.class).invoke(host, OWNER, "headless"));
         NotificationProbe.run(this);
         JobProbe.run(this);
+    }
+
+    private void probeAccountContinuation(AccountManager accounts) throws Exception {
+        require(getPackageManager().getApplicationInfo(OWNER, 0).uid != android.os.Process.myUid(),
+                "Authenticator and client must run under distinct UIDs");
+        Bundle exported = accounts.addAccount(TYPE, "fixture-exported-continuation", null, null,
+                this, null, null).getResult(30, TimeUnit.SECONDS);
+        require(exported.getBoolean(AccountManager.KEY_BOOLEAN_RESULT),
+                "Exported authenticator continuation did not complete");
+        pass("exported authenticator continuation completed across UIDs");
+
+        Bundle pending = accounts.addAccount(TYPE, "fixture-private-continuation", null, null,
+                null, null, null).getResult(30, TimeUnit.SECONDS);
+        Intent privateIntent = pending.getParcelable(AccountManager.KEY_INTENT, Intent.class);
+        ComponentName privateTarget = new ComponentName(OWNER, OWNER + ".AccountContinuationActivity$Private");
+        require(privateIntent != null && privateTarget.equals(privateIntent.getComponent())
+                        && !getPackageManager().getActivityInfo(privateTarget, 0).exported,
+                "Authenticator did not return the private continuation fixture");
+        denied("private authenticator continuation denied across UIDs", () -> startActivity(privateIntent));
     }
 }
