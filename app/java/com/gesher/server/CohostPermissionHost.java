@@ -62,6 +62,7 @@ final class CohostPermissionHost implements AutoCloseable {
         // The layout journal belongs to the host. Only the two actual data
         // trees take part in the private storage broker.
         code.prepareDataDirectories();
+        LegacyKeyStoreArchive.prepare(code);
         String[] external = AppDataStorage.prepareExternalDirectories(new File(Device.dataDir()),
                 code.packageName).stream().map(path -> Zygote.windowsPath(path.toString()))
                 .toArray(String[]::new);

@@ -7,6 +7,7 @@ add_executable(gesher-usb-authority
   binder_listener_factory.cc
   protected_identity.cc
   protected_runtime_session.cc
+  ../framework/legacy_keystore_archive.cc
   protected_usb_observation.cc
   ${CMAKE_CURRENT_LIST_DIR}/../devsvc/usb_storage_observation.cc
   ${CMAKE_CURRENT_LIST_DIR}/../devsvc/usb_winusb.cc

@@ -36,6 +36,11 @@ static void expect_language(enum GesherUiLanguage expected) {
   assert(mock_live_allocations == 0 && mock_open_keys == 0);
   ++checks;
 }
+static void expect_rtl(BOOL expected) {
+  assert(GesherDesktopRtl() == expected);
+  assert(mock_live_allocations == 0 && mock_open_keys == 0);
+  ++checks;
+}
 
 int main(void) {
   mock_reset();
@@ -144,6 +149,19 @@ int main(void) {
   mock_environment = L"he-IL,en-US"; expect_language(GESHER_UI_HE);
   mock_environment = L"fr-FR"; expect_language(GESHER_UI_EN);
   mock_environment = L" \t\r\n"; expect_language(GESHER_UI_HE);
+
+  // Layout is determined by Windows even when Gesher has no matching translation.
+  mock_reset();
+  PROFILE(L"ar-EG\0en-US\0", REG_MULTI_SZ);
+  mock_layout_locale = L"ar-EG"; mock_layout = 1;
+  expect_language(GESHER_UI_EN); expect_rtl(1);
+  mock_environment = L" \tar_EG,en-US"; expect_rtl(1);
+  mock_environment = L"en-US,ar-EG"; expect_rtl(0);
+  mock_reset();
+  PROFILE(L"he-IL\0", REG_MULTI_SZ);
+  expect_rtl(1); // Unknown Windows reading layout falls back to the matching UI language.
+  mock_layout_locale = L"he-IL"; mock_layout = 2;
+  expect_rtl(0); // A vertical layout is not horizontal RTL.
   mock_reset();
   printf("PASS: %u preferred-language boundary and selector checks\n", checks);
   return 0;

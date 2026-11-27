@@ -15,6 +15,7 @@
 #include <userenv.h>
 #include <winternl.h>
 #include <wtsapi32.h>
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -223,6 +224,7 @@ struct Evidence {
   DesktopObjectAccess desktop_access[2]{};
   GuestLoaderEvidence guest_loader[std::size(kGuestLoaderProbes)]{};
   GuestLoaderTrace guest_loader_trace;
+  GuestLoaderEvidence private_loader[2][std::size(kGuestLoaderProbes)]{};
   lowbox_trace::LowboxIatTraceEvidence lowbox_trace;
   EquivalentTokenEvidence equivalent;
   profile_control::ScmProfileControlEvidence scm_control;
@@ -2836,6 +2838,107 @@ void ObserveGuestLoader(HANDLE token, const storage::AuthorityLaunchSpec& origin
   }
 }
 
+// Test-only controls: the actual private identity, same desktop/environment,
+// same mitigation/job and exact guest default DACL, without lowbox membership.
+// Report medium and low integrity separately. Never substitute for the guest.
+void ObservePrivateLoader(HANDLE source, HANDLE lowbox, const storage::AuthorityLaunchSpec& spec,
+                         GuestLoaderEvidence (&rows)[2][std::size(kGuestLoaderProbes)]) {
+  const ULONGLONG deadline = std::min(config.worker_deadline, GetTickCount64() + 5000);
+  for (size_t low = 0; low < 2; ++low) for (size_t i = 0; i < std::size(kGuestLoaderProbes); ++i) {
+    if (GetTickCount64() >= deadline) return;
+    auto& row = rows[low][i];
+    row.attempted = 1;
+    Handle process, thread;
+    try {
+      HANDLE raw = nullptr;
+      Require(CreateRestrictedToken(source, DISABLE_MAX_PRIVILEGE, 0, nullptr, 0, nullptr,
+          0, nullptr, &raw), "private-control-token");
+      const Handle token(raw);
+      const auto copy = [&](TOKEN_INFORMATION_CLASS type) {
+        DWORD bytes = 0;
+        GetTokenInformation(lowbox, type, nullptr, 0, &bytes);
+        Require(bytes && bytes <= 65536, "private-control-token-size", ERROR_INVALID_DATA);
+        std::vector<BYTE> buffer(bytes);
+        Require(GetTokenInformation(lowbox, type, buffer.data(), bytes, &bytes) &&
+            SetTokenInformation(token.get(), type, buffer.data(), bytes), "private-control-token-value");
+      };
+      copy(TokenDefaultDacl);
+      if (low) copy(TokenIntegrityLevel);
+      DWORD bytes = 0, session = MAXDWORD, contained = 1;
+      TOKEN_STATISTICS a{}, b{};
+      Require(GetTokenInformation(source, TokenStatistics, &a, sizeof(a), &bytes) &&
+          GetTokenInformation(token.get(), TokenStatistics, &b, sizeof(b), &bytes) &&
+          GetTokenInformation(token.get(), TokenSessionId, &session, sizeof(session), &bytes) &&
+          GetTokenInformation(token.get(), TokenIsAppContainer, &contained, sizeof(contained), &bytes) &&
+          !contained && session == spec.desktop_session &&
+          a.AuthenticationId.LowPart == b.AuthenticationId.LowPart &&
+          a.AuthenticationId.HighPart == b.AuthenticationId.HighPart,
+          "private-control-identity", ERROR_ACCESS_DENIED);
+      const Local descriptor = Security();
+      SECURITY_ATTRIBUTES security{sizeof(security), descriptor.get(), FALSE};
+      SIZE_T needed = 0;
+      InitializeProcThreadAttributeList(nullptr, 2, 0, &needed);
+      std::vector<BYTE> memory(needed);
+      auto* attributes = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(memory.data());
+      Require(InitializeProcThreadAttributeList(attributes, 2, 0, &needed), "private-control-attributes");
+      const auto release = [](LPPROC_THREAD_ATTRIBUTE_LIST p) { DeleteProcThreadAttributeList(p); };
+      const std::unique_ptr<std::remove_pointer_t<LPPROC_THREAD_ATTRIBUTE_LIST>, decltype(release)> own(attributes, release);
+      HANDLE job = spec.job;
+      DWORD64 mitigation = PROCESS_CREATION_MITIGATION_POLICY_EXTENSION_POINT_DISABLE_ALWAYS_ON;
+      Require(job && UpdateProcThreadAttribute(attributes, 0, PROC_THREAD_ATTRIBUTE_JOB_LIST,
+          &job, sizeof(job), nullptr, nullptr) && UpdateProcThreadAttribute(attributes, 0,
+          PROC_THREAD_ATTRIBUTE_MITIGATION_POLICY, &mitigation, sizeof(mitigation), nullptr, nullptr),
+          "private-control-job-mitigation");
+      std::vector<std::wstring> entries;
+      for (size_t off = 0; off < spec.environment.size() && spec.environment[off];) {
+        entries.emplace_back(spec.environment.data() + off);
+        off += entries.back().size() + 1;
+      }
+      std::sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) {
+        return CompareStringOrdinal(a.c_str(), -1, b.c_str(), -1, TRUE) == CSTR_LESS_THAN;
+      });
+      std::vector<wchar_t> environment;
+      for (const auto& entry : entries) {
+        environment.insert(environment.end(), entry.begin(), entry.end());
+        environment.push_back(0);
+      }
+      if (entries.empty()) environment.push_back(0);
+      environment.push_back(0);
+      const auto image = config.directory + L"\\" + kGuestLoaderProbes[i];
+      std::wstring command = Quote(image);
+      wchar_t desktop[] = L"winsta0\\default";
+      STARTUPINFOEXW startup{};
+      startup.StartupInfo.cb = sizeof(startup);
+      startup.StartupInfo.lpDesktop = desktop;
+      startup.lpAttributeList = attributes;
+      PROCESS_INFORMATION child{};
+      Require(CreateProcessAsUserW(token.get(), image.c_str(), command.data(), &security, &security,
+          FALSE, EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT |
+          CREATE_NO_WINDOW, environment.data(), spec.directory, &startup.StartupInfo, &child),
+          "private-control-create");
+      process.reset(child.hProcess); thread.reset(child.hThread);
+      row.start_status = ERROR_SUCCESS;
+      row.resume_status = ResumeThread(thread.get()) == 1 ? ERROR_SUCCESS : ERROR_INVALID_STATE;
+      if (!row.resume_status) {
+        const auto now = GetTickCount64();
+        row.wait_status = WaitForSingleObject(process.get(), now < deadline ?
+            static_cast<DWORD>(std::min<ULONGLONG>(750, deadline - now)) : 0);
+        if (row.wait_status == WAIT_OBJECT_0) {
+          row.exit_read = GetExitCodeProcess(process.get(), &row.exit_code) != FALSE;
+          if (!row.exit_read) row.exit_code = GetLastError();
+        }
+      }
+    } catch (const Failure& failure) {
+      row.start_status = failure.status;
+      std::snprintf(row.stage, sizeof(row.stage), "%s", failure.stage);
+    } catch (...) { row.start_status = ERROR_NOT_ENOUGH_MEMORY; }
+    if (process) {
+      if (WaitForSingleObject(process.get(), 0) != WAIT_OBJECT_0) TerminateProcess(process.get(), ERROR_TIMEOUT);
+      row.stop_status = WaitForSingleObject(process.get(), 500) == WAIT_OBJECT_0 ? ERROR_SUCCESS : ERROR_TIMEOUT;
+    }
+  }
+}
+
 void AppendGuestLoaderMessage(HANDLE process, const OUTPUT_DEBUG_STRING_INFO& info, GuestLoaderTrace* trace) {
   ++trace->strings;
   std::array<BYTE, 512> message{};
@@ -3327,6 +3430,7 @@ Evidence RunSystem() {
     Require(GetExitCodeProcess(child->process(), &code), "guest-exit-query");
     if (code == 0xc0000142 && config.lowbox_iat_trace) {
       if (!desktop_snapshot.empty()) ObserveDesktopAccess(desktop_snapshot, identity->token(), guest_token.get(), spec, &evidence);
+      ObservePrivateLoader(identity->token(), guest_token.get(), spec, evidence.private_loader);
       ObserveGuestLoader(identity->token(), spec, *child, evidence.guest_loader);
       const auto& late = evidence.guest_loader[2];
       if (late.start_status == ERROR_SUCCESS && late.resume_status == ERROR_SUCCESS &&
@@ -3587,6 +3691,14 @@ DWORD Controller(bool explicit_scm_control, bool explicit_lowbox_trace) {
             static_cast<int>(sizeof(probe.stage)), probe.stage, static_cast<unsigned long>(probe.resume_status),
             static_cast<unsigned long>(probe.wait_status), static_cast<unsigned long>(probe.exit_code),
             static_cast<unsigned long>(probe.stop_status));
+    }
+    for (size_t low = 0; low < 2; ++low) for (size_t i = 0; i < std::size(kGuestLoaderProbes); ++i) {
+      const auto& p = evidence.private_loader[low][i];
+      if (p.attempted) std::printf("Protected private loader control: low-integrity=%zu image=%ls start=%lu stage=%.*s resume=%lu wait=0x%08lx exit-read=%lu exit=0x%08lx stop=%lu\n",
+          low, kGuestLoaderProbes[i], static_cast<unsigned long>(p.start_status),
+          static_cast<int>(sizeof(p.stage)), p.stage, static_cast<unsigned long>(p.resume_status),
+          static_cast<unsigned long>(p.wait_status), static_cast<unsigned long>(p.exit_read),
+          static_cast<unsigned long>(p.exit_code), static_cast<unsigned long>(p.stop_status));
     }
     if (explicit_lowbox_trace && evidence.status == 0xc0000142) {
       const auto& trace = evidence.guest_loader_trace;

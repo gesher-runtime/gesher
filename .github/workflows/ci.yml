@@ -225,6 +225,10 @@ jobs:
         if: ${{ !cancelled() }}
         shell: cmd
         run: python tools/test_appcontainer_null_owner.py --cxx cl
+      - name: Protect original legacy keys before publishing sanitized app metadata
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: python tools/test_legacy_keystore_archive.py --cxx cl
       - name: Launch failure text with native Windows direction classification
         if: ${{ !cancelled() }}
         shell: pwsh
@@ -290,7 +294,7 @@ jobs:
       - name: Build actual app identity restart implementation
         if: ${{ !cancelled() }}
         shell: cmd
-        run: cl /nologo /std:c++20 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 compat\framework\services_zygote.cc compat\usb_storage\protected_runtime_client.cc compat\binder\protected_data_client.cc compat\framework\app_container.cc tests\clipboard\standalone_restart_windows_test.cc /Fe:app-identity-restart.exe user32.lib advapi32.lib ole32.lib shell32.lib uuid.lib
+        run: cl /nologo /std:c++20 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 compat\framework\services_zygote.cc compat\usb_storage\protected_runtime_client.cc compat\binder\protected_data_client.cc compat\framework\app_container.cc compat\posix\src\binder_endpoint.cc tests\clipboard\standalone_restart_windows_test.cc /Fe:app-identity-restart.exe user32.lib advapi32.lib ole32.lib shell32.lib uuid.lib
       - name: Check UID re-entry, inherited I/O, exact exit and parent-death cleanup
         if: ${{ !cancelled() }}
         shell: pwsh
@@ -304,7 +308,7 @@ jobs:
       - name: Build actual dexopt child waiting and resource budgets
         if: ${{ !cancelled() }}
         shell: cmd
-        run: cl /nologo /std:c++20 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 compat\framework\services_zygote.cc compat\usb_storage\protected_runtime_client.cc compat\binder\protected_data_client.cc compat\framework\app_container.cc compat\framework\services_dexopt_watch.cc tests\native\dexopt_child_wait_test.cc /Fe:dexopt-child-wait.exe user32.lib advapi32.lib ole32.lib shell32.lib uuid.lib
+        run: cl /nologo /std:c++20 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 compat\framework\services_zygote.cc compat\usb_storage\protected_runtime_client.cc compat\binder\protected_data_client.cc compat\framework\app_container.cc compat\posix\src\binder_endpoint.cc compat\framework\services_dexopt_watch.cc tests\native\dexopt_child_wait_test.cc /Fe:dexopt-child-wait.exe user32.lib advapi32.lib ole32.lib shell32.lib uuid.lib
       - name: Verify real compiler cancellation, reaping, CPU and memory budgets
         if: ${{ !cancelled() }}
         shell: pwsh

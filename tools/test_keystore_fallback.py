@@ -6,10 +6,40 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+import time
 
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "tests/biometrics/keystore"
+
+
+def check_process_lock(command, directory):
+    directory.mkdir()
+    subprocess.run([*command, "race-seed", str(directory)], check=True, timeout=60)
+    children = []
+    try:
+        for phase in ("race-first", "race-second"):
+            children.append(subprocess.Popen([*command, phase, str(directory)]))
+        deadline = time.monotonic() + 6
+        while not (directory / "second-attempt").exists():
+            if time.monotonic() >= deadline or any(child.poll() is not None for child in children):
+                raise AssertionError("keystore writers did not reach the race barrier")
+            time.sleep(0.01)
+        deadline = time.monotonic() + 1
+        while time.monotonic() < deadline:
+            if (directory / "second-finished").exists():
+                raise AssertionError("a second process published while the first held the store lock")
+            time.sleep(0.01)
+        (directory / "release-first").touch()
+        for child in children:
+            if child.wait(timeout=15) != 0:
+                raise AssertionError("concurrent AndroidKeyStore writer failed")
+    finally:
+        for child in children:
+            if child.poll() is None:
+                child.kill()
+                child.wait(timeout=15)
+    subprocess.run([*command, "race-check", str(directory)], check=True, timeout=60)
 
 
 def main():
@@ -32,12 +62,14 @@ def main():
             [str(java_bin / "javac"), "-encoding", "UTF-8", "-cp", android, "-d", str(classes),
              *map(str, sources)], check=True, timeout=60
         )
-        for phase in ("seed", "failed-persistence", "migrate", "reload"):
+        command = [str(java_bin / "java"), "-cp", os.pathsep.join((str(classes), android)),
+                   "com.gesher.tests.AndroidKeyStoreContracts"]
+        for phase in ("seed", "reject-unarchived", "seed-scrubbed-fixture",
+                      "failed-persistence", "migrate", "reload", "recursive"):
             subprocess.run(
-                [str(java_bin / "java"), "-cp", os.pathsep.join((str(classes), android)),
-                 "com.gesher.tests.AndroidKeyStoreContracts", phase, str(work)],
-                check=True, timeout=60
+                [*command, phase, str(work)], check=True, timeout=60
             )
+        check_process_lock(command, work / "second-process")
 
 
 if __name__ == "__main__":

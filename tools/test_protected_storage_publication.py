@@ -38,10 +38,12 @@ import java.util.*;
 
 final class PackageManagerService {}
 final class ApkPackage {
+    static final String INSTALLATION = "2cf7b610-cbeb-4027-a259-40e1111c1a2c";
     final String packageName = "fixture.protected";
     final String apkPath;
     ApkPackage(String path) { apkPath = path; }
     int uid() { return 10001; }
+    String enabledStateOwner() { return INSTALLATION; }
 }
 final class ApkEnrollmentVerifier {
     record Archive(String splitName, String sha256) {}
@@ -53,7 +55,10 @@ final class ApkEnrollmentVerifier {
     }
 }
 final class AppSandbox {
-    static void prepareStoragePolicyFile(String name, File file) {}
+    static void prepareStoragePolicyFile(ApkPackage pkg, File file) throws IOException {
+        if (!Files.readString(file.toPath()).contains("installation=" + pkg.enabledStateOwner() + "\n"))
+            throw new AssertionError("staged policy lost the package installation identity");
+    }
 }
 final class Zygote {
     static boolean protectedRole;
@@ -68,6 +73,7 @@ final class Zygote {
         if (!policy.isFile()) throw new AssertionError("native admission ran before policy publication");
         String value = Files.readString(policy.toPath());
         if (!value.contains("pkg=" + pkg + "\nuid=" + uid + "\n")
+                || !value.contains("installation=" + ApkPackage.INSTALLATION + "\n")
                 || !value.contains("mode=" + ExternalStorageAccess.mode.name() + "\n"))
             throw new AssertionError("native admission received stale or wrong-identity policy");
         for (String entry : environment) {
@@ -178,7 +184,7 @@ final class ExternalStorageAccess {
 ''' + methods + '\n}',
         }
         for name, content in sources.items():
-            (work / name).write_text(content)
+            (work / name).write_text(content, encoding='utf-8')
         subprocess.run([str(args.java_home / 'bin/javac'), '-d', str(work),
                         *[str(work / name) for name in sources]], check=True, timeout=60)
         subprocess.run([str(args.java_home / 'bin/java'), '-XX:-UsePerfData', '-cp', str(work),

@@ -169,6 +169,20 @@ public final class SystemServer {
         for (ApkPackage current : selected) log(current.describe());
     }
 
+    private static void archiveLegacyKeyStores(List<ApkPackage> packages) {
+        // A desktop process that attaches after startup uses these published
+        // package records without calling the ordinary process starter.
+        packages.removeIf(owner -> {
+            try {
+                LegacyKeyStoreArchive.prepare(owner);
+                return false;
+            } catch (IOException failure) {
+                log("not admitting " + owner.packageName + ": " + failure.getMessage());
+                return true;
+            }
+        });
+    }
+
     public static void main(String[] args) {
         // stdout/stderr are system_server.log: no credentials (docs/logging.md).
         com.gesher.app.LogRedaction.installStandardStreams();
@@ -329,7 +343,10 @@ public final class SystemServer {
         }
         try (PackageUids.Admission identity = PackageUids.prepare(packages, committed)) {
             identity.commit();
-            if (!cohostOwner) preparePackageStorage(committed, packages);
+            if (!cohostOwner) {
+                preparePackageStorage(committed, packages);
+                archiveLegacyKeyStores(packages);
+            }
             identity.accept();
         }
 
@@ -494,6 +511,7 @@ public final class SystemServer {
             if (protectedDevice && !atm.protectedStartCurrent(pkg, startSeq)) {
                 throw new IllegalStateException("Contained start retired for " + packageName);
             }
+            LegacyKeyStoreArchive.prepare(pkg);
             String uid = String.valueOf(pkg.uid());
             List<String> env = new java.util.ArrayList<>(List.of("GESHER_BINDER=" + binder,
                     "GESHER_UID=" + uid,

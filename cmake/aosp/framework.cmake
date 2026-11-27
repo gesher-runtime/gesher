@@ -113,6 +113,7 @@ add_library(framework_runtime OBJECT
   ${_fwjni}/com_android_internal_util_VirtualRefBasePtr.cpp
   ${CMAKE_SOURCE_DIR}/compat/framework/android_runtime.cc
   ${CMAKE_SOURCE_DIR}/compat/framework/rooted_storage_server.cc
+  ${CMAKE_SOURCE_DIR}/compat/framework/legacy_keystore_archive.cc
   ${CMAKE_SOURCE_DIR}/compat/framework/services_natives.cc
   ${CMAKE_SOURCE_DIR}/compat/framework/services_natives_pic.cc
   ${CMAKE_SOURCE_DIR}/compat/framework/services_zygote.cc
@@ -130,7 +131,8 @@ add_library(framework_runtime OBJECT
   ${CMAKE_SOURCE_DIR}/compat/framework/tracing_perfetto_stub.cc)
 # A protected child already belongs to the authority when its Java-side epoch
 # is recorded. Allocation failure must retire that child instead of orphaning it.
-set_source_files_properties(${CMAKE_SOURCE_DIR}/compat/framework/services_zygote.cc
+set_source_files_properties(${CMAKE_SOURCE_DIR}/compat/framework/legacy_keystore_archive.cc
+  ${CMAKE_SOURCE_DIR}/compat/framework/services_zygote.cc
   PROPERTIES COMPILE_OPTIONS "-fexceptions")
 target_include_directories(framework_runtime PRIVATE
   ${_fwjni} ${_fwjni}/include ${CMAKE_SOURCE_DIR}/compat/framework/include

@@ -50,8 +50,10 @@ $script:OnAppLaunch = { param($pkg) $script:Launched = $pkg }
 $script:OnAppUninstall = { param($pkg) $script:Uninstalled = $pkg }
 $script:OnAppDetails = { param($pkg) $script:Detailed = $pkg }
 $script:OnAppProxy = { param($pkg) $script:ProxyEdited = $pkg }
+$savedSandbox = $env:GESHER_SANDBOX
 foreach ($language in 'en', 'he') {
     foreach ($height in 600, 820) {
+        $contained = -not $SourceRef -and $height -eq 820
         $script:GesherUiLanguage = $language
         $flowDirection = if ($language -eq 'he') { 'RightToLeft' } else { 'LeftToRight' }
         if ($SourceRef) {
@@ -77,7 +79,11 @@ foreach ($language in 'en', 'he') {
                 }
             })
             foreach ($name in 'BtnEnableMicrog', 'BtnInstallStore') { $window.FindName($name).Visibility = 'Collapsed' }
+            $env:GESHER_SANDBOX = if ($contained) { 'appcontainer-trusted' } else { $null }
             . $handler
+            # The routed test records the requested package at the menu boundary.
+            function Show-AppIsolationMenu($button, [string] $pkg) { $script:IsolationEdited = $pkg }
+            $script:IsolationEdited = $null
             $items = [Collections.Generic.List[object]]::new()
             for ($i = 0; $i -lt 1000; $i++) {
                 $items.Add([pscustomobject]@{ Package = "fixture.$i"; Label = "App $i"; IconImage = $null; LaunchVisibility = 'Visible' })
@@ -97,13 +103,17 @@ foreach ($language in 'en', 'he') {
             $viewport.ScrollToEnd(); Settle-Layout
             $last = $appsList.ItemContainerGenerator.ContainerFromIndex(999)
             Assert-List ($null -ne $last) 'Last app cannot be reached'
-            $buttons = @(Find-Visual $last ([Windows.Controls.Button]))
-            Assert-List ($buttons.Count -eq 4) 'Row actions missing'
+            $buttons = @(Find-Visual $last ([Windows.Controls.Button]) | Where-Object Visibility -eq 'Visible')
+            $expectedActions = if ($contained) { 5 } else { 4 }
+            Assert-List ($buttons.Count -eq $expectedActions) 'Unexpected visible row actions'
             foreach ($button in $buttons) {
                 Assert-List ($button.Tag -ceq 'fixture.999') 'Recycled button retained an old package'
                 $button.RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent, $button))
             }
             Assert-List ($script:Launched -ceq 'fixture.999' -and $script:Uninstalled -ceq 'fixture.999' -and $script:Detailed -ceq 'fixture.999' -and $script:ProxyEdited -ceq 'fixture.999') 'Production routed actions used stale data'
+            if ($contained) {
+                Assert-List ($script:IsolationEdited -ceq 'fixture.999') 'App isolation routed an old package'
+            }
             if (-not $Measure) { Assert-List ((Count-Containers) -lt 100) 'Scrolling retained the entire row tree' }
             $viewport.ScrollToTop(); Settle-Layout
             Assert-List ($null -ne $appsList.ItemContainerGenerator.ContainerFromIndex(0)) 'First app cannot be reached after recycling'
@@ -118,11 +128,11 @@ foreach ($language in 'en', 'he') {
             $appsList.ItemsSource = @([pscustomobject]@{ Package = 'replacement'; Label = 'Replacement'; IconImage = $null; LaunchVisibility = 'Visible' })
             Settle-Layout
             $replacement = $appsList.ItemContainerGenerator.ContainerFromIndex(0)
-            $buttons = @(Find-Visual $replacement ([Windows.Controls.Button]))
-            Assert-List ($buttons.Count -eq 4 -and @($buttons | Where-Object { $_.Tag -cne 'replacement' }).Count -eq 0) 'Refresh retained a removed package'
+            $buttons = @(Find-Visual $replacement ([Windows.Controls.Button]) | Where-Object Visibility -eq 'Visible')
+            Assert-List ($buttons.Count -eq $expectedActions -and @($buttons | Where-Object { $_.Tag -cne 'replacement' }).Count -eq 0) 'Refresh retained a removed package'
             $appsList.ItemsSource = @(); Settle-Layout
             Assert-List ((Count-Containers) -eq 0) 'Empty list retained row containers'
-        } finally { $window.Close() }
+        } finally { $env:GESHER_SANDBOX = $savedSandbox; $window.Close() }
     }
 }
 "PASS: control panel virtualization ($script:Checks checks)"

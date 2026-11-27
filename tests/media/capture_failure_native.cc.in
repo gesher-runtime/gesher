@@ -18,6 +18,16 @@
 #define private public
 #include "@ROOT@/compat/media/audio/capture.h"
 #undef private
+#include <gesher/binder_endpoint.h>
+
+namespace gesher::binder_endpoint {
+Binding& Current() {
+  // The standalone worker fixture has no protected startup or Binder pipe.
+  static Binding unbound;
+  return unbound;
+}
+}
+
 namespace fixture {
 std::atomic<bool> available{true}, start_ok{true}, pull_ok{true}, block_start{false}, start_entered{false};
 std::atomic<int> pulls{0};

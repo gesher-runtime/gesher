@@ -9,8 +9,10 @@
 #include <wchar.h>
 typedef uint32_t DWORD;
 typedef uint32_t ULONG;
+typedef int BOOL;
 typedef void* HKEY;
 typedef unsigned char* LPBYTE;
+typedef wchar_t* LPWSTR;
 #define HKEY_CURRENT_USER ((HKEY)1)
 #define KEY_QUERY_VALUE 1
 #define ERROR_SUCCESS 0
@@ -19,7 +21,11 @@ typedef unsigned char* LPBYTE;
 #define REG_DWORD 4
 #define REG_MULTI_SZ 7
 #define MUI_LANGUAGE_NAME 8
+#define LOCALE_IREADINGLAYOUT 0x70
+#define LOCALE_RETURN_NUMBER 0x20000000
+#if !defined(_WIN32)
 #define _wcsnicmp wcsncasecmp
+#endif
 
 static const wchar_t* mock_profile;
 static DWORD mock_profile_bytes, mock_profile_probe_bytes, mock_profile_return_bytes;
@@ -29,6 +35,8 @@ static const wchar_t* mock_display;
 static ULONG mock_display_chars, mock_display_probe_chars, mock_display_return_chars;
 static int mock_display_read_success;
 static const wchar_t* mock_environment;
+static const wchar_t* mock_layout_locale;
+static DWORD mock_layout;
 static unsigned mock_allocations, mock_live_allocations, mock_fail_allocation, mock_open_keys;
 
 static void mock_reset(void) {
@@ -41,6 +49,8 @@ static void mock_reset(void) {
   mock_display_chars = mock_display_probe_chars = mock_display_return_chars = 0;
   mock_display_read_success = 1;
   mock_environment = NULL;
+  mock_layout_locale = NULL;
+  mock_layout = 0;
   mock_allocations = mock_fail_allocation = 0;
 }
 static void mock_set_profile(const wchar_t* value, size_t bytes, DWORD type) {
@@ -59,6 +69,13 @@ static DWORD GetEnvironmentVariableW(const wchar_t* name, wchar_t* buffer, DWORD
   if (buffer == NULL || capacity <= chars) return chars + 1;
   memcpy(buffer, mock_environment, (chars + 1) * sizeof(wchar_t));
   return chars;
+}
+static int GetLocaleInfoEx(const wchar_t* name, DWORD kind, LPWSTR buffer, int capacity) {
+  assert(kind == (LOCALE_IREADINGLAYOUT | LOCALE_RETURN_NUMBER));
+  if (!name || !mock_layout_locale || wcscmp(name, mock_layout_locale) != 0) return 0;
+  assert((size_t)capacity * sizeof(wchar_t) >= sizeof(mock_layout));
+  memcpy(buffer, &mock_layout, sizeof(mock_layout));
+  return capacity;
 }
 static void* GetProcessHeap(void) { return NULL; }
 static void* HeapAlloc(void* heap, DWORD flags, size_t size) {

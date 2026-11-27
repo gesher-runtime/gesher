@@ -34,6 +34,8 @@ public final class Zygote {
             String logPath, boolean breakaway);
     static native boolean nativeProtectedRuntimeEnabled();
     static native int nativeStartProtectedRuntime(String apkPath);
+    /** The host pins the data directory and archive ACL. No key bytes cross JNI. */
+    static native int nativeArchiveLegacyKeys(String dataDirectory, String archiveRoot, String binding);
     static native int nativeSpawnProtected(String packageName, String processName, String apkPath,
             String apkSha256, String signerSetSha256, int uid, int targetSdk, long startSeq,
             String[] environment);
