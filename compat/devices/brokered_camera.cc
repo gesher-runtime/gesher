@@ -31,6 +31,13 @@ struct OpenReply {
   Geometry size;
 };
 
+// Private success values keep the open reply and ACK byte-compatible with
+// older peers. Only the camera pipe sees these values. A legacy S_OK carries no
+// backend identity. Capture failures keep their original HRESULT unchanged.
+constexpr HRESULT kOpenMfDevice = MAKE_HRESULT(SEVERITY_SUCCESS, FACILITY_ITF, 0x200);
+constexpr HRESULT kOpenMfTest = MAKE_HRESULT(SEVERITY_SUCCESS, FACILITY_ITF, 0x201);
+constexpr HRESULT kOpenSoftwareTest = MAKE_HRESULT(SEVERITY_SUCCESS, FACILITY_ITF, 0x202);
+
 struct FocusReply {
   HRESULT result;
   long value;
@@ -98,6 +105,25 @@ bool Acknowledge(HANDLE pipe, bool write, ULONGLONG deadline) {
 }
 
 #ifndef GESHER_CAMERA_BROKER_HOST
+bool ParseOpenBackend(HRESULT result, bool test_device, CaptureBackend* backend) {
+  switch (result) {
+    case S_OK:
+      *backend = CaptureBackend::kUnreported;
+      return true;
+    case kOpenMfDevice:
+      *backend = CaptureBackend::kMfDevice;
+      return !test_device;
+    case kOpenMfTest:
+      *backend = CaptureBackend::kMfTestSource;
+      return test_device;
+    case kOpenSoftwareTest:
+      *backend = CaptureBackend::kSoftwareTestSource;
+      return test_device;
+    default:
+      return false;
+  }
+}
+
 class CameraPipe {
  public:
   explicit CameraPipe(HANDLE handle) : handle_(handle) {}
@@ -116,10 +142,11 @@ class CameraPipe {
 
 class BrokerCapture final : public Capture {
  public:
-  BrokerCapture(HANDLE pipe, Geometry size, DWORD bytes) : pipe_(pipe), bytes_(bytes) {
+  BrokerCapture(HANDLE pipe, Geometry size, DWORD bytes, CaptureBackend source)
+      : pipe_(pipe), bytes_(bytes) {
     width = size.width;
     height = size.height;
-    via = "Media Foundation on the protected camera broker";
+    backend = source;
   }
 
   ~BrokerCapture() override {
@@ -182,6 +209,20 @@ class BrokerCapture final : public Capture {
   bool failed_ = false;
 };
 #else
+HRESULT OpenSuccess(CaptureBackend backend) {
+  switch (backend) {
+    case CaptureBackend::kMfDevice:
+      return kOpenMfDevice;
+    case CaptureBackend::kMfTestSource:
+      return kOpenMfTest;
+    case CaptureBackend::kSoftwareTestSource:
+      return kOpenSoftwareTest;
+    case CaptureBackend::kUnreported:
+      return E_UNEXPECTED;
+  }
+  return E_UNEXPECTED;
+}
+
 constexpr ULONGLONG kAuthorizationProbeMs = 50;
 constexpr DWORD kCommandPollMs = 5;
 
@@ -320,11 +361,13 @@ std::unique_ptr<Capture> OpenBrokered(const std::string& id, int width, int heig
   *hr = reply.result;
   if (FAILED(*hr)) return nullptr;
   const DWORD bytes = Nv12Bytes(reply.size);
-  if (bytes == 0) {
+  CaptureBackend backend{};
+  if (bytes == 0 || !ParseOpenBackend(reply.result, id == kTestDeviceId, &backend)) {
     *hr = E_UNEXPECTED;
     return nullptr;
   }
-  return std::make_unique<BrokerCapture>(pipe.release(), reply.size, bytes);
+  *hr = S_OK;
+  return std::make_unique<BrokerCapture>(pipe.release(), reply.size, bytes, backend);
 }
 #else
 void ServeBrokeredCamera(HANDLE pipe, bool info_only, const std::function<bool()>& live,
@@ -368,6 +411,7 @@ void ServeBrokeredCamera(HANDLE pipe, bool info_only, const std::function<bool()
     bytes = Nv12Bytes(reply.size);
     if (!bytes) reply.result = E_UNEXPECTED;
     else if (!admitted()) reply.result = E_ACCESSDENIED;
+    else if (SUCCEEDED(reply.result)) reply.result = OpenSuccess(capture->backend);
   }
   if (FAILED(reply.result)) capture.reset();
   if (!capture) finish();

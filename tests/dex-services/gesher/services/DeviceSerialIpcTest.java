@@ -10,6 +10,7 @@ import android.os.ServiceManager;
 public final class DeviceSerialIpcTest {
     public static void main(String[] args) throws Exception {
         System.loadLibrary("android_runtime");
+        if (args.length == 0 || !args[0].equals("expect-null")) PackageInstallerIpcTest.prepareOperator();
         IBinder remote = ServiceManager.getService("device_identifiers");
         if (remote == null || remote instanceof Binder) throw new AssertionError("Device identifiers service is not remote");
         String serial = Build.getSerial();

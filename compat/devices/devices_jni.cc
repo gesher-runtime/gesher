@@ -152,7 +152,7 @@ jlong WindowsCamera_open(JNIEnv* env, jclass, jstring id, jint width, jint heigh
       : cam::Open(chars.c_str(), width, height, &hr);
   if (capture) {
     ALOGI("camera: opened %s at %dx%d through %s", chars.c_str(), capture->width,
-          capture->height, capture->via);
+          capture->height, cam::DescribeCaptureBackend(capture->backend));
   } else {
     ALOGI("camera: opening %s failed: HRESULT 0x%08lX", chars.c_str(),
           static_cast<unsigned long>(hr));

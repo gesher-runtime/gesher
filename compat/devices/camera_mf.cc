@@ -1048,6 +1048,20 @@ class TestCapture : public Capture {
 
 }  // namespace
 
+const char* DescribeCaptureBackend(CaptureBackend backend) {
+  switch (backend) {
+    case CaptureBackend::kMfDevice:
+      return "Media Foundation (IMFSourceReader over the device)";
+    case CaptureBackend::kMfTestSource:
+      return "Media Foundation (IMFSourceReader over the test media source, YUY2 to NV12)";
+    case CaptureBackend::kSoftwareTestSource:
+      return "frames made without Media Foundation";
+    case CaptureBackend::kUnreported:
+      return "a camera broker that did not report its capture backend";
+  }
+  return "an unknown capture backend";
+}
+
 const std::vector<Device>& List(std::string* status) {
   static std::string found;
   static const std::vector<Device>* list = new std::vector<Device>(FindDevices(&found, TestCameraWanted()));
@@ -1070,7 +1084,7 @@ std::unique_ptr<Capture> OpenWithPolicy(const std::string& id, int width, int he
       auto capture = std::make_unique<MfCapture>();
       *hr = capture->InitTest(width, height);
       if (FAILED(*hr)) return nullptr;
-      capture->via = "Media Foundation (IMFSourceReader over the test media source, YUY2 to NV12)";
+      capture->backend = CaptureBackend::kMfTestSource;
       return capture;
     }
     auto capture = std::make_unique<TestCapture>();
@@ -1078,7 +1092,7 @@ std::unique_ptr<Capture> OpenWithPolicy(const std::string& id, int width, int he
     bool small = width * height <= 320 * 240;
     capture->width = small ? 320 : 640;
     capture->height = small ? 240 : 480;
-    capture->via = "frames made without Media Foundation";
+    capture->backend = CaptureBackend::kSoftwareTestSource;
     *hr = S_OK;
     return capture;
   }
@@ -1103,8 +1117,10 @@ std::unique_ptr<Capture> OpenWithPolicy(const std::string& id, int width, int he
 #else
     *hr = capture->Init(devices[i], width, height);
 #endif
-    capture->via = "Media Foundation (IMFSourceReader over the device)";
-    if (SUCCEEDED(*hr)) result = std::move(capture);
+    if (SUCCEEDED(*hr)) {
+      capture->backend = CaptureBackend::kMfDevice;
+      result = std::move(capture);
+    }
   }
   FreeDevices(devices, count);
   return result;

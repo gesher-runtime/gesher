@@ -140,6 +140,8 @@ public final class GmsSetupContractTest {
                 atm, 123, new IApplicationThread.Default());
         String gmsPackage = "com.google.android.gms";
         set(gms, "packageName", gmsPackage); set(gms, "processName", gmsPackage);
+        // A binding process belongs to the exact installed code generation.
+        set(gms, "packageCode", method(pm.getClass(), "get", String.class).invoke(pm, gmsPackage));
         List<Object> processes = (List<Object>) get(atm, "mProcesses"); processes.add(gms);
         Method idleSince = method(atmType, "idleSince");
         check((long) idleSince.invoke(atm) == 0, "Binding GMS process counted as idle");

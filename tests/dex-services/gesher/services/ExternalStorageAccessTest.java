@@ -147,7 +147,10 @@ public final class ExternalStorageAccessTest {
         File mgrFile = ExternalStorageAccess.policyFile(mgrPkg.packageName);
         if (mgrFile != null) {
             String content = Files.readString(mgrFile.toPath());
-            check(content.equals("v=1\npkg=com.test.mgr\nuid=10200\ndeclared=1\nmode=MANAGER\nmedia_mask=7\n"),
+            Field installation = ApkPackage.class.getDeclaredField("mEnabledOwner");
+            installation.setAccessible(true);
+            check(content.equals("v=1\npkg=com.test.mgr\nuid=10200\ninstallation="
+                            + installation.get(mgrPkg) + "\ndeclared=1\nmode=MANAGER\nmedia_mask=7\n"),
                     "unexpected policy file content: " + content);
         }
 

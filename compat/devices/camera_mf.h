@@ -43,6 +43,11 @@ enum FocusOp {
 // Foundation answered, for the logs).
 const std::vector<Device>& List(std::string* status);
 
+// The actual source of an open capture. Older brokers do not report it.
+enum class CaptureBackend { kUnreported, kMfDevice, kMfTestSource, kSoftwareTestSource };
+
+const char* DescribeCaptureBackend(CaptureBackend backend);
+
 // An open device, producing NV12 frames of width x height.
 class Capture {
  public:
@@ -59,7 +64,7 @@ class Capture {
     return E_NOTIMPL;
   }
   int width = 0, height = 0;
-  const char* via = "";  // how frames are read, for the logs
+  CaptureBackend backend = CaptureBackend::kUnreported;
   // nativeRead keeps one scratch frame for this capture. Its mutex also keeps
   // a second caller from changing bytes before the first has published them.
   // Width/height are fixed after opening; destruction releases the scratch.

@@ -134,3 +134,37 @@ smaller record-state fixture retains all ten original assertions and passes
 when compiled on Windows; its declared query boundary does not prove actual
 handle or sharing semantics. Physical ReFS and new performance measurements
 are outside these local checks. Historical timings are unchanged.
+
+## Camera provenance and contract-fixture follow-up
+
+The camera pipe now carries the backend selected by successful initialization.
+An older untagged producer is reported as unknown, and the explicit software
+fixture does not claim Media Foundation execution. The unchanged track-58
+assertions pass for the actual protected IMFSourceReader path and reject only
+the MF proof for software and older-producer controls. Actual malformed and
+fixture-mismatched tags are rejected before frame requests; the earlier client
+still captures preview and JPEG with the updated producer. Source, runtime,
+APK and control identities are in
+`out/qa314/camera-provenance/final-inputs.json`. This remains an isolated test
+picture, not physical camera qualification.
+
+The GMS binding fixture now supplies its exact installed code generation, and
+the external-storage fixture checks the complete policy including that
+installation's actual owner. Original Windows ART runs reproduce each failure;
+the corrected fixtures pass 35 and 54 checks respectively.
+
+Installer Shell fixtures now use the real live device's authenticated operator
+admission. A genuinely enrolled probe tests foreign installer ownership while
+retaining harmless own-session creation and abandonment. Naked forged-UID
+transport denial and the original legacy service-denial tests are separate
+checks. The full protected installer run passes with both the signed and stock
+unsigned test APKs; an independent PID/creation-time/token witness confirms the
+unsigned probe's low-integrity AppContainer. Exact source, APK, DEX, native,
+runtime and log identities are in
+`out/qa314/contracts-repair/installer-inputs.json`.
+
+The unmodified SAF fixture also passes 1,161 actual native-peer checks locally.
+That does not resolve its hosted callback failure. WebView networking, the
+isolated Windows 2022 native task-menu failure, private USER32 and the earlier
+installer/default/interactive gates still require qualification. No criterion
+was weakened to count these local results as a green integrated matrix.

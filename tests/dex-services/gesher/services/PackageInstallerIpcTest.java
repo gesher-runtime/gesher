@@ -8,6 +8,8 @@ import android.content.pm.PackageInstaller;
 import android.os.Binder;
 import android.os.ParcelFileDescriptor;
 import android.os.ServiceManager;
+import com.gesher.server.Device;
+import com.gesher.server.Zygote;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.OutputStream;
@@ -15,12 +17,44 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.util.Arrays;
+import java.util.Objects;
+import java.util.Properties;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /** Actual separate-process stream/cancellation/role checks. Never commits or requests consent. */
 public final class PackageInstallerIpcTest {
     private static void require(boolean condition, String reason) {
         if (!condition) throw new AssertionError(reason);
+    }
+    private static Properties device() throws Exception {
+        Properties state = Device.read(Device.stateFile());
+        require(state != null && Objects.equals(System.getenv("GESHER_BINDER"),
+                state.getProperty(Device.STATE_DEVICE)), "Fixture device namespace changed");
+        require(Device.alive(state, Device.BINDERD) && Device.alive(state, Device.SYSTEM_SERVER),
+                "Fixture device process generation is stale");
+        return state;
+    }
+    static void prepareOperator() throws Exception {
+        require(android.os.Process.myUid() == android.os.Process.SHELL_UID,
+                "Positive fixture requires explicit host shell authority");
+        Properties state = device();
+        if ("true".equals(state.getProperty(Device.STATE_PROTECTED))) {
+            require(Zygote.nativePrepareProtectedOperator(Device.pid(state, Device.BINDERD),
+                    Device.startTime(state, Device.BINDERD)), "Protected fixture operator admission failed");
+        }
+    }
+    private static void forgedUid() throws Exception {
+        require("true".equals(device().getProperty(Device.STATE_PROTECTED)),
+                "Forged-UID transport probe requires a protected device");
+        require(android.os.Process.myUid() == 12345, "Forged-UID probe identity changed");
+        try {
+            ServiceManager.getService("package");
+            throw new AssertionError("Naked forged UID connected to the protected package service");
+        } catch (RuntimeException refused) {
+            require(refused.getMessage() != null && refused.getMessage().contains("Bad file descriptor"),
+                    "Unexpected protected transport failure: " + refused);
+        }
+        System.out.println("PackageInstallerIpcTest: naked forged UID transport denied");
     }
     private static void nativeRoles() throws Exception {
         Class<?> transport = Class.forName("com.gesher.server.InstallPipeTransport");
@@ -161,8 +195,10 @@ public final class PackageInstallerIpcTest {
         System.out.println("PackageInstallerIpcTest: unattached caller and native role denials passed");
     }
     public static void main(String[] args) throws Exception {
-        require(args.length >= 1, "Pass stream, cancel, or untrusted");
+        require(args.length >= 1, "Pass stream, cancel, untrusted, or forged-uid");
         System.loadLibrary("android_runtime");
+        if (args[0].equals("forged-uid")) { forgedUid(); return; }
+        if (!args[0].equals("untrusted")) prepareOperator();
         nativeRoles();
         IPackageInstaller installer = remote();
         if (args[0].equals("untrusted")) untrusted(installer);
