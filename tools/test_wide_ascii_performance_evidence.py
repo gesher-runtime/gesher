@@ -66,7 +66,13 @@ def main():
         check(hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest() == value['blob'], 'frozen Git blob: ' + name)
         # The preserved workflows are source-phase build context. New evidence
         # steps and unrelated later CI jobs are not measured conversion bodies.
-        if not name.startswith('.github/workflows/'):
+        if name == 'tests/native2/native3_wide_ascii_contracts.h':
+            # The live qualification captures errno before formatting assertions.
+            # The archived header and executable still verify the original run.
+            check(digest((ROOT / name).read_bytes()) ==
+                  '922ab80a76dd5a846278199f86d747a9280afa0a1690d4d2ceac13969cdb31d7',
+                  'current errno-safe qualification fixture: ' + name)
+        elif not name.startswith('.github/workflows/'):
             check((ROOT / name).read_bytes() == data, 'current measured source: ' + name)
     check(digest(files['wide-ascii-build-v1/candidate-source.cc']) == CANDIDATE_SHA256 == report['candidate_source_sha256'], 'exact candidate locale')
     check(digest(files['wide-ascii-build-v1/baseline-source.cc']) == report['baseline_source_sha256'], 'exact baseline locale')
@@ -168,7 +174,7 @@ def main():
         commands = load('wide-ascii-extra-qualification-v2/' + row['label'] + '/commands.json')
         check(any(x['stdout'] == 'compile.stdout' and x['exit'] == 0 for x in commands), 'negative actually compiles')
         check(any(x['stdout'] == 'run.stdout' and x['exit'] != 0 for x in commands), 'negative actually executes and fails')
-    ci = (ROOT / '.github/workflows/ci.yml').read_text()
+    ci = (ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8')
     check(ci.count('run: python3 tools/test_wide_ascii_contracts.py --sanitize') == 1, 'mandatory actual-source full CI gate')
     check(ci.count('run: python3 tools/test_wide_ascii_performance_evidence.py') == 1, 'mandatory immutable evidence full CI gate')
     print(f'PASS wide ASCII performance evidence: {checks} source/raw/archive/resource/qualification checks')
