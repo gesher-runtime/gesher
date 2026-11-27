@@ -228,6 +228,12 @@ public final class AppDataStorageHostTest {
         storage.prepare(false, false);
         write(storage.credential.resolve("same"), "CE");
         write(storage.device.resolve("same"), "DE");
+        Path profile = data.resolve("misc/profiles/cur/0/" + PACKAGE + "/nested/owned");
+        Path log = root.resolve("logs/" + PACKAGE + ".log");
+        Path logcat = root.resolve("logs/" + PACKAGE + ".log.logcat");
+        write(profile, "profile");
+        write(log, "log");
+        write(logcat, "logcat");
         for (String kind : new String[] {"data", "obb", "media"}) {
             write(data.resolve("media/0/Android/" + kind + "/" + PACKAGE + "/same"), kind);
         }
@@ -235,9 +241,14 @@ public final class AppDataStorageHostTest {
         pending.stage();
         check(!Files.exists(storage.credential) && !Files.exists(storage.device)
                         && !Files.exists(storage.metadata), "uninstall retained an original private data area");
+        check(!Files.exists(profile) && !Files.exists(log) && !Files.exists(logcat),
+                "uninstall retained application-visible profile or logs");
         PackageRemovalStorage.recover(Map.of(PACKAGE, code.toString()));
         equal(storage.credential.resolve("same"), "CE", "uncommitted uninstall failed to restore CE");
         equal(storage.device.resolve("same"), "DE", "uncommitted uninstall failed to restore DE");
+        equal(profile, "profile", "rollback lost a nested profile file");
+        equal(log, "log", "rollback lost the package log");
+        equal(logcat, "logcat", "rollback lost the package logcat");
         check(Files.isRegularFile(storage.metadata.resolve("state.properties")), "rollback lost layout identity");
         for (String kind : new String[] {"data", "obb", "media"}) {
             equal(data.resolve("media/0/Android/" + kind + "/" + PACKAGE + "/same"), kind,
@@ -251,6 +262,8 @@ public final class AppDataStorageHostTest {
         check(!Files.exists(storage.credential.resolve("same"))
                         && !Files.exists(storage.device.resolve("same")),
                 "reinstall inherited removed CE or DE data");
+        check(!Files.exists(profile) && !Files.exists(log) && !Files.exists(logcat),
+                "reinstall inherited a removed profile or logs");
 
         // A journal from before CE/DE support has only fixed item-0..4 entries.
         Path oldCode = data.resolve("app/" + PACKAGE + "-2");
@@ -273,6 +286,58 @@ public final class AppDataStorageHostTest {
             equal(data.resolve("media/0/Android/" + kind + "/" + PACKAGE + "/old"), kind,
                     "old journal restored external data into wrong slot");
         }
+    }
+
+    private static void nativeRemovalFence(Path root) throws Exception {
+        Path data = root.resolve("fenced-removal");
+        System.setProperty("gesher.test.data", data.toString());
+        Path code = data.resolve("app/" + PACKAGE + "-1");
+        Path marker = data.resolve("system/package-enabled-owners/" + PACKAGE);
+        Path ce = data.resolve("data/" + PACKAGE + "/original");
+        String owner = "b305677d-d9f6-4302-ae0a-9fe598fa50df";
+        String other = "0029806a-b75a-4dd3-90d4-029f0f5ad4d1";
+        write(code.resolve("base.apk"), "original code");
+        write(marker, owner);
+        write(ce, "original private data");
+        Map<String, String> installed = Map.of(PACKAGE, code.toString());
+        PackageRemovalStorage transaction = new PackageRemovalStorage(PACKAGE, code.toString());
+        transaction.beginNativeFence(owner);
+        for (boolean fresh : new boolean[] {false, true}) {
+            try {
+                PackageRemovalStorage.recover(installed, fresh);
+                throw new AssertionError("recovery reopened an ambiguously revoked installation");
+            } catch (IOException expected) { }
+            check(PackageRemovalStorage.reserves(code), "ambiguous native stop lost its journal");
+        }
+        transaction.acknowledgeNativeStop(owner);
+        transaction.stage();
+        transaction.rollback(); // Files returned; native re-admission still lacks an acknowledgment.
+        equal(ce, "original private data", "storage rollback lost original data");
+        try {
+            PackageRemovalStorage.recover(installed);
+            throw new AssertionError("same-server recovery reopened after a failed native restore");
+        } catch (IOException expected) { }
+        check(PackageRemovalStorage.reserves(code), "storage rollback discarded its native fence");
+
+        write(marker, other);
+        try {
+            PackageRemovalStorage.recover(installed, true);
+            throw new AssertionError("fresh authority accepted a different installation owner");
+        } catch (IOException expected) { }
+        equal(marker, other, "ambiguous recovery altered the replacement owner");
+        check(PackageRemovalStorage.reserves(code), "owner mismatch discarded the journal");
+        write(marker, owner);
+        PackageRemovalStorage.recover(installed, true);
+        equal(marker, owner, "fresh authority failed to restore the original exact owner");
+        check(!PackageRemovalStorage.reserves(code), "verified recovery retained the fence");
+
+        transaction = new PackageRemovalStorage(PACKAGE, code.toString());
+        transaction.beginNativeFence(owner);
+        transaction.acknowledgeNativeStop(owner);
+        transaction.stage();
+        PackageRemovalStorage.recover(Map.of());
+        check(!Files.exists(marker) && !Files.exists(ce) && !PackageRemovalStorage.reserves(code),
+                "committed uninstall restored its retired owner or private data");
     }
 
     private static void removalAliases(Path root) throws Exception {
@@ -426,6 +491,7 @@ public final class AppDataStorageHostTest {
             interruptedMigration(root);
             concurrentPreparation(root);
             removalRecovery(root);
+            nativeRemovalFence(root);
             removalAliases(root);
             canceledContenderKeepsOwnerLock(root);
             System.out.println("AppDataStorageHostTest all passed: " + checks + " checks");

@@ -256,7 +256,7 @@ final class Installer {
         Map<String, Entry> entries = readRegistry();
         Map<String, String> installed = new LinkedHashMap<>();
         for (Entry entry : entries.values()) installed.put(entry.packageName, entry.codePath);
-        PackageRemovalStorage.recover(installed);
+        PackageRemovalStorage.recover(installed, SystemServer.isProtectedDevice());
         // Code directories no entry names: an uninstall or update that could not delete
         // them (a file still open), or one that did not finish.
         java.util.Set<String> kept = new java.util.HashSet<>();
@@ -1017,7 +1017,7 @@ final class Installer {
         PackageRemovalStorage quarantine = new PackageRemovalStorage(packageName, e.codePath);
         mPm.beginPackageRemoval(target);
         mRemovalActive = true;
-        boolean committed = false, restored = false, nativeRevoked = false;
+        boolean committed = false, restored = false, nativeAttempted = false, nativeStopped = false;
         Attribution metadata = mAttributions.get(packageName);
         try {
             Dexopt.packageChanging(packageName);
@@ -1033,10 +1033,13 @@ final class Installer {
             // Retire any background start already queued while capabilities were canceled.
             mAtm.forceStopPackage(packageName);
             if (SystemServer.isProtectedDevice()) {
-                nativeRevoked = Zygote.changeProtectedInstallation(target, true);
-                if (!nativeRevoked) {
+                quarantine.beginNativeFence(target.enabledStateOwner());
+                nativeAttempted = true;
+                nativeStopped = Zygote.changeProtectedInstallation(target, true);
+                if (!nativeStopped) {
                     throw new IOException("Could not revoke native process identity for " + packageName);
                 }
+                quarantine.acknowledgeNativeStop(target.enabledStateOwner());
             }
             try (PackageUids.Admission identity = PackageUids.prepareRetire(target)) {
                 quarantine.stage();
@@ -1053,14 +1056,19 @@ final class Installer {
                 mEntries.put(packageName, e);
                 if (metadata != null) mAttributions.put(packageName, metadata);
                 try {
+                    if (nativeAttempted) quarantine.verifyRollbackOwner(target.enabledStateOwner());
                     quarantine.rollback();
-                    restored = true;
-                    if (nativeRevoked && !Zygote.changeProtectedInstallation(target, false)) {
-                        failure.addSuppressed(new IOException("Could not restore native process identity"
-                                + " for " + packageName));
+                    if (nativeAttempted) {
+                        quarantine.verifyRestoredOwner(target.enabledStateOwner());
+                        if (!nativeStopped || !Zygote.changeProtectedInstallation(target, false)) {
+                            throw new IOException("Could not restore native process identity for " + packageName);
+                        }
+                        quarantine.releaseNativeFence();
                     }
+                    restored = true;
+                    quarantine.discard();
                 }
-                catch (IOException restore) { failure.addSuppressed(restore); }
+                catch (IOException | RuntimeException restore) { failure.addSuppressed(restore); }
             }
             throw failure;
         } finally {

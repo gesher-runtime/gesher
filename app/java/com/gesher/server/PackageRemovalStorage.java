@@ -4,25 +4,27 @@ package com.gesher.server;
 import java.io.*;
 import java.nio.file.*;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.nio.charset.StandardCharsets;
 import java.util.*;
 
 /** Private removal quarantine. A reinstall can never inherit an undeleted old data path. */
 final class PackageRemovalStorage {
     // Server-local failure injection for locked-remnant recovery fixtures, never a Binder setting.
     private static java.util.function.Predicate<Path> sReaper = PackageRemovalStorage::deleteNoFollow;
-    private final Path root, directory;
+    private final Path root, directory, logs;
     private final String name, code;
     private final LinkedHashMap<Path, Path> paths = new LinkedHashMap<>();
 
     PackageRemovalStorage(String name, String codePath) throws IOException {
-        this(name, codePath, null);
+        this(name, codePath, null, logRoot());
     }
-    private PackageRemovalStorage(String name, String codePath, Path recovered) throws IOException {
+    private PackageRemovalStorage(String name, String codePath, Path recovered, Path logs) throws IOException {
         if (name == null || !name.matches("[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)+")) {
             throw new SecurityException("Invalid removal package");
         }
         this.name = name;
         root = deviceRoot();
+        this.logs = logs;
         Path apk = codePath(new File(codePath).toPath());
         if (!root.resolve("app").equals(apk.getParent())
                 || !apk.getFileName().toString().matches(java.util.regex.Pattern.quote(name) + "-[0-9]+")) {
@@ -43,18 +45,27 @@ final class PackageRemovalStorage {
         // unambiguous when different runtime versions recover the same journal.
         add(root.resolve("user_de/0").resolve(name), "device-protected-data");
         add(root.resolve("system/app-data-layout").resolve(name), "storage-layout");
+        add(root.resolve("misc/profiles/cur/0").resolve(name), "current-profile");
+        if (logs != null) {
+            add(logs.resolve(name + ".log"), "package-log");
+            add(logs.resolve(name + ".log.logcat"), "package-logcat");
+        }
+        add(root.resolve("system/package-enabled-owners").resolve(name), "package-enabled-owner");
         if (recovered == null) {
             Properties journal = new Properties();
             journal.setProperty("package", name); journal.setProperty("code", code);
+            journal.setProperty("logs", logs.toString());
             try (FileOutputStream out = new FileOutputStream(directory.resolve("journal").toFile())) {
                 journal.store(out, "Gesher package removal transaction"); out.getFD().sync();
             }
         }
-        add(root.resolve("system/package-enabled-owners").resolve(name), "package-enabled-owner");
     }
     private static Path deviceRoot() throws IOException {
         Path data = new File(Device.dataDir()).getCanonicalFile().toPath();
         return Files.exists(data) ? data.toRealPath() : data;
+    }
+    private static Path logRoot() throws IOException {
+        return Device.logsDir().getCanonicalFile().toPath();
     }
     private static Path codePath(Path path) throws IOException {
         Path apk = path.toAbsolutePath().normalize();
@@ -77,6 +88,13 @@ final class PackageRemovalStorage {
     }
     private void checkParents(Path original) throws IOException {
         Path parent = original.getParent();
+        if (logs != null && logs.equals(parent)) {
+            if (present(logs) && (!Files.isDirectory(logs, LinkOption.NOFOLLOW_LINKS)
+                    || !logs.toRealPath().equals(logs))) {
+                throw new SecurityException("Removal log parent changed");
+            }
+            return;
+        }
         if (!original.normalize().startsWith(root)) throw new SecurityException("Removal path escaped device");
         while (parent != null && !parent.equals(root)) {
             if (Files.isSymbolicLink(parent)
@@ -88,10 +106,77 @@ final class PackageRemovalStorage {
         }
         if (parent == null) throw new SecurityException("Removal path escaped device");
     }
+    private static boolean present(Path path) throws IOException {
+        try {
+            Files.readAttributes(path, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+            return true;
+        } catch (NoSuchFileException absent) {
+            return false;
+        }
+    }
+
+    private static String readOwner(Path path) throws IOException {
+        BasicFileAttributes attrs = Files.readAttributes(path, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+        if (!attrs.isRegularFile() || attrs.size() != 36) throw new IOException("Invalid removal owner marker");
+        try (InputStream in = Files.newInputStream(path, LinkOption.NOFOLLOW_LINKS)) {
+            byte[] bytes = in.readNBytes(37);
+            if (bytes.length != 36) throw new IOException("Invalid removal owner marker length");
+            String owner = new String(bytes, StandardCharsets.US_ASCII);
+            try {
+                if (UUID.fromString(owner).toString().equals(owner)) return owner;
+            } catch (IllegalArgumentException ignored) { }
+            throw new IOException("Invalid removal owner identity");
+        }
+    }
+
+    private void writeFence(String leaf, String owner) throws IOException {
+        Path marker = directory.resolve(leaf);
+        Path temporary = Files.createTempFile(directory, ".fence-", ".tmp");
+        try {
+            try (FileOutputStream out = new FileOutputStream(temporary.toFile())) {
+                out.write(owner.getBytes(StandardCharsets.US_ASCII));
+                out.getFD().sync();
+            }
+            Files.move(temporary, marker);
+        } finally {
+            Files.deleteIfExists(temporary);
+        }
+    }
+
+    void beginNativeFence(String owner) throws IOException {
+        verifyRestoredOwner(owner);
+        writeFence("native-fence", owner);
+    }
+
+    void acknowledgeNativeStop(String owner) throws IOException {
+        writeFence("native-stopped", owner);
+    }
+
+    void verifyRollbackOwner(String owner) throws IOException {
+        Path active = root.resolve("system/package-enabled-owners").resolve(name);
+        Path quarantined = paths.get(active);
+        checkParents(active);
+        Path marker = present(quarantined) ? quarantined : active;
+        if (!readOwner(marker).equals(owner)) throw new IOException("Removal owner changed: " + name);
+    }
+
+    void verifyRestoredOwner(String owner) throws IOException {
+        Path marker = root.resolve("system/package-enabled-owners").resolve(name);
+        Path apk = root.resolve(code).resolve("base.apk");
+        checkParents(marker);
+        checkParents(apk);
+        if (!readOwner(marker).equals(owner) || !Files.isRegularFile(apk, LinkOption.NOFOLLOW_LINKS)) {
+            throw new IOException("Original package generation could not be confirmed: " + name);
+        }
+    }
+
+    void releaseNativeFence() throws IOException {
+        Files.delete(directory.resolve("native-fence"));
+    }
     void stage() throws IOException {
         for (Map.Entry<Path, Path> path : paths.entrySet()) {
             checkParents(path.getKey());
-            if (!Files.exists(path.getKey(), LinkOption.NOFOLLOW_LINKS)) continue;
+            if (!present(path.getKey())) continue;
             IOException last = null;
             for (int attempt = 0; attempt < 5; attempt++) {
                 try { Files.move(path.getKey(), path.getValue()); last = null; break; }
@@ -107,19 +192,22 @@ final class PackageRemovalStorage {
         List<Map.Entry<Path, Path>> reverse = new ArrayList<>(paths.entrySet());
         Collections.reverse(reverse);
         for (Map.Entry<Path, Path> path : reverse) {
-            if (!Files.exists(path.getValue(), LinkOption.NOFOLLOW_LINKS)) continue;
+            if (!present(path.getValue())) continue;
             checkParents(path.getKey());
-            if (Files.exists(path.getKey(), LinkOption.NOFOLLOW_LINKS)) {
+            if (present(path.getKey())) {
                 throw new IOException("Cannot restore occupied application path");
             }
             Files.move(path.getValue(), path.getKey());
         }
-        discard();
     }
     void discard() { sReaper.test(directory); }
 
     /** Registry is the commit point: restore precommit moves, reap committed quarantine. */
     static void recover(Map<String, String> installed) throws IOException {
+        recover(installed, false);
+    }
+
+    static void recover(Map<String, String> installed, boolean freshProtectedAuthority) throws IOException {
         Path root = deviceRoot();
         Path trash = root.resolve("system/uninstall-trash");
         if (!Files.isDirectory(trash, LinkOption.NOFOLLOW_LINKS)) return;
@@ -136,11 +224,32 @@ final class PackageRemovalStorage {
                 try (InputStream in = Files.newInputStream(journal)) { p.load(in); }
                 String name = p.getProperty("package"), code = p.getProperty("code");
                 if (code == null) throw new IOException("Invalid removal journal");
-                PackageRemovalStorage old = new PackageRemovalStorage(name, root.resolve(code).toString(), entry);
+                PackageRemovalStorage old = new PackageRemovalStorage(name, root.resolve(code).toString(), entry, null);
                 String retained = installed.get(name);
                 if (retained != null && codePath(new File(retained).toPath())
-                        .equals(root.resolve(old.code))) old.rollback();
-                else old.discard();
+                        .equals(root.resolve(old.code))) {
+                    Path logRoot = journalLogs(p);
+                    if (logRoot != null) {
+                        old = new PackageRemovalStorage(name, root.resolve(code).toString(), entry, logRoot);
+                    }
+                    Path fence = entry.resolve("native-fence");
+                    String owner = null;
+                    if (present(fence)) {
+                        owner = readOwner(fence);
+                        // Only a fresh authenticated device may recover a previously
+                        // acknowledged exact process stop without the old broker.
+                        if (!freshProtectedAuthority || !owner.equals(readOwner(entry.resolve("native-stopped")))) {
+                            throw new IOException("Native package retirement is pending: " + name);
+                        }
+                        old.verifyRollbackOwner(owner);
+                    }
+                    old.rollback();
+                    if (owner != null) {
+                        old.verifyRestoredOwner(owner);
+                        old.releaseNativeFence();
+                    }
+                }
+                old.discard();
             }
         }
     }
@@ -162,11 +271,19 @@ final class PackageRemovalStorage {
                 if (old == null) throw new IOException("Invalid removal journal");
                 // Validate the complete record before using its path as authority.
                 PackageRemovalStorage transaction = new PackageRemovalStorage(p.getProperty("package"),
-                        root.resolve(old).toString(), entry);
+                        root.resolve(old).toString(), entry, null);
                 if (root.resolve(transaction.code).equals(codePath(codePath))) return true;
             }
         }
         return false;
+    }
+
+    private static Path journalLogs(Properties journal) throws IOException {
+        String saved = journal.getProperty("logs");
+        if (saved == null) return null; // journals before the log slots existed
+        Path current = logRoot();
+        if (!current.toString().equals(saved)) throw new IOException("Removal log root changed");
+        return current;
     }
 
     /** No FOLLOW_LINKS: links inside app data are removed, never traversed. */
