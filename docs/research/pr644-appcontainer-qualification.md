@@ -189,3 +189,21 @@ objects retained cancellation without a grant. Source, JAR/DEX, runtime and log
 identities are in `out/qa314/saf-hosted/final-inputs.json`. Temporary SUBST
 experiments were removed and are not the before/after proof. Actual UNC-share
 execution remains unavailable and the hosted rerun remains required.
+
+## Protected graphics fixture follow-up
+
+The nested service-first graphics run reproduced `0xc0000142` before Android
+attachment: its disposable private desktop lacked the runtime capability grant
+used by ordinary launchers. The fixture now adds only the five production
+desktop rights to its newly generated GUID desktop. It changes no existing
+desktop, window station or integrity label. Protected control commands use the
+real verified operator, retaining the separate legacy path.
+
+The original three modes pass in both protected and legacy executions. Native
+frame ownership, service/PID/job lifetime, hidden unapproved frames, background
+visibility and explicit-headless assertions remain intact. The configured
+CMake executable and all 83 final receipt artifacts were independently verified
+in `out/qa314/window-promotion-qa/guid-inputs.json`. This tests same-user
+AppContainer graphics, not the separate private SYSTEM runtime. The shared
+runtime capability is not an assertion of foreign-app isolation on that fixture
+desktop; the next hosted matrix remains required.
