@@ -16,6 +16,7 @@ std::unique_ptr<Capture> OpenBrokered(const std::string& id, int width, int heig
                                      capture_policy::Attribution attribution, HRESULT* hr);
 void ServeBrokeredCamera(HANDLE pipe, bool info_only, const std::function<bool()>& live,
                          const std::function<bool(const capture_policy::Attribution&)>& start,
-                         const std::function<bool()>& authorized, bool slot);
+                         const std::function<bool()>& authorized,
+                         const std::function<bool()>& finish, bool slot);
 
 }  // namespace gesher::devices::camera

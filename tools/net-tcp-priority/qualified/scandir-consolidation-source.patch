@@ -2328,6 +2328,88 @@ index 036f657..88622e0 100644
  int PthreadSetName(uint64_t thread, const char* name);
  int PthreadGetName(uint64_t thread, char* name, size_t size);
  int PthreadCpuClock(uint64_t thread, int* clock_id);
+diff --git a/tests/native/directory_contract_host_test.cc.in b/tests/native/directory_contract_host_test.cc.in
+index 77f08ca..2e7cae7 100644
+--- a/tests/native/directory_contract_host_test.cc.in
++++ b/tests/native/directory_contract_host_test.cc.in
+@@ -26,7 +26,9 @@ size_t owned_count;
+ int fail_read_after = -1;
+ int reads;
+ int closes;
+-bool fail_fd_path;
++bool fail_fd_open;
++bool max_cookie;
++bool max_cookie_seen;
+
+ void track(void* pointer) {
+   if (pointer == nullptr || !allocations_armed) return;
+@@ -54,6 +56,7 @@ extern "C" void* __real_realloc(void*, size_t);
+ extern "C" void __real_free(void*);
+ extern "C" dirent* __real_readdir(DIR*);
+ extern "C" int __real_closedir(DIR*);
++extern "C" DIR* __real_fdopendir(int);
+ extern "C" void* __wrap_malloc(size_t n) {
+   if (allocation_fails()) return nullptr;
+   void* pointer = __real_malloc(n);
+@@ -75,7 +78,17 @@ extern "C" void __wrap_free(void* pointer) {
+ }
+ extern "C" dirent* __wrap_readdir(DIR* dir) {
+   if (fail_read_after >= 0 && reads++ >= fail_read_after) return errno = EIO, nullptr;
+-  return __real_readdir(dir);
++  dirent* entry = __real_readdir(dir);
++  if (entry != nullptr && max_cookie) {
++    // Directory cookies are opaque; even INT64_MAX is not an arithmetic overflow.
++    entry->d_off = INT64_MAX;
++    max_cookie_seen = true;
++  }
++  return entry;
++}
++extern "C" DIR* __wrap_fdopendir(int fd) {
++  if (fail_fd_open) return errno = EIO, nullptr;
++  return __real_fdopendir(fd);
+ }
+ extern "C" int __wrap_closedir(DIR* dir) {
+   ++closes;
+@@ -89,7 +102,9 @@ namespace {
+ constexpr int kAtFdcwd = -100;
+ constexpr int kODirectory = O_DIRECTORY;
+ bool PathOfFd(int fd, std::string* out) {
+-  if (fail_fd_path) return errno = EIO, false;
++  // Historical source projections used this path lookup before fdopendir.
++  // Keep their same fault contract while live source uses the real boundary.
++  if (fail_fd_open) return errno = EIO, false;
+   char proc[64], path[4096];
+   std::snprintf(proc, sizeof(proc), "/proc/self/fd/%d", fd);
+   ssize_t length = readlink(proc, path, sizeof(path));
+@@ -198,11 +213,11 @@ static void test_directory_failures(const char* mode) {
+     if (scanat) {
+       int parent = ::open(".", O_RDONLY | O_DIRECTORY);
+       struct dirent** entries = sentinel;
+-      fail_fd_path = true;
++      fail_fd_open = true;
+       errno = 0;
+       int count = scanat(parent, path, &entries, nullptr, nullptr);
+       const int error = errno;
+-      fail_fd_path = false;
++      fail_fd_open = false;
+       check("directory: fdopendir failure returns original error", count == -1 && error == EIO && entries == sentinel);
+       check("directory: failed fdopendir closes new fd, retains parent", descriptor_count() == baseline_fds + 1 && fcntl(parent, F_GETFD, 0) >= 0);
+       ::close(parent);
+@@ -220,6 +235,14 @@ static void test_directory_failures(const char* mode) {
+ int main(int argc, char** argv) {
+   if (argc != 2) return 2;
+   if (std::strcmp(argv[1], "public") == 0) test_directory_contracts();
++  else if (std::strcmp(argv[1], "opaque-cookie") == 0) {
++    // Use the real reader and directory contents, changing only its opaque
++    // cookie boundary. A stale maximum-position guard must fail this scan.
++    max_cookie = true;
++    test_directory_failures("allocations");
++    max_cookie = false;
++    check("directory: maximum cookie reached production reader", max_cookie_seen);
++  }
+   else test_directory_failures(argv[1]);
+   return failures == 0 ? 0 : 1;
+ }
 diff --git a/tests/native/libc_test.c b/tests/native/libc_test.c
 index 2eedef0..7e800c9 100644
 --- a/tests/native/libc_test.c
@@ -2425,6 +2507,48 @@ index 2eedef0..7e800c9 100644
    test_scan_many_arguments();
    test_errno_files();
    test_statfs();
+diff --git a/tests/native/scandir_sort_bench.cc.in b/tests/native/scandir_sort_bench.cc.in
+index 44c78f9..7c974fa 100644
+--- a/tests/native/scandir_sort_bench.cc.in
++++ b/tests/native/scandir_sort_bench.cc.in
+@@ -61,12 +61,14 @@ int BIONIC_SYSV Filter(const BionicDirent* e) { return active->order != FilterNo
+ void Require(bool value) { if (!value) { std::fputs("SCANDIR_BENCH_IDENTITY_FAILURE\n", stderr); std::exit(1); } }
+ uint64_t Clock(clockid_t id) { timespec t{}; Require(clock_gettime(id, &t) == 0); return uint64_t(t.tv_sec) * 1000000000ULL + t.tv_nsec; }
+ std::vector<BionicDirent> Reference(const std::string& path) {
++  constexpr bool native_cookie = @SCANDIR_REFERENCE_USES_NATIVE_COOKIE@;
+   std::vector<BionicDirent> result; DIR* d = ::opendir(path.c_str()); Require(d != nullptr);
+   int64_t position = 0;
+   while (auto* e = ::readdir(d)) {
+     ++position; if (e->d_name[0] == '.' || active->order == FilterNone) continue;
+     BionicDirent v{}; v.d_ino = e->d_ino ? e->d_ino : static_cast<uint64_t>(e->d_off);
+-    v.d_off = position; v.d_type = e->d_type; v.d_reclen = sizeof(v); std::strcpy(v.d_name, e->d_name); result.push_back(v);
++    v.d_off = native_cookie ? e->d_off : position;
++    v.d_type = e->d_type; v.d_reclen = sizeof(v); std::strcpy(v.d_name, e->d_name); result.push_back(v);
+   }
+   Require(::closedir(d) == 0);
+   if (active->order != NoSort) std::stable_sort(result.begin(), result.end(), [](const auto& a, const auto& b) { return Value(a, b, active->order) < 0; });
+diff --git a/tests/native/scandir_sort_host.cc.in b/tests/native/scandir_sort_host.cc.in
+index b69ecba..1305c2f 100644
+--- a/tests/native/scandir_sort_host.cc.in
++++ b/tests/native/scandir_sort_host.cc.in
+@@ -133,6 +133,7 @@ int BIONIC_SYSV CompareEntry(const BionicDirent** a, const BionicDirent** b) {
+   return answer;
+ }
+ std::vector<BionicDirent> Reference(const Directory& dir, Order order) {
++  constexpr bool native_cookie = @SCANDIR_REFERENCE_USES_NATIVE_COOKIE@;
+   std::vector<BionicDirent> result;
+   DIR* d = ::opendir(dir.path.c_str()); if (!d) std::abort();
+   int64_t position = 0;
+@@ -141,7 +142,8 @@ std::vector<BionicDirent> Reference(const Directory& dir, Order order) {
+     if (e->d_name[0] == '.') continue;
+     BionicDirent value{};
+     value.d_ino = e->d_ino ? e->d_ino : static_cast<uint64_t>(e->d_off);
+-    value.d_off = position; value.d_type = e->d_type; value.d_reclen = sizeof(value);
++    value.d_off = native_cookie ? e->d_off : position;
++    value.d_type = e->d_type; value.d_reclen = sizeof(value);
+     std::strcpy(value.d_name, e->d_name); result.push_back(value);
+   }
+   if (::closedir(d)) std::abort();
 diff --git a/tools/net-tcp-priority/qualified/memrchr-source.json b/tools/net-tcp-priority/qualified/memrchr-source.json
 index c7d6fec..d6ee610 100644
 --- a/tools/net-tcp-priority/qualified/memrchr-source.json
@@ -3011,7 +3135,7 @@ index 16c4744..d487a91 100644
 ++}  // namespace
 ++#endif
 diff --git a/tools/net-tcp-priority/test-memrchr-policy.py b/tools/net-tcp-priority/test-memrchr-policy.py
-index ff74e316c8ad681c4f961e688eb653d062443ed1..73045effb2bdeadcc8e23c6e34b6c5fe3ed52fea 100644
+index ff74e31..73045ef 100644
 --- a/tools/net-tcp-priority/test-memrchr-policy.py
 +++ b/tools/net-tcp-priority/test-memrchr-policy.py
 @@ -23,12 +23,15 @@ FOLDER = 'tools/net-tcp-priority/qualified/'
@@ -3061,7 +3185,7 @@ index ff74e316c8ad681c4f961e688eb653d062443ed1..73045effb2bdeadcc8e23c6e34b6c5fe
  print('MEMRCHR_SOURCE_POLICY_PASS exact_main_round_trip=1 original_protected_digests=71 negative_controls=' + str(checks))
 +
 diff --git a/tools/net-tcp-priority/test-scandir-policy.py b/tools/net-tcp-priority/test-scandir-policy.py
-index fcd68fdfa506f4aaaa42170fc08acf5413e60012..4bb09c04d443ec9273f367bc75013655abc359ec 100644
+index fcd68fd..4bb09c0 100644
 --- a/tools/net-tcp-priority/test-scandir-policy.py
 +++ b/tools/net-tcp-priority/test-scandir-policy.py
 @@ -18,7 +18,14 @@ spec.loader.exec_module(policy)
@@ -3105,7 +3229,7 @@ index fcd68fdfa506f4aaaa42170fc08acf5413e60012..4bb09c04d443ec9273f367bc75013655
       b'while (n > 0) {', 'scandir reverse endpoint'),
      ('public export', b'E("scandir", Scandir);', b'E("scandir", ScandirWrong);', 'scandir reverse endpoint'),
 diff --git a/tools/net-tcp-priority/test-selected-policy.py b/tools/net-tcp-priority/test-selected-policy.py
-index 5f0fff8..cf6fc5d 100644
+index 5f0fff8..ec6a35e 100644
 --- a/tools/net-tcp-priority/test-selected-policy.py
 +++ b/tools/net-tcp-priority/test-selected-policy.py
 @@ -2,6 +2,9 @@
@@ -3886,7 +4010,7 @@ index 5f0fff8..cf6fc5d 100644
   assert hashlib.sha256(current).hexdigest()==transition['after_sha256'][MEMRCHR_SOURCE],MEMRCHR_SOURCE
   baseline=subprocess.check_output(['git','-C',str(ROOT),'show',MEMRCHR_BASE+':'+MEMRCHR_SOURCE])
   assert hashlib.sha256(baseline).hexdigest()==transition['before_sha256'][MEMRCHR_SOURCE],MEMRCHR_SOURCE
-@@ -474,7 +1137,246 @@ def preceding_memrchr_source(qualification):
+@@ -474,7 +1137,248 @@ def preceding_memrchr_source(qualification):
    assert (work/MEMRCHR_SOURCE).read_bytes()==current,'memrchr forward endpoint'
   return baseline
 
@@ -4015,15 +4139,17 @@ index 5f0fff8..cf6fc5d 100644
 +# ends of each changed file are exact, and no runtime pass is granted here.
 +APPCONTAINER_INTEGRATION_BASE = 'ff2c1870053c9d0332e6abef07a25fc282d384b5'
 +# Independent historical endpoint pin remains fixed when the live side is refreshed.
-+APPCONTAINER_INTEGRATION_PREVIOUS_SHA256 = '685804f7733ddf9a0f51ee9b2c0fbea026a802532141e08c3f9cbdb1bf41150c'
++APPCONTAINER_INTEGRATION_PREVIOUS_SHA256 = '754be6b93d9a81d2d3e04541af036bedde7b45ef3b6e86d3eeb48514fceda2f9'
 +APPCONTAINER_INTEGRATION_PATCH = 'tools/net-tcp-priority/qualified/appcontainer-integration-source.patch'
 +APPCONTAINER_INTEGRATION_QUALIFICATION = 'tools/net-tcp-priority/qualified/appcontainer-integration-source.json'
-+APPCONTAINER_INTEGRATION_QUALIFICATION_SHA256 = '3edcbb7867be4e41e77d9b65c5302d387d8942f1ad3cbfce311d39928e7b8473'
++APPCONTAINER_INTEGRATION_QUALIFICATION_SHA256 = '9c25e2e013a292a0647fd26b3540752c807736f6fd35c35236fa60eb723dba5b'
 +# In addition to the donor identity surface, the merged startup/fork path
 +# intersects the exact USB and child-wait source qualification.
 +APPCONTAINER_INTEGRATION_PATHS = sorted(APPCONTAINER_IDENTITY_SOURCE_SHA256.keys() | {
 + 'compat/bionic/process_bionic.cc', 'compat/credentials/account_crypto.c',
 + 'compat/elf/exec/exec.cmake', 'compat/elf/exec/gesher_tools.cc',
++ # Preserve the exact USB shell inputs before replaying their historical proof.
++ 'compat/elf/exec/gesher_shell.cc', 'compat/elf/exec/shell_execute.inc',
 + 'compat/posix/src/binder_transport.cc', 'compat/posix/src/process.cc', 'compat/posix/src/storage_policy.cc',
 + 'compat/posix/src/storage_policy.h',
 + # Host-only legacy-key archiving extends the contained runtime. Reconstruct
@@ -4134,7 +4260,7 @@ index 5f0fff8..cf6fc5d 100644
   folder=ROOT/'tools/net-tcp-priority/qualified'
   raw=(folder/'ofd-stream-source.json').read_bytes()
   assert hashlib.sha256(raw).hexdigest()==OFD_QUALIFICATION_SHA256,'OFD source qualification changed'
-@@ -485,42 +1387,86 @@ def preceding_ofd_sources():
+@@ -485,42 +1389,86 @@ def preceding_ofd_sources():
          'compat/posix/src/system.cc','compat/posix/src/winsock.cc']
   assert qualification['paths']==paths
   assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==paths
@@ -4237,7 +4363,7 @@ index 5f0fff8..cf6fc5d 100644
  # AF_UNIX credentials and descriptor passing (ADR 0088) and memfd seals change
  # these selected sources after REVIEWED_CHECKPOINT, a commit on main. The
  # pinned REVIEWED_PATCH lists each changed line as an exact hunk at its line in
-@@ -529,7 +1475,9 @@ def preceding_ofd_sources():
+@@ -529,7 +1477,9 @@ def preceding_ofd_sources():
  # checkpoint's bytes. Any other change fails here as before.
  REVIEWED_CHECKPOINT='7a45c2468c270bfe68ee5f854aa9d4feaf2208b3'
  REVIEWED_PATCH='tools/net-tcp-priority/reviewed-adr0088-memfd-seals.json'
@@ -4248,7 +4374,7 @@ index 5f0fff8..cf6fc5d 100644
  def reviewed(path,actual):
   raw=(ROOT/REVIEWED_PATCH).read_bytes()
   assert hashlib.sha256(raw).hexdigest()==REVIEWED_PATCH_SHA256,REVIEWED_PATCH
-@@ -555,12 +1503,68 @@ NDK_ARCHIVE_SHARING={
+@@ -555,12 +1505,68 @@ NDK_ARCHIVE_SHARING={
    b"archive = Path('tcp-ndk-archive/android-ndk-r27c-linux.zip')\narchive.parent.mkdir(exist_ok=True)\n",
    b"# Shares native2's publisher-archive cache entry (same path and key), so one copy is kept.\narchive = Path('dns-ndk.zip')\n"),
  }
@@ -4321,7 +4447,7 @@ index 5f0fff8..cf6fc5d 100644
   paths=subprocess.check_output(['git','-C',str(ROOT),'diff','1745e99d7f2849ba81784545e07d60cb2b7800c3^','1745e99d7f2849ba81784545e07d60cb2b7800c3','--name-only'],text=True).splitlines()
   paths+=['.github/workflows/net-tcp-coherent-component.yml','tests/net-tcp-priority/contract.cc','tests/net-tcp-priority/native_udp_control.cc','tests/native2/net_udp_trunc.cpp','tests/native2/net_udp_fault_observer.c','tools/net-tcp-priority/qualified/TsfJobSupervisor.cs','tools/windows4/TsfJobSupervisor.cs','tools/windows4/TsfJobWorker.cs','tools/windows4/test-tsf-job-supervisor.ps1','tools/ci/receipt-diagnostics.ps1','tools/net-tcp-priority/import-policy.json','tools/net-tcp-priority/import_policy.py','tools/net-tcp-priority/build-guests.py','tools/net-tcp-priority/prepare-ndk.py']
   for path in paths:
-@@ -569,7 +1573,10 @@ def check():
+@@ -569,7 +1575,10 @@ def check():
           WINSOCK_BASE if path=='compat/posix/src/winsock.cc' else
           CONTROL_BASE if path=='tools/windows4/test-tsf-job-supervisor.ps1' else BASE)
    expected=subprocess.check_output(['git','-C',str(ROOT),'show',epoch+':'+path])
@@ -4333,7 +4459,7 @@ index 5f0fff8..cf6fc5d 100644
    if path=='compat/posix/src/winsock.cc':
     assert actual.count(TCP_PRIORITY_WAKE_AFTER)==1 and TCP_PRIORITY_WAKE_BEFORE not in actual,path
     actual=actual.replace(TCP_PRIORITY_WAKE_AFTER,TCP_PRIORITY_WAKE_BEFORE,1)
-@@ -663,11 +1670,159 @@ def check():
+@@ -663,11 +1672,159 @@ def check():
   assert pin['ordered_patch_sha256']=={'minimum-detached-retirement.patch':'ebc5aac990c6ec075431d0c25a9b74ecadc0940da1bdad9503f358d4fe3431ad','minimum-noattach-join.patch':'c4f47903af720542a584fa743932316d86c45683da70a4c8620d7a71d3eb7f96'}
   for name,digest in pin['ordered_patch_sha256'].items():assert hashlib.sha256((ROOT/'tools/host-pthread-authority'/name).read_bytes()).hexdigest()==digest
   for path in ['tools/net-tcp-priority/manifest.py','tools/host-pthread-authority/minimum_receipt.py']:ast.parse((ROOT/path).read_text(encoding='utf-8'))
@@ -4494,7 +4620,7 @@ index 5f0fff8..cf6fc5d 100644
    ('compat/posix/src/fd.cc',b'--state->description->descriptor_refs == 0',b'--state->description->descriptor_refs == 1'),
    ('compat/posix/src/fd.cc',b'return TransferPipe(snapshot, bytes, count, false);',b'return 0;'),
    ('compat/posix/src/system.cc',b'gesher::ws::RecvOwned(state.socket,',b'gesher::ws::SendOwned(state.socket,'),
-@@ -675,6 +1830,9 @@ def transition_negative_controls():
+@@ -675,6 +1832,9 @@ def transition_negative_controls():
    ('compat/posix/src/ofd.cc',b'InterlockedCompareExchange(&shared->flags,',b'InterlockedExchange(&shared->flags,'),
    ('compat/elf/exec/shell_execute.inc',b'gesher::ReadPipeDescriptionInterruptible(description, value, 1, interrupted)',b'gesher::ReadFileDescription(description, value, 1)'),
    ('tools/net-tcp-priority/qualified/ofd-stream-source.patch',b'@@',b'@x'),
@@ -4504,7 +4630,7 @@ index 5f0fff8..cf6fc5d 100644
    ('compat/posix/src/fd.cc',b'if (result < 0) return -1;',b'if (result < 0) return 0;'),
    ('compat/posix/src/fd.cc',b'SocketRegistry& socket_registry = *new (socket_registry_storage) SocketRegistry;',b'SocketRegistry socket_registry;'),
    ('compat/posix/src/stdio_output.cc',b'if (locked_stream_) _lock_file(locked_stream_);',b'if (locked_stream_) {}'),
-@@ -689,6 +1847,11 @@ def transition_negative_controls():
+@@ -689,6 +1849,11 @@ def transition_negative_controls():
    ('compat/posix/src/system_properties.cc',b'SetWideEnvironment(L"GESHER_PROPERTY_ROOT", root.c_str())',b'_wputenv_s(L"GESHER_PROPERTY_ROOT", root.c_str())'),
    ('compat/posix/include/gesher/system_properties.h',b'uint32_t generation = 0;',b'uint64_t generation = 0;'),
    ('tools/net-tcp-priority/qualified/native13-property-source.patch',b'@@',b'@x'),
@@ -4516,7 +4642,7 @@ index 5f0fff8..cf6fc5d 100644
    # The memmem normalization admits its exact reviewed delta only. The old
    # whole-file digest must still reject any unrelated shim change afterwards.
    ('compat/bionic/shim.cc',b'size_t n = std::strlen(s) + 1;',b'size_t n = std::strlen(s) + 2;'),
-@@ -696,6 +1859,40 @@ def transition_negative_controls():
+@@ -696,6 +1861,40 @@ def transition_negative_controls():
    ('compat/bionic/shim.cc',b'#include "memmem_search.h"\n',b''),
    ('compat/bionic/shim.cc',b'#include "memmem_search.h"\n',b'#include "memmem_search.h"\n#include "memmem_search.h"\n'),
    (MEMMEM_HEADER,b'if (needle_size == 0) return haystack_data;',b'if (needle_size == 0) return nullptr;'),
@@ -4557,7 +4683,7 @@ index 5f0fff8..cf6fc5d 100644
   ]
   for name,before,after in cases:
    target=ROOT/name
-@@ -703,22 +1900,208 @@ def transition_negative_controls():
+@@ -703,22 +1902,210 @@ def transition_negative_controls():
    def changed(path):
     raw=original(path)
     return raw.replace(before,after,1) if path==target else raw
@@ -4716,7 +4842,7 @@ index 5f0fff8..cf6fc5d 100644
 +  assert rejected,'repinned composed Binder mutation accepted: '+before.decode()
 + print('TCP_SELECTED_TRANSITION_NEGATIVE_CONTROLS_PASS cases='+str(len(cases))+' repinned_property_controls=5 repinned_memfd_lease_controls='+str(repinned_memfd_lease)+' repinned_binder_output_controls=6 repinned_composed_binder_controls='+str(len(composed_cases)))
 +NATIVE2_PROJECTION_ADAPTER = 'tools/scandir_native2_projection.py'
-+NATIVE2_PROJECTION_ADAPTER_SHA256 = '00fdced959bf7b4783b1dcd0aa6384ed9e4d9bdf48cf54a984415243a756161b'
++NATIVE2_PROJECTION_ADAPTER_SHA256 = '92315526cfd0331ee455f892c2cff66f6b25ae91f585b3f31c190e5bb137969c'
 +
 +def native2_projection():
 + # Keep the qualified historical Bionic endpoint exact while independently
@@ -4771,16 +4897,20 @@ index 5f0fff8..cf6fc5d 100644
    transition_negative_controls()
    import runpy
    runpy.run_path(str(ROOT/'tools/net-tcp-priority/test-shared-stdio-policy.py'),run_name='__main__')
-   runpy.run_path(str(ROOT/'tools/net-tcp-priority/test-memrchr-policy.py'),run_name='__main__')
+-  runpy.run_path(str(ROOT/'tools/net-tcp-priority/test-memrchr-policy.py'),run_name='__main__')
+-  runpy.run_path(str(ROOT/'tools/net-tcp-priority/test-scandir-policy.py'),run_name='__main__')
 +  runpy.run_path(str(ROOT/'tools/net-tcp-priority/test-tsf-metadata-policy.py'),run_name='__main__')
-   runpy.run_path(str(ROOT/'tools/net-tcp-priority/test-scandir-policy.py'),run_name='__main__')
++ # These standalone controls validate the live projection themselves before
++ # supplying historical bytes to their own inner mutation checks.
++ runpy.run_path(str(ROOT/'tools/net-tcp-priority/test-memrchr-policy.py'),run_name='__main__')
++ runpy.run_path(str(ROOT/'tools/net-tcp-priority/test-scandir-policy.py'),run_name='__main__')
 +
 +if __name__=='__main__':
 + import sys
 + previous=check_live()
 + if '--selftest' in sys.argv:selftest(previous)
 diff --git a/tools/test_memrchr_report.py b/tools/test_memrchr_report.py
-index bbbec330d7ff0b02bf8c27970245de2f2e6d2a4a..0d5d15a890cf32cd4debbbeb02ea6e32461149aa 100644
+index bbbec33..0d5d15a 100644
 --- a/tools/test_memrchr_report.py
 +++ b/tools/test_memrchr_report.py
 @@ -10,6 +10,7 @@ import json
@@ -4825,3 +4955,66 @@ index bbbec330d7ff0b02bf8c27970245de2f2e6d2a4a..0d5d15a890cf32cd4debbbeb02ea6e32
  if __name__ == "__main__":
      main()
 +
+diff --git a/tools/test_scandir_sort.py b/tools/test_scandir_sort.py
+index 2d6c088..91b992c 100644
+--- a/tools/test_scandir_sort.py
++++ b/tools/test_scandir_sort.py
+@@ -11,6 +11,24 @@ import subprocess
+ import sys
+
+ ROOT = Path(__file__).resolve().parents[1]
++# Shared by the archived baseline and candidate, including 7e205878, 3a309b7
++# and the qualified pre-Native2 endpoint. Only this exact legacy reader
++# synthesizes ordinals. Current tests require the host's actual opaque cookie.
++ORDINAL_READER_SHA256 = '5063dedb9c3bb0e8eaf6374b2917dc9893a0ca2004dd6bfaaa89864d62e31f5d'
++COOKIE_MARKER = '@SCANDIR_REFERENCE_USES_NATIVE_COOKIE@'
++
++
++def reference_cookie(section, explicit_source):
++    boundary = "// scandir with the .so's System V filter and comparator; alphasort is the"
++    assert section.count(boundary) == 1, 'directory reader/sort boundary changed'
++    reader = section[:section.index(boundary)]
++    if explicit_source and hashlib.sha256(reader.encode()).hexdigest() == ORDINAL_READER_SHA256:
++        return 'false'
++    start, end = 'bool Fill(ShimDir* d, BionicDirent* out) {', 'BionicDirent* BIONIC_SYSV Readdir('
++    assert reader.count(start) == reader.count(end) == 1, 'directory reader boundaries changed'
++    fill = reader[reader.index(start):reader.index(end)]
++    assert fill.count('out->d_off = e->d_off;') == 1, 'current reader must return the native cookie'
++    return 'true'
+
+
+ def main():
+@@ -35,10 +53,11 @@ def main():
+     start, end = 'struct BionicDirent {', '// --- the *at() calls and other path calls'
+     assert source.count(start) == source.count(end) == 1
+     section = source[source.index(start):source.index(end)]
++    native_cookie = reference_cookie(section, args.source_ref is not None or args.source is not None)
+     if args.build_benchmark:
+         template = (ROOT / 'tests/native/scandir_sort_bench.cc.in').read_text()
+-        assert template.count('@DIRECTORY_IMPLEMENTATION@') == 1
+-        generated = template.replace('@DIRECTORY_IMPLEMENTATION@', section)
++        assert template.count('@DIRECTORY_IMPLEMENTATION@') == template.count(COOKIE_MARKER) == 1
++        generated = template.replace('@DIRECTORY_IMPLEMENTATION@', section).replace(COOKIE_MARKER, native_cookie)
+         cpp = out / 'scandir_bench.cc'; cpp.write_text(generated)
+         binary = out / 'scandir_bench'
+         command = shlex.split(os.environ.get('CXX', 'c++')) + ['-std=gnu++20', '-O3', '-DNDEBUG', '-g', '-Wall', '-Wextra', '-Werror',
+@@ -69,8 +88,8 @@ def main():
+         assert host.count(marker) == 1
+         host = host.replace(marker, value)
+     template = (ROOT / 'tests/native/scandir_sort_host.cc.in').read_text()
+-    assert template.count('@HOST_TEMPLATE@') == 1
+-    generated = template.replace('@HOST_TEMPLATE@', host)
++    assert template.count('@HOST_TEMPLATE@') == template.count(COOKIE_MARKER) == 1
++    generated = template.replace('@HOST_TEMPLATE@', host).replace(COOKIE_MARKER, native_cookie)
+     cpp = out / 'scandir_sort.cc'
+     cpp.write_text(generated)
+     binary = out / 'scandir_sort'
+@@ -78,7 +97,7 @@ def main():
+         '-std=c++20', '-O1', '-g', '-Wall', '-Wextra', '-Werror', '-Wno-unused-function', '-fno-exceptions',
+         '-fno-builtin', '-pthread', '-I', str(ROOT / 'compat/bionic'), '-I', str(ROOT / 'compat/arm64/include'),
+         '-I', str(ROOT / 'tests/native'), str(cpp),
+-        '-Wl,--wrap=malloc,--wrap=realloc,--wrap=free,--wrap=readdir,--wrap=closedir', '-o', str(binary)]
++        '-Wl,--wrap=malloc,--wrap=realloc,--wrap=free,--wrap=readdir,--wrap=closedir,--wrap=fdopendir', '-o', str(binary)]
+     if args.sanitize:
+         command += ['-fsanitize=address,undefined', '-fno-omit-frame-pointer']
+     subprocess.run(command, check=True, timeout=120)

@@ -267,22 +267,33 @@ if (Test-Path "$Dir/recordapp.apk") {
 
   # The Gesher device: the app in a process of its own (logs/com.gesher.recordapp.log), its
   # environment the device's (GESHER_AUDIO_SOURCE, GESHER_CAMERA_TEST).
-  $env:GESHER_AUDIO_CAPTURE = Join-Path $m3Tmp 'out-device'
-  New-Item -ItemType Directory -Force $env:GESHER_AUDIO_CAPTURE | Out-Null
   $launcherRec = $dvmRecTrace + 'com.gesher.app.Launcher'
   $null = & $captureRuntime @($launcherRec + 'shutdown') 2>&1 | Out-String
-  $recordInstall = RunTimed $captureRuntime ($launcherRec + @('install', (NoDrive "$Dir/recordapp.apk"))) 180
-  if ($LASTEXITCODE -ne 0) { throw "Record fixture installation prerequisite failed: $recordInstall" }
-  $null = Grant-FixturePermissions $captureRuntime $dvmRec (NoDrive "$Dir/services-tests.dex") `
-    (NoDrive "$Dir/recordapp.apk") 'com.gesher.recordapp' @('android.permission.CAMERA', 'android.permission.RECORD_AUDIO') `
-    -Installed -ExpectedUid $recordUid
-  $recordDeviceLog = Join-Path $root 'logs/com.gesher.recordapp.log'
-  if (Test-Path -LiteralPath $recordDeviceLog) { Remove-Item -LiteralPath $recordDeviceLog -Force }
-  $devOut = & $captureRuntime @($launcherRec + 'launch', (NoDrive "$Dir/recordapp.apk"), '--headless', '--keep-task') 2>&1 | Out-String
-  $devCode = $LASTEXITCODE
-  $devOut += "`n" + (Get-Content -LiteralPath $recordDeviceLog -Raw -ErrorAction SilentlyContinue)
-  RecordChecks 'Gesher device' $devOut $devCode
-  $null = & $captureRuntime @($launcherRec + 'shutdown') 2>&1 | Out-String
+  # Stage the same fixture PCM inside the read-only runtime tree. The child
+  # can write captures only in its app data, not the runner's artifacts.
+  $deviceMic = Join-Path $root 'system/etc/gesher-media3-mic.wav'
+  New-Item -ItemType Directory -Force (Split-Path -Parent $deviceMic) | Out-Null
+  Copy-Item -LiteralPath $micWav -Destination $deviceMic
+  $env:GESHER_AUDIO_SOURCE = $deviceMic
+  $env:GESHER_AUDIO_CAPTURE = Join-Path $root 'data/data/com.gesher.recordapp/fixture-capture'
+  New-Item -ItemType Directory -Force $env:GESHER_AUDIO_CAPTURE | Out-Null
+  try {
+    $recordInstall = RunTimed $captureRuntime ($launcherRec + @('install', (NoDrive "$Dir/recordapp.apk"))) 180
+    if ($LASTEXITCODE -ne 0) { throw "Record fixture installation prerequisite failed: $recordInstall" }
+    $null = Grant-FixturePermissions $captureRuntime $dvmRec (NoDrive "$Dir/services-tests.dex") `
+      (NoDrive "$Dir/recordapp.apk") 'com.gesher.recordapp' @('android.permission.CAMERA', 'android.permission.RECORD_AUDIO') `
+      -Installed -ExpectedUid $recordUid
+    $recordDeviceLog = Join-Path $root 'logs/com.gesher.recordapp.log'
+    if (Test-Path -LiteralPath $recordDeviceLog) { Remove-Item -LiteralPath $recordDeviceLog -Force }
+    $devOut = & $captureRuntime @($launcherRec + 'launch', (NoDrive "$Dir/recordapp.apk"), '--window', '--keep-task') 2>&1 | Out-String
+    $devCode = $LASTEXITCODE
+    $devOut += "`n" + (Get-Content -LiteralPath $recordDeviceLog -Raw -ErrorAction SilentlyContinue)
+    RecordChecks 'Gesher device' $devOut $devCode
+  } finally {
+    $null = & $captureRuntime @($launcherRec + 'shutdown') 2>&1 | Out-String
+    $env:GESHER_AUDIO_SOURCE = $micWav
+    Remove-Item -LiteralPath $deviceMic -ErrorAction SilentlyContinue
+  }
   Remove-Item Env:GESHER_CAMERA_TEST, Env:GESHER_AUDIO_CAPTURE, Env:GESHER_MEDIA_TRACE_RECORD -ErrorAction SilentlyContinue
 
   # A real EGL producer keeps the same connection while two AVC codecs and a

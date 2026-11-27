@@ -104,6 +104,7 @@ int Builtin(Shell* sh, const std::vector<std::string>& args, Io* io) {
     }
     SetVar(sh, "OLDPWD", sh->cwd);
     sh->cwd = Narrow(path);
+    sh->cwd_inherited = false;
     SetVar(sh, "PWD", sh->cwd);
     if (print) WriteAll(io->fd[1], sh->cwd + "\n");
     return 0;

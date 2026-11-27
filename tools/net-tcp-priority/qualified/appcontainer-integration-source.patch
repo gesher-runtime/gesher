@@ -1,5 +1,5 @@
 diff --git a/compat/binder/binderd.cc b/compat/binder/binderd.cc
-index 9516fa9..021198d 100644
+index 9516fa9..13c9ed4 100644
 --- a/compat/binder/binderd.cc
 +++ b/compat/binder/binderd.cc
 @@ -54,9 +54,25 @@
@@ -326,7 +326,7 @@ index 9516fa9..021198d 100644
      g_procs[proc->id] = proc_owner;
    }
    TRACE("proc %u: pid %u opened the device", proc->id, pid);
-@@ -1723,6 +1873,509 @@ void ServeProc(HANDLE pipe, In in, const ProtectedIdentity& protected_peer) {
+@@ -1723,6 +1873,513 @@ void ServeProc(HANDLE pipe, In in, const ProtectedIdentity& protected_peer) {
    ProcRelease(proc);
  }
 
@@ -722,17 +722,21 @@ index 9516fa9..021198d 100644
 +        g_camera_sessions.insert(identity).second) session = g_camera_next_session++;
 +  }
 +  using Kind = gesher::capture_policy::Kind;
++  auto finish = [&] {
++    if (!session) return false;
++    const bool stopped = CaptureAuthorized(process, Kind::kCameraFinish, session);
++    std::lock_guard lock(g_camera_lock);
++    g_camera_sessions.erase(identity);
++    session = 0;
++    return stopped;
++  };
 +  gesher::devices::camera::ServeBrokeredCamera(pipe, info_only != 0,
 +      [&] { return g_peer_registry->Live(process); },
 +      [&](const auto& attribution) {
 +        return CaptureAuthorized(process, Kind::kCameraStart, session, attribution);
 +      },
-+      [&] { return CaptureAuthorized(process, Kind::kCameraCheck, session); }, session != 0);
-+  if (session) {
-+    CaptureAuthorized(process, Kind::kCameraFinish, session);
-+    std::lock_guard lock(g_camera_lock);
-+    g_camera_sessions.erase(identity);
-+  }
++      [&] { return CaptureAuthorized(process, Kind::kCameraCheck, session); }, finish, session != 0);
++  finish();
 +}
 +#endif
 +
@@ -836,7 +840,7 @@ index 9516fa9..021198d 100644
  // --- the descriptor broker (ADR 0088 section 3) --------------------------------------
  //
  // SCM_RIGHTS on Gesher's AF_UNIX socketpairs. A deposited group of
-@@ -1806,19 +2459,29 @@ void DeliverRights(HANDLE to, RightsGroup* group, WireReply* reply) {
+@@ -1806,19 +2463,29 @@ void DeliverRights(HANDLE to, RightsGroup* group, WireReply* reply) {
  void ServeRights(HANDLE pipe, In in) {
    uint32_t version;
    ULONG client_pid = 0;
@@ -870,7 +874,7 @@ index 9516fa9..021198d 100644
      In req{msg.data(), msg.data() + msg.size()};
      uint32_t op;
      if (!req.Get(&op)) break;
-@@ -1954,7 +2617,6 @@ void ServeRights(HANDLE pipe, In in) {
+@@ -1954,7 +2621,6 @@ void ServeRights(HANDLE pipe, In in) {
      }
      if (!WriteMessage(pipe, reply)) break;
    }
@@ -878,7 +882,7 @@ index 9516fa9..021198d 100644
  }
 
  int DoIoctl(Proc* proc, Thread* thread, uint32_t request, In in, Out* out) {
-@@ -1971,6 +2633,8 @@ int DoIoctl(Proc* proc, Thread* thread, uint32_t request, In in, Out* out) {
+@@ -1971,6 +2637,8 @@ int DoIoctl(Proc* proc, Thread* thread, uint32_t request, In in, Out* out) {
        if (proc->protected_peer &&
            proc->protected_peer->role() != gesher::binder::PeerRole::kContextManager) return -EPERM;
  #endif
@@ -887,7 +891,7 @@ index 9516fa9..021198d 100644
        flat_binder_object fbo = {};
        if (request == BINDER_SET_CONTEXT_MGR_EXT && !in.Get(&fbo)) return -EINVAL;
        if (g_context_mgr_node != nullptr) {
-@@ -2015,13 +2679,17 @@ void ServeThread(HANDLE pipe, In in, const ProtectedIdentity& protected_peer = {
+@@ -2015,13 +2683,17 @@ void ServeThread(HANDLE pipe, In in, const ProtectedIdentity& protected_peer = {
    }
    std::shared_ptr<Thread> thread_owner;
    std::shared_ptr<Proc> proc_owner;
@@ -906,7 +910,7 @@ index 9516fa9..021198d 100644
        proc_owner = it->second;
        proc = proc_owner.get();
        thread_owner = std::make_shared<Thread>();
-@@ -2043,6 +2711,7 @@ void ServeThread(HANDLE pipe, In in, const ProtectedIdentity& protected_peer = {
+@@ -2043,6 +2715,7 @@ void ServeThread(HANDLE pipe, In in, const ProtectedIdentity& protected_peer = {
 
    std::vector<uint8_t> msg;
    while (ReadMessage(pipe, &msg)) {
@@ -914,7 +918,7 @@ index 9516fa9..021198d 100644
      In req{msg.data(), msg.data() + msg.size()};
      uint32_t op;
      if (!req.Get(&op)) break;
-@@ -2104,7 +2773,144 @@ void ServeThread(HANDLE pipe, In in, const ProtectedIdentity& protected_peer = {
+@@ -2104,7 +2777,144 @@ void ServeThread(HANDLE pipe, In in, const ProtectedIdentity& protected_peer = {
    ThreadRelease(thread);
  }
 
@@ -1060,7 +1064,7 @@ index 9516fa9..021198d 100644
    std::vector<uint8_t> msg;
    // The largest protected hello is op, magic, version, proc id, key and tid.
    constexpr uint32_t kProtectedHelloLimit = 7 * sizeof(uint32_t);
-@@ -2114,11 +2920,9 @@ void ServeConnection(HANDLE pipe, ProtectedIdentity protected_peer = {}) {
+@@ -2114,11 +2924,9 @@ void ServeConnection(HANDLE pipe, ProtectedIdentity protected_peer = {}) {
      uint32_t op, magic;
      if (in.Get(&op) && in.Get(&magic) && magic == wire::kMagic) {
        if (op == wire::kHelloProc) {
@@ -1073,7 +1077,7 @@ index 9516fa9..021198d 100644
  #ifdef GESHER_PROTECTED_BINDER
        } else if (op == wire::kPublishApplicationSharedMemory && protected_peer) {
          uint32_t version = 0;
-@@ -2139,8 +2943,6 @@ void ServeConnection(HANDLE pipe, ProtectedIdentity protected_peer = {}) {
+@@ -2139,8 +2947,6 @@ void ServeConnection(HANDLE pipe, ProtectedIdentity protected_peer = {}) {
    CloseHandle(pipe);
  }
 
@@ -1082,7 +1086,7 @@ index 9516fa9..021198d 100644
  #ifdef GESHER_PROTECTED_BINDER
  ProtectedIdentity AdmitProtected(HANDLE pipe, const gesher::binder::ProtectedPeers& peers) {
    ProtectedIdentity identity;
-@@ -2194,7 +2996,7 @@ int RunProtected(int argc, char** argv) {
+@@ -2194,7 +3000,7 @@ int RunProtected(int argc, char** argv) {
        }
      }
      auto identity = AdmitProtected(pipe, peers);
@@ -1091,7 +1095,7 @@ index 9516fa9..021198d 100644
    }
  }
  #endif
-@@ -2211,46 +3013,89 @@ int main(int argc, char** argv) {
+@@ -2211,46 +3017,89 @@ int main(int argc, char** argv) {
      return 1;
  #endif
    }
@@ -1209,7 +1213,7 @@ index 9516fa9..021198d 100644
      if (error != ERROR_SUCCESS) {
        Log("GESHER_SANDBOX=appcontainer: no pipe security descriptor: %lu", error);
 diff --git a/compat/bionic/process_bionic.cc b/compat/bionic/process_bionic.cc
-index 33e275d..77b0f40 100644
+index 33e275d..6881f7f 100644
 --- a/compat/bionic/process_bionic.cc
 +++ b/compat/bionic/process_bionic.cc
 @@ -22,6 +22,7 @@
@@ -1220,7 +1224,56 @@ index 33e275d..77b0f40 100644
  #include <gesher/elf_loader.h>
  #include <gesher/environment.h>
  #include <gesher/fork.h>
-@@ -956,6 +957,7 @@ void ForkChildProcessState() {
+@@ -194,7 +195,11 @@ bool CurrentEnv(std::vector<std::string>* out) {
+   }, out);
+ }
+
+-std::string CurrentDir() {
++// NULL preserves the process's existing cwd handle even when the restricted
++// child cannot reopen its host path. A fork broker has its own cwd, so that
++// route must receive the forked caller's actual directory explicitly.
++std::string SpawnDirectory() {
++  if (!gesher::InForkedChild()) return {};
+   DWORD n = GetCurrentDirectoryW(0, nullptr);
+   std::wstring d(n, L'\0');
+   n = GetCurrentDirectoryW(n, d.data());
+@@ -305,7 +310,7 @@ void ExecReplace(const std::string& program, const std::vector<std::string>& arg
+       return;
+     }
+   }
+-  int pid = SpawnProgram(program, argv, env, CurrentDir(), search, fds, job);
++  int pid = SpawnProgram(program, argv, env, SpawnDirectory(), search, fds, job);
+   fds.clear();  // snapshots must not keep child pipe endpoints open while waiting
+   if (pid < 0) {
+     if (job != nullptr) {
+@@ -563,7 +568,7 @@ int BIONIC_SYSV System(const char* command) {
+   if (!InheritedFds(&fds)) return -1;
+   std::vector<std::string> env;
+   if (!CurrentEnv(&env)) return -1;
+-  int pid = SpawnProgram("/system/bin/sh", argv, env, CurrentDir(), false, fds);
++  int pid = SpawnProgram("/system/bin/sh", argv, env, SpawnDirectory(), false, fds);
+   fds.clear();
+   if (pid < 0) return -1;
+   int status = 0;
+@@ -624,7 +629,7 @@ void* BIONIC_SYSV Popen(const char* command, const char* mode) {
+   if (!found) fds.push_back({target, child_description->handle, child_description});
+   std::vector<std::string> argv{"/system/bin/sh", "-c", command};
+   std::vector<std::string> env;
+-  int pid = CurrentEnv(&env) ? SpawnProgram("/system/bin/sh", argv, env, CurrentDir(), false, fds) : -1;
++  int pid = CurrentEnv(&env) ? SpawnProgram("/system/bin/sh", argv, env, SpawnDirectory(), false, fds) : -1;
+   fds.clear();
+   CloseHandle(child_end);
+   child_description.reset();
+@@ -834,7 +839,7 @@ int DoPosixSpawn(int* pid_out, const char* path, const BionicFileActions* const*
+   std::vector<std::string> env;
+   if (envp) env = FromList(envp);
+   else if (!CurrentEnv(&env)) return errno;
+-  int pid = SpawnPrepared(launch, env, CurrentDir(), fds);
++  int pid = SpawnPrepared(launch, env, SpawnDirectory(), fds);
+   if (pid < 0) return errno;  // posix_spawn returns the error number
+   if (pid_out != nullptr) *pid_out = pid;
+   return 0;
+@@ -956,6 +961,7 @@ void ForkChildProcessState() {
  // clone system call, as on Linux).
  int BIONIC_SYSV GuestFork(int exit_signal, int run_atfork, const ForkHooks* hooks) {
    if (run_atfork) RunAtforkPrepare();
@@ -1228,7 +1281,7 @@ index 33e275d..77b0f40 100644
    // Forked children create processes through this one (gesher/fork.h).
    gesher::StartSpawnBroker();
    gesher::PrepareFork();
-@@ -979,16 +981,19 @@ int BIONIC_SYSV GuestFork(int exit_signal, int run_atfork, const ForkHooks* hook
+@@ -979,16 +985,19 @@ int BIONIC_SYSV GuestFork(int exit_signal, int run_atfork, const ForkHooks* hook
    const bool leases = gesher::ForkHasMemfdWriteLeases();
    HANDLE leases_renewed = leases ? CreateEventW(nullptr, TRUE, FALSE, nullptr) : nullptr;
    HANDLE leases_go = leases ? CreateEventW(nullptr, TRUE, FALSE, nullptr) : nullptr;
@@ -1251,7 +1304,7 @@ index 33e275d..77b0f40 100644
        if (h != nullptr) CloseHandle(h);
      }
      gesher::ReleaseForkLocks(false);
-@@ -1018,10 +1023,20 @@ int BIONIC_SYSV GuestFork(int exit_signal, int run_atfork, const ForkHooks* hook
+@@ -1018,10 +1027,20 @@ int BIONIC_SYSV GuestFork(int exit_signal, int run_atfork, const ForkHooks* hook
        // waiting ends this process instead of saying go.
        HANDLE waits[2] = {leases_go, parent_self};
        WaitForMultipleObjects(2, waits, FALSE, INFINITE);
@@ -1273,7 +1326,7 @@ index 33e275d..77b0f40 100644
      if (!gesher::ReinitializeAfterFork()) {
        // It could not watch its own signals (or be traced): not a child the
        // parent may return. The parent sees it end without being ready.
-@@ -1044,8 +1059,9 @@ int BIONIC_SYSV GuestFork(int exit_signal, int run_atfork, const ForkHooks* hook
+@@ -1044,8 +1063,9 @@ int BIONIC_SYSV GuestFork(int exit_signal, int run_atfork, const ForkHooks* hook
        // (it waits for this word, so it has run no guest code either way).
        if (lease_wait == WAIT_OBJECT_0) SetEvent(leases_go);
      }
@@ -1284,7 +1337,7 @@ index 33e275d..77b0f40 100644
    const bool leases_failed = cloned > 0 && lease_wait != WAIT_OBJECT_0;
    if (leases_failed) {
      // The child did not take its leases in time (or ended first): returning
-@@ -1064,20 +1080,31 @@ int BIONIC_SYSV GuestFork(int exit_signal, int run_atfork, const ForkHooks* hook
+@@ -1064,20 +1084,31 @@ int BIONIC_SYSV GuestFork(int exit_signal, int run_atfork, const ForkHooks* hook
    // no guest code (it signals before fork returns in it), so it is ended and
    // fork fails, rather than return a child that loses signals.
    DWORD ready_wait = WAIT_OBJECT_0;
@@ -1501,6 +1554,27 @@ index a3851ce..c35a8c6 100644
    if (started) for (auto& reservation : native_exports) reservation->Commit();
    return error;
  } catch (const std::bad_alloc&) {
+diff --git a/compat/elf/exec/gesher_shell.cc b/compat/elf/exec/gesher_shell.cc
+index f5bf8b0..d457ac5 100644
+--- a/compat/elf/exec/gesher_shell.cc
++++ b/compat/elf/exec/gesher_shell.cc
+@@ -27,6 +27,7 @@
+ // drive, "/mnt/d/x" on drive D:, /dev/null is NUL.
+
+ #include "gesher_shell.h"
++#include <gesher/fork.h>
+ #include "../../usb_storage/protected_runtime_client.h"
+
+ #include <gesher/reserved_names.h>
+@@ -266,6 +267,8 @@ struct Io {
+ struct Shell {
+   std::map<std::string, Var> vars;
+   std::string cwd;
++  // Until cd changes shell state, children inherit the real process cwd handle.
++  bool cwd_inherited = true;
+   Io io;
+   std::vector<std::string> pos;  // $0, $1...
+   std::map<std::string, NodeP> funcs;
 diff --git a/compat/elf/exec/gesher_tools.cc b/compat/elf/exec/gesher_tools.cc
 index 8e1e424..b03ea38 100644
 --- a/compat/elf/exec/gesher_tools.cc
@@ -1527,6 +1601,24 @@ index 8e1e424..b03ea38 100644
    command.insert(command.end(), args.begin(), args.end());
    Launch launch;
    int error = PrepareLaunch(command, Narrow(directory), &launch);
+diff --git a/compat/elf/exec/shell_execute.inc b/compat/elf/exec/shell_execute.inc
+index e44309e..42b469f 100644
+--- a/compat/elf/exec/shell_execute.inc
++++ b/compat/elf/exec/shell_execute.inc
+@@ -139,7 +139,12 @@ int Start(const Shell& sh, const std::vector<std::string>& args, const Io& io,
+     ShErr(sh, io, args[0] + ": " + ErrorText(EILSEQ));
+     return 126;
+   }
+-  DWORD failed = SpawnWithFds(launch, environment.c_str(), WindowsPath(sh.cwd),
++  // Reopening an inherited host cwd can fail under an AppContainer. Preserve
++  // inheritance until cd changes the shell's logical cwd. A fork broker needs
++  // an explicit path because its process directory belongs to the broker.
++  std::wstring directory = sh.cwd_inherited && !gesher::InForkedChild()
++                               ? std::wstring{} : WindowsPath(sh.cwd);
++  DWORD failed = SpawnWithFds(launch, environment.c_str(), directory,
+                               fds, process);
+   if (failed != 0) {
+     ShErr(sh, io, args[0] + ": " + ErrorText(ErrnoFromWin32(failed)));
 diff --git a/compat/posix/include/gesher/file_description.h b/compat/posix/include/gesher/file_description.h
 index b142828..3a8deee 100644
 --- a/compat/posix/include/gesher/file_description.h

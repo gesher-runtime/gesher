@@ -8,7 +8,9 @@ public final class CapturePermissionFlowHost extends ActivityBoundary {
     private static final int REQUEST_CAMERA = 1;
     private static final String EXTRA_AUTO_CAPTURE_MS = "auto";
     private volatile boolean mDone;
+    private volatile boolean mResumed;
     private boolean mCameraStarted;
+    private boolean mAwaitingCameraPermission;
     private final HandlerThread mThread = new HandlerThread();
     private Handler mHandler;
     private final Handler mMain = new Handler();
@@ -39,7 +41,9 @@ public final class CapturePermissionFlowHost extends ActivityBoundary {
     private static CapturePermissionFlowHost pending() {
         CapturePermissionFlowHost activity = new CapturePermissionFlowHost();
         activity.intent.auto = 40;
-        activity.requestCameraAccess();
+        activity.onResume();
+        check(activity.requests == 0, "permission checked before resume was reported");
+        activity.mMain.drain();
         check(activity.requests == 1 && activity.requestCode == REQUEST_CAMERA,
                 "missing ordinary camera permission request");
         check(activity.requested.length == 1 && Manifest.permission.CAMERA.equals(activity.requested[0]),
@@ -56,6 +60,7 @@ public final class CapturePermissionFlowHost extends ActivityBoundary {
         CapturePermissionFlowHost granted = pending();
         granted.permission = PackageManager.PERMISSION_GRANTED;
         granted.answer(PackageManager.PERMISSION_GRANTED);
+        granted.mMain.drain();
         check(granted.opens == 1 && granted.mThread.starts == 1 && granted.mMain.delayed == 1,
                 "grant did not start the requested camera and timer once");
         granted.answer(PackageManager.PERMISSION_GRANTED);
@@ -70,7 +75,24 @@ public final class CapturePermissionFlowHost extends ActivityBoundary {
         check(granted.mSession.closed && granted.mDevice.closed && granted.mPreviewReader.closed
                 && granted.mStillReader.closed && granted.mThread.quits == 1,
                 "started camera resources were not closed on destruction");
-        check(granted.mMain.queue.isEmpty(), "destruction retained auto-capture callbacks");
+        check(granted.mMain.queue.isEmpty() && granted.mMain.timers.isEmpty(),
+                "destruction retained auto-capture callbacks");
+
+        CapturePermissionFlowHost paused = pending();
+        paused.onPause();
+        paused.permission = PackageManager.PERMISSION_GRANTED;
+        paused.answer(PackageManager.PERMISSION_GRANTED);
+        paused.mMain.drain();
+        check(paused.opens == 0 && !paused.mDone, "the paused callback started or canceled pending work");
+        paused.onResume();
+        paused.mMain.drain();
+        check(paused.opens == 1 && paused.requests == 1, "resume did not consume the deferred grant");
+        paused.onPause();
+        paused.mMain.drain();
+        paused.capture();
+        paused.mHandler.drain();
+        check(paused.result == RESULT_CANCELED && paused.mSession.captures == 0,
+                "foreground loss let a queued or later capture proceed");
 
         CapturePermissionFlowHost denied = pending();
         denied.answer(PackageManager.PERMISSION_DENIED);
@@ -116,11 +138,13 @@ public final class CapturePermissionFlowHost extends ActivityBoundary {
         other.onRequestPermissionsResult(99, new String[] {Manifest.permission.CAMERA}, new int[] {0});
         check(other.opens == 0 && !other.mDone, "unrelated permission result changed this operation");
         other.answer(PackageManager.PERMISSION_GRANTED);
+        other.mMain.drain();
         check(other.opens == 1, "real permission result lost after unrelated callback");
 
         CapturePermissionFlowHost pregranted = new CapturePermissionFlowHost();
         pregranted.permission = PackageManager.PERMISSION_GRANTED;
-        pregranted.requestCameraAccess();
+        pregranted.onResume();
+        pregranted.mMain.drain();
         check(pregranted.requests == 0 && pregranted.opens == 1,
                 "an existing grant was prompted again or ignored");
 
@@ -150,7 +174,10 @@ class ActivityBoundary {
     <T> T getSystemService(Class<T> type) { return type.cast(new CameraManager()); }
     Intent getIntent() { return intent; }
     void setResult(int value, Intent data) { result = value; }
+    void setResult(int value) { result = value; }
     void finish() { finishes++; finishing = true; }
+    protected void onResume() { }
+    protected void onPause() { }
     protected void onDestroy() { destroyed = true; }
 }
 class Manifest { static class permission { static final String CAMERA = "android.permission.CAMERA"; } }
@@ -161,12 +188,13 @@ class Intent {
 }
 class Handler {
     final ArrayDeque<Runnable> queue = new ArrayDeque<>();
+    final ArrayDeque<Runnable> timers = new ArrayDeque<>();
     int delayed;
     Handler() { }
     Handler(Object looper) { }
     void post(Runnable action) { queue.add(action); }
-    void postDelayed(Runnable action, long delay) { delayed++; queue.add(action); }
-    void removeCallbacksAndMessages(Object owner) { queue.clear(); }
+    void postDelayed(Runnable action, long delay) { delayed++; timers.add(action); }
+    void removeCallbacksAndMessages(Object owner) { queue.clear(); timers.clear(); }
     void drain() {
         int remaining = 100;
         while (!queue.isEmpty()) {

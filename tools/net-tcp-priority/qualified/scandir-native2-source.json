@@ -1,13 +1,13 @@
 {
   "after_sha256": {
-    "compat/bionic/posix_bionic.cc": "4b2a88eef3812a62d1b3722dcf9f1813fd9969992b82252ade062b49cb4d553f"
+    "compat/bionic/posix_bionic.cc": "b936b41896079115592ccbe1846ee16744d7a402b0094a20702d43eb4e5cbdaf"
   },
   "baseline": "3c7fe0dd2813cd6495e303405b974fc46dfea30f",
   "before_sha256": {
     "compat/bionic/posix_bionic.cc": "9ba77321ff4a4fedd64b9dfc433a5c93349daf6eef90552bda95763b0ef3a531"
   },
   "native_runtime_approval": false,
-  "patch_sha256": "bb2c9caeb9b2afc6e17236646ee2925347cfeb06e527aa0f4a946bf00b6a218b",
+  "patch_sha256": "590f105aef323506880d00ff3c011b640d249884e44e515180833ac824ac08c7",
   "paths": [
     "compat/bionic/posix_bionic.cc"
   ],

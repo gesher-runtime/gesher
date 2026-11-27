@@ -26,7 +26,9 @@ size_t owned_count;
 int fail_read_after = -1;
 int reads;
 int closes;
-bool fail_fd_path;
+bool fail_fd_open;
+bool max_cookie;
+bool max_cookie_seen;
 
 void track(void* pointer) {
   if (pointer == nullptr || !allocations_armed) return;
@@ -54,6 +56,7 @@ extern "C" void* __real_realloc(void*, size_t);
 extern "C" void __real_free(void*);
 extern "C" dirent* __real_readdir(DIR*);
 extern "C" int __real_closedir(DIR*);
+extern "C" DIR* __real_fdopendir(int);
 extern "C" void* __wrap_malloc(size_t n) {
   if (allocation_fails()) return nullptr;
   void* pointer = __real_malloc(n);
@@ -75,7 +78,17 @@ extern "C" void __wrap_free(void* pointer) {
 }
 extern "C" dirent* __wrap_readdir(DIR* dir) {
   if (fail_read_after >= 0 && reads++ >= fail_read_after) return errno = EIO, nullptr;
-  return __real_readdir(dir);
+  dirent* entry = __real_readdir(dir);
+  if (entry != nullptr && max_cookie) {
+    // Directory cookies are opaque; even INT64_MAX is not an arithmetic overflow.
+    entry->d_off = INT64_MAX;
+    max_cookie_seen = true;
+  }
+  return entry;
+}
+extern "C" DIR* __wrap_fdopendir(int fd) {
+  if (fail_fd_open) return errno = EIO, nullptr;
+  return __real_fdopendir(fd);
 }
 extern "C" int __wrap_closedir(DIR* dir) {
   ++closes;
@@ -89,7 +102,9 @@ namespace {
 constexpr int kAtFdcwd = -100;
 constexpr int kODirectory = O_DIRECTORY;
 bool PathOfFd(int fd, std::string* out) {
-  if (fail_fd_path) return errno = EIO, false;
+  // Historical source projections used this path lookup before fdopendir.
+  // Keep their same fault contract while live source uses the real boundary.
+  if (fail_fd_open) return errno = EIO, false;
   char proc[64], path[4096];
   std::snprintf(proc, sizeof(proc), "/proc/self/fd/%d", fd);
   ssize_t length = readlink(proc, path, sizeof(path));
@@ -198,11 +213,11 @@ static void test_directory_failures(const char* mode) {
     if (scanat) {
       int parent = ::open(".", O_RDONLY | O_DIRECTORY);
       struct dirent** entries = sentinel;
-      fail_fd_path = true;
+      fail_fd_open = true;
       errno = 0;
       int count = scanat(parent, path, &entries, nullptr, nullptr);
       const int error = errno;
-      fail_fd_path = false;
+      fail_fd_open = false;
       check("directory: fdopendir failure returns original error", count == -1 && error == EIO && entries == sentinel);
       check("directory: failed fdopendir closes new fd, retains parent", descriptor_count() == baseline_fds + 1 && fcntl(parent, F_GETFD, 0) >= 0);
       ::close(parent);
@@ -220,6 +235,14 @@ static void test_directory_failures(const char* mode) {
 int main(int argc, char** argv) {
   if (argc != 2) return 2;
   if (std::strcmp(argv[1], "public") == 0) test_directory_contracts();
+  else if (std::strcmp(argv[1], "opaque-cookie") == 0) {
+    // Use the real reader and directory contents, changing only its opaque
+    // cookie boundary. A stale maximum-position guard must fail this scan.
+    max_cookie = true;
+    test_directory_failures("allocations");
+    max_cookie = false;
+    check("directory: maximum cookie reached production reader", max_cookie_seen);
+  }
   else test_directory_failures(argv[1]);
   return failures == 0 ? 0 : 1;
 }

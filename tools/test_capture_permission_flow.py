@@ -18,8 +18,9 @@ def main() -> None:
     args = parser.parse_args()
     source = (ROOT / 'app/gesher-camera/java/com/gesher/camera/CaptureActivity.java').read_text(
             encoding='utf-8')
-    signatures = ('private void requestCameraAccess(', 'public void onRequestPermissionsResult(',
-                  'private void startCamera(', 'private void capture(',
+    signatures = ('protected void onResume(', 'protected void onPause(',
+                  'private void requestCameraAccess(', 'public void onRequestPermissionsResult(',
+                  'private void startCamera(', 'private boolean canCapture(', 'private void capture(',
                   'private synchronized void done(', 'protected void onDestroy(')
     production = '\n\n'.join(method(source, signature) for signature in signatures)
     template = (ROOT / 'tests/camera-permission/CapturePermissionFlowHost.java.in').read_text(

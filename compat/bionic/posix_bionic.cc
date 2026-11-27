@@ -144,8 +144,17 @@ struct ShimDir {
 };
 
 ShimDir* BIONIC_SYSV Opendir(const char* name) {
-  DIR* host = opendir(name);
-  if (host == nullptr) return nullptr;
+  // Use the same descriptor enumeration as fdopendir/scandirat: entry inodes,
+  // cookies and the held directory object must agree across all public APIs.
+  int fd = open(name, O_RDONLY | kODirectory | O_CLOEXEC, 0);
+  if (fd < 0) return nullptr;
+  DIR* host = fdopendir(fd);
+  if (host == nullptr) {
+    const int error = errno;
+    close(fd);
+    errno = error;
+    return nullptr;
+  }
   auto* d = new ShimDir();
   d->host = host;
   return d;
@@ -164,7 +173,6 @@ ShimDir* BIONIC_SYSV Fdopendir(int fd) {
   return d;
 }
 bool Fill(ShimDir* d, BionicDirent* out) {
-  if (d->position == INT64_MAX) return errno = EOVERFLOW, false;
   struct dirent* e = readdir(d->host);
   if (e == nullptr) return false;
   out->d_ino = e->d_ino != 0 ? e->d_ino : static_cast<uint64_t>(e->d_off);

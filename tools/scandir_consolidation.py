@@ -21,10 +21,10 @@ ARCHIVE_VERIFIER_SHA256 = '8e62fae9c0b12f9cfa14665b4baab386270e95d69456f6e8b086e
 MANIFEST = 'tools/net-tcp-priority/qualified/scandir-consolidation-source.json'
 PATCH = 'tools/net-tcp-priority/qualified/scandir-consolidation-source.patch'
 ADAPTER = 'tools/scandir_consolidation.py'
-MANIFEST_SHA256 = '12e8cbe8c80052cb4d04cf6a3ce7f4c307e5c424574a619e866bacd5c3b584db'
+MANIFEST_SHA256 = '26b9caf1b6a831aec1c59bcd190af8c0553c0688d5174a54ea478369a000a89d'
 ORIGINAL_ADAPTER_SHA256 = 'f6bfd6c916300cbf95b31a6de4ad394b3c6da13cdd189339c0fc823a167481cd'
 NATIVE2_ADAPTER = 'tools/scandir_native2_projection.py'
-NATIVE2_ADAPTER_SHA256 = '00fdced959bf7b4783b1dcd0aa6384ed9e4d9bdf48cf54a984415243a756161b'
+NATIVE2_ADAPTER_SHA256 = '92315526cfd0331ee455f892c2cff66f6b25ae91f585b3f31c190e5bb137969c'
 
 
 

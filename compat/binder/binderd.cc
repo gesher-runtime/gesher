@@ -2265,17 +2265,21 @@ void ServeCamera(HANDLE pipe, In in) {
         g_camera_sessions.insert(identity).second) session = g_camera_next_session++;
   }
   using Kind = gesher::capture_policy::Kind;
+  auto finish = [&] {
+    if (!session) return false;
+    const bool stopped = CaptureAuthorized(process, Kind::kCameraFinish, session);
+    std::lock_guard lock(g_camera_lock);
+    g_camera_sessions.erase(identity);
+    session = 0;
+    return stopped;
+  };
   gesher::devices::camera::ServeBrokeredCamera(pipe, info_only != 0,
       [&] { return g_peer_registry->Live(process); },
       [&](const auto& attribution) {
         return CaptureAuthorized(process, Kind::kCameraStart, session, attribution);
       },
-      [&] { return CaptureAuthorized(process, Kind::kCameraCheck, session); }, session != 0);
-  if (session) {
-    CaptureAuthorized(process, Kind::kCameraFinish, session);
-    std::lock_guard lock(g_camera_lock);
-    g_camera_sessions.erase(identity);
-  }
+      [&] { return CaptureAuthorized(process, Kind::kCameraCheck, session); }, finish, session != 0);
+  finish();
 }
 #endif
 

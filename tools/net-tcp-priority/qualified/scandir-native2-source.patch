@@ -1,5 +1,5 @@
 diff --git a/compat/bionic/posix_bionic.cc b/compat/bionic/posix_bionic.cc
-index 550eb58..d086283 100644
+index 550eb58..5b72264 100644
 --- a/compat/bionic/posix_bionic.cc
 +++ b/compat/bionic/posix_bionic.cc
 @@ -7,8 +7,8 @@
@@ -31,7 +31,7 @@ index 550eb58..d086283 100644
    if (h == INVALID_HANDLE_VALUE || h == nullptr) return errno = kEBADF, false;
    wchar_t buf[32768];
    DWORD n = GetFinalPathNameByHandleW(h, buf, 32768, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
-@@ -140,9 +138,7 @@ static_assert(sizeof(BionicDirent) == 280);
+@@ -140,34 +138,46 @@ static_assert(sizeof(BionicDirent) == 280);
 
  struct ShimDir {
    DIR* host = nullptr;
@@ -41,8 +41,21 @@ index 550eb58..d086283 100644
    BionicDirent entry{};
    std::mutex mutex;
  };
-@@ -152,14 +148,19 @@ ShimDir* BIONIC_SYSV Opendir(const char* name) {
-   if (host == nullptr) return nullptr;
+
+ ShimDir* BIONIC_SYSV Opendir(const char* name) {
+-  DIR* host = opendir(name);
+-  if (host == nullptr) return nullptr;
++  // Use the same descriptor enumeration as fdopendir/scandirat: entry inodes,
++  // cookies and the held directory object must agree across all public APIs.
++  int fd = open(name, O_RDONLY | kODirectory | O_CLOEXEC, 0);
++  if (fd < 0) return nullptr;
++  DIR* host = fdopendir(fd);
++  if (host == nullptr) {
++    const int error = errno;
++    close(fd);
++    errno = error;
++    return nullptr;
++  }
    auto* d = new ShimDir();
    d->host = host;
 -  d->path = name;
@@ -66,7 +79,7 @@ index 550eb58..d086283 100644
    return d;
  }
  bool Fill(ShimDir* d, BionicDirent* out) {
-@@ -167,7 +168,8 @@ bool Fill(ShimDir* d, BionicDirent* out) {
+-  if (d->position == INT64_MAX) return errno = EOVERFLOW, false;
    struct dirent* e = readdir(d->host);
    if (e == nullptr) return false;
    out->d_ino = e->d_ino != 0 ? e->d_ino : static_cast<uint64_t>(e->d_off);
@@ -76,7 +89,7 @@ index 550eb58..d086283 100644
    out->d_reclen = sizeof(BionicDirent);
    out->d_type = e->d_type;
    size_t n = std::strlen(e->d_name);
-@@ -194,10 +196,9 @@ int BIONIC_SYSV ReaddirR(ShimDir* d, BionicDirent* entry, BionicDirent** result)
+@@ -194,10 +204,9 @@ int BIONIC_SYSV ReaddirR(ShimDir* d, BionicDirent* entry, BionicDirent** result)
  }
  int BIONIC_SYSV Closedir(ShimDir* d) {
    if (d == nullptr) return errno = kEBADF, -1;
@@ -89,7 +102,7 @@ index 550eb58..d086283 100644
  }
  void BIONIC_SYSV Rewinddir(ShimDir* d) {
    if (d == nullptr) return;
-@@ -223,8 +224,7 @@ void BIONIC_SYSV Seekdir(ShimDir* d, int64_t location) {
+@@ -223,8 +232,7 @@ void BIONIC_SYSV Seekdir(ShimDir* d, int64_t location) {
  int BIONIC_SYSV Dirfd(ShimDir* d) {
    if (d == nullptr) return errno = kEBADF, -1;
    std::lock_guard<std::mutex> lock(d->mutex);
@@ -99,7 +112,7 @@ index 550eb58..d086283 100644
  }
 
  // scandir with the .so's System V filter and comparator; alphasort is the
-@@ -389,14 +389,7 @@ int BIONIC_SYSV Openat(int dirfd, const char* path, int flags, int mode) {
+@@ -389,14 +397,7 @@ int BIONIC_SYSV Openat(int dirfd, const char* path, int flags, int mode) {
  }
  int BIONIC_SYSV Fstatat(int dirfd, const char* path, struct stat* st, int flags) {
    std::memset(st, 0, sizeof(*st));
@@ -115,7 +128,7 @@ index 550eb58..d086283 100644
    if (r == 0) WidenStat(st);
    return r;
  }
-@@ -443,9 +436,7 @@ int BIONIC_SYSV Remove(const char* path) {
+@@ -443,9 +444,7 @@ int BIONIC_SYSV Remove(const char* path) {
    return remove(path);
  }
  int BIONIC_SYSV Unlinkat(int dirfd, const char* path, int flags) {

@@ -47,7 +47,6 @@ constexpr DWORD kFirstVideoStream = 0xFFFFFFFC;  // MF_SOURCE_READER_FIRST_VIDEO
 constexpr ULONG kMfVersion = 0x00020070;         // MF_VERSION
 constexpr DWORD kStartupLite = 1;                // MFSTARTUP_LITE
 
-constexpr char kTestId[] = "gesher-test";
 
 // IAMCameraControl (strmif.h), which Media Foundation's video capture source
 // answers to QueryInterface: the driver's camera controls (usbvideo.sys maps
@@ -674,7 +673,7 @@ HRESULT NewTestReader(IMFMediaSource** source, IMFSourceReader** reader) {
   return NewReaderFor(source, reader);
 }
 
-std::vector<Device> FindDevices(std::string* status, bool allow_test = true) {
+std::vector<Device> FindDevices(std::string* status, bool include_test) {
   std::vector<Device> list;
   IMFActivate** devices = nullptr;
   UINT32 count = 0;
@@ -715,9 +714,9 @@ std::vector<Device> FindDevices(std::string* status, bool allow_test = true) {
     }
     FreeDevices(devices, count);
   }
-  if (allow_test && TestCameraWanted()) {
+  if (include_test) {
     Device t;
-    t.id = kTestId;
+    t.id = kTestDeviceId;
     t.name = "Gesher Test Camera";
     t.test = true;
     IMFMediaSource* source = nullptr;
@@ -1051,7 +1050,7 @@ class TestCapture : public Capture {
 
 const std::vector<Device>& List(std::string* status) {
   static std::string found;
-  static const std::vector<Device>* list = new std::vector<Device>(FindDevices(&found));
+  static const std::vector<Device>* list = new std::vector<Device>(FindDevices(&found, TestCameraWanted()));
   if (status != nullptr) *status = found;
   return *list;
 }
@@ -1059,8 +1058,13 @@ const std::vector<Device>& List(std::string* status) {
 namespace {
 
 std::unique_ptr<Capture> OpenWithPolicy(const std::string& id, int width, int height,
-                                       HRESULT* hr, const std::function<bool()>& admitted) {
-  if (!admitted && id == kTestId && TestCameraWanted()) {
+                                       HRESULT* hr, const std::function<bool()>& admitted,
+                                       bool include_test) {
+  if (id == kTestDeviceId && include_test) {
+    if (admitted && !admitted()) {
+      *hr = E_ACCESSDENIED;
+      return nullptr;
+    }
     if (GetApi().missing.empty()) {
       // Through Media Foundation: its source reader over TestSource.
       auto capture = std::make_unique<MfCapture>();
@@ -1109,17 +1113,25 @@ std::unique_ptr<Capture> OpenWithPolicy(const std::string& id, int width, int he
 }  // namespace
 
 std::unique_ptr<Capture> Open(const std::string& id, int width, int height, HRESULT* hr) {
-  return OpenWithPolicy(id, width, height, hr, {});
+  return OpenWithPolicy(id, width, height, hr, {}, TestCameraWanted());
 }
 
 #ifdef GESHER_CAMERA_BROKER_HOST
-std::vector<Device> EnumerateRealDevices(std::string* status) {
-  return FindDevices(status, false);
+bool BrokerTestCameraEnabled() {
+  static const bool enabled = [] {
+    const char* fixture = getenv("GESHER_CAMERA_TEST");
+    return fixture != nullptr && strcmp(fixture, "1") == 0;
+  }();
+  return enabled;
+}
+
+std::vector<Device> EnumerateBrokerDevices(std::string* status) {
+  return FindDevices(status, BrokerTestCameraEnabled());
 }
 
 std::unique_ptr<Capture> OpenRevocable(const std::string& id, int width, int height, HRESULT* hr,
                                        std::function<bool()> admitted) {
-  return OpenWithPolicy(id, width, height, hr, admitted);
+  return OpenWithPolicy(id, width, height, hr, admitted, BrokerTestCameraEnabled());
 }
 #endif
 

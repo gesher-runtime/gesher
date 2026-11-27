@@ -101,3 +101,14 @@ mode substring also retains the ordinary loader path; the parser only reads
 arguments after the image name. The decoder retains its seven original metadata
 integrity controls and adds four malformed PE diagnostic-input controls. Actual
 private-token/lowbox heap results and CI GDI image identities remain pending.
+
+Run `45966509354` supplied those separate controls on both Windows versions.
+All three actual subjects on each version created and destroyed their heap:
+six create-success and six destroy-success observations, with report, process
+exit and cleanup statuses zero. The Windows 2025 GDI32FULL hash matched the
+local image above; Windows 2022 used a different recorded image. USER32 still
+returned false through the `GdiDllInitialize` failure. These heap results do
+not establish the internal failing call. Static decoding also identifies an
+alternate initializer body, so the heap-failure branch is only a possible
+path. The next observation must identify the actual GDI initializer path;
+there is no evidence here supporting an ACL or memory-limit expansion.
