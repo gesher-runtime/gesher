@@ -32,10 +32,8 @@ using LocalMemory = std::unique_ptr<void, LocalFreeOwner>;
 
 constexpr wchar_t kObjectPolicy[] = L"O:SYG:SYD:P(A;;0x001fffff;;;SY)";
 static_assert(PROCESS_ALL_ACCESS == 0x001fffff && THREAD_ALL_ACCESS == 0x001fffff);
-// Windows adds the AppContainer SID when creating the lowbox token. Strip
-// this token default after creation, before another thread can use it for
-// default-owned objects. OWNER RIGHTS denies the desktop user's implicit DACL
-// changes on newly-created objects that it may otherwise own as a user SID.
+// The restricted authority working token isn't an application. Its default
+// must not give the private user implicit owner rights on working objects.
 constexpr wchar_t kDefaultPolicy[] = L"D:P(D;;WDWO;;;OW)(A;;GA;;;SY)";
 constexpr DWORD kMaximumCapabilities = 64;
 
@@ -235,6 +233,34 @@ DWORD MakeDescriptor(const wchar_t* policy, LocalMemory* output) {
           &security, nullptr)) return GetLastError();
   output->reset(security);
   return ERROR_SUCCESS;
+}
+
+DWORD MakeGuestDefaultDescriptor(HANDLE token, PSID package, LocalMemory* output) {
+  struct LogonGroup {
+    TOKEN_GROUPS groups;
+    BYTE sid[SECURITY_MAX_SID_SIZE];
+  } token_logon{};
+  DWORD bytes = 0;
+  if (!GetTokenInformation(token, TokenLogonSid, &token_logon, sizeof(token_logon), &bytes))
+    return GetLastError();
+  const auto& logon = token_logon.groups.Groups[0];
+  if (bytes < sizeof(TOKEN_GROUPS) || bytes > sizeof(token_logon) ||
+      token_logon.groups.GroupCount != 1 ||
+      (logon.Attributes & SE_GROUP_LOGON_ID) != SE_GROUP_LOGON_ID ||
+      !logon.Sid || !IsValidSid(logon.Sid)) return ERROR_INVALID_SID;
+  wchar_t* raw_logon = nullptr;
+  if (!ConvertSidToStringSidW(logon.Sid, &raw_logon)) return GetLastError();
+  const LocalMemory logon_name(raw_logon);
+  wchar_t* raw_package = nullptr;
+  if (!ConvertSidToStringSidW(package, &raw_package)) return GetLastError();
+  const LocalMemory package_name(raw_package);
+  // Windows initializes a lowbox using its real logon and package grants on
+  // default-created objects, including rights to mutate their own objects.
+  // OWNER RIGHTS preserves the native implicit READ_CONTROL grant. Explicit
+  // authority descriptors protect the bootstrap, namespace and child objects.
+  const std::wstring policy = std::wstring(L"D:P(A;;GA;;;SY)(A;;GA;;;") + raw_logon +
+      L")(A;;RC;;;OW)(A;;GA;;;" + raw_package + L")";
+  return MakeDescriptor(policy.c_str(), output);
 }
 
 PACL GetAcl(PSECURITY_DESCRIPTOR security) {
@@ -1325,7 +1351,13 @@ DWORD AuthorityLaunch::Create(HANDLE desktop_token, const AuthorityLaunchSpec& s
         spec.namespace_create_result ? &spec.namespace_create_result->recheck : nullptr);
     if (status != ERROR_SUCCESS) return status;
   }
-  status = SealAndVerifyToken(raw_lowbox, desktop, spec, default_acl, startup_stage, false);
+  stage("lowbox.guest-default-descriptor");
+  LocalMemory guest_default_descriptor;
+  status = MakeGuestDefaultDescriptor(raw_lowbox, spec.capabilities.AppContainerSid, &guest_default_descriptor);
+  if (status != ERROR_SUCCESS) return status;
+  PACL guest_default_acl = GetAcl(guest_default_descriptor.get());
+  if (!guest_default_acl) return ERROR_INVALID_ACL;
+  status = SealAndVerifyToken(raw_lowbox, desktop, spec, guest_default_acl, startup_stage, false);
   if (status != ERROR_SUCCESS) return status;
 
   // SECURITY_CAPABILITIES is deliberately absent: the verified primary token
@@ -1359,7 +1391,7 @@ DWORD AuthorityLaunch::Create(HANDLE desktop_token, const AuthorityLaunchSpec& s
     if (!GetProcessMitigationPolicy(launch->guest_.hProcess, ProcessExtensionPointDisablePolicy,
             &installed, sizeof(installed))) return GetLastError();
     if (!installed.DisableExtensionPoints) return ERROR_ACCESS_DENIED;
-    status = SealAndVerifyChild(launch->guest_.hProcess, desktop, spec, default_acl, startup_stage);
+    status = SealAndVerifyChild(launch->guest_.hProcess, desktop, spec, guest_default_acl, startup_stage);
   }
   if (status != ERROR_SUCCESS) return status;
   if (spec.app_container_objects) {
