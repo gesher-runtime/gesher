@@ -303,3 +303,26 @@ failure instead of fabricated success. The historical source transition adds
 only the three now-modified socket inputs to the original 48, each bound to its
 actual immutable Git predecessor; all earlier predecessors, archived
 measurements and rejection controls remain in force.
+
+## Owned desktop mask matrix follow-up
+
+Hosted run 46006971740 on both Windows versions passed setup and cleanup of
+all original owned-object controls. The same private and lowbox subjects fail
+USER32 on WinSta0/Default but load it successfully on the new full-grant station
+and desktop. This localizes the difference to object/context policy; it does
+not establish which access bit or original-object property is responsible.
+
+Seven additional diagnostic cases now isolate a fresh GUID desktop under the
+unchanged current station (old mask, READ_CONTROL added, full mask), and fresh
+station/desktop pairs with the original effective masks and READ_CONTROL added
+to either or both. Each case reads back exact effective per-token rights and
+low integrity on owned objects. Existing WinSta0/Default security is only read;
+it is never granted, restored or switched. The original four rows and all real
+launch gates remain intact. Separate fixed reports do not displace the bounded
+original USER32/GDI trace.
+
+Strict MSVC compilation and ordinary desktop mechanics, non-SYSTEM rejection,
+and missing-image cleanup controls pass. The 18-artifact receipt is
+`out/qa314/owned-desktop-matrix/final-inputs.json`; actual private/lowbox matrix
+execution remains pending hosted CI. Ordinary mechanics do not qualify that
+matrix, the service UI, physical USB or default enablement.
