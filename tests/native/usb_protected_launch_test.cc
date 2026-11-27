@@ -190,6 +190,7 @@ struct DesktopObjectAccess {
 struct GuestLoaderEvidence {
   DWORD attempted = 0, prepare_status = ERROR_SUCCESS, start_status = ERROR_NOT_READY, resume_status = ERROR_NOT_READY;
   DWORD wait_status = ERROR_NOT_READY, exit_code = ERROR_NOT_READY, stop_status = ERROR_NOT_READY;
+  DWORD exit_read = 0;
   char stage[96] = "not-attempted";
 };
 struct GuestLoaderTrace {
@@ -2823,8 +2824,9 @@ void ObserveGuestLoader(HANDLE token, const storage::AuthorityLaunchSpec& origin
         const ULONGLONG now = GetTickCount64();
         const DWORD wait = now < deadline ? static_cast<DWORD>(std::min<ULONGLONG>(1500, deadline - now)) : 0;
         row.wait_status = WaitForSingleObject(probe->process(), wait);
-        if (row.wait_status == WAIT_OBJECT_0 && !GetExitCodeProcess(probe->process(), &row.exit_code)) {
-          row.exit_code = GetLastError();
+        if (row.wait_status == WAIT_OBJECT_0) {
+          row.exit_read = GetExitCodeProcess(probe->process(), &row.exit_code) != FALSE;
+          if (!row.exit_read) row.exit_code = GetLastError();
         }
       }
       row.stop_status = probe->Stop(500);
@@ -2913,7 +2915,12 @@ void ObserveGuestLoaderTrace(HANDLE token, const storage::AuthorityLaunchSpec& o
                              const storage::AuthorityLaunch& first, PSID private_user, PSID capability,
                              PSID desktop_user, GuestLoaderTrace* trace) {
   trace->attempted = 1;
-  const ULONGLONG deadline = std::min(config.worker_deadline, GetTickCount64() + 5000);
+  const ULONGLONG now = GetTickCount64();
+  if (now >= config.worker_deadline) {
+    trace->setup = ERROR_TIMEOUT;
+    return;
+  }
+  const ULONGLONG deadline = std::min(config.worker_deadline, now + 5000);
   constexpr wchar_t ifeo[] = L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options";
   std::wstring basename, image;
   HKEY parent = nullptr, entry = nullptr;
@@ -3320,7 +3327,9 @@ Evidence RunSystem() {
     if (code == 0xc0000142 && config.lowbox_iat_trace) {
       if (!desktop_snapshot.empty()) ObserveDesktopAccess(desktop_snapshot, identity->token(), guest_token.get(), spec, &evidence);
       ObserveGuestLoader(identity->token(), spec, *child, evidence.guest_loader);
-      if (evidence.guest_loader[2].exit_code == ERROR_DLL_INIT_FAILED) {
+      const auto& late = evidence.guest_loader[2];
+      if (late.start_status == ERROR_SUCCESS && late.resume_status == ERROR_SUCCESS &&
+          late.wait_status == WAIT_OBJECT_0 && late.exit_read && late.exit_code == ERROR_DLL_INIT_FAILED) {
         ObserveGuestLoaderTrace(identity->token(), spec, *child, identity->sid(), capability.value,
             desktop_user, &evidence.guest_loader_trace);
       }
