@@ -11271,8 +11271,8 @@
   "draft_consolidation": {
     "version": 1,
     "reviewed_feature": "3a309b747fc604f84fa20a42bbd875d706116d6d",
-    "manifest_sha256": "1b4b1b0c58980a08e6b4c09a0efd055f911d9f22001399fdf6aaff5e583ee24a",
-    "adapter_sha256": "09d605caa36861a01c674fe2cce4783601db922eaed93a8bb4022cd533e1ccc6",
+    "manifest_sha256": "7ff2ea8592b8c21ed983c0dda9006eef403ca04744994013819f4073ea001949",
+    "adapter_sha256": "933fcc6a7be7a32c605d8e31bd69e44875e5e0b91c27e4108881031bc59cf28a",
     "native_runtime_approval": false
   }
 }

@@ -64,7 +64,7 @@ def main(*, check_current_sources=False):
         require(len(members[path]) == expected['bytes'], 'member size: ' + path)
     if check_current_sources:
         from scandir_consolidation import historical_sources
-        source_bytes = historical_sources(ROOT, report, members, '09d605caa36861a01c674fe2cce4783601db922eaed93a8bb4022cd533e1ccc6')
+        source_bytes = historical_sources(ROOT, report, members, '933fcc6a7be7a32c605d8e31bd69e44875e5e0b91c27e4108881031bc59cf28a')
         for path, expected in report['sources'].items():
             require(digest(source_bytes[path]) == expected, 'current source: ' + path)
     for path, expected in report['sources'].items():
