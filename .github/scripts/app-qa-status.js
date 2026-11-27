@@ -45,6 +45,8 @@ module.exports = ({github, readGithub = github, appGithub, owner, repo, enabled 
   };
   const valid = (value, sha, state) => trustedStatus(value, owner, repo, sha, APP_STATUS, state);
   const current = async (sha, receipt) => {
+    if (!valid(receipt, sha, receipt?.state))
+      throw new Error('Gesher App QA receipt has an invalid source');
     // Combined status returns the current row per context, avoiding a growing
     // full history scan on every controller event. Still paginate contexts.
     const values = await list(async args => {
@@ -56,7 +58,13 @@ module.exports = ({github, readGithub = github, appGithub, owner, repo, enabled 
     if (matching.some(s => !Number.isSafeInteger(s.id) || s.id <= 0))
       throw new Error('Gesher App QA status has an invalid identity');
     const latest = matching.sort((a, b) => b.id - a.id)[0];
-    if (!latest || latest.id !== receipt.id || !valid(latest, sha, receipt.state))
+    // The combined-status API omits creator. Authenticate the full receipt
+    // returned by createCommitStatus, then require that immutable status ID to
+    // remain current with the same repository/head/context/state. A status
+    // update creates a new ID; it cannot transfer this ID to another writer.
+    if (!latest || latest.id !== receipt.id || latest.context !== APP_STATUS ||
+        latest.state !== receipt.state || latest.url !== receipt.url ||
+        (Object.hasOwn(latest, 'creator') && !valid(latest, sha, receipt.state)))
       throw new Error('Gesher App QA status is missing, replaced or from a different source');
   };
   const app = async (sha, ok) => {

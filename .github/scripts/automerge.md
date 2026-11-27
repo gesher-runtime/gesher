@@ -340,6 +340,10 @@ workflow-permission change is part of this implementation.
 When explicitly enabled, the controller also writes
 `qa/gesher-label-approval` with the App token. The workflow then requests
 Statuses write permission, in addition to its existing permissions. The
+bot outcome reporter also requests Checks write and publishes the advisory
+`automerge` check in a separate step after the controller. Waiting is neutral;
+only an actual protected merge is success. See [bot-checks.md](bot-checks.md)
+for all required-check identities and rollout. The
 pinned token action omits an empty permission input, so installations without
 Statuses access continue to work while this feature is off. Verify the actual
 installation grant before enabling it; a missing grant fails the run, without
@@ -351,6 +355,10 @@ response and readback must match the exact repository, head, context, state,
 numeric status ID, and bot identity (`gesher-runtime-automation[bot]`, user
 `358279050`, account type `Bot`). A missing, replaced, pending, failed, or foreign
 status cannot release the existing Actions gate or native waiting. The readback
+authenticates the immutable ID from the full write receipt: GitHub's combined
+status response omits `creator`, so it checks the same ID/head/context/state/URL
+instead of requiring an absent writer field. Any supplied writer is checked too.
+The readback
 uses the configured read-only App client, with the Actions fallback, and
 paginates current combined-status contexts, avoiding full history scans without
 trusting a partial page.

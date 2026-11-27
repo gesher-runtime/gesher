@@ -11,6 +11,33 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class QueueWorkflows(unittest.TestCase):
+    def test_bot_required_checks_use_only_trusted_scripts_and_reporting_permissions(self):
+        doc = yaml.safe_load((ROOT / '.github/workflows/required-checks.yml').read_text())
+        self.assertEqual(doc['permissions'], {'contents': 'read'})
+        self.assertEqual(set(doc[True]['workflow_run']['workflows']), {'ci', 'arm64-windows'})
+        self.assertEqual(set(doc[True]['workflow_run']['types']), {'requested', 'in_progress', 'completed'})
+        job = doc['jobs']['publish']
+        self.assertEqual(job['if'], "vars.GESHER_APP_REQUIRED_CHECKS == 'true'")
+        checkout, repo, token, publisher = job['steps']
+        self.assertEqual(checkout['with']['ref'], '${{ github.event.repository.default_branch }}')
+        self.assertFalse(checkout['with']['persist-credentials'])
+        self.assertEqual(checkout['with']['sparse-checkout'], '.github/scripts')
+        permissions = {key: value for key, value in token['with'].items() if key.startswith('permission-')}
+        self.assertEqual(permissions, {'permission-actions': 'read', 'permission-checks': 'read',
+                                      'permission-pull-requests': 'read', 'permission-statuses': 'write'})
+        self.assertEqual(token['with']['repositories'], '${{ steps.repo.outputs.name }}')
+        self.assertEqual(publisher['with']['github-token'], '${{ steps.bot.outputs.token }}')
+        self.assertNotIn('mergePullRequest', publisher['with']['script'])
+
+    def test_advisory_automerge_report_is_a_separate_step_after_the_controller(self):
+        doc = yaml.safe_load((ROOT / '.github/workflows/automerge.yml').read_text())
+        controller, report = doc['jobs']['automerge']['steps'][-2:]
+        self.assertEqual(controller['id'], 'controller')
+        self.assertIn('always()', report['if'])
+        self.assertEqual(report['env']['RESULTS'], '${{ steps.controller.outputs.automerge-results }}')
+        self.assertEqual(report['with']['github-token'], '${{ steps.gesher-bot.outputs.token }}')
+        self.assertIn('app-automerge-check.js', report['with']['script'])
+
     def test_contract_checkout_contains_planner_and_preflight_audit_inputs(self):
         doc = yaml.safe_load((ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8'))
         steps = doc['jobs']['automerge-script']['steps']
@@ -242,7 +269,7 @@ class QueueWorkflows(unittest.TestCase):
 
     def test_workflow_credential_is_separate_from_required_status_identity(self):
         doc = yaml.safe_load((ROOT / '.github/workflows/automerge.yml').read_text())
-        checkout, repo, flag, token, reader, controller = doc['jobs']['automerge']['steps']
+        checkout, repo, flag, token, reader, controller, reporter = doc['jobs']['automerge']['steps']
         self.assertEqual(checkout['with']['ref'], '${{ github.event.repository.default_branch }}')
         self.assertFalse(checkout['with']['persist-credentials'])
         self.assertEqual(token['if'], "vars.GESHER_BOT_APP_ID != ''")
@@ -256,6 +283,7 @@ class QueueWorkflows(unittest.TestCase):
                          {'permission-contents': 'write', 'permission-issues': 'write',
                           'permission-pull-requests': 'write',
                           'permission-workflows': 'write',
+                          'permission-checks': "${{ steps.app-qa-flag.outputs.enabled == 'true' && 'write' || '' }}",
                           'permission-statuses': "${{ steps.app-qa-flag.outputs.enabled == 'true' && 'write' || '' }}"})
         self.assertNotIn('skip-token-revoke', token['with'])
         self.assertEqual(controller['env']['GESHER_BOT_TOKEN'], '${{ steps.gesher-bot.outputs.token }}')
@@ -276,7 +304,7 @@ class QueueWorkflows(unittest.TestCase):
 
     def test_evidence_reads_use_a_read_only_app_token_with_actions_fallback(self):
         doc = yaml.safe_load((ROOT / '.github/workflows/automerge.yml').read_text())
-        checkout, repo, flag, token, reader, controller = doc['jobs']['automerge']['steps']
+        checkout, repo, flag, token, reader, controller, reporter = doc['jobs']['automerge']['steps']
         self.assertEqual(reader['id'], 'gesher-read')
         self.assertEqual(reader['uses'], token['uses'])
         self.assertEqual(reader['if'], "vars.GESHER_BOT_APP_ID != ''")
@@ -299,12 +327,13 @@ class QueueWorkflows(unittest.TestCase):
     def test_exact_flag_controls_both_token_permission_and_status_writer(self):
         import os
         doc = yaml.safe_load((ROOT / '.github/workflows/automerge.yml').read_text())
-        checkout, repo, flag, token, reader, controller = doc['jobs']['automerge']['steps']
+        checkout, repo, flag, token, reader, controller, reporter = doc['jobs']['automerge']['steps']
         self.assertEqual(flag['id'], 'app-qa-flag')
         self.assertEqual(flag['uses'], 'actions/github-script@v7')
         self.assertEqual(flag['env'], {'GESHER_APP_QA_STATUS': '${{ vars.GESHER_APP_QA_STATUS }}'})
         self.assertEqual(token['with']['permission-statuses'],
                          "${{ steps.app-qa-flag.outputs.enabled == 'true' && 'write' || '' }}")
+        self.assertEqual(token['with']['permission-checks'], token['with']['permission-statuses'])
         self.assertEqual(controller['env']['GESHER_APP_QA_STATUS'], '${{ steps.app-qa-flag.outputs.enabled }}')
         # Execute the actual trusted flag script; Actions string equality is
         # case-insensitive and must see only this canonical boolean output.

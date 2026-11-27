@@ -92,7 +92,7 @@ jobs:
         with:
           node-version: 20
       - name: Label approval, fork and exact-head QA contracts
-        run: node --test .github/scripts/label-automerge.test.js
+        run: node --test .github/scripts/label-automerge.test.js .github/scripts/app-required-checks.test.js .github/scripts/app-automerge-check.test.js
       - name: Owner-only runner routing and source ancestry contracts
         run: node --test .github/actions/runner-route/route.test.cjs
       - name: Workflow coverage and failure propagation
