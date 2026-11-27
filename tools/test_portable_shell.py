@@ -42,6 +42,14 @@ def main() -> None:
     exact = '\n'.join(method(source, signature) for signature in METHODS)
     template = (ROOT / 'tests/portable/PortableShellHost.java.in').read_text(encoding='utf-8')
     stubs = {
+        'libcore/util/HexEncoding.java': '''package libcore.util;
+            import java.util.HexFormat;
+            public class HexEncoding {
+                public static String encodeToString(byte[] bytes, boolean upperCase) {
+                    HexFormat format = HexFormat.of();
+                    return (upperCase ? format.withUpperCase() : format).formatHex(bytes);
+                }
+            }''',
         'android/content/Intent.java': 'package android.content; public class Intent {}',
         'android/content/pm/ActivityInfo.java': 'package android.content.pm; public class ActivityInfo {}',
         'android/content/pm/ShortcutInfo.java': '''package android.content.pm;

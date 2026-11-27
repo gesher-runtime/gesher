@@ -553,6 +553,12 @@ public final class SystemServer {
         }
 
         @Override
+        public String[] installConfirmed(String apk, String pkg, long version, String digest)
+                throws Exception {
+            return mInstaller.installConfirmed(apk, pkg, version, digest);
+        }
+
+        @Override
         public boolean uninstall(String packageName) throws Exception {
             return mInstaller.uninstall(packageName);
         }

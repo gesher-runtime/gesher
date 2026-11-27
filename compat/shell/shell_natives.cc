@@ -1,5 +1,5 @@
 // Gesher: com.gesher.app.shell.Shell's natives (gesher-app.jar), registered by
-// android_runtime.cc: Start menu shortcuts, AppUserModelIDs and URL protocols
+// android_runtime.cc: Start menu and desktop shortcuts, AppUserModelIDs and URL protocols
 // for installed Android apps (shell track, docs/installer.md). The Win32 side is
 // shell_win32.cc.
 
@@ -31,6 +31,10 @@ static jstring ShellJavaString(JNIEnv* env, const std::u16string& s) {
 
 static jstring Shell_programsFolder(JNIEnv* env, jclass) {
     return ShellJavaString(env, gesher::shell::ProgramsFolder());
+}
+
+static jstring Shell_desktopFolder(JNIEnv* env, jclass) {
+    return ShellJavaString(env, gesher::shell::DesktopFolder());
 }
 
 static jint Shell_createShortcut(JNIEnv* env, jclass, jstring link, jstring target,
@@ -90,6 +94,7 @@ static jstring Shell_urlProtocolOwner(JNIEnv* env, jclass, jstring scheme) {
 
 static const JNINativeMethod gShellMethods[] = {
     {"nativeProgramsFolder", "()" SHELL_STRING, GESHER_JNI(Shell_programsFolder)},
+    {"nativeDesktopFolder", "()" SHELL_STRING, GESHER_JNI(Shell_desktopFolder)},
     {"nativeCreateShortcut",
      "(" SHELL_STRING SHELL_STRING SHELL_STRING SHELL_STRING SHELL_STRING SHELL_STRING
      SHELL_STRING ")I",
