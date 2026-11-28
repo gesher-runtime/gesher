@@ -188,6 +188,9 @@ struct Inotify {};
 int ReadInotify(Inotify&, void*, unsigned int) { return errno = EINVAL, -1; }
 struct TimerFd;
 struct EventFd;
+// An epoll registration of a pipe is keyed by its open description. This
+// timer corpus registers no pipe; the state declarations only name the type.
+struct OpenFileDescription;
 bool RefreshTimerFd(TimerFd&);
 int ReadTimerFd(TimerFd&, void*, unsigned int);
 std::shared_ptr<TimerFd> LookupTimerFd(int);
