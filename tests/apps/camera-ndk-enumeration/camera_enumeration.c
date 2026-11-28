@@ -29,10 +29,10 @@ JNIEXPORT jobjectArray JNICALL Java_org_gesher_contracts_camerandk_ProbeApplicat
     ACameraIdList* first = NULL;
     struct ThreadQuery query = {0};
     jobjectArray output = NULL;
-    void* library = dlopen("libcamera2ndk.so", RTLD_NOW | RTLD_LOCAL);
+    // Gesher keeps dlopen("libcamera2ndk.so") unavailable until capture
+    // sessions exist; the linked library's symbols are global.
 #define REQUIRE(condition, explanation) do { if (!(condition)) { failure = explanation; goto done; } } while (0)
-    REQUIRE(library != NULL, "cannot dlopen libcamera2ndk.so");
-    query.get = (GetIdList) dlsym(library, "ACameraManager_getCameraIdList");
+    query.get = (GetIdList) dlsym(RTLD_DEFAULT, "ACameraManager_getCameraIdList");
     REQUIRE(query.get != NULL, "camera-ID discovery symbol missing");
     manager = ACameraManager_create();
     REQUIRE(manager != NULL, "cannot allocate camera manager");
@@ -80,7 +80,6 @@ done:
     ACameraManager_delete(manager);
     ACameraManager_deleteCameraIdList(first);
     ACameraManager_deleteCameraIdList(query.ids);
-    if (library != NULL) dlclose(library);
     if (failure != NULL) {
         jclass error = (*env)->FindClass(env, "java/lang/AssertionError");
         if (error != NULL) (*env)->ThrowNew(env, error, failure);
@@ -114,10 +113,9 @@ JNIEXPORT void JNICALL Java_org_gesher_contracts_camerandk_EnumerationActivity_v
     ACameraDevice_StateCallbacks callbacks = {
         .context = &errors, .onDisconnected = disconnected, .onError = device_error,
     };
-    void* library = dlopen("libcamera2ndk.so", RTLD_NOW | RTLD_LOCAL);
     typedef camera_status_t (*Open)(ACameraManager*, const char*, ACameraDevice_StateCallbacks*,
                                     ACameraDevice**);
-    Open open = library != NULL ? (Open)dlsym(library, "ACameraManager_openCamera") : NULL;
+    Open open = (Open)dlsym(RTLD_DEFAULT, "ACameraManager_openCamera");
 #define REQUIRE(condition, explanation) do { if (!(condition)) { failure = explanation; goto done; } } while (0)
     REQUIRE(manager != NULL && open != NULL, "cannot resolve camera device open");
     REQUIRE(ACameraManager_openCamera(NULL, "gesher-absent-camera", &callbacks, &device)
@@ -150,7 +148,6 @@ JNIEXPORT void JNICALL Java_org_gesher_contracts_camerandk_EnumerationActivity_v
 done:
     if (device != NULL) ACameraDevice_close(device);
     ACameraManager_delete(manager);
-    if (library != NULL) dlclose(library);
     if (id != NULL) (*env)->ReleaseStringUTFChars(env, selected, id);
     if (failure != NULL) {
         jclass error = (*env)->FindClass(env, "java/lang/AssertionError");

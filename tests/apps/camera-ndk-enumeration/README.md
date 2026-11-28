@@ -4,8 +4,11 @@ The signed fixture asks Camera2 and `ACameraManager_getCameraIdList` for the
 currently connected cameras. It uses no CAMERA permission and does not open a
 camera. It compares the service's ordered IDs with the result obtained in the
 Application constructor and again from the Activity. The JNI probe checks
-ordinary ELF imports, `dlopen` and `dlsym`, an independent native thread and
+ordinary ELF imports, `dlsym(RTLD_DEFAULT)`, an independent native thread and
 snapshots that survive deleting the manager and freeing the other list.
+Gesher implements only the manager and device parts of libcamera2ndk, so
+`dlopen("libcamera2ndk.so")` stays unavailable to apps until characteristics,
+capture requests and sessions exist (`tests/native2` checks this).
 
 The [Android NDK CameraManager API](https://developer.android.com/ndk/reference/group/camera)
 defines the allocation, null argument and snapshot behavior. The NDK list can
