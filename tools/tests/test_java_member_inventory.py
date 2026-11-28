@@ -281,6 +281,58 @@ class ResolutionTests(unittest.TestCase):
         self.assertEqual(result["status"], "unresolved_hierarchy")
         self.assertEqual(result["unresolved_parent_count"], 1)
 
+    def test_boot_ancestry_and_descriptor_types_cannot_use_child(self):
+        field = ("field", "f", "Lsample/Type;", 1)
+        boot = {"Boot": model("Boot", (field,), parent="ChildParent")}
+        available = dict(boot)
+        available.update({"Child": model("Child", parent="Boot"),
+                          "ChildParent": model("ChildParent", (("method", "m", "()V", 1),)),
+                          "sample.Type": model("sample.Type")})
+        resolver = audit.Resolver(available, boot)
+        self.assertEqual(resolver.lookup("Child", ("method", "m", "()V")), ([], True))
+        self.assertEqual(resolver.ancestry("Child"), ({"Child", "Boot"}, {"ChildParent"}))
+        result = audit.compare_member(available["Child"], audit.Member(*field), available,
+                                      resolver, {"Child"})
+        self.assertEqual(result["location"], "inherited")
+        self.assertEqual(result["descriptor_types_absent_from_defining_loader"], ["sample.Type"])
+
+    def test_child_only_declaring_class_keeps_defining_dex_and_boot_first_order(self):
+        present = (("method", "inherited", "()V", 1),)
+        shadowed = (("method", "shadowed", "()V", 1),)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sdk, boot, first, last = [root / name for name in
+                                      ("android.jar", "framework.jar", "library.jar", "later.jar")]
+            with zipfile.ZipFile(sdk, "w") as archive:
+                archive.writestr("sample/AChild.class", classfile(members=present + shadowed))
+            with zipfile.ZipFile(boot, "w") as archive:
+                archive.writestr("classes.dex", dex([("sample.ZParent", None, (), 1, present)]))
+            with zipfile.ZipFile(first, "w") as archive:
+                archive.writestr("classes.dex", dex([("sample.ZParent", None, (), 1, shadowed)]))
+                archive.writestr("classes2.dex", dex([("sample.AChild", "sample.ZParent", (), 1, ())]))
+            with zipfile.ZipFile(last, "w") as archive:
+                archive.writestr("classes.dex", dex([("sample.AChild", "sample.ZParent", (), 1, shadowed)]))
+            report, rows = audit.inventory(sdk, [boot], loader_jars=[first, last], loader_name="library")
+            inherited, blocked = rows
+            self.assertEqual(inherited["installed"], {"status": "declaring_class_absent"})
+            self.assertEqual(inherited["installed_child"]["status"], "exact_descriptor_present")
+            self.assertEqual(inherited["definition_sources"]["installed_child"], {
+                "declaring": {"source_id": "loader-01", "dex_entry": "classes2.dex"},
+                "resolved": [{"owner": "<non-sdk declaration>", "source_id": "boot-01", "dex_entry": "classes.dex"}]})
+            self.assertEqual(blocked["installed_child"]["status"], "absent_from_present_class")
+            self.assertEqual(blocked["definition_sources"]["installed_child"]["resolved"], [])
+            self.assertEqual(report["loader_profiles"]["installed_child"], {
+                "name": "library", "parent": "installed", "ordered_source_ids": ["loader-01", "loader-02"]})
+            self.assertEqual(report["comparisons"]["installed_child"]["duplicate_provider_groups"], [
+                {"selected_source_id": "boot-01", "skipped_source_id": "loader-01", "class_definitions": 1},
+                {"selected_source_id": "loader-01", "skipped_source_id": "loader-02", "class_definitions": 1}])
+
+    def test_child_profile_requires_name_and_ordered_inputs(self):
+        sdk, boot, library = Path("android.jar"), Path("framework.jar"), Path("library.jar")
+        for jars, name in (((), "library"), ([library], None), ([library], "../library"), ((), "")):
+            with self.subTest(jars=jars, name=name), self.assertRaisesRegex(audit.InvalidInput, "invalid_loader_profile"):
+                audit.inventory(sdk, [boot], loader_jars=jars, loader_name=name)
+
     def test_absent_class_separate_from_absent_member(self):
         cls = model("C")
         item = audit.Member("field","f","I",1)
@@ -341,6 +393,8 @@ class ResolutionTests(unittest.TestCase):
             report,rows = audit.inventory(sdk,[first,last],{"gesher-app.jar":candidate})
             self.assertEqual(rows[0]["candidate"]["status"],"absent_from_present_class")
             self.assertEqual(rows[0]["installed"],rows[0]["candidate"])
+            self.assertEqual(rows[0]["definition_sources"]["candidate"],
+                             rows[0]["definition_sources"]["installed"])
             groups = report["comparisons"]["candidate"]["duplicate_provider_groups"]
             self.assertEqual(groups,[{"selected_source_id":"boot-01","skipped_source_id":"candidate-02","class_definitions":1}])
 

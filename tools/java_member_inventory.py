@@ -8,11 +8,12 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter, defaultdict
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from functools import lru_cache
 import hashlib
 import json
 from pathlib import Path
+import re
 import struct
 import sys
 import zipfile
@@ -51,6 +52,7 @@ class Class:
     superclass: str | None
     interfaces: tuple[str, ...]
     members: dict[tuple[str, str, str], Member]
+    dex_source: tuple[str, str] | None = field(default=None, kw_only=True)
 
 
 def modified_utf8(raw: bytes, expected_units: int | None = None) -> str:
@@ -333,6 +335,8 @@ def archive_members(path: Path, role: str, source_id: str, limits=Limits()):
                 parsed = {cls.name: cls}
             elif role == "boot" and base.DEX_ENTRY.fullmatch(info.filename):
                 parsed = dex_members(archive.read(info), limits)
+                for cls in parsed.values():
+                    cls.dex_source = source_id, info.filename
             else:
                 continue
             if classes.keys() & parsed.keys():
@@ -352,37 +356,47 @@ def archive_members(path: Path, role: str, source_id: str, limits=Limits()):
 
 class Resolver:
     """Conservative descriptor lookup, with unknown or ambiguous resolution retained."""
-    def __init__(self, classes):
+    def __init__(self, classes, boot_classes=None):
         self.classes = classes
+        self.boot_classes = classes if boot_classes is None else boot_classes
+
+    def definition(self, name, referring_class):
+        # A boot-defined class can resolve its own references through boot only.
+        visible = self.boot_classes if referring_class in self.boot_classes else self.classes
+        return visible.get(name)
+
+    @staticmethod
+    def parents(cls):
+        return (*cls.interfaces, cls.superclass) if cls.superclass else cls.interfaces
 
     @lru_cache(maxsize=None)
     def ancestry(self, name):
-        seen, unknown, stack = set(), set(), [(name, frozenset())]
+        seen, unknown, stack = set(), set(), [(name, name, frozenset())]
         while stack:
-            current, active = stack.pop()
+            current, referring_class, active = stack.pop()
+            cls = self.definition(current, referring_class)
+            if cls is None:
+                unknown.add(current)
+                continue
             if current in active:
                 fail("cyclic_class_hierarchy")
             if current in seen:
                 continue
             seen.add(current)
-            cls = self.classes.get(current)
-            if cls is None:
-                unknown.add(current)
-                continue
-            stack.extend((parent, active | {current}) for parent in (*cls.interfaces, *((cls.superclass,) if cls.superclass else ())))
+            stack.extend((parent, current, active | {current}) for parent in self.parents(cls))
         return frozenset(seen), frozenset(unknown)
 
-    def field(self, name, key, active=frozenset()):
-        if name in active:
-            fail("cyclic_class_hierarchy")
-        cls = self.classes.get(name)
+    def field(self, name, key, active=frozenset(), referring_class=None):
+        cls = self.definition(name, referring_class)
         if cls is None:
             return [], True
+        if name in active:
+            fail("cyclic_class_hierarchy")
         if key in cls.members:
             return [(name, cls.members[key])], False
         unknown = False
-        for parent in (*cls.interfaces, *((cls.superclass,) if cls.superclass else ())):
-            found, incomplete = self.field(parent, key, active | {name})
+        for parent in self.parents(cls):
+            found, incomplete = self.field(parent, key, active | {name}, name)
             unknown |= incomplete
             if found:
                 return found, unknown
@@ -396,7 +410,7 @@ class Resolver:
         if cls.flags & INTERFACE:
             if key in cls.members:
                 return [(name, cls.members[key])], False
-            obj = self.classes.get("java.lang.Object")
+            obj = self.definition("java.lang.Object", cls.name)
             if obj is None:
                 unknown = True
             elif key in obj.members and obj.members[key].flags & PUBLIC and not obj.members[key].flags & STATIC:
@@ -415,20 +429,19 @@ class Resolver:
                 # exact native declarations remain ordinary rows in this inventory.
                 if not current.superclass:
                     break
-                current = self.classes.get(current.superclass)
+                current = self.definition(current.superclass, current.name)
                 if current is None:
                     unknown = True
-        interfaces, stack = set(), [parent for item in lineage for parent in item.interfaces]
+        interfaces = set()
+        stack = [(parent, item.name) for item in lineage for parent in item.interfaces]
         while stack:
-            parent = stack.pop()
-            if parent in interfaces:
-                continue
-            interfaces.add(parent)
-            target = self.classes.get(parent)
+            parent, referring_class = stack.pop()
+            target = self.definition(parent, referring_class)
             if target is None:
                 unknown = True
-            else:
-                stack.extend(target.interfaces)
+            elif parent not in interfaces:
+                interfaces.add(parent)
+                stack.extend((dependency, parent) for dependency in target.interfaces)
         matches = [(parent, self.classes[parent].members[key]) for parent in sorted(interfaces)
                    if parent in self.classes and key in self.classes[parent].members
                    and not self.classes[parent].members[key].flags & (PRIVATE | STATIC)]
@@ -458,14 +471,13 @@ def flag_issues(expected: Member, actual: Member):
 
 def descriptor_classes(signature):
     # Descriptors have already been validated. Never scan arbitrary pool strings.
-    import re
     return {value.replace("/", ".") for value in re.findall(r"L([^;]+);", signature)}
 
 
-def compare_member(sdk_class, item, available, resolver, sdk_names):
+def compare_member(sdk_class, item, available, resolver, sdk_names, lookup=None):
     if sdk_class.name not in available:
         return {"status": "declaring_class_absent"}
-    found, unknown = resolver.lookup(sdk_class.name, item.key)
+    found, unknown = resolver.lookup(sdk_class.name, item.key) if lookup is None else lookup
     if not found:
         lineage, unresolved = resolver.ancestry(sdk_class.name)
         count = sum(1 for name in lineage if name in available for other in available[name].members.values()
@@ -484,7 +496,8 @@ def compare_member(sdk_class, item, available, resolver, sdk_names):
         flags.append("declaring_class_public_visibility_reduced")
     if not sdk_class.flags & FINAL and actual_class.flags & FINAL:
         flags.append("declaring_class_new_final_restriction")
-    missing_types = sorted(name for name in descriptor_classes(item.descriptor) if name not in available)
+    missing_types = sorted(name for name in descriptor_classes(item.descriptor)
+                           if any(resolver.definition(name, owner) is None for owner, _ in found))
     status = "exact_descriptor_present"
     if flags:
         status = "exact_descriptor_possible_flag_mismatch"
@@ -495,7 +508,9 @@ def compare_member(sdk_class, item, available, resolver, sdk_names):
     if flags:
         result["possible_mismatches"] = flags
     if missing_types:
-        result["descriptor_types_absent_from_boot"] = missing_types
+        key = ("descriptor_types_absent_from_boot" if resolver.boot_classes is available
+               else "descriptor_types_absent_from_defining_loader")
+        result[key] = missing_types
     if unknown:
         result["unresolved_parent_count"] = len(resolver.ancestry(sdk_class.name)[1])
     if len(found) > 1:
@@ -504,30 +519,39 @@ def compare_member(sdk_class, item, available, resolver, sdk_names):
     return result
 
 
-def inventory(sdk: Path, boots: list[Path], replacements=None, limits=Limits(), sdk_api=36):
+def dex_origin(source):
+    source_id, dex_entry = source
+    return {"source_id": source_id, "dex_entry": dex_entry}
+
+
+def inventory(sdk: Path, boots: list[Path], replacements=None, limits=Limits(), sdk_api=36,
+              loader_jars=(), loader_name=None):
     replacements = replacements or {}
     if not boots or any(value <= 0 for value in asdict(limits).values()):
         fail("invalid_inventory_bounds_or_boot_list")
-    if len(boots) + 1 + len(replacements) > limits.max_archives or len({path.name for path in boots}) != len(boots):
+    if bool(loader_jars) != (loader_name is not None) or (
+            loader_name is not None and not re.fullmatch(r"[a-z][a-z0-9_.-]{0,63}", loader_name)):
+        fail("invalid_loader_profile")
+    inputs = [sdk, *boots, *replacements.values(), *loader_jars]
+    if len(inputs) > limits.max_archives or len({path.name for path in boots}) != len(boots):
         fail("archive_count_or_duplicate_boot_name")
     if set(replacements) - {path.name for path in boots}:
         fail("candidate_replacement_has_no_base_input")
-    if sum(base.safe_file(path, limits).stat().st_size for path in [sdk, *boots, *replacements.values()]) > limits.max_total_archive_bytes:
+    if sum(base.safe_file(path, limits).stat().st_size for path in inputs) > limits.max_total_archive_bytes:
         fail("total_archive_bytes_limit")
     sdk_classes, manifest = archive_members(sdk, "sdk", "sdk", limits)
     manifests, installed, candidate = [manifest], {}, {}
     duplicates = {"installed": 0, "candidate": 0}
-    providers = {"installed": {}, "candidate": {}}
     duplicate_providers = {"installed": Counter(), "candidate": Counter()}
     def merge(target, classes, role, source_id):
         duplicates[role] += len(target.keys() & classes.keys())
         # The supplied boot order is deliberate: the first definition wins.
         for name, item in classes.items():
             if name in target:
-                duplicate_providers[role][(providers[role][name], source_id)] += 1
+                selected_source_id, _ = target[name].dex_source
+                duplicate_providers[role][(selected_source_id, source_id)] += 1
             else:
                 target[name] = item
-                providers[role][name] = source_id
     for index, path in enumerate(boots, 1):
         classes, manifest = archive_members(path, "boot", f"boot-{index:02d}", limits)
         manifests.append(manifest)
@@ -541,6 +565,26 @@ def inventory(sdk: Path, boots: list[Path], replacements=None, limits=Limits(), 
     if replacements:
         targets["candidate"] = candidate
     resolvers = {name: Resolver(classes) for name, classes in targets.items()}
+    loader_profiles = {}
+    if loader_jars:
+        libraries = []
+        for index, path in enumerate(loader_jars, 1):
+            source_id = f"loader-{index:02d}"
+            classes, manifest = archive_members(path, "boot", source_id, limits)
+            manifest["role"] = "loader"
+            manifests.append(manifest)
+            libraries.append((classes, source_id))
+        for name, parent in tuple(targets.items()):
+            profile = name + "_child"
+            selected = dict(parent)
+            duplicates[profile] = 0
+            duplicate_providers[profile] = Counter()
+            for classes, source_id in libraries:
+                merge(selected, classes, profile, source_id)
+            targets[profile] = selected
+            resolvers[profile] = Resolver(selected, parent)
+            loader_profiles[profile] = {"name": loader_name, "parent": name,
+                                        "ordered_source_ids": [source_id for _, source_id in libraries]}
     summaries = {name: {"sdk_classes_present": len(sdk_classes.keys() & classes.keys()),
                         "sdk_classes_absent": len(sdk_classes.keys() - classes.keys()),
                         "duplicate_class_definitions_first_wins": duplicates[name],
@@ -550,6 +594,7 @@ def inventory(sdk: Path, boots: list[Path], replacements=None, limits=Limits(), 
                         "status_counts": Counter(), "kind_status_counts": defaultdict(Counter),
                         "families": defaultdict(Counter), "possible_mismatch_counts": Counter(),
                         "descriptor_present_with_absent_boot_types": 0,
+                        "descriptor_present_with_absent_defining_loader_types": 0,
                         "inherited_exact_descriptor_rows": 0} for name, classes in targets.items()}
     rows, kinds, sdk_visibility = [], Counter(), Counter()
     for cname, cls in sorted(sdk_classes.items()):
@@ -562,7 +607,17 @@ def inventory(sdk: Path, boots: list[Path], replacements=None, limits=Limits(), 
             row = {"class": cname, "kind": kind, "name": item.name, "descriptor": item.descriptor,
                    "sdk_access_flags": item.flags, "family": base.family(cname)[0]}
             for name, classes in targets.items():
-                result = compare_member(cls, item, classes, resolvers[name], sdk_classes.keys())
+                resolver = resolvers[name]
+                lookup = None
+                if cname in classes:
+                    lookup = resolver.lookup(cname, item.key)
+                    origins = sorted({(owner if owner in sdk_classes else "<non-sdk declaration>",
+                                       classes[owner].dex_source) for owner, _ in lookup[0]})
+                    provenance = {"declaring": dex_origin(classes[cname].dex_source),
+                                  "resolved": [{"owner": owner, **dex_origin(origin)}
+                                               for owner, origin in origins]}
+                    row.setdefault("definition_sources", {})[name] = provenance
+                result = compare_member(cls, item, classes, resolver, sdk_classes.keys(), lookup)
                 row[name] = result
                 summary = summaries[name]
                 summary["status_counts"][result["status"]] += 1
@@ -570,6 +625,8 @@ def inventory(sdk: Path, boots: list[Path], replacements=None, limits=Limits(), 
                 summary["families"][row["family"]][result["status"]] += 1
                 summary["possible_mismatch_counts"].update(result.get("possible_mismatches", []))
                 summary["descriptor_present_with_absent_boot_types"] += bool(result.get("descriptor_types_absent_from_boot"))
+                summary["descriptor_present_with_absent_defining_loader_types"] += bool(
+                    result.get("descriptor_types_absent_from_defining_loader"))
                 summary["inherited_exact_descriptor_rows"] += result.get("location") == "inherited"
             rows.append(row)
     def plain(value):
@@ -594,9 +651,15 @@ def inventory(sdk: Path, boots: list[Path], replacements=None, limits=Limits(), 
                               "Exact descriptors include field type, method parameters and return type. Covariant returns require an exact bridge/inherited descriptor; generic signatures are not compared.",
                               "Visibility/static/final/abstract/class-kind checks are possible mismatches. Protected receiver rules, class-loader constraints, module exports, inner-class source access, default method execution and polymorphic call sites are not fully evaluated.",
                               "Presence does not assess code bodies, native registration, values/constants, exceptions, annotations, permissions, services or behavior.",
-                              "Descriptor type absence concerns selected boot inputs only. APK/module/uses-library providers and desugaring are not assessed.",
+                              "Boot descriptor type absence concerns the selected boot inputs. The child model checks descriptor types from each member owner. Desugaring is not assessed.",
                               "Supplied boot order uses first definition. Runtime class-loader ordering was not executed or independently proved.",
                               "No runtime private member names, arbitrary strings, absolute input paths or bytecode bodies are written to the report."]}
+    if loader_profiles:
+        report["scope"] = "SDK public/protected member descriptors on selected boot paths and an explicit parent-first child"
+        report["loader_profiles"] = loader_profiles
+        report["limitations"].append(
+            "The child profile models one ordered DEX path delegating to boot. Separate LoadedApk "
+            "shared-library graphs, delegate-last loaders and app isolation need runtime evidence.")
     if replacements:
         changes = [row for row in rows if row["installed"] != row["candidate"]]
         report["candidate_delta"] = {"changed_member_rows": len(changes),
@@ -611,10 +674,20 @@ def markdown(report):
              "Presence is structural evidence, with no claim about behavior. Full per-declaration results are in `java-member-availability.jsonl`.", "",
              "| Status | Installed | Candidate |", "| --- | ---: | ---: |"]
     comparisons = report["comparisons"]
+    if report.get("loader_profiles"):
+        lines[-2:] = ["| Status | " + " | ".join(comparisons) + " |",
+                      "| --- | " + " | ".join("---:" for _ in comparisons) + " |"]
+    names = comparisons if report.get("loader_profiles") else ("installed", "candidate")
     statuses = sorted({status for summary in comparisons.values() for status in summary["status_counts"]})
     for status in statuses:
-        lines.append(f"| {status} | {comparisons['installed']['status_counts'].get(status, 0):,} | {comparisons.get('candidate', {}).get('status_counts', {}).get(status, 0):,} |")
-    lines += ["", "## Definitively absent descriptors on present classes by family", "",
+        counts = (f"{comparisons.get(name, {}).get('status_counts', {}).get(status, 0):,}" for name in names)
+        lines.append(f"| {status} | " + " | ".join(counts) + " |")
+    if report.get("loader_profiles"):
+        lines += ["", "## Supplied child class paths", ""]
+        for name, profile in report["loader_profiles"].items():
+            ordered = ", ".join(profile["ordered_source_ids"])
+            lines.append(f"- `{name}` models `{profile['name']}` with parent `{profile['parent']}` and ordered inputs {ordered}.")
+    lines += ["", "## Definitively absent boot descriptors on present classes by family", "",
               "| Family | Installed | Candidate |", "| --- | ---: | ---: |"]
     for family, counts in comparisons["installed"]["families"].items():
         lines.append(f"| {family} | {counts.get('absent_from_present_class', 0):,} | {comparisons.get('candidate', {}).get('families', {}).get(family, {}).get('absent_from_present_class', 0):,} |")
@@ -651,6 +724,9 @@ def main(argv=None):
     parser.add_argument("--sdk-api-level", default=36, type=int)
     parser.add_argument("--boot-jar", required=True, action="append", type=Path)
     parser.add_argument("--candidate-replace", action="append", default=[], metavar="BOOT_NAME=JAR")
+    parser.add_argument("--loader-name", help="Label for one hypothetical parent-first child of boot.")
+    parser.add_argument("--loader-jar", action="append", default=[], type=Path,
+                        help="DEX archive in the child's search order. Repeat for additional archives.")
     parser.add_argument("--outdir", type=Path, default=Path("out/compat-audit/java-members"))
     args = parser.parse_args(argv)
     try:
@@ -660,8 +736,10 @@ def main(argv=None):
             if not sep or name in replacements:
                 fail("invalid_candidate_replacement")
             replacements[name] = Path(path)
-        report, rows = inventory(args.sdk_jar, args.boot_jar, replacements, sdk_api=args.sdk_api_level)
-        targets = safe_output_targets(args.outdir, [args.sdk_jar, *args.boot_jar, *replacements.values()])
+        report, rows = inventory(args.sdk_jar, args.boot_jar, replacements, sdk_api=args.sdk_api_level,
+                                 loader_jars=args.loader_jar, loader_name=args.loader_name)
+        targets = safe_output_targets(args.outdir, [args.sdk_jar, *args.boot_jar, *replacements.values(),
+                                                    *args.loader_jar])
         args.outdir.mkdir(parents=True, exist_ok=True)
         with targets[0].open("w", encoding="utf-8", newline="\n") as stream:
             digest = hashlib.sha256()

@@ -21,6 +21,9 @@ public final class MicrogAddons {
         if (!GmsSignatureSpoofing.verifyAddonApk(expectedPackage, apk.getPath())) {
             throw new SecurityException("Untrusted microG addon for " + expectedPackage);
         }
+        if (apk.canWrite() && !apk.setReadOnly()) {
+            throw new IOException("Cannot make the verified microG addon read-only: " + apk);
+        }
         ApkPackage parsed = ApkPackage.parse(apk.getPath());
         parsed.setSystemAddon(true);
         return parsed;

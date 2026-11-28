@@ -175,7 +175,8 @@ function Sync-GesherRuntimeFile {
     param(
         [Parameter(Mandatory = $true)][string] $Source,
         [Parameter(Mandatory = $true)][string] $Destination,
-        [Parameter(Mandatory = $true)] $State
+        [Parameter(Mandatory = $true)] $State,
+        [switch] $ReadOnly
     )
     $sourceInfo = Get-Item -LiteralPath $Source -ErrorAction Stop
     # A missing literal path must not be acknowledged even if the filesystem
@@ -206,7 +207,11 @@ function Sync-GesherRuntimeFile {
         }
     }
     if ($copy) {
-        Copy-Item -LiteralPath $Source -Destination $Destination -ErrorAction Stop
+        Copy-Item -LiteralPath $Source -Destination $Destination -Force:$ReadOnly -ErrorAction Stop
+    }
+    if ($ReadOnly) {
+        $code = Get-Item -LiteralPath $Destination -ErrorAction Stop
+        if (-not $code.IsReadOnly) { $code.IsReadOnly = $true }
     }
 }
 

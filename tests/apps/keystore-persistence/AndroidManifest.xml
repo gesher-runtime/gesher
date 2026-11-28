@@ -1,0 +1,14 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.gesher.keystorepersist">
+  <uses-sdk android:minSdkVersion="36" android:targetSdkVersion="36" />
+  <application android:label="Gesher Keystore persistence contract">
+    <activity android:name=".PersistenceActivity" android:exported="true">
+      <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
+    </activity>
+    <activity android:name=".ConcurrentActivity$WriterA" android:process=":writer_a"
+              android:exported="true" />
+    <activity android:name=".ConcurrentActivity$WriterB" android:process=":writer_b"
+              android:exported="true" />
+    <activity android:name=".ConcurrentActivity$Verify" android:process=":verifier"
+              android:exported="true" />
+  </application>
+</manifest>

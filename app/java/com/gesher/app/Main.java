@@ -248,7 +248,8 @@ public final class Main {
             log("done");
             return 0;
         }
-        ApkPackage pkg = ApkPackage.parse(apk);
+        String codePath = ApkCode.snapshot(apk).getPath();
+        ApkPackage pkg = ApkPackage.parse(codePath);
         log(pkg.describe());
         if (dataDir != null) pkg.setDataDir(new File(dataDir).getAbsolutePath());
         // Admission owns the canonical durable UID. If this VM started with another
@@ -267,7 +268,7 @@ public final class Main {
             com.gesher.server.ConnectivityService.applyInternetPermission(pkg);  // docs/network.md
             log("stand-in services in this process: "
                     + String.join(", ", ServiceManager.listServices()));
-            return runInProcess(apk, appInfo, launch, window, showWindow, application);
+            return runInProcess(codePath, appInfo, launch, window, showWindow, application);
         }
     }
 

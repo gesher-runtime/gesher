@@ -221,6 +221,7 @@ try {
         $temp = Join-Path $slot 'base.apk.new'
         Copy-Item -LiteralPath $entry.Source -Destination $temp -Force
         $staged += $temp
+        (Get-Item -LiteralPath $temp).IsReadOnly = $true
         $arguments = @("-Xbootclasspath:$bcp", "-Ximage:$(AndroidPath (Join-Path $RuntimeDir 'framework/boot.art'))",
             '-Xusejit:false', 'com.gesher.server.MicrogAddons',
             'verify', $entry.Package, (AndroidPath $temp))
@@ -280,7 +281,7 @@ try {
 
 } finally {
     foreach ($temp in $staged) {
-        if (Test-Path -LiteralPath $temp) { Remove-Item -LiteralPath $temp }
+        if (Test-Path -LiteralPath $temp) { Remove-Item -LiteralPath $temp -Force }
     }
 }
 if ($InstallStore) { Install-AuroraStore }

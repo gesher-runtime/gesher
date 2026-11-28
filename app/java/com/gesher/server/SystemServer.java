@@ -290,7 +290,7 @@ public final class SystemServer {
             }
         }
         for (String apk : apks) {
-            ApkPackage p = ApkPackage.parse(apk);
+            ApkPackage p = ApkPackage.parse(com.gesher.app.ApkCode.snapshot(apk).getPath());
             selectCommandLinePackage(packages, p);
         }
         try (PackageUids.Admission identity = PackageUids.prepare(packages, committed)) {

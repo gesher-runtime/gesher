@@ -251,6 +251,8 @@ public final class SplitPackageContractTest {
                 .anyMatch(line -> line.startsWith(PACKAGE + "\t" + installedCode.getPath() + "\t")),
                 "Registry lost the canonical installed generation");
         ApplicationInfo ai = metadata(pm.get(PACKAGE));
+        require(archive.canWrite(), "Installing APKs modified the input archive permissions");
+        requireReadOnlyCode(ai);
         loadFeature(ai);
         Class<?> notifications = Class.forName("com.gesher.server.NotificationManagerService");
         Class<?> amType = Class.forName("com.gesher.server.ActivityManagerService");
@@ -279,11 +281,18 @@ public final class SplitPackageContractTest {
         result = (String[]) install.invoke(installer, baseOnly.getPath());
         require("unchanged".equals(result[1]), "Unchanged lone base discarded installed splits");
         metadata(pm.get(PACKAGE));
+        // Reproduce an older installation without replacing the installed bytes.
+        require(new File(ai.sourceDir).setWritable(true), "Could not prepare a writable installed base");
+        for (String split : ai.splitSourceDirs) {
+            require(new File(split).setWritable(true), "Could not prepare a writable installed split: " + split);
+        }
         List<ApkPackage> reloaded = (List<ApkPackage>) method(installerType, "loadInstalled").invoke(null);
         require(reloaded.size() == 1, "Cluster vanished on registry reload");
         require(new File(reloaded.get(0).apkPath).getParentFile().equals(installedCode),
                 "Registry reload changed the canonical installed generation");
-        loadFeature(metadata(reloaded.get(0)));
+        ApplicationInfo reloadedInfo = metadata(reloaded.get(0));
+        requireReadOnlyCode(reloadedInfo);
+        loadFeature(reloadedInfo);
         File external = new File(data, "external"); external.mkdirs();
         File externalBase = new File(external, "base.apk"); Files.write(externalBase.toPath(), inputs.get("base"));
         Files.write(new File(external, "split_unrelated.apk").toPath(), inputs.get("foreign"));
@@ -325,6 +334,13 @@ public final class SplitPackageContractTest {
         codeRootBoundary(data, installerType);
         inheritedSplitSessions(data, inputs);
         System.out.println("SplitPackageContractTest all passed: " + checks + " checks");
+    }
+
+    private static void requireReadOnlyCode(ApplicationInfo info) {
+        require(!new File(info.sourceDir).canWrite(), "Published APK base is writable");
+        for (String path : info.splitSourceDirs) {
+            require(!new File(path).canWrite(), "Published APK split is writable: " + path);
+        }
     }
 
     private static void codeRootBoundary(File parent, Class<?> installerType) throws Exception {

@@ -1,0 +1,39 @@
+diff --git a/runtime/native/dalvik_system_DexFile.cc b/runtime/native/dalvik_system_DexFile.cc
+--- a/runtime/native/dalvik_system_DexFile.cc
++++ b/runtime/native/dalvik_system_DexFile.cc
+@@ -27,6 +27,7 @@
+ #include "base/hiddenapi_domain.h"
+ #include "base/logging.h"
+ #include "base/os.h"
++#include "base/sdk_version.h"
+ #include "base/stl_util.h"
+ #include "base/transform_iterator.h"
+ #include "base/utils.h"
+@@ -343,7 +344,14 @@
+     return false;
+   }
+ }
+-#else   // ART_TARGET_ANDROID
++#elif defined(_WIN32)
++static bool isReadOnlyJavaDclEnforced(JNIEnv*) {
++  // Gesher has no per-app compatibility overrides. Use the same default
++  // target-SDK threshold as DexFile.ENFORCE_READ_ONLY_JAVA_DCL on Android.
++  (void)kEnforceReadOnlyJavaDcl;
++  return IsSdkVersionSetAndAtLeast(Runtime::Current()->GetTargetSdkVersion(), SdkVersion::kU);
++}
++#else
+ constexpr static bool isReadOnlyJavaDclEnforced(JNIEnv*) {
+   (void)kEnforceReadOnlyJavaDcl;
+   return false;
+@@ -351,9 +359,11 @@
+ #endif  // ART_TARGET_ANDROID
+
+ static bool isReadOnlyJavaDclChecked() {
++#if !defined(_WIN32)
+   if (!kIsTargetAndroid) {
+     return false;
+   }
++#endif
+   const int uid = getuid();
+   // The following UIDs are exempted:
+   // * Root (0): root processes always have write access to files.
