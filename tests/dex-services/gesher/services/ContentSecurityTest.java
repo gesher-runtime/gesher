@@ -232,8 +232,13 @@ public final class ContentSecurityTest {
         h.notify(CLIENT, URI, 0);
         require(clientObserver.changes.get() == 2, "Explicit write grant did not authorize notification");
         h.revoke(READ);
+        Observer writeOnlyObserver = new Observer();
+        h.as(CLIENT, () -> h.content.registerContentObserver(URI, true, writeOnlyObserver, 0, 36));
         h.notify(OWNER, URI, 0);
-        require(clientObserver.changes.get() == 2, "Revoked read grant still received content URIs");
+        require(clientObserver.changes.get() == 2 && writeOnlyObserver.changes.get() == 0,
+                "Revoked read grant still received content URIs");
+        h.revoke(WRITE);
+        h.as(CLIENT, () -> denied(() -> h.content.registerContentObserver(URI, true, writeOnlyObserver, 0, 36)));
         System.out.println("ContentSecurityTest: private observations/notifiers, package spoof, unknown PID, sync-settings and cross-user writes denied; owner and exact URI grants work/revoke");
 
         h.notify(CLIENT, URI, ContentResolver.NOTIFY_SYNC_TO_NETWORK);

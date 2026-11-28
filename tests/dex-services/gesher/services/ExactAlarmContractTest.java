@@ -745,6 +745,18 @@ public final class ExactAlarmContractTest {
                 order.clear(); delivered.clear();
                 runAs(EXACT_UID, EXACT_PID, () -> {
                     int result = ((android.app.IActivityTaskManager)h.atm).startActivity(h.thread, EXACT_PKG,
+                            null, new Intent("android.app.role.action.REQUEST_ROLE")
+                                    .putExtra(Intent.EXTRA_ROLE_NAME, "android.app.role.CALL_SCREENING"),
+                            null, (IBinder)get(source, "token"), "role", 45, 0, null, null);
+                    check(result == ActivityManager.START_SUCCESS,
+                            "REQUEST_ROLE without role controller returns START_SUCCESS");
+                });
+                check(delivered.size() == 1 && delivered.get(0).mResultCode == android.app.Activity.RESULT_CANCELED
+                        && delivered.get(0).mRequestCode == 45 && "role".equals(delivered.get(0).mResultWho),
+                        "REQUEST_ROLE delivers RESULT_CANCELED to the requesting activity");
+                order.clear(); delivered.clear();
+                runAs(EXACT_UID, EXACT_PID, () -> {
+                    int result = ((android.app.IActivityTaskManager)h.atm).startActivity(h.thread, EXACT_PKG,
                             null, new Intent("android.app.action.ADD_DEVICE_ADMIN"), null,
                             null, null, -1, 0, null, null);
                     check(result == ActivityManager.START_SUCCESS, "Unparented enrollment finishes safely without a launch exception");

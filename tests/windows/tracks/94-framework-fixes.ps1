@@ -173,7 +173,7 @@ $exactAlarmCode = $LASTEXITCODE
 Check 'services: exact alarm scheduling contracts, permissions and revocation' {
   $global:LASTEXITCODE = $exactAlarmCode
   $exactAlarmOut
-} @('ExactAlarmContractTest all passed: 422 checks verified')
+} @('ExactAlarmContractTest all passed: 424 checks verified')
 
 $schedulerConstraintsOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
   'JobSchedulerConstraintContractTest') 90

@@ -179,8 +179,22 @@ public final class SettingsIntentsTest {
             require(pages.size() == 4 && pages.get(3).equals("notifications:ms-settings:notifications"),
                     "notification settings took another path: " + pages);
 
+            // Role requests without an installed role controller return RESULT_CANCELED
+            // rather than crashing apps with ActivityNotFoundException.
+            require(started(start, atm, new Intent("android.app.role.action.REQUEST_ROLE")
+                    .putExtra(Intent.EXTRA_ROLE_NAME, "android.app.role.CALL_SCREENING")),
+                    "REQUEST_ROLE not handled");
+            require(centers.size() == 6 && pages.size() == 4,
+                    "REQUEST_ROLE opened Settings or Control Center: " + centers + " " + pages);
+
             int before = centers.size() + pages.size();
             Intent[] unresolved = {
+                    // Addressed elsewhere: another package, an explicit component.
+                    new Intent("android.app.role.action.REQUEST_ROLE")
+                            .setPackage("other.application"),
+                    new Intent("android.app.role.action.REQUEST_ROLE").setComponent(
+                            new ComponentName("com.android.permissioncontroller",
+                                    "com.android.permissioncontroller.role.ui.RequestRoleActivity")),
                     // An app that is not installed: Settings' own "not found".
                     new Intent("android.settings.APPLICATION_DETAILS_SETTINGS",
                             Uri.fromParts("package", "com.example.missing", null)),
