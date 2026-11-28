@@ -90,6 +90,10 @@ def snapshot(folder: Path, source_ref: str | None) -> tuple[Path, Path]:
         shutil.copy2(ROOT / "tests/native" / name, fixtures / name)
     shutil.copytree(ROOT / "tests/native/elf_loader_host_platform",
                     fixtures / "elf_loader_host_platform")
+    # The loader reads the application's target SDK from this production header.
+    # It is portable C++ with no Windows dependency: use it, not a stand-in.
+    shutil.copy2(ROOT / "compat/posix/include/gesher/application_target_sdk.h",
+                 fixtures / "elf_loader_host_platform/gesher/application_target_sdk.h")
     shutil.copytree(ROOT / "compat/arm64/include", fixtures / "arm64-include")
 
     elf = source / "compat/elf"
