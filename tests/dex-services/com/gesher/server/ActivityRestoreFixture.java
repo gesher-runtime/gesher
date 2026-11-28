@@ -141,14 +141,19 @@ public final class ActivityRestoreFixture {
         }
     }
 
+    /** A transaction rejected by the fixture, distinct from a failed lifecycle callback. */
+    private static final class InjectedTransactionFailure extends RemoteException {
+        InjectedTransactionFailure(String message) { super(message); }
+    }
+
     private static final class AppThread extends IApplicationThread.Default {
         final IBinder binder = new Binder();
         final List<Event> events = new ArrayList<>();
         final ArrayDeque<Event> pending = new ArrayDeque<>();
         IActivityClientController controller;
+        boolean failNextResultTransaction;
         boolean autoAck = true;
         boolean failNextTransaction;
-        boolean failNextResultTransaction;
         Operation onExit;
         @Override public void scheduleExit() {
             try { if (onExit != null) onExit.run(); }
@@ -159,12 +164,12 @@ public final class ActivityRestoreFixture {
 
         @Override public void scheduleTransaction(ClientTransaction transaction) throws RemoteException {
             if (failNextTransaction) { failNextTransaction = false; throw new RemoteException("isolated failed restore IPC"); }
-            if (failNextResultTransaction
-                    && transaction.getTransactionItems().stream().anyMatch(ActivityResultItem.class::isInstance)) {
-                failNextResultTransaction = false;
-                throw new RemoteException("isolated failed result IPC");
-            }
             try {
+                if (failNextResultTransaction
+                        && transaction.getTransactionItems().stream().anyMatch(ActivityResultItem.class::isInstance)) {
+                    failNextResultTransaction = false;
+                    throw new InjectedTransactionFailure("isolated failed result IPC");
+                }
                 for (ClientTransactionItem item : transaction.getTransactionItems()) {
                     IBinder token = null;
                     if (item instanceof ActivityTransactionItem activity) {
@@ -176,6 +181,8 @@ public final class ActivityRestoreFixture {
                     events.add(event);
                     if (autoAck) acknowledge(event); else pending.addLast(event);
                 }
+            } catch (InjectedTransactionFailure failure) {
+                throw failure;
             } catch (Exception failure) {
                 throw new AssertionError("Lifecycle callback failed", failure);
             }
@@ -592,7 +599,7 @@ public final class ActivityRestoreFixture {
 
     private static void testFailedRestoreDelivery() throws Exception {
         Harness h = new Harness();
-        Object record = h.record("MainAct", 10, "a", "STOPPING");
+        var record = (ActivityTaskManagerService.ActivityRecord) h.record("MainAct", 10, "a", "STOPPING");
         Bundle saved = new Bundle(); saved.putString("retry", "snapshot");
         h.activityStopped(record, saved, null);
         h.processDied(h.process);
@@ -718,10 +725,10 @@ public final class ActivityRestoreFixture {
             testForceStopLiveSavedRecord();
         }
         if (group.equals("all") || group.equals("results")) testPendingResultsPreservedAcrossProcessDeath();
-        if (group.equals("all") || group.equals("finish-result-retry")) testFailedFinishResultDelivery();
-        if (group.equals("all") || group.equals("late-stop")) testLateStopDoesNotRestoreStaleState();
         if (group.equals("all") || group.equals("movetask")) testMoveTaskToFrontRelaunch();
         if (group.equals("all") || group.equals("paused")) testActivityPausedFinishingRelaunchesUnderlying();
+        if (group.equals("all") || group.equals("finish-result-retry")) testFailedFinishResultDelivery();
+        if (group.equals("all") || group.equals("late-stop")) testLateStopDoesNotRestoreStaleState();
         return checks;
     }
 }
