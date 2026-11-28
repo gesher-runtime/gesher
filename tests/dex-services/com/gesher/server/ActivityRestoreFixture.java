@@ -679,7 +679,11 @@ public final class ActivityRestoreFixture {
     @SuppressWarnings("unchecked")
     private static void testFailedRestoreDelivery(boolean deathDuringIpc) throws Exception {
         Harness h = new Harness();
-        var record = (ActivityTaskManagerService.ActivityRecord) h.record("MainAct", 10, "a", "STOPPING");
+        Object record = h.record("MainAct", 10, "a", "STOPPING");
+        // The fixture is loaded apart from the server classes on ART; reach the
+        // record's queues reflectively instead of through its package-private type.
+        List<ResultInfo> queuedResults = pendingResults(record);
+        List<ReferrerIntent> queuedIntents = (List<ReferrerIntent>) get(record, "pendingNewIntents");
         Bundle saved = new Bundle(); saved.putString("retry", "snapshot");
         h.activityStopped(record, saved, null);
         h.processDied(h.process);
@@ -687,8 +691,8 @@ public final class ActivityRestoreFixture {
                 new Intent("fixture.restore.RESULT_1"), new Binder());
         ReferrerIntent firstIntent = new ReferrerIntent(new Intent("fixture.restore.INTENT_1"),
                 OWNER, new Binder());
-        record.pendingResults.add(first);
-        record.pendingNewIntents.add(firstIntent);
+        queuedResults.add(first);
+        queuedIntents.add(firstIntent);
 
         AppThread failing = new AppThread(); failing.failNextTransaction = true;
         Object failedProcess = h.newProcess(PID + 20, failing);
@@ -699,8 +703,8 @@ public final class ActivityRestoreFixture {
         Operation replaceProcess = () -> {
             h.processDied(failedProcess);
             check(!(boolean)get(record, "launchScheduled"), "Failed launch stranded scheduled flag");
-            record.pendingResults.add(second);
-            record.pendingNewIntents.add(secondIntent);
+            queuedResults.add(second);
+            queuedIntents.add(secondIntent);
             h.newProcess(PID + 21, retry);
             h.moveTaskToFront(10);
             if (deathDuringIpc) {
@@ -724,7 +728,7 @@ public final class ActivityRestoreFixture {
                 "mPendingNewIntents").get(delivered);
         check(List.of(first, second).equals(results), "Retry lost or reordered queued activity results");
         check(List.of(firstIntent, secondIntent).equals(intents), "Retry lost or reordered queued new intents");
-        check(record.pendingResults.isEmpty() && record.pendingNewIntents.isEmpty(),
+        check(queuedResults.isEmpty() && queuedIntents.isEmpty(),
                 "Accepted launch left previously delivered callbacks queued");
         check(get(record, "savedState") == null, "Successful resumed acknowledgment did not release snapshot");
     }
