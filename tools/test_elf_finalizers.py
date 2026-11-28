@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Test production Close routing and lifecycle with an observing translator.
+"""Test production Close, group collection and retirement with an observing translator.
+
+The fixture runs the loader's own close, finalizer, retirement and image
+reclamation code over library records it publishes itself: reference counts,
+dependency liveness, what keeps a library resident, and finalizer order.
 
 Real x86-64 and translated ARM64 DT_FINI_ARRAY execution is additionally required
 by the existing Windows ELF loader fixtures using tests/native/trivial.c.
@@ -24,8 +28,10 @@ def main():
     template = (ROOT / "tests/native/elf_finalizers_host_test.cc.in").read_text()
     for placeholder, start, end in [
         ("@LOADER_MUTEX_IMPLEMENTATION@", "class LoaderMutex {", "LoaderMutex g_mutex;"),
-        ("@CLOSE_IMPLEMENTATION@", "void Close(Library* library) {",
-         "namespace {\n\n// Takes `library` out of every list"),
+        ("@COLLECTION_IMPLEMENTATION@", "void RunFinalizers(Library* library) {",
+         "Library* LibraryForAddressLocked("),
+        ("@CLOSE_IMPLEMENTATION@", "bool Close(Library* library) {",
+         "Library* RetainForAddress("),
         ("@LOOKUP_GLOBAL_LOCKED_IMPLEMENTATION@", "void* LookupGlobalLocked(const char* name,",
          "struct ResolvedSymbol {"),
         ("@LOOKUP_GLOBAL_IMPLEMENTATION@", "void* LookupGlobal(const char* name) {",

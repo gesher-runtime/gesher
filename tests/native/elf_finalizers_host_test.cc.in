@@ -1,33 +1,69 @@
 // Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <elf.h>
+#include <memory>
 #include <mutex>
+#include <set>
+#include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 #include <cstdint>
 
 #define SYSV __attribute__((sysv_abi))
 using Finalizer = void (SYSV*)();
 static std::vector<const void*> translated;
+static int removed_code;
 namespace gesher::arm64 {
 uint64_t Call(const void* function, const uint64_t* arguments, size_t count) {
   if (arguments != nullptr || count != 0) std::abort();
   translated.push_back(function);
   return 0;
 }
+void RemoveCode(const void*, size_t) { ++removed_code; }
 }
+static std::vector<void*> unmapped;
 namespace gesher::elf {
+// The fields the production close, retirement and reclamation code reads, with
+// the loader's own types. Nothing here is mapped: `base` only names the image.
 struct Library {
   bool is_closed = false;
+  bool is_closing = false;
+  std::atomic<bool> retired{false};
   bool is_aarch64 = false;
   Finalizer* fini_array = nullptr;
   size_t fini_array_count = 0;
   Finalizer fini_func = nullptr;
-  bool is_closing = false;
+  bool init_done = false;
+  uint64_t init_order = 0;
+  size_t open_references = 0;
+  size_t lifetime_pins = 0;
+  bool keep_resident = false;
+  bool mapped_by_caller = false;
+  struct { bool present = false; } tls;
+  Library* load_group_root = nullptr;
+  std::vector<Library*> dependencies;
+  std::vector<Library*> relocation_dependencies;
+  uint8_t* base = nullptr;
+  size_t map_size = 0;
+  bool guest_code_registered = false;
+  std::unique_ptr<int> rewrite_registration;
+  const Elf64_Sym* symtab = nullptr;
+  const Elf64_Phdr* phdr = nullptr;
+  std::vector<std::pair<uint8_t*, size_t>> caller_ranges;
+  bool reclaim_when_idle = false;
+  std::atomic<int> in_callback{0};
+  std::vector<std::string> needed;
+  std::vector<void*> unresolved_functions;
+  std::vector<uint8_t*> unresolved_pages;
+  std::vector<const char*> unresolved_data_names;
+  std::string load_notes;
+  // Fixture symbol storage for the production global lookup.
   Elf64_Sym symbol{};
   const char* symbol_name = nullptr;
   void* symbol_address = nullptr;
@@ -35,8 +71,24 @@ struct Library {
 // The production recursive loader lock, which knows whether this thread holds it.
 @LOADER_MUTEX_IMPLEMENTATION@
 LoaderMutex g_mutex;
-static std::vector<Library*> loaded;
-static const std::vector<Library*>& Loaded() { return loaded; }
+static std::vector<Library*>& Loaded() {
+  static std::vector<Library*> loaded;
+  return loaded;
+}
+static std::vector<Library*>& RelocationGlobals() {
+  static std::vector<Library*> globals;
+  return globals;
+}
+static uint64_t g_unload_count;
+static bool g_closes_pending;
+// No load is in progress here, so no relocation transaction defers a collection.
+static thread_local std::vector<int> g_pending_scopes;
+static void ReleaseUnresolvedImports(Library*) {}
+// The image's pages: record the release instead of unmapping test storage.
+static int munmap(void* address, size_t) {
+  unmapped.push_back(address);
+  return 0;
+}
 // The fixture only supplies symbol storage. Visibility and loader locking use
 // the production global-lookup traversal, as called by a finalizer.
 static uint32_t GnuHash(const char*) { return 0; }
@@ -47,6 +99,7 @@ static const Elf64_Sym* FindDefinedSymbol(const Library* lib, const char* name, 
 static void* SymbolAddress(const Library* lib, const Elf64_Sym*) { return lib->symbol_address; }
 @LOOKUP_GLOBAL_LOCKED_IMPLEMENTATION@
 @LOOKUP_GLOBAL_IMPLEMENTATION@
+@COLLECTION_IMPLEMENTATION@
 @CLOSE_IMPLEMENTATION@
 }
 using gesher::elf::Library;
@@ -55,6 +108,7 @@ using gesher::elf::LoaderMutex;
 static int order;
 static Library* reentrant;
 static bool entered;
+static bool reentrant_refused;
 static bool visible_during_finalization;
 static bool locked_during_finalization;
 static std::atomic<int> concurrent_calls{0};
@@ -65,7 +119,7 @@ static void SYSV Reentrant() {
   order++;
   visible_during_finalization = gesher::elf::LookupGlobal("finalizer_visible") == &order;
   locked_during_finalization = LoaderMutex::HeldByThisThread();
-  if (!entered) { entered = true; Close(reentrant); }
+  if (!entered) { entered = true; reentrant_refused = !Close(reentrant); }
 }
 static void SYSV Concurrent() {
   ++concurrent_calls;
@@ -76,43 +130,131 @@ static void Check(bool ok, const char* message) {
   if (!ok) { std::fprintf(stderr, "FAIL %s\n", message); std::exit(1); }
   ++checks;
 }
+static uint64_t next_order;
+// A loaded library whose constructors ran and which the application opened once.
+static void Publish(Library& library, Finalizer* array, size_t count, Finalizer fini,
+                    bool arm64 = false) {
+  library.fini_array = array;
+  library.fini_array_count = count;
+  library.fini_func = fini;
+  library.is_aarch64 = arm64;
+  library.init_done = true;
+  library.init_order = ++next_order;
+  library.open_references = 1;
+  library.base = reinterpret_cast<uint8_t*>(&library);
+  library.map_size = 4096;
+  gesher::elf::Loaded().push_back(&library);
+}
+static bool Listed(const Library* library) {
+  const auto& loaded = gesher::elf::Loaded();
+  return std::find(loaded.begin(), loaded.end(), library) != loaded.end();
+}
 int main() {
-  Close(nullptr);
+  Check(!Close(nullptr), "a null handle is refused");
+  Library unknown;
+  Check(!Close(&unknown), "a handle that is not loaded is refused");
+
   Finalizer callbacks[] = {One, Two};
-  Library native{false, false, callbacks, 2, Three};
-  Close(&native);
-  Check(order == 213, "reverse native array then DT_FINI");
-  Close(&native);
-  Check(order == 213, "native finalizers run once");
+  Library native;
+  Publish(native, callbacks, 2, Three);
+  native.open_references = 2;
+  Check(Close(&native) && order == 0 && Listed(&native) && !native.retired,
+        "a second reference keeps the library and runs nothing");
+  Check(Close(&native) && order == 213, "reverse native array then DT_FINI at the last close");
+  Check(native.retired && native.is_closed && !Listed(&native),
+        "the closed library leaves the loaded list");
+  Check(unmapped == std::vector<void*>{&native} && native.base == nullptr,
+        "its image is released once");
+  Check(!Close(&native) && order == 213, "native finalizers run once");
+
   order = 0;
-  Library guest{false, true, callbacks, 2, Three};
-  Close(&guest);
-  Check(order == 0, "ARM64 callbacks do not execute as host instructions");
+  Library guest;
+  Publish(guest, callbacks, 2, Three, true);
+  guest.guest_code_registered = true;
+  Check(Close(&guest) && order == 0, "ARM64 callbacks do not execute as host instructions");
   Check(translated == std::vector<const void*>{reinterpret_cast<void*>(Two),
         reinterpret_cast<void*>(One), reinterpret_cast<void*>(Three)}, "translated order and routing");
-  Close(&guest);
-  Check(translated.size() == 3, "translated finalizers run once");
+  Check(removed_code == 1 && !guest.guest_code_registered,
+        "the translated code registration is withdrawn");
+  Check(!Close(&guest) && translated.size() == 3, "translated finalizers run once");
+
   Finalizer sentinels[] = {nullptr, reinterpret_cast<Finalizer>(-1), One};
-  Library empty{false, false, sentinels, 3, reinterpret_cast<Finalizer>(-1)};
-  Close(&empty);
-  Check(order == 1, "null and minus-one finalizer entries are skipped");
-  Library recursive{false, false, nullptr, 0, Reentrant};
+  Library empty;
+  Publish(empty, sentinels, 3, reinterpret_cast<Finalizer>(-1));
+  Check(Close(&empty) && order == 1, "null and minus-one finalizer entries are skipped");
+
+  order = 0;
+  Library unstarted;
+  Publish(unstarted, callbacks, 2, Three);
+  unstarted.init_done = false;
+  Check(Close(&unstarted) && order == 0 && unstarted.retired,
+        "a library whose constructors never ran runs no finalizer");
+
+  Library recursive;
+  Publish(recursive, nullptr, 0, Reentrant);
   recursive.symbol.st_info = ELF64_ST_INFO(STB_GLOBAL, STT_OBJECT);
   recursive.symbol_name = "finalizer_visible";
   recursive.symbol_address = &order;
-  gesher::elf::loaded.push_back(&recursive);
   reentrant = &recursive; order = 0;
   Check(gesher::elf::LookupGlobal("finalizer_visible") == &order, "symbol visible before Close");
-  Close(&recursive);
-  Check(order == 1, "recursive close does not repeat finalization");
+  Check(Close(&recursive) && order == 1, "recursive close does not repeat finalization");
+  Check(reentrant_refused, "a close from the library's own finalizer has no reference to release");
   Check(visible_during_finalization, "symbol remains visible while finalizers run");
   Check(locked_during_finalization, "finalizers run under the loader lock");
   Check(!LoaderMutex::HeldByThisThread(), "Close releases the loader lock");
   Check(gesher::elf::LookupGlobal("finalizer_visible") == nullptr, "symbol hidden after Close");
-  Library shared{false, false, nullptr, 0, Concurrent};
+
+  // A dependency lives as long as something that is still open needs it.
+  order = 0;
+  Finalizer dependency_fini[] = {Two};
+  Finalizer held_fini[] = {Three};
+  Finalizer root_fini[] = {One};
+  Library dependency, held, root;
+  Publish(dependency, dependency_fini, 1, nullptr);
+  dependency.open_references = 0;  // loaded only for `root`
+  Publish(held, held_fini, 1, nullptr);  // also opened by the application
+  Publish(root, root_fini, 1, nullptr);
+  root.dependencies = {&dependency, &held};
+  Check(Close(&root) && order == 12, "a dependent is finalized before the dependency it loaded");
+  Check(root.retired && dependency.retired && !Listed(&dependency),
+        "an unreferenced dependency is unloaded with its dependent");
+  Check(Listed(&held) && !held.retired, "a dependency the application also opened stays loaded");
+  Check(Close(&held) && order == 123 && held.retired, "and is unloaded by its own last close");
+
+  // What keeps a library resident after its last handle is closed.
+  order = 0;
+  Library pinned, resident, thread_local_storage, reserved;
+  Publish(pinned, callbacks, 2, Three);
+  pinned.lifetime_pins = 1;  // a pending thread_local destructor
+  Publish(resident, callbacks, 2, Three);
+  resident.keep_resident = true;  // a process-lifetime callback registration
+  Publish(thread_local_storage, callbacks, 2, Three);
+  thread_local_storage.tls.present = true;
+  Publish(reserved, callbacks, 2, Three);
+  reserved.mapped_by_caller = true;  // the caller owns the address range
+  for (Library* library : {&pinned, &resident, &thread_local_storage, &reserved}) {
+    Check(Close(library) && order == 0 && Listed(library) && !library->retired,
+          "a pinned, resident, TLS or reserved library outlives its last handle");
+    Check(!Close(library), "and has no handle left to close");
+  }
+
+  Library iterated;
+  Publish(iterated, nullptr, 0, nullptr);
+  iterated.in_callback = 1;  // a dl_iterate_phdr callback still reads its headers
+  const size_t released = unmapped.size();
+  Check(Close(&iterated) && iterated.retired && !Listed(&iterated),
+        "a library an iteration callback reads is still retired");
+  Check(unmapped.size() == released && iterated.reclaim_when_idle && iterated.base != nullptr,
+        "but its image is not released under the callback");
+
+  Library shared;
+  Publish(shared, nullptr, 0, Concurrent);
+  std::atomic<int> accepted{0};
   std::vector<std::thread> threads;
-  for (int i = 0; i < 12; ++i) threads.emplace_back([&] { Close(&shared); });
+  for (int i = 0; i < 12; ++i) threads.emplace_back([&] { if (Close(&shared)) ++accepted; });
   for (auto& thread : threads) thread.join();
-  Check(concurrent_calls.load() == 1, "concurrent close claims finalizers once");
+  Check(concurrent_calls.load() == 1 && accepted.load() == 1,
+        "concurrent closes release one reference and claim finalizers once");
+  Check(gesher::elf::g_unload_count == 10, "every unloaded library is counted once");
   std::printf("ELF finalizer contracts all passed: %d checks\n", checks);
 }
