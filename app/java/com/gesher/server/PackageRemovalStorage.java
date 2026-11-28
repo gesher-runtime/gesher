@@ -98,7 +98,12 @@ final class PackageRemovalStorage {
             for (int attempt = 0; attempt < 5; attempt++) {
                 try { Files.move(path.getKey(), path.getValue()); last = null; break; }
                 catch (IOException busy) {
-                    last = busy; System.gc(); System.runFinalization();
+                    // Never block on System.runFinalization(): a stalled
+                    // FinalizerDaemon/ReferenceQueueDaemon would deadlock uninstall.
+                    // Runtime.gc() still collects (System.gc() is a no-op on ART
+                    // without runFinalization) so leaked handles can finalize
+                    // asynchronously during the back-off.
+                    last = busy; Runtime.getRuntime().gc();
                     android.os.SystemClock.sleep(100);
                 }
             }

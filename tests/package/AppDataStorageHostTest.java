@@ -2,6 +2,8 @@
 package com.gesher.server;
 
 import java.io.IOException;
+import java.lang.ref.ReferenceQueue;
+import java.lang.ref.WeakReference;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.file.Files;
@@ -406,6 +408,71 @@ public final class AppDataStorageHostTest {
         }
     }
 
+    private static void removalDoesNotBlockOnStalledFinalizer(Path root) throws Exception {
+        Path data = root.resolve("removal-stalled-finalizer");
+        System.setProperty("gesher.test.data", data.toString());
+        Path code = data.resolve("app/" + PACKAGE + "-1");
+        write(code.resolve("base.apk"), "code");
+
+        CountDownLatch finalizerEntered = new CountDownLatch(1);
+        CountDownLatch releaseFinalizer = new CountDownLatch(1);
+        new Object() {
+            @SuppressWarnings("removal")
+            @Override protected void finalize() throws Throwable {
+                finalizerEntered.countDown();
+                releaseFinalizer.await();
+            }
+        };
+        for (int i = 0; i < 20 && finalizerEntered.getCount() > 0; i++) {
+            System.gc();
+            finalizerEntered.await(50, TimeUnit.MILLISECONDS);
+        }
+        check(finalizerEntered.getCount() == 0, "finalizer did not stall as expected for test setup");
+        // Leave another finalizer pending behind the stalled one. A blocking
+        // runFinalization() would wait for it on every JVM (HotSpot runs pending
+        // finalizers on a secondary thread, so one stalled daemon is not enough).
+        ReferenceQueue<Object> collected = new ReferenceQueue<>();
+        WeakReference<Object> pendingFinalizer = new WeakReference<>(new Object() {
+            @SuppressWarnings("removal")
+            @Override protected void finalize() throws Throwable {
+                releaseFinalizer.await();
+            }
+        }, collected);
+        for (int i = 0; i < 20 && collected.poll() == null; i++) {
+            System.gc();
+            Thread.sleep(50);
+        }
+        check(pendingFinalizer.get() == null, "second finalizer was not queued for test setup");
+
+        PackageRemovalStorage pending = new PackageRemovalStorage(PACKAGE, code.toString());
+        Path appDir = code.getParent();
+        java.nio.file.attribute.PosixFileAttributeView posix = Files.getFileAttributeView(
+                appDir, java.nio.file.attribute.PosixFileAttributeView.class);
+        java.util.Set<java.nio.file.attribute.PosixFilePermission> originalPerms = null;
+        if (posix != null) {
+            originalPerms = posix.readAttributes().permissions();
+            posix.setPermissions(java.nio.file.attribute.PosixFilePermissions.fromString("r-xr-xr-x"));
+        }
+        try (FileChannel openHandle = FileChannel.open(code.resolve("base.apk"), StandardOpenOption.READ)) {
+            AtomicReference<Throwable> failure = new AtomicReference<>();
+            Thread stageThread = new Thread(() -> {
+                try {
+                    pending.stage();
+                } catch (Throwable t) {
+                    failure.set(t);
+                }
+            }, "test-stage-stalled-finalizer");
+            stageThread.start();
+            stageThread.join(5000);
+            check(!stageThread.isAlive(), "PackageRemovalStorage.stage() deadlocked on stalled finalizer");
+            check(failure.get() instanceof IOException, "expected IOException when code path is in use");
+        } finally {
+            if (posix != null && originalPerms != null) posix.setPermissions(originalPerms);
+            releaseFinalizer.countDown();
+            pending.rollback();
+        }
+    }
+
     public static void main(String[] args) throws Exception {
         if (args.length == 2 && "probe-lock".equals(args[0])) {
             boolean acquired;
@@ -427,6 +494,7 @@ public final class AppDataStorageHostTest {
             concurrentPreparation(root);
             removalRecovery(root);
             removalAliases(root);
+            removalDoesNotBlockOnStalledFinalizer(root);
             canceledContenderKeepsOwnerLock(root);
             System.out.println("AppDataStorageHostTest all passed: " + checks + " checks");
         } finally {
