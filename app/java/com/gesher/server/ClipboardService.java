@@ -108,7 +108,6 @@ public final class ClipboardService extends IClipboard.Default
     private final PackageManagerService mPm;
     private final CallerIdentity mCallers;
     private final AppOpsService mAppOps;
-    private final ClipboardImageProvider mImages;
     private final Host mHost;
     private final AutoCloseable mPackageChanges;
     private final AutoCloseable mPackageRemovals;
@@ -133,7 +132,6 @@ public final class ClipboardService extends IClipboard.Default
         mPm = Objects.requireNonNull(pm);
         mCallers = new CallerIdentity(pm, atm);
         mAppOps = pm.appOps();
-        mImages = atm.clipboardImages();
         mHost = Objects.requireNonNull(host);
         mPackageChanges = pm.onPackageChange(pkg -> packageLifetimeChanged(pkg.packageName));
         mPackageRemovals = pm.onPackageRemoval(this::packageLifetimeChanged);
@@ -145,6 +143,11 @@ public final class ClipboardService extends IClipboard.Default
      */
     private UriGrants uriGrants() {
         return Objects.requireNonNull(mAtm.uriGrants(), "URI grants are not available");
+    }
+
+    /** The clipboard image provider, resolved where a clipboard image is stored or shared. */
+    private ClipboardImageProvider images() {
+        return Objects.requireNonNull(mAtm.clipboardImages(), "Clipboard images are not available");
     }
 
     private record ListenerInfo(int uid, String packageName, String attributionTag, ApkPackage owner) { }
@@ -272,7 +275,7 @@ public final class ClipboardService extends IClipboard.Default
                         }
                     }
                     if (text != null) mimeTypes.add(ClipDescription.MIMETYPE_TEXT_PLAIN);
-                    imageUri = mImages.add(image);
+                    imageUri = images().add(image);
                     clip = new ClipData(new ClipDescription(WINDOWS_LABEL, mimeTypes.toArray(new String[0])),
                             new ClipData.Item(text, html, null, imageUri));
                     uris = new ClipUris(null, List.of(imageUri));
@@ -293,7 +296,7 @@ public final class ClipboardService extends IClipboard.Default
 
     private boolean replaceLocked(ClipData clip, String source, Uri image, ClipUris uris) {
         boolean changed = clip != null || mClip != null;
-        if (mOwnedImage != null) mImages.remove(mOwnedImage);
+        if (mOwnedImage != null) images().remove(mOwnedImage);
         if (mClipUris != null) uriGrants().revokeByOwner(mClipUris.owner);
         mOwnedImage = image;
         mClipUris = uris;
@@ -535,7 +538,7 @@ public final class ClipboardService extends IClipboard.Default
                     }
                     if (reader.owner != null && !uris.readers.contains(reader.owner)) {
                         if (mOwnedImage != null) {
-                            mImages.grantRead(uris.owner, reader.packageName, mOwnedImage);
+                            images().grantRead(uris.owner, reader.packageName, mOwnedImage);
                         } else {
                             List<UriGrants.Grant> grants = uriGrants().prepareClipboard(uris.publisher.uid,
                                     reader.packageName, uris.uris);
