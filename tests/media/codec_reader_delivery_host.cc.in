@@ -12,6 +12,7 @@
 #include <memory>
 #include <mutex>
 #include <new>
+#include <span>
 #include <thread>
 #include <vector>
 #include "compat/media/video/video_decoder.h"
@@ -257,6 +258,29 @@ template <class T> uint8_t* ImageBytes(T& image) {
   else return image.data.data();
 }
 bool IsRgbaFormat(int format) { return format == 1 || (PRIVATE_IS_RGBA && format == 0x22); }
+
+// Observe the actual host buffer extent independently of image plane metadata.
+// Older source controls own a vector; current RGBA/PRIVATE images own a pooled
+// CPU buffer through the explicit AHardwareBuffer adapter above.
+template <class T> std::span<uint8_t> ImageStorage(T& image) {
+  size_t size = image.data.size();
+  if constexpr (requires { image.rgba; }) {
+    if (image.rgba != nullptr) {
+      const auto* buffer = static_cast<const gesher::bionic::ahb::HostRgbaBuffer*>(image.rgba);
+      size = static_cast<size_t>(buffer->width) * buffer->height * 4;
+    }
+  }
+  return {ImageBytes(image), size};
+}
+template <class T> bool ImageStorageMatches(T& image, const std::vector<uint8_t>& expected) {
+  const auto bytes = ImageStorage(image);
+  return bytes.size() == expected.size() && std::equal(bytes.begin(), bytes.end(), expected.begin());
+}
+template <class T> std::vector<uint8_t> ImageSnapshot(T& image) {
+  const auto bytes = ImageStorage(image);
+  if (bytes.empty()) return {};
+  return {bytes.begin(), bytes.end()};
+}
 
 void Pixels(Image& image, const VideoFrame& frame, int seed) {
   const int w = frame.visible_width() & ~1, h = frame.visible_height() & ~1;

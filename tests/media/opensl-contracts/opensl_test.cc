@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -61,6 +62,79 @@ void BufferDone(SLAndroidSimpleBufferQueueItf, void* user) {
   state->calls.fetch_add(1, std::memory_order_release);
 }
 
+void CheckVolumeEffect(Report& r, SLObjectItf player, SLAndroidEffectItf effect) {
+  constexpr SLInterfaceID_ volume = {
+      0x119341a0, 0x8469, 0x11df, 0x81f9, {0x00, 0x02, 0xa5, 0xd5, 0xc5, 0x1b}};
+  constexpr SLInterfaceID_ unavailable = {};
+  const auto& api = **effect;
+  SLboolean enabled = SL_BOOLEAN_TRUE;
+  r.Check(api.CreateEffect(effect, &unavailable) == SL_RESULT_RESOURCE_ERROR &&
+              api.SetEnabled(effect, &volume, SL_BOOLEAN_TRUE) == SL_RESULT_PARAMETER_INVALID,
+          "unknown and uncreated Android effects fail");
+  r.Check(api.CreateEffect(effect, &volume) == SL_RESULT_SUCCESS &&
+              api.IsEnabled(effect, &volume, &enabled) == SL_RESULT_SUCCESS && !enabled,
+          "create disabled Android volume effect");
+  r.Check(api.SetEnabled(effect, &volume, SL_BOOLEAN_TRUE) == SL_RESULT_SUCCESS &&
+              api.CreateEffect(effect, &volume) == SL_RESULT_SUCCESS &&
+              api.IsEnabled(effect, &volume, &enabled) == SL_RESULT_SUCCESS && enabled,
+          "enable effect and preserve state on duplicate creation");
+  struct LevelParam {
+    int32_t status;
+    uint32_t parameter_size;
+    uint32_t value_size;
+    uint32_t parameter;
+    int16_t value;
+  } request{0, 4, 2, 0, -637}, reply{};
+  constexpr SLuint32 kSetParam = 5, kGetParam = 8;
+  constexpr SLuint32 kParamHeader = offsetof(LevelParam, value);
+  SLuint32 size = sizeof(int32_t);
+  int32_t status = -1;
+  r.Check(api.SendCommand(effect, &volume, kSetParam, kParamHeader + 2, &request, &size, &status) ==
+              SL_RESULT_SUCCESS && size == sizeof(status) && status == 0,
+          "set Android volume effect level");
+  size = sizeof(reply);
+  r.Check(api.SendCommand(effect, &volume, kGetParam, kParamHeader, &request, &size, &reply) ==
+              SL_RESULT_SUCCESS && size == kParamHeader + 2 && reply.status == 0 && reply.value == -600,
+          "get Android volume effect level at bundle precision");
+  request.value_size = UINT32_MAX;
+  r.Check(api.SendCommand(effect, &volume, kSetParam, kParamHeader + 2, &request, &size, &reply) ==
+              SL_RESULT_PARAMETER_INVALID, "reject malformed Android effect command");
+  struct BooleanParam {
+    int32_t status;
+    uint32_t parameter_size;
+    uint32_t value_size;
+    uint32_t parameter;
+    uint32_t value;
+    uint32_t guard;
+  };
+  static_assert(offsetof(BooleanParam, value) == kParamHeader);
+  constexpr uint32_t kGuard = 0x12345678;
+  for (uint32_t parameter : {2u, 3u}) {
+    BooleanParam boolean_request{0, 4, 4, parameter, 1, 0};
+    status = -1;
+    size = sizeof(status);
+    r.Check(api.SendCommand(effect, &volume, kSetParam, kParamHeader + 4, &boolean_request, &size, &status) ==
+                SL_RESULT_SUCCESS && size == sizeof(status) && status == 0,
+            "set Android volume effect boolean parameter");
+    BooleanParam boolean_reply{0, 0, 0, 0, 0, kGuard};
+    boolean_request.value_size = 8;
+    size = sizeof(boolean_reply);
+    r.Check(api.SendCommand(effect, &volume, kGetParam, kParamHeader, &boolean_request, &size,
+                            &boolean_reply) == SL_RESULT_SUCCESS &&
+                size == kParamHeader + 4 && boolean_reply.status == 0 && boolean_reply.value_size == 4 &&
+                boolean_reply.value == 1 && boolean_reply.guard == kGuard,
+            "get Android volume effect boolean with larger reply capacity");
+  }
+  SLVolumeItf ordinary = nullptr;
+  SLmillibel level = 1;
+  r.Check((*player)->GetInterface(player, SL_IID_VOLUME, &ordinary) == SL_RESULT_SUCCESS &&
+              ordinary != nullptr && (*ordinary)->GetVolumeLevel(ordinary, &level) == SL_RESULT_SUCCESS &&
+              level == 0, "effect gain is separate from ordinary player volume");
+  r.Check(api.ReleaseEffect(effect, &volume) == SL_RESULT_SUCCESS &&
+              api.IsEnabled(effect, &volume, &enabled) == SL_RESULT_PARAMETER_INVALID,
+          "release Android volume effect");
+}
+
 std::string Run(bool allowed, const char* caller, bool has_manifest) {
   Report r;
 #if defined(__aarch64__)
@@ -105,7 +179,7 @@ std::string Run(bool allowed, const char* caller, bool has_manifest) {
   r.Check(slQueryNumSupportedEngineInterfaces(nullptr) == SL_RESULT_PARAMETER_INVALID, "null global count");
   const SLuint32 kinds[] = {SL_OBJECTID_ENGINE, SL_OBJECTID_OUTPUTMIX, SL_OBJECTID_AUDIOPLAYER,
                             SL_OBJECTID_AUDIORECORDER};
-  const SLuint32 counts[] = {2, 1, 8, 5};
+  const SLuint32 counts[] = {2, 1, 9, 5};
   for (size_t k = 0; k < 4; k++) {
     count = 777;
     r.Check((*api)->QueryNumSupportedInterfaces(api, kinds[k], &count) == SL_RESULT_SUCCESS &&
@@ -262,6 +336,26 @@ std::string Run(bool allowed, const char* caller, bool has_manifest) {
   r.Check((*api)->CreateOutputMix(api, &bad, 1, &unavailable, &required) ==
               SL_RESULT_FEATURE_UNSUPPORTED && bad == nullptr, "unsupported required mix effect rejected");
   r.Part("player", before, "real PCM queue and volume, explicit exposure and unsupported effect rejection");
+
+  before = r.failed;
+  const SLInterfaceID effect_ids[] = {SL_IID_BUFFERQUEUE, SL_IID_VOLUME, SL_IID_ANDROIDEFFECT,
+                                     SL_IID_ANDROIDCONFIGURATION};
+  const SLboolean effect_required[] = {SL_BOOLEAN_TRUE, SL_BOOLEAN_TRUE, SL_BOOLEAN_TRUE, SL_BOOLEAN_TRUE};
+  Object effect_player;
+  SLAndroidEffectItf effect = nullptr;
+  r.Check((*api)->CreateAudioPlayer(api, &effect_player.value, &source, &sink, 4, effect_ids,
+                                  effect_required) == SL_RESULT_SUCCESS && effect_player.value != nullptr,
+          "create PCM player with required Android effect interface");
+  if (effect_player.value != nullptr) {
+    const auto p = effect_player.value;
+    r.Check((*p)->GetInterface(p, SL_IID_ANDROIDEFFECT, &effect) == SL_RESULT_PRECONDITIONS_VIOLATED &&
+                effect == nullptr, "effect unavailable before realization");
+    r.Check((*p)->Realize(p, SL_BOOLEAN_FALSE) == SL_RESULT_SUCCESS &&
+                (*p)->GetInterface(p, SL_IID_ANDROIDEFFECT, &effect) == SL_RESULT_SUCCESS &&
+                effect != nullptr, "retrieve Android effect on realized player");
+    if (effect != nullptr) CheckVolumeEffect(r, p, effect);
+  }
+  r.Part("effect", before, "required Android effect interface and per-player volume lifecycle");
 
   before = r.failed;
   SLDataLocator_IODevice input{SL_DATALOCATOR_IODEVICE, SL_IODEVICE_AUDIOINPUT,

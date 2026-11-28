@@ -71,11 +71,12 @@ class ControlledCondition {
 };
 
 constexpr int kSlots = 2, kInfoTryAgainLater = -1, kInfoOutputFormatChanged = -2;
-constexpr int kCbInputAvailable = 1, kCbError = 3;
+constexpr int kCbError = 3;
 namespace android {
 constexpr int OK = 0, INVALID_OPERATION = -38, UNKNOWN_ERROR = INT32_MIN;
 }
 using jlong = int64_t;
+using jint = int32_t;
 struct Info { int index_calls = 0; };
 using jobject = void*;
 using jstring = std::string*;
@@ -98,18 +99,6 @@ JNIEnv* AttachedEnv(const char*) { thread_local JNIEnv env; return &env; }
 bool CheckException(JNIEnv*, const char*) { return false; }
 struct ANativeWindow { int releases = 0; };
 void ANativeWindow_release(ANativeWindow* window) { ++window->releases; }
-// These lifecycle checks enter through Java; the separate NDK fixture uses the real dispatcher.
-[[maybe_unused]] constexpr int AMEDIA_ERROR_UNKNOWN = -10000;
-struct AsyncInput { int index; };
-struct AsyncError { int status, action; std::string message; };
-struct NativeCodecCallbacks {
-  uint64_t RetireAsync() { std::abort(); }
-  uint64_t DiscardAsync() { std::abort(); }
-  void DiscardPending() { std::abort(); }
-  void WaitForAsync(uint64_t) { std::abort(); }
-  void PostAsync(AsyncInput) { std::abort(); }
-  void PostAsync(AsyncError) { std::abort(); }
-};
 struct FakeInput {
   explicit FakeInput(int& count) : abandonments(count) {}
   ~FakeInput() {
@@ -128,10 +117,30 @@ struct Slot {
   int size = 0, flags = 0;
   int64_t time_us = 0;
   std::shared_ptr<int> frame;
+  std::shared_ptr<void> format;
 };
+#if SHARED_CODEC_ENGINE
+using InputFrameSource = FakeInput;
+using CodecSlot = Slot;
+constexpr int kCodecSlots = kSlots, kCodecInfoTryAgainLater = kInfoTryAgainLater;
+constexpr int kCodecInfoOutputFormatChanged = kInfoOutputFormatChanged;
+struct CodecBufferInfo { int offset = 0, size = 0; int64_t time_us = 0; uint32_t flags = 0; };
+#endif
 class Codec {
  public:
-  NativeCodecCallbacks* native_callbacks_ = nullptr;
+#if SHARED_CODEC_ENGINE
+  Codec* engine_ = this;
+  std::shared_ptr<void> output_format_;
+  struct Callbacks {
+    std::function<void(CODEC_CALLBACK_EPOCH_ARGS int)> on_input_available;
+    std::function<void(CODEC_CALLBACK_EPOCH_ARGS int, int, const std::string&)> on_error;
+  } callbacks_{{}, [this](CODEC_CALLBACK_EPOCH_ARGS int code, int action, const std::string&) {
+    ++error_events_; callback_error_ = {code, action};
+  }};
+  std::function<void(int64_t, int64_t)> frame_rendered_cb_;
+  std::function<void()> reader_hook_;
+  std::unique_ptr<FakeInput>& input_source_ = input_surface_;
+#endif
   @DESTRUCTOR@
   @RELEASE@
   @START@
@@ -144,7 +153,6 @@ class Codec {
   @STOP_WORKER@
   @RETIRE_SURFACE@
   @POST_FATAL@
-  @POST_INPUT@
   bool InWork(int index) const {
     return std::find(work_.begin(), work_.end(), index) != work_.end();
   }
@@ -180,9 +188,6 @@ class Codec {
   uint64_t execution_generation_ = 0, fatal_generation_ = 0;
   bool fatal_ = false;
   std::atomic<bool> frame_rendered_{false};
-  // The host fixture exercises the Java path, which owns no NDK dispatcher.
-  struct NativeFrameCallbacks { void DiscardPending() {} };
-  NativeFrameCallbacks* native_frame_callbacks_ = nullptr;
   bool configured_ = true, started_ = false, flushed_ = false, async_ = false;
   bool flush_requested_ = false, failed_ = false, stall_flush_ = false;
   bool surface_eos_ = false, enc_eos_sent_ = false, output_known_ = false, format_pending_ = false;
@@ -326,8 +331,15 @@ void ReleaseResources() {
   int abandonments = 0;
   Codec codec;
   codec.window_ = &window;
+#if SHARED_CODEC_ENGINE
+  auto retained = std::make_shared<int>(1);
+  std::weak_ptr<int> reader = retained;
+  codec.reader_hook_ = [retained] {};
+  retained.reset();
+#else
   codec.reader_ = std::make_shared<int>(1);
   std::weak_ptr<int> reader = codec.reader_;
+#endif
   codec.input_surface_ = std::make_unique<FakeInput>(abandonments);
   codec.Release();
   Check(window.releases == 1 && codec.window_ == nullptr, "release drops output window immediately");

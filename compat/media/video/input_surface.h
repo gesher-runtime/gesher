@@ -13,8 +13,6 @@
 #include <functional>
 #include <memory>
 
-struct ANativeWindow;
-
 namespace gesher::media {
 
 // RGBA_8888 pixels (R in the low byte), width x height with stride == width.
@@ -26,8 +24,6 @@ class InputSurface {
   virtual ~InputSurface() = default;
   // A new android.view.Surface (a local reference) over this input.
   virtual jobject NewJavaSurface(JNIEnv* env) = 0;
-  // The same producer, borrowed while this consumer lease is held.
-  virtual ANativeWindow* NativeWindow() const = 0;
   // Replace after any current callback on another thread has returned. A
   // callback may replace itself; its current invocation still owns its captures.
   virtual void SetCallback(InputFrameCallback cb) = 0;
@@ -53,16 +49,10 @@ InputSurface* CreateInputSurface(int width, int height);
 class PersistentInputSurface {
  public:
   virtual ~PersistentInputSurface() = default;
-  // Borrowed while this source reference is held.
-  virtual ANativeWindow* NativeWindow() const = 0;
   virtual jobject NewJavaSurface(JNIEnv* env) = 0;
   virtual std::unique_ptr<InputSurface> Attach(int width, int height) = 0;
 };
 
-std::shared_ptr<PersistentInputSurface> CreatePersistentInputSurface(bool native_owned = false);
-
-// Accept a producer created for the NDK API. The caller must hold a native
-// window reference while passing it in.
-std::shared_ptr<PersistentInputSurface> PersistentInputSurfaceFromWindow(ANativeWindow* window);
+std::shared_ptr<PersistentInputSurface> CreatePersistentInputSurface();
 
 }  // namespace gesher::media

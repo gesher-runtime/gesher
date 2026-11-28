@@ -1,0 +1,98 @@
+// Host boundary for the actual recordapp callback and bounded readiness expression.
+// These identities stand in for Camera2 objects; no camera or recorded output is simulated.
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+
+public class RecorderCameraReadyHost {
+    static int checks;
+    static void check(boolean value, String message) {
+        ++checks;
+        if (!value) throw new AssertionError(message);
+    }
+
+    static class CameraCaptureSession {}
+    static class CaptureRequest {}
+    static class TotalCaptureResult {
+        final CaptureRequest request;
+        final int sequence;
+        TotalCaptureResult(CaptureRequest request, int sequence) {
+            this.request = request;
+            this.sequence = sequence;
+        }
+        CaptureRequest getRequest() { return request; }
+        int getSequenceId() { return sequence; }
+    }
+
+    static class Boundary {
+        final CameraCaptureSession recordingSession = new CameraCaptureSession();
+        final CaptureRequest recordingRequest = new CaptureRequest();
+        final AtomicInteger captureCompleted = new AtomicInteger();
+        final AtomicInteger firstCompletedSequence = new AtomicInteger(-1);
+        final CountDownLatch firstCaptureCompleted = new CountDownLatch(1);
+
+        @COMPLETION_METHOD@
+
+        boolean ready(int requestId) throws InterruptedException {
+            return @READINESS_EXPRESSION@;
+        }
+
+        void complete(int sequence) {
+            onCaptureCompleted(recordingSession, recordingRequest,
+                    new TotalCaptureResult(recordingRequest, sequence));
+        }
+    }
+
+    public static void main(String[] args) throws Exception {
+        Boundary b = new Boundary();
+        b.onCaptureCompleted(new CameraCaptureSession(), b.recordingRequest,
+                new TotalCaptureResult(b.recordingRequest, 17));
+        check(b.firstCaptureCompleted.getCount() == 1, "foreign session cannot begin collection");
+        b.onCaptureCompleted(b.recordingSession, new CaptureRequest(),
+                new TotalCaptureResult(b.recordingRequest, 17));
+        check(b.firstCaptureCompleted.getCount() == 1, "foreign callback request cannot begin collection");
+        b.onCaptureCompleted(b.recordingSession, b.recordingRequest,
+                new TotalCaptureResult(new CaptureRequest(), 17));
+        check(b.firstCaptureCompleted.getCount() == 1, "foreign result request cannot begin collection");
+        check(b.firstCompletedSequence.get() == -1, "foreign callbacks cannot set completion identity");
+        check(b.captureCompleted.get() == 3, "existing callback diagnostic count remains observable");
+        b.complete(17);
+        check(b.ready(17), "owned completion before submit returns is retained");
+        b.complete(18);
+        check(b.firstCompletedSequence.get() == 17, "later callbacks cannot replace the first completion");
+        check(b.ready(17), "the completed recording remains ready");
+
+        Boundary wrong = new Boundary();
+        wrong.complete(16);
+        check(!wrong.ready(17), "sequence mismatch cannot begin collection");
+
+        Boundary later = new Boundary();
+        CountDownLatch entered = new CountDownLatch(1);
+        AtomicInteger result = new AtomicInteger(-1);
+        Thread waiter = new Thread(() -> {
+            entered.countDown();
+            try {
+                result.set(later.ready(41) ? 1 : 0);
+            } catch (InterruptedException e) {
+                result.set(-2);
+            }
+        });
+        waiter.start();
+        check(entered.await(2, TimeUnit.SECONDS), "actual JDK waiter entered");
+        check(result.get() == -1, "collection cannot start without an owned completed frame");
+        later.complete(41);
+        waiter.join(2000);
+        check(!waiter.isAlive() && result.get() == 1, "completion wakes the actual JDK waiter");
+
+        if (args.length != 0 && args[0].equals("timeout")) {
+            Boundary absent = new Boundary();
+            long start = System.nanoTime();
+            check(!absent.ready(9), "missing real completion reports failure");
+            long elapsed = System.nanoTime() - start;
+            check(elapsed >= TimeUnit.SECONDS.toNanos(9)
+                    && elapsed < TimeUnit.SECONDS.toNanos(20), "readiness wait has the declared ten-second bound");
+            check(absent.firstCompletedSequence.get() == -1, "timeout invents no completed sequence");
+        }
+        System.out.println("RECORDER_CAMERA_READY_PASS checks=" + checks);
+    }
+}

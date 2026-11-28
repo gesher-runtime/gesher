@@ -18,6 +18,7 @@
 #include <vector>
 #include <cerrno>
 #include <cstdlib>
+#include "dns_peer_ports_test.h"
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -930,7 +931,7 @@ void ServerFallback(Peer& peer) {
 }
 }  // namespace fixture
 
-int main() {
+int main(int argc, char** argv) {
 #ifdef _WIN32
   WSADATA data{}; fixture::Check(WSAStartup(MAKEWORD(2, 2), &data) == 0, "Winsock startup");
 #endif
@@ -939,6 +940,8 @@ int main() {
   fixture::ExclusiveUdpPortCollision();
   fixture::PeerPortCollision(fixture::BindExclusivePeerSockets(), "exclusive-wildcard");
 #endif
+  dns_fixture::peer_port_test::Run();
+  if (argc == 2 && std::strcmp(argv[1], "--peer-ports-only") == 0) return 0;
   fixture::Peer peer;
   fixture::Failures(); fixture::Wire(peer);
   for (size_t count : {size_t{1}, size_t{32}, size_t{256}}) fixture::Burst(peer, count);

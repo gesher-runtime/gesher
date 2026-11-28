@@ -4,6 +4,7 @@
 using DWORD = uint32_t;
 using ULONG = uint32_t;
 using LONG = int32_t;
+using ULONGLONG = uint64_t;
 using BOOL = int;
 using HWND = void*;
 using HANDLE = void*;
@@ -20,3 +21,8 @@ DWORD WaitForSingleObject(HANDLE, DWORD);
 BOOL CloseHandle(HANDLE);
 DWORD GetCurrentProcessId();
 BOOL ProcessIdToSessionId(DWORD, DWORD*);
+BOOL LockWorkStation();
+ULONGLONG GetTickCount64();
+void Sleep(DWORD);
+LPWSTR GetCommandLineW();
+void* LocalFree(void*);

@@ -88,14 +88,32 @@ target_compile_options(gesher_media_player_core PRIVATE -Wall -Wextra -Werror
   -Wno-unused-parameter -Wno-deprecated-copy)
 set_target_properties(gesher_media_player_core PROPERTIES CXX_STANDARD 23)
 
-# The native APIs share the actual audio/file-player backend in both hosts.
+# Shared C++ codec engine and encoders (JNI-free), linked into both hosts.
+add_library(gesher_media_codec OBJECT
+  ${_media}/codec/codec_engine.cc
+  ${_media}/encode/encoder.cc
+  ${_media}/encode/mf_encoder.cc
+  ${_media}/encode/opus_encoder.cc
+  ${_media}/encode/soft_avc_encoder.cc)
+target_link_libraries(gesher_media_codec PUBLIC gesher_media_player_core
+  stagefright_foundation gesher_media_codecs gesher_bionic gesher_window_surface ole32 mmdevapi dxgi)
+target_include_directories(gesher_media_codec PRIVATE ${CMAKE_SOURCE_DIR}/compat/bionic)
+target_compile_options(gesher_media_codec PRIVATE -Wall -Wextra -Werror -Wno-unused-parameter
+  -Wno-deprecated-copy)
+set_target_properties(gesher_media_codec PROPERTIES CXX_STANDARD 23)
+add_dependencies(media_codecs_all gesher_media_codec)
+
+# The native APIs share the actual audio/file-player/codec backend in both hosts.
 add_library(gesher_media_ndk OBJECT
-  ${_media}/ndk/aaudio.cc ${_media}/ndk/opensles.cc ${_media}/ndk/media_extractor.cc)
-target_link_libraries(gesher_media_ndk PUBLIC gesher_media_audio gesher_media_player_core gesher_bionic)
+  ${_media}/ndk/aaudio.cc ${_media}/ndk/opensles.cc ${_media}/ndk/media_extractor.cc
+  ${_media}/ndk/media_codec.cc)
+target_link_libraries(gesher_media_ndk PUBLIC gesher_media_audio gesher_media_player_core
+  gesher_media_codec gesher_bionic)
 target_compile_options(gesher_media_ndk PRIVATE -Wall -Wextra -Werror -Wno-unused-parameter)
 set_target_properties(gesher_media_ndk PROPERTIES CXX_STANDARD 23)
 foreach(_host dalvikvm gesher-exec)
-  target_link_libraries(${_host} PRIVATE gesher_media_audio gesher_media_player_core gesher_media_ndk)
+  target_link_libraries(${_host} PRIVATE gesher_media_audio gesher_media_player_core
+    gesher_media_codec gesher_media_ndk)
 endforeach()
 
 # The actual container writers and pure packet metadata are shared by JNI
@@ -124,6 +142,16 @@ target_compile_options(media_muxer_verify PRIVATE -Wall -Wextra -Werror -Wno-unu
   -Wno-deprecated-copy)
 set_target_properties(media_muxer_verify PROPERTIES CXX_STANDARD 23)
 
+# The actual pure helper, including unaligned and protected-page boundaries.
+# This default native target accompanies the unchanged ART/NDK muxer gates.
+add_executable(media_annexb_contracts
+  "${CMAKE_SOURCE_DIR}/tests/media/annexb_split_contracts.cc"
+  ${_media}/encode/codec_config.cc)
+target_include_directories(media_annexb_contracts PRIVATE "${CMAKE_SOURCE_DIR}")
+target_compile_options(media_annexb_contracts PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(media_annexb_contracts PRIVATE pthread)
+set_target_properties(media_annexb_contracts PROPERTIES CXX_STANDARD 23)
+
 add_library(gesher_media_player OBJECT
   ${_media}/ndk/image_reader.cc
   ${_media}/jni/java_data_source.cc
@@ -134,16 +162,13 @@ add_library(gesher_media_player OBJECT
   ${_media}/jni/media_jni_others.cc
   ${_media}/jni/media_extractor_jni.cc
   ${_media}/jni/soundpool_jni.cc
-  # Recording (media3, ADR 0059): encoders, container writers, MediaMuxer, MediaRecorder.
-  ${_media}/encode/encoder.cc
-  ${_media}/encode/mf_encoder.cc
-  ${_media}/encode/opus_encoder.cc
-  ${_media}/encode/soft_avc_encoder.cc
+  # Recording (media3, ADR 0059): container writers, MediaMuxer, MediaRecorder.
   ${_media}/record/recorder.cc
   ${_media}/jni/media_muxer_jni.cc
   ${_media}/jni/media_recorder_jni.cc)
 target_include_directories(gesher_media_player PRIVATE ${CMAKE_SOURCE_DIR}/compat/bionic)
-target_link_libraries(gesher_media_player PUBLIC gesher_media gesher_media_player_core gesher_media_ndk gesher_media_muxer gesher_media_codecs gesher_bionic
+target_link_libraries(gesher_media_player PUBLIC gesher_media gesher_media_player_core
+  gesher_media_codec gesher_media_ndk gesher_media_muxer gesher_media_codecs gesher_bionic
   winhttp ole32 mmdevapi dxgi)
 target_compile_options(gesher_media_player PRIVATE -Wall -Wextra -Werror -Wno-unused-parameter
   # libutils' TypeHelpers.h trips -Wdeprecated-copy on key_value_pair_t<String8, String8>.
@@ -251,6 +276,15 @@ add_executable(media_yuv_rgba_test "${CMAKE_SOURCE_DIR}/tests/media/yuv_rgba_tes
 target_include_directories(media_yuv_rgba_test PRIVATE "${CMAKE_SOURCE_DIR}")
 target_compile_options(media_yuv_rgba_test PRIVATE -Wall -Wextra -Werror)
 
+# Actual full cropped-frame conversion and QueueSurface ownership. This links
+# the production renderer and hostgraphics objects, without host test adapters.
+add_executable(media_i420_crop_test "${CMAKE_SOURCE_DIR}/tests/media/i420_crop_test.cc")
+target_include_directories(media_i420_crop_test PRIVATE "${CMAKE_SOURCE_DIR}")
+target_compile_options(media_i420_crop_test PRIVATE
+  -Wall -Wextra -Werror -Wno-unused-parameter -Wno-deprecated-copy)
+target_link_libraries(media_i420_crop_test PRIVATE gesher_media_audio gesher_media_player_core gesher_elf)
+gesher_graphics_cxx(media_i420_crop_test)
+
 add_executable(wasapi_refill_test "${CMAKE_SOURCE_DIR}/tests/media/wasapi_refill_test.cc")
 target_include_directories(wasapi_refill_test PRIVATE "${CMAKE_SOURCE_DIR}")
 target_compile_options(wasapi_refill_test PRIVATE -Wall -Wextra -Werror)
@@ -292,3 +326,106 @@ target_compile_options(media_retriever_pixels_test PRIVATE
   -Wall -Wextra -Werror -Wno-unused-parameter)
 target_link_libraries(media_retriever_pixels_test PRIVATE skia)
 gesher_graphics_cxx(media_retriever_pixels_test)
+
+# The complete AVC output path, its real frame helpers and pinned provider.
+add_executable(media_soft_avc_output_test
+  "${CMAKE_SOURCE_DIR}/tests/media/soft_avc_output_test.cc"
+  "${CMAKE_SOURCE_DIR}/compat/media/video/video_decoder.cc")
+target_include_directories(media_soft_avc_output_test PRIVATE
+  "${CMAKE_SOURCE_DIR}" "${CMAKE_SOURCE_DIR}/tests/media/decoder-host/include")
+target_include_directories(media_soft_avc_output_test SYSTEM PRIVATE ${GESHER_SOFT_AVC_INCLUDES})
+target_compile_definitions(media_soft_avc_output_test PRIVATE GESHER_MEDIA_STANDALONE)
+target_compile_options(media_soft_avc_output_test PRIVATE
+  -Wall -Wextra -Werror -Wno-unused-parameter -ffunction-sections -fdata-sections)
+target_link_options(media_soft_avc_output_test PRIVATE -Wl,--gc-sections)
+target_link_libraries(media_soft_avc_output_test PRIVATE avc pthread)
+# The complete software encoder and the product's actual pinned AVC library.
+add_executable(media_soft_avc_reuse_test
+  "${CMAKE_SOURCE_DIR}/tests/media/soft_avc_reuse_test.cc")
+target_include_directories(media_soft_avc_reuse_test PRIVATE "${CMAKE_SOURCE_DIR}")
+target_include_directories(media_soft_avc_reuse_test SYSTEM PRIVATE ${GESHER_SOFT_AVCENC_INCLUDES})
+target_compile_definitions(media_soft_avc_reuse_test PRIVATE GESHER_MEDIA_STANDALONE)
+target_compile_options(media_soft_avc_reuse_test PRIVATE
+  -Wall -Wextra -Werror -Wno-unused-parameter)
+target_link_libraries(media_soft_avc_reuse_test PRIVATE avc pthread)
+
+# Real pinned MP3/Vorbis/Opus providers with the complete product decoder.
+# Metadata transport is explicit fixture code; no codec is simulated.
+add_executable(media_audio_decoder_scratch_test
+  "${CMAKE_SOURCE_DIR}/tests/media/audio_decoder_scratch_test.cc")
+target_include_directories(media_audio_decoder_scratch_test PRIVATE
+  "${CMAKE_SOURCE_DIR}"
+  "${CMAKE_SOURCE_DIR}/tests/media/audio-host/include"
+  ${_fnd}/include ${_fnd}/include/media/stagefright/foundation)
+target_compile_definitions(media_audio_decoder_scratch_test PRIVATE GESHER_MEDIA_STANDALONE)
+target_compile_options(media_audio_decoder_scratch_test PRIVATE
+  -Wall -Wextra -Werror -Wno-unused-parameter -ffunction-sections -fdata-sections -fno-exceptions)
+target_link_options(media_audio_decoder_scratch_test PRIVATE -Wl,--gc-sections)
+# Reuse the product's OpusHeader object and its exported media compatibility
+# includes (including Tremolo's _G_config.h) with the same provider build flags.
+# The complete decoder fixture itself keeps the strict warnings above.
+target_link_libraries(media_audio_decoder_scratch_test PRIVATE
+  stagefright_foundation stagefright_mp3dec vorbisidec opus)
+set_target_properties(media_audio_decoder_scratch_test PROPERTIES CXX_STANDARD 20)
+
+# Complete HEVC output path and frame helpers, with the real pinned provider.
+# Unselected VPx/AV1 backends abort at the explicit test boundary.
+add_executable(media_soft_hevc_output_test
+  "${CMAKE_SOURCE_DIR}/tests/media/soft_hevc_output_test.cc"
+  "${CMAKE_SOURCE_DIR}/compat/media/video/video_decoder.cc")
+target_include_directories(media_soft_hevc_output_test PRIVATE
+  "${CMAKE_SOURCE_DIR}" "${CMAKE_SOURCE_DIR}/tests/media/decoder-host/include")
+target_include_directories(media_soft_hevc_output_test SYSTEM PRIVATE ${GESHER_SOFT_VIDEO_INCLUDES})
+target_compile_definitions(media_soft_hevc_output_test PRIVATE GESHER_MEDIA_STANDALONE)
+target_compile_options(media_soft_hevc_output_test PRIVATE
+  -Wall -Wextra -Werror -Wno-unused-parameter -ffunction-sections -fdata-sections)
+target_link_options(media_soft_hevc_output_test PRIVATE -Wl,--gc-sections)
+target_link_libraries(media_soft_hevc_output_test PRIVATE hevcdec pthread)
+
+# Complete production RGBA conversion/AVC encoder TUs and the actual input
+# callback bodies. Source generation adds only a test coordinate-mapping observer.
+set(_rgba_fixture "${CMAKE_CURRENT_BINARY_DIR}/rgba-i420-fixture")
+set(_rgba_video "${_rgba_fixture}/rgba_i420_video_decoder.cc")
+set(_rgba_encoder "${_rgba_fixture}/rgba_i420_soft_avc_encoder.cc")
+set(_rgba_callbacks "${_rgba_fixture}/rgba_i420_callbacks.h")
+add_custom_command(OUTPUT "${_rgba_video}" "${_rgba_encoder}" "${_rgba_callbacks}"
+  COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/test_rgba_i420.py"
+    --generate-only --output-dir "${_rgba_fixture}"
+  DEPENDS "${CMAKE_SOURCE_DIR}/tools/test_rgba_i420.py"
+    "${CMAKE_SOURCE_DIR}/tests/media/rgba_i420_callbacks.h.in"
+    "${_media}/video/video_decoder.cc" "${_media}/encode/soft_avc_encoder.cc"
+    "${_media}/jni/media_codec_jni.cc" "${_media}/codec/codec_engine.cc"
+    "${CMAKE_SOURCE_DIR}/tools/codec_contract_source.py" "${_media}/record/recorder.cc"
+  VERBATIM)
+add_executable(media_rgba_i420_test
+  "${CMAKE_SOURCE_DIR}/tests/media/rgba_i420_test.cc"
+  "${_rgba_video}" "${_rgba_encoder}" "${_rgba_callbacks}")
+target_include_directories(media_rgba_i420_test PRIVATE "${CMAKE_SOURCE_DIR}"
+  "${_rgba_fixture}" "${_media}/video" "${_media}/encode"
+  "${CMAKE_SOURCE_DIR}/tests/media/rgba-host/include")
+target_include_directories(media_rgba_i420_test SYSTEM PRIVATE ${GESHER_SOFT_AVCENC_INCLUDES})
+target_compile_definitions(media_rgba_i420_test PRIVATE GESHER_MEDIA_STANDALONE GESHER_COUNT_COORDINATES=1)
+target_compile_options(media_rgba_i420_test PRIVATE -Wall -Wextra -Werror -Wno-unused-parameter)
+target_link_libraries(media_rgba_i420_test PRIVATE avc pthread)
+set_target_properties(media_rgba_i420_test PROPERTIES CXX_STANDARD 23)
+
+# Complete capture stream methods and the explicitly selected test-owned WAV
+# source. Only engine attachment and source-clock input are fixture boundaries.
+set(_capture_unity_fixture "${CMAKE_CURRENT_BINARY_DIR}/capture-unity-fixture")
+set(_capture_unity_cpp "${_capture_unity_fixture}/capture_unity_production.cc")
+set(_capture_unity_header "${_capture_unity_fixture}/capture_unity_common.h")
+add_custom_command(OUTPUT "${_capture_unity_cpp}" "${_capture_unity_header}"
+  COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tools/test_audio_capture_unity.py"
+    --generate-only --output-dir "${_capture_unity_fixture}"
+  DEPENDS "${CMAKE_SOURCE_DIR}/tools/test_audio_capture_unity.py"
+    "${CMAKE_SOURCE_DIR}/tests/media/capture_unity_common.h.in"
+    "${_media}/audio/capture.cc" "${_media}/audio/capture.h"
+    "${_media}/audio/engine.cc" "${_media}/audio/engine.h"
+  VERBATIM)
+add_executable(media_capture_unity_test "${_capture_unity_cpp}" "${_capture_unity_header}"
+  "${CMAKE_SOURCE_DIR}/tests/media/capture_unity_test.cc")
+target_include_directories(media_capture_unity_test PRIVATE "${_capture_unity_fixture}")
+target_compile_definitions(media_capture_unity_test PRIVATE GESHER_COUNT_CAPTURE=1)
+target_compile_options(media_capture_unity_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(media_capture_unity_test PRIVATE pthread)
+set_target_properties(media_capture_unity_test PROPERTIES CXX_STANDARD 23)

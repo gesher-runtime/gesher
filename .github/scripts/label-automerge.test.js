@@ -480,6 +480,131 @@ function bothStates(w, state) {
   assert.equal(lastStatus(w, appStatus.APP_STATUS)?.state, state);
 }
 
+test('real combined-status API shape authenticates the immutable App receipt without creator', async () => {
+  const w = appStatusWorld({combinedOmitsCreator: true});
+  await w.ciDone();
+  bothStates(w, 'success');
+  assert.equal(w.did('nativeMerge').length, 1);
+});
+
+test('omitted combined creator cannot hide a replacement status ID', async () => {
+  const w = appStatusWorld({combinedOmitsCreator: true});
+  let replaced = false;
+  w.hooks.statuses = () => {
+    const latest = lastStatus(w, appStatus.APP_STATUS);
+    if (!replaced && latest?.state === 'success') {
+      replaced = true;
+      w.statuses.unshift({...latest, id: w.nextStatusId++});
+    }
+  };
+  await assert.rejects(w.ciDone(), /missing, replaced or from a different source/);
+  assert.equal(w.did('nativeMerge').length, 0);
+});
+
+for (const stale of ['missing', 'older']) {
+  test(`App publication tolerates briefly ${stale} combined status without rewriting the receipt`, async () => {
+    const w = appStatusWorld({combinedOmitsCreator: true});
+    let reads = 0;
+    w.combinedStatusView = rows => {
+      if (reads++ >= 2) return rows;
+      return stale === 'missing' ? [] : [{id: 1, context: appStatus.APP_STATUS, state: 'failure',
+        creator: {...APP_BOT}, url: `https://api.github.com/repos/o/r/statuses/${HEAD}`}];
+    };
+    await w.ciDone();
+    bothStates(w, 'success');
+    assert.equal(w.did('nativeMerge').length, 1);
+    assert.deepEqual(w.did('app-status').map(([, args]) => args.state), ['pending', 'success']);
+    assert.ok(w.did('statuses').every(([, args]) => args.headers?.['cache-control'] === 'no-cache'));
+  });
+}
+
+test('publication visibility retries are bounded and never release an unseen receipt', async () => {
+  const w = appStatusWorld();
+  let hiddenReads = 0;
+  w.combinedStatusView = rows => {
+    if (rows.find(s => s.context === appStatus.APP_STATUS)?.state !== 'pending') return rows;
+    hiddenReads++;
+    return [];
+  };
+  await assert.rejects(w.ciDone(), /expected \d+\/pending; observed missing\/missing/);
+  assert.equal(hiddenReads, appStatus.READBACK.attempts);
+  assert.deepEqual(w.did('app-status').map(([, args]) => args.state), ['pending', 'failure']);
+  bothStates(w, 'failure');
+  assert.equal(w.did('nativeMerge').length, 0);
+});
+
+test('a newer receipt during visibility retry fails immediately instead of waiting it out', async () => {
+  const w = appStatusWorld();
+  let pendingReads = 0;
+  w.combinedStatusView = rows => {
+    const latest = rows.find(s => s.context === appStatus.APP_STATUS);
+    if (latest?.state !== 'pending') return rows;
+    if (++pendingReads === 1) return [];
+    return [{...latest, id: latest.id + 1, creator: {...APP_BOT, id: 123}}];
+  };
+  await assert.rejects(w.ciDone(), /missing, replaced or from a different source/);
+  assert.equal(pendingReads, 2);
+  bothStates(w, 'failure');
+  assert.equal(w.did('nativeMerge').length, 0);
+});
+
+test('QA revocation while waiting for App success visibility is rechecked before legacy success', async () => {
+  const w = appStatusWorld();
+  let hidden = false;
+  w.combinedStatusView = rows => {
+    if (!hidden && rows.find(s => s.context === appStatus.APP_STATUS)?.state === 'success') {
+      hidden = true;
+      w.reviews[0].state = 'DISMISSED';
+      return [];
+    }
+    return rows;
+  };
+  await w.ciDone();
+  assert.ok(hidden);
+  bothStates(w, 'failure');
+  assert.equal(w.did('status').some(([, args]) => args.state === 'success'), false);
+  assert.equal(w.did('nativeMerge').length, 0);
+});
+
+for (const phase of ['finishSuccess', 'verifySuccess']) {
+  test(`later ${phase} readback does not retry a missing previously visible receipt`, async () => {
+    const w = appStatusWorld();
+    const publisher = appStatus({github: w.github, appGithub: w.prGithub, owner: 'o', repo: 'r',
+      enabled: true, appId: appStatus.APP_ID, installationId: appStatus.INSTALLATION_ID});
+    const receipt = await publisher.prepareSuccess(HEAD);
+    let reads = 0;
+    w.combinedStatusView = () => {reads++; return [];};
+    await assert.rejects(publisher[phase](HEAD, receipt), /missing, replaced or from a different source/);
+    assert.equal(reads, 1);
+    assert.equal(w.did('status').length, 0);
+  });
+}
+
+test('App automerge output records the actual protected merge without another API call', async () => {
+  const w = appStatusWorld();
+  await w.ciDone();
+  const result = JSON.parse(w.outputs['automerge-results']).at(-1);
+  assert.equal(result.head.sha, HEAD);
+  assert.equal(result.outcome, 'success');
+  assert.equal(w.did('nativeMerge').length, 1);
+  assert.equal(w.calls.at(-1)[0], 'nativeMerge');
+});
+
+test('App automerge waiting is neutral and never claims a merge happened', async () => {
+  const w = appStatusWorld({runs: [], checks: []});
+  await w.fire('workflow_dispatch', {inputs: {pull_request_number: '7'}});
+  assert.equal(JSON.parse(w.outputs['automerge-results']).at(-1).outcome, 'neutral');
+  assert.equal(w.did('nativeMerge').length, 0);
+});
+
+test('controller errors produce a failed App automerge check', async () => {
+  const w = appStatusWorld();
+  w.github.rest.actions.getWorkflow = async () => {throw new Error('CI API unavailable');};
+  await assert.rejects(w.fire('workflow_dispatch', {inputs: {pull_request_number: '7'}}));
+  assert.equal(JSON.parse(w.outputs['automerge-results']).at(-1).outcome, 'failure');
+  assert.equal(w.did('nativeMerge').length, 0);
+});
+
 for (const flag of [undefined, false]) {
   test('App status is opt-in; disabled value ' + flag + ' retains the Actions gate only', async () => {
     const w = appStatusWorld({appQaStatus: flag, appId: undefined, appInstallationId: undefined});

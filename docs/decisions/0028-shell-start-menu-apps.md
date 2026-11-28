@@ -1,7 +1,9 @@
 # 0028 — Installed apps as Windows apps: Start menu shortcuts, icons, AppUserModelIDs
 
 **Status:** accepted, 2026-10-24 (shell track); amended 2026-11-22 (installs and
-removals committed through PackageInstaller sessions, below)
+removals committed through PackageInstaller sessions, below); amended 2026-11-25
+(confirmation before installing an APK opened from Explorer, optional desktop
+shortcut, below)
 
 ## Context
 With the Gesher device ([0026](0026-services-persistent-device.md)) packages stay
@@ -79,6 +81,40 @@ AppUserModelID that ties the app's taskbar buttons to it.
   `PackageInstaller` (amendment above); Gesher's uninstaller removes
   `{userprograms}\Gesher Apps` as a whole (`[UninstallDelete]`), the icons going
   with `%LOCALAPPDATA%\Gesher`.
+- **Amended 2026-11-25 (issue 519): an APK opened from Explorer asks first.** A
+  double-clicked APK or split bundle (`gesher-launch "<file>"`, the bare form; also
+  a file dropped on portable `Gesher.exe`) used to be installed and launched at
+  once, as `gesher-app my.apk` is. Opening a file is not consent to install an app
+  on the PC, and an installed app that starts by itself is not what Windows users
+  expect from an installer. Now:
+  - **Confirmation before install.** gesher-launch reads the file first
+    (`gesher-app apk-info`: package, version, label, icon, the installed version;
+    no install, no device) and shows a dialog with the app's icon, name and
+    version and Install (Update when the package is installed) / Cancel, Cancel
+    being the default. Nothing is installed until the user clicks Install; Cancel,
+    Esc and the X do nothing (exit 1223, `ERROR_CANCELLED`).
+  - **No automatic launch.** After a successful install a second dialog says the
+    app was installed and offers Open (`launch <package>`, as the Start menu
+    shortcut does) and Done. A failed step shows the error and never claims
+    success.
+  - **Optional desktop shortcut.** The confirmation has a "Create a desktop
+    shortcut" check box, unchecked by default (`gesher-app install
+    --desktop-shortcut`): the Start menu link's copy as `<Desktop>\<label>.lnk`,
+    recorded as `desktop_link` in `shortcut.properties`. Later launches keep the
+    record and never make the link again (a link the user deleted stays deleted);
+    uninstalling the package removes the recorded path, and so does Gesher's
+    uninstaller. The box is hidden with `GESHER_SHORTCUTS=0` and when the recorded
+    desktop link exists.
+  - **The same version opens directly.** When the installed versionCode equals the
+    file's, there is nothing to install: no dialog, the installed package is
+    launched with the normal splash.
+  - **Portable: none.** Portable Gesher still asks before installing but shows no
+    check box and makes no desktop shortcut, as it makes no Start menu shortcut.
+  - The command lines (`gesher-app my.apk`, `gesher-app install`, `gesher-launch
+    launch`, `gesher-launch install`, an APK given with options) are unchanged:
+    a user typing them has already asked for the install. The dialogs' control IDs
+    are stable for UI automation (`docs/installer.md`, "Opening an APK from
+    Explorer"); CI drives them through the registered association command.
 - **Gesher's own icon**, `tools/package/gesher.ico` (drawn by
   `tools/icons/make-icons.py`): Setup's, Add/Remove Programs', the Start menu
   entries', the `.apk` type's (`Gesher.Apk\DefaultIcon`), and a shortcut's when an
@@ -87,6 +123,10 @@ AppUserModelID that ties the app's taskbar buttons to it.
 ## Consequences
 - An installed app is a Start menu entry with its own name and icon, searchable
   and pinnable; it opens a console (gesher-app's) while it runs.
+- Opening an APK from Explorer takes one more click (Install), and another (Open)
+  to start the app; reopening the same file of an installed app opens it at once.
+  Automation of the Explorer path has to answer the dialogs (CI uses
+  `tests/windows/shell/InstallConfirmDialog.ps1`).
 - The app's windows and its shortcut share an ID; the console window of
   gesher-app.cmd does not (it belongs to the console host).
 - `--single-process` and `--system-server` runs (the app in the launcher's

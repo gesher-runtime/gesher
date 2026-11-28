@@ -16,6 +16,7 @@ import subprocess
 import tempfile
 
 from test_codec_lifecycle_contracts import method
+from codec_contract_source import member, shared, ENGINE, HEADER
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -34,23 +35,25 @@ def main() -> int:
     args = parser.parse_args()
     codec = read("compat/media/jni/media_codec_jni.cc", args.source_ref)
     video = read("compat/media/video/video_decoder.cc", args.source_ref)
+    is_shared = shared(args.source_ref)
+    engine = read(ENGINE, args.source_ref) if is_shared else ""
     persistent = "  bool SetInputSurface(" in codec
     replacements = {
         "ALLOCATE": method(video, "void VideoFrame::Allocate("),
         "CLAMP": method(video, "inline uint8_t Clamp8("),
         "CONVERT": method(video, "void RgbaToI420("),
-        "MAKE_INPUT": (method(codec, "  template <class Factory>\n  auto MakeCodecInputSurface(")
-                       if "MakeCodecInputSurface(" in codec else ""),
         "CREATE_INPUT": method(codec, "  jobject CreateInputSurface("),
         "SET_INPUT": method(codec, "  bool SetInputSurface(") if persistent else "",
-        "ON_FRAME": method(codec, "  void OnSurfaceFrame("),
+        "ON_FRAME": member(engine, "OnSurfaceFrame") if is_shared else method(codec, "  void OnSurfaceFrame("),
+        "ENGINE_INPUT": (member(engine, "PrepareInputSurface") + "\n" + member(engine, "AttachInputSource")) if is_shared else "",
+        "SOURCE_TYPES": (method(read(HEADER, args.source_ref), "class InputFrameSource {") + ";\n" + method(codec, "class JniInputSource final") + ";") if is_shared else "",
     }
     template = read("tests/media/codec_input_host.cc.in")
     for key, body in replacements.items():
         if template.count("@" + key + "@") != 1:
             raise ValueError("fixture boundary changed: " + key)
         template = template.replace("@" + key + "@", body)
-    print("codec input source SHA256 " + hashlib.sha256(codec.encode()).hexdigest(), flush=True)
+    print("codec input source SHA256 " + hashlib.sha256((codec + engine).encode()).hexdigest(), flush=True)
     print("pixel source SHA256 " + hashlib.sha256(video.encode()).hexdigest(), flush=True)
     with tempfile.TemporaryDirectory(prefix="gesher-codec-input-") as directory:
         work = Path(directory)
@@ -70,7 +73,7 @@ def main() -> int:
                            'namespace android { jobject android_view_Surface_createFromSurface('
                            'JNIEnv*, const sp<Surface>&); }\n')
         source = work / "codec-input.cc"
-        source.write_text(f"#define HAS_PERSISTENT_INPUT {int(persistent)}\n" + template)
+        source.write_text(f"#define HAS_PERSISTENT_INPUT {int(persistent)}\n#define SHARED_CODEC_ENGINE {int(is_shared)}\n" + template)
         binary = work / "codec-input"
         command = shlex.split(args.cxx) + ["-std=c++20", "-O2", "-g", "-pthread", "-Wall", "-Wextra",
             "-Werror", "-Wno-mismatched-new-delete", "-I" + str(work), "-I" + str(ROOT),

@@ -26,8 +26,8 @@ jobs:
             tests/media/ndk-format
             tests/media/opensl-contracts
             tests/media/ndk-muxer
-            tests/media/ndk-codec
             tests/media/ndk-extractor
+            tests/media/ndk-codec
             compat/media/ndk
             compat/media/player
             compat/media/sounds
@@ -152,13 +152,11 @@ jobs:
       - name: Build Media4 NDK muxer fixtures
         run: bash tests/media/ndk-muxer/build.sh out android-ndk-r27c
 
-      - name: Build NDK codec contract fixtures
-        run: |
-          chmod +x work/build-tools-36.1/d8
-          bash tests/media/ndk-codec/build.sh out android-ndk-r27c "$PWD/work/build-tools-36.1/d8"
-
       - name: Build NDK extractor contract fixtures
         run: bash tests/media/ndk-extractor/build.sh out android-ndk-r27c
+
+      - name: Build NDK codec contracts for ELF and ART in both guest ABIs
+        run: bash tests/media/ndk-codec/build.sh out android-ndk-r27c work/build-tools-36.1
 
       - name: NDK extractor start failure contracts (host)
         run: python3 tools/test_extractor_start_contracts.py --sanitize

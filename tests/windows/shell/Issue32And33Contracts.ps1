@@ -230,7 +230,7 @@ Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, Sys
 
 # Keep the real visit-reporting boundary. Only the background device query is a
 # stand-in: it stays pending so every close path must retain it for live cleanup.
-foreach ($name in 'Get-PanelVisitIdentity', 'Send-PanelSettingsShown') {
+foreach ($name in 'Get-PanelVisitIdentity', 'Send-PanelSettingsShown', 'Test-PanelPackageName', 'Initialize-PanelDeviceAdminControls') {
     $definition = $panelAst.Find({ param($node)
         $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
     }, $false)
@@ -239,11 +239,18 @@ foreach ($name in 'Get-PanelVisitIdentity', 'Send-PanelSettingsShown') {
 }
 $script:SpecialAccessQueries = [Collections.Generic.List[string]]::new()
 $script:SpecialAccessQuery = [pscustomobject]@{ Pending = $true }
-function Start-PanelSpecialAccess([string[]] $arguments) {
+$script:DeviceAdminQueries = [Collections.Generic.List[string]]::new()
+$script:DeviceAdminQuery = [pscustomobject]@{ Pending = $true }
+function Start-PanelSpecialAccess([string[]] $arguments, [string] $command = 'special-access') {
+    if ($command -eq 'device-admin') {
+        $script:DeviceAdminQueries.Add(($arguments -join ' '))
+        return $script:DeviceAdminQuery
+    }
     $script:SpecialAccessQueries.Add(($arguments -join ' '))
     return $script:SpecialAccessQuery
 }
 function Test-PanelSpecialAccessDone($worker) { return $false }
+function Receive-PanelSpecialAccess($worker) { throw 'A scripted pending query must not be received' }
 function Write-PanelLog([string] $message) { throw "Unexpected dialog failure: $message" }
 
 $references = @(
@@ -291,8 +298,11 @@ function Invoke-WpfDialogCase {
             Assert-Dialog ($shown.Command -ceq 'settings-shown' -and $shown.Arguments.Count -eq 3 -and
                 $shown.Arguments[0] -ceq [string]$PID -and
                 $shown.Arguments[2] -ceq $script:ShowingTokens[0]) 'The shown report retains the host identity and request token'
-            Assert-Dialog ($script:OrphanSpecialAccessWorkers.Count -eq 1 -and
-                [object]::ReferenceEquals($script:OrphanSpecialAccessWorkers[0], $script:SpecialAccessQuery)) 'Every App info close path preserves its pending query for cleanup'
+            Assert-Dialog ($script:DeviceAdminQueries.Count -eq 1 -and
+                $script:DeviceAdminQueries[0] -ceq 'com.truecaller') 'App info starts one administrator query without an activation or revocation'
+            Assert-Dialog ($script:OrphanSpecialAccessWorkers.Count -eq 2 -and
+                @($script:OrphanSpecialAccessWorkers | Where-Object { [object]::ReferenceEquals($_, $script:SpecialAccessQuery) }).Count -eq 1 -and
+                @($script:OrphanSpecialAccessWorkers | Where-Object { [object]::ReferenceEquals($_, $script:DeviceAdminQuery) }).Count -eq 1) 'Every App info close path preserves both pending queries for cleanup'
         } else {
             Assert-Dialog $probe.CancelIsCancel 'Cancel remains the WPF cancel action'
             Assert-Dialog ($probe.CancelText -eq (Get-GesherText 'cp_update_cancel')) 'Cancel label is localized'
@@ -338,6 +348,7 @@ try {
         foreach ($action in 'Cancel', 'Close', 'Enter', 'Escape') {
             $script:OnAppUninstallCalled = $false
             $script:SpecialAccessQueries.Clear()
+            $script:DeviceAdminQueries.Clear()
             $script:ShowingPackage = 'com.truecaller'
             $script:ShowingTokens = [Collections.Generic.List[string]]::new()
             $script:ShowingTokens.Add('0123456789abcdef0123456789abcdef')

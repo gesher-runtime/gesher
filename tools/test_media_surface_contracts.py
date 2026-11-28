@@ -14,6 +14,8 @@ import shlex
 import subprocess
 import tempfile
 
+from codec_contract_source import member, adapter, shared, read, ENGINE
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -43,7 +45,27 @@ def method(source: str, marker: str) -> str:
 
 
 def generate(component: str, ref: str | None) -> str:
-    if component == "codec":
+    is_shared = shared(ref)
+    if component == "codec" and is_shared:
+        source = source_text("compat/media/jni/media_codec_jni.cc", ref)
+        engine = read(ENGINE, ref)
+        template = (ROOT / "tests/media/codec_window_host.cc.in").read_text(encoding="utf-8")
+        replacements = {
+            "@THROW_CODEC_EXCEPTION@": method(source, "void ThrowCodecException(") + "\n" + method(source, "void ThrowCodecStatus("),
+            "@SET_SURFACE@": member(engine, "SetSurfaceLocked") + "\n" + member(engine, "SetSurface") + "\n" + adapter(source, "  void SetSurface(JNIEnv*") + "\n" + method(source, "  static SurfaceDeliverHook MakeReaderHook("),
+            "@RELEASE_OUTPUT@": member(engine, "ReleaseOutput"),
+            "@POST_FATAL@": member(engine, "RetireSurfaceFailure") + "\n" + member(engine, "IsReleasedOrFatal"),
+        }
+        for name in ("Start", "Stop", "StopLocked", "StopWorker", "Reset", "Flush", "Release", "DequeueInput", "DequeueOutput", "SetVideoScalingMode"):
+            key = re.sub(r"(?<!^)(?=[A-Z])", "_", name).upper()
+            if key == "SET_VIDEO_SCALING_MODE": key = "SET_VIDEO_SCALING"
+            replacements["@" + key + "@"] = member(engine, name)
+        replacements["@DEQUEUE_OUTPUT@"] += "\n" + adapter(source, "  int DequeueOutput(JNIEnv*")
+        for key, name in {"RELEASE_OUTPUT": "releaseOutputBuffer", "DEQUEUE_INPUT": "dequeueInputBuffer", "DEQUEUE_OUTPUT": "dequeueOutputBuffer", "SET_SURFACE": "setSurface", "START": "start", "STOP": "stop", "FLUSH": "flush", "VIDEO_SCALING": "setVideoScalingMode"}.items():
+            prefix = "jint" if key.startswith("DEQUEUE") else "void"
+            replacements["@JNI_" + key + "@"] = method(source, prefix + " JNICALL MC_" + name + "(")
+        source += engine
+    elif component == "codec":
         source = source_text("compat/media/jni/media_codec_jni.cc", ref)
         template = (ROOT / "tests/media/codec_window_host.cc.in").read_text(encoding="utf-8")
         replacements = {
@@ -55,11 +77,9 @@ def generate(component: str, ref: str | None) -> str:
                                         "  jobject InputBuffer(JNIEnv* env, int index)"),
             "@JNI_RELEASE_OUTPUT@": section(source, "void JNICALL MC_releaseOutputBuffer(JNIEnv* env,",
                                             "void JNICALL MC_signalEndOfInputStream(")}
-        stop_locked = ("  std::optional<uint64_t> StopLocked(" if
-                       "  std::optional<uint64_t> StopLocked(" in source else "  void StopLocked(")
         for name, marker in {
             "START": "  bool Start(", "STOP": "  void Stop(",
-            "STOP_LOCKED": stop_locked, "STOP_WORKER": "  void StopWorker(",
+            "STOP_LOCKED": "  void StopLocked(", "STOP_WORKER": "  void StopWorker(",
             "RESET": "  void Reset(", "FLUSH": "  void Flush(",
             "RELEASE": "  void Release(", "POST_FATAL": "  void PostFatalErrorLocked(",
             "DEQUEUE_INPUT": "  int DequeueInput(", "DEQUEUE_OUTPUT": "  int DequeueOutput(",
@@ -73,8 +93,6 @@ def generate(component: str, ref: str | None) -> str:
             replacements["@" + name + "@"] = method(source, marker)
         replacements["@SET_VIDEO_SCALING@"] = (method(source, "  bool SetVideoScalingMode(")
                 if "  bool SetVideoScalingMode(" in source else "")
-        replacements["@POST_INPUT@"] = (method(source, "  void PostInputAvailable(")
-                if "  void PostInputAvailable(" in source else "")
     else:
         source = source_text("compat/media/surface/queue_surface.cc", ref)
         header = source_text("compat/media/surface/queue_surface.h", ref)
@@ -118,7 +136,9 @@ def generate(component: str, ref: str | None) -> str:
         template = template.replace(marker, body)
     digest = hashlib.sha256(source.encode()).hexdigest()
     print(component + " source SHA256 " + digest, flush=True)
-    return "// Production source SHA256: " + digest + "\n" + template
+    epoch = "uint64_t," if component == "codec" and "IsCallbackCurrent(" in source else ""
+    return (f"#define CODEC_CALLBACK_EPOCH_ARGS {epoch}\n"
+            + f"#define SHARED_CODEC_ENGINE {int(is_shared)}\n// Production source SHA256: " + digest + "\n" + template)
 
 
 def main() -> int:

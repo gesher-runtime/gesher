@@ -31,6 +31,7 @@ static void TREE_CALLBACK_ABI tree_free_key(void* key) {
   tree_destroy_sum += *(int*)key;
   free(key);
 }
+#include "search_delete_contract.inc"
 #undef TREE_CALLBACK_ABI
 
 static void test_search(void) {
@@ -105,4 +106,5 @@ static void test_search(void) {
   tdestroy(NULL, tree_free_key);
   check("tdestroy frees every key exactly once via callback", allocated &&
         tree_destroyed == 128 && tree_destroy_sum == (127 * 128) / 2);
+  test_search_delete_contracts();
 }

@@ -15,9 +15,8 @@ struct ANativeWindow_Buffer {
   void* bits = nullptr;
 };
 struct ARect;
-struct ANativeWindow { virtual ~ANativeWindow() = default; };
 namespace android {
-class Surface : public ANativeWindow {
+class Surface {
  public:
   void incStrong(const void*) const { ++references_; }
   void decStrong(const void*) const { if (--references_ == 0) delete this; }
@@ -56,9 +55,6 @@ class QueueSurface : public android::Surface {
   inline static std::atomic<int> live{0}, created{0};
   QueueSurface(int w, int h) : width_(w), height_(h), pixels_(w * h) { ++live; ++created; }
   ~QueueSurface() override { --live; }
-  static QueueSurface* From(ANativeWindow* window) {
-    return dynamic_cast<QueueSurface*>(window);
-  }
   void SetDefaultSize(int w, int h) {
     std::lock_guard<std::mutex> lock(mu_);
     if (w > 0) width_ = w;

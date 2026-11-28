@@ -5,7 +5,7 @@
 package com.gesher.app.shell;
 
 /**
- * The Windows shell, for {@link AppShell}: Start menu shortcuts (IShellLinkW, with
+ * The Windows shell, for {@link AppShell}: Start menu and desktop shortcuts (IShellLinkW, with
  * System.AppUserModel.ID in their property store), this process's AppUserModelID, the
  * file operations on the Start menu folder, and the apps' URL protocols (per user, in
  * HKCU\Software\Classes). Paths are Windows paths with a drive letter: the
@@ -19,6 +19,14 @@ public final class Shell {
     /** The user's Start menu Programs folder (FOLDERID_Programs), or null. */
     public static String programsFolder() {
         return nativeProgramsFolder();
+    }
+
+    /**
+     * The user's Desktop folder (FOLDERID_Desktop), or null: where {@code gesher-app install
+     * --desktop-shortcut} puts the app's desktop shortcut.
+     */
+    public static String desktopFolder() {
+        return nativeDesktopFolder();
     }
 
     /**
@@ -92,6 +100,7 @@ public final class Shell {
     }
 
     private static native String nativeProgramsFolder();
+    private static native String nativeDesktopFolder();
     private static native int nativeCreateShortcut(String link, String target, String arguments,
             String workDir, String icon, String description, String appUserModelId);
     private static native int nativeSetProcessAppUserModelId(String id);

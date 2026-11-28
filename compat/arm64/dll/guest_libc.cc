@@ -1020,9 +1020,6 @@ bool InitGuestLibc() {
     Override(name, bridge ? bridge : reinterpret_cast<void*>(&MissingArm64DnsBridge));
   }
 
-  Override("AMediaCodec_setAsyncNotifyCallback",
-           Host("__gesher_arm64_AMediaCodec_setAsyncNotifyCallback"));
-
   g_pthread_create = reinterpret_cast<ThreadCreate>(Host("pthread_create"));
   if (g_pthread_create) Override("pthread_create", reinterpret_cast<void*>(&GuestPthreadCreate));
   if (void* getattr = Host("__gesher_arm64_pthread_getattr_np"))
@@ -1044,6 +1041,12 @@ bool InitGuestLibc() {
   g_nftw = Host("nftw");
   if (g_ftw) for (const char* name : {"ftw", "ftw64"}) Override(name, reinterpret_cast<void*>(&GuestFtw));
   if (g_nftw) for (const char* name : {"nftw", "nftw64"}) Override(name, reinterpret_cast<void*>(&GuestNftw));
+
+  // AAPCS64's >16-byte callback aggregate is indirect; generic scalar
+  // translation cannot feed System V's by-value stack argument.
+  if (void* codec_callback = Host("__gesher_AMediaCodec_setAsyncNotifyCallback")) {
+    Override("AMediaCodec_setAsyncNotifyCallback", codec_callback);
+  }
 
   g_epoll_ctl = Host("epoll_ctl");
   g_epoll_wait = Host("epoll_wait");

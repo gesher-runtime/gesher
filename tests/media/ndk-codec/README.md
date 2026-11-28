@@ -1,16 +1,23 @@
-# Native AVC buffer contract
+# Native AMediaCodec contracts
 
-Build the same public NDK fixture as an Android ELF executable and an ELF JNI
-library for x86-64 and ARM64.
+Both fixtures in this directory call the public NDK API, which Gesher serves
+from `compat/media/ndk/media_codec.cc` over the shared codec engine. Build
+them for x86-64 and ARM64 as Android ELF executables and ELF JNI libraries:
 
 ```sh
-bash tests/media/ndk-codec/build.sh out "$ANDROID_NDK" "$ANDROID_BUILD_TOOLS/d8"
+bash tests/media/ndk-codec/build.sh out "$ANDROID_NDK" "$ANDROID_BUILD_TOOLS"
 ```
 
-Run the matching `out/media/ndk-codec/ndk-codec-*` executable on Android.
-The Windows media shard loads the two JNI libraries in separate dalvikvm
-processes. It exercises the app-host codec exports through the native library
-loader, including the translated ARM64 guest ABI.
+`codec_test.cc` (`out/media/ndk-codec/<abi>/`) checks the exports, an AVC
+round trip, Opus, raw PCM, LP64 buffer indices and callback-driven
+flush/restart/stop/delete; the Windows media shard runs it through
+`gesher-exec` and dalvikvm.
+
+The rest of this file describes the C fixtures, `codec_test.c` and
+`input_test.c`. Run the matching `out/media/ndk-codec/ndk-codec-*` executable
+on Android. The Windows media shard loads the two JNI libraries in separate
+dalvikvm processes. It exercises the app-host codec exports through the native
+library loader, including the translated ARM64 guest ABI.
 
 The fixture submits three different 128×96 I420 images to a real AVC encoder
 and passes its compressed access units and codec-specific data to a real AVC
