@@ -212,6 +212,10 @@ public final class PackageUninstallTest {
         require(!shellSteps.toString().contains("retired"),"Failed or refused removal retired the Windows shell: "+shellSteps);
         require(pm.get(name)==beforeFailure&&new File(privateData,"private-marker").isFile()
                 &&new File(deviceData,"private-marker").isFile(),"Failed removal lost publication/data");
+        for (File path : List.of(nestedProfile, packageLog, packageLogcat)) {
+            require(Files.readString(path.toPath()).equals("owned old installation fixture"),
+                    "Failed removal lost profile or package log bytes");
+        }
         require(Files.readString(new File(data,"system/packages.list").toPath()).contains(name+"\t")&&events.isEmpty(),"Failed removal changed registry/events");
         require(!(Boolean)pendingRemoval.invoke(pm,name),"Successful rollback retained removal barrier");
         Files.delete(temporary.toPath());

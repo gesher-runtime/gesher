@@ -243,6 +243,14 @@ public final class AppDataStorageHostTest {
                         && !Files.exists(storage.metadata), "uninstall retained an original private data area");
         check(!Files.exists(profile) && !Files.exists(log) && !Files.exists(logcat),
                 "uninstall retained application-visible profile or logs");
+        try (var slots = Files.newDirectoryStream(log.getParent(), ".gesher-uninstall-*")) {
+            List<Path> quarantined = new ArrayList<>();
+            slots.forEach(quarantined::add);
+            check(quarantined.size() == 2, "log quarantine did not stay beside the original files");
+            check(quarantined.stream().anyMatch(slot -> slot.toString().endsWith("-package-log"))
+                    && quarantined.stream().anyMatch(slot -> slot.toString().endsWith("-package-logcat")),
+                    "log quarantine confused the two named slots");
+        }
         PackageRemovalStorage.recover(Map.of(PACKAGE, code.toString()));
         equal(storage.credential.resolve("same"), "CE", "uncommitted uninstall failed to restore CE");
         equal(storage.device.resolve("same"), "DE", "uncommitted uninstall failed to restore DE");
@@ -255,6 +263,18 @@ public final class AppDataStorageHostTest {
                     "named storage slots changed legacy external quarantine numbering");
         }
 
+        PackageRemovalStorage interrupted = new PackageRemovalStorage(PACKAGE, code.toString());
+        interrupted.stage();
+        write(logcat, "occupied logcat");
+        rejects(() -> PackageRemovalStorage.recover(Map.of(PACKAGE, code.toString())),
+                "rollback replaced an occupied logcat");
+        equal(logcat, "occupied logcat", "rollback overwrote an occupied logcat");
+        check(PackageRemovalStorage.reserves(code), "failed log rollback lost its journal");
+        Files.delete(logcat);
+        PackageRemovalStorage.recover(Map.of(PACKAGE, code.toString()));
+        equal(logcat, "logcat", "log rollback retry lost original bytes");
+        equal(log, "log", "log rollback retry lost the other original log");
+
         PackageRemovalStorage committed = new PackageRemovalStorage(PACKAGE, code.toString());
         committed.stage();
         PackageRemovalStorage.recover(Collections.emptyMap());
@@ -264,6 +284,9 @@ public final class AppDataStorageHostTest {
                 "reinstall inherited removed CE or DE data");
         check(!Files.exists(profile) && !Files.exists(log) && !Files.exists(logcat),
                 "reinstall inherited a removed profile or logs");
+        try (var slots = Files.newDirectoryStream(log.getParent(), ".gesher-uninstall-*")) {
+            check(!slots.iterator().hasNext(), "committed removal orphaned adjacent log slots");
+        }
 
         // A journal from before CE/DE support has only fixed item-0..4 entries.
         Path oldCode = data.resolve("app/" + PACKAGE + "-2");
@@ -286,6 +309,22 @@ public final class AppDataStorageHostTest {
             equal(data.resolve("media/0/Android/" + kind + "/" + PACKAGE + "/old"), kind,
                     "old journal restored external data into wrong slot");
         }
+
+        // Before adjacent-v1, the named log entries lived inside data trash.
+        oldCode = data.resolve("app/" + PACKAGE + "-3");
+        trash = data.resolve("system/uninstall-trash/uninstall-old-logs");
+        var props = new java.util.Properties();
+        props.setProperty("package", PACKAGE);
+        props.setProperty("code", "app/" + PACKAGE + "-3");
+        props.setProperty("logs", log.getParent().toFile().getCanonicalPath());
+        Files.createDirectories(trash);
+        try (var out = Files.newOutputStream(trash.resolve("journal"))) { props.store(out, null); }
+        write(trash.resolve("item-0/base.apk"), "legacy log-era code");
+        write(trash.resolve("package-log"), "legacy log");
+        write(trash.resolve("package-logcat"), "legacy logcat");
+        PackageRemovalStorage.recover(Map.of(PACKAGE, oldCode.toString()));
+        equal(log, "legacy log", "legacy named log was not restored");
+        equal(logcat, "legacy logcat", "legacy named logcat was not restored");
     }
 
     private static void nativeRemovalFence(Path root) throws Exception {
