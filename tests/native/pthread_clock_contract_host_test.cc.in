@@ -62,6 +62,11 @@ static DWORD GetCurrentThreadId() {
 static void SwitchToThread() { std::this_thread::yield(); }
 static void Sleep(DWORD ms) { std::this_thread::sleep_for(std::chrono::milliseconds(ms)); }
 
+// gesher/clocks.h: a shared barrier bounds its progress wait on the monotonic
+// clock. Here it is the fixture's clock, the one its deadline is compared with.
+namespace gesher::bionic { int64_t MonotonicNanos(); }
+namespace gesher { inline int64_t MonotonicNanos() { return bionic::MonotonicNanos(); } }
+
 namespace gesher::bionic {
 static bool fixed_clock;
 static LinuxTimespec realtime{1000000, 0};
