@@ -34,9 +34,20 @@ void ProducerOwnership() {
   if (!native) return;
   auto* pixels = static_cast<uint32_t*>(native->reserved[0]);
   pixels[0] = 0xff112233;
+  // Before the first queued buffer BufferQueue lets the producer hold every
+  // writable slot; each has its own storage and a further dequeue would block.
+  ANativeWindowBuffer* second = nullptr;
   ANativeWindowBuffer* excess = nullptr;
-  Check(window->dequeueBuffer(window, &excess, &fence) == -ENOSYS && excess == nullptr,
-        "actual native-window slot cannot be borrowed twice");
+  Check(window->dequeueBuffer(window, &second, &fence) == 0 && second != nullptr &&
+            second != native && second->reserved[0] != native->reserved[0],
+        "a second slot before the first queue has separate storage");
+  Check(window->dequeueBuffer(window, &excess, &fence) == -EAGAIN && excess == nullptr,
+        "actual native-window slots are bounded");
+  if (second != nullptr) {
+    static_cast<uint32_t*>(second->reserved[0])[0] = 0xff778899;
+    Check(window->cancelBuffer(window, second, -1) == 0 && pixels[0] == 0xff112233,
+          "cancelling one slot leaves the other slot's pixels intact");
+  }
   Post(surface.get(), 0xff445566);
   Check(pixels[0] == 0xff112233, "Canvas/CPU writes leave the outstanding native slot intact");
   Check(window->queueBuffer(window, native, -1) == 0, "publish the real native slot");

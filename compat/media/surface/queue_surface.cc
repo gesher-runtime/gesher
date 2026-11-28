@@ -314,39 +314,53 @@ std::function<void()> QueueSurface::PublishLocked(const Buffer& buffer,
 int QueueSurface::dequeueBuffer(ANativeWindowBuffer** buffer, int* fence_fd) {
   std::lock_guard<std::mutex> lock(mutex_);
   if (abandoned_) return -ENODEV;
-  if (dequeued_ != nullptr) return -ENOSYS;  // Android INVALID_OPERATION.
-  if (locked_) {
+  // As BufferQueue does, the one-outstanding-buffer limit applies once a
+  // buffer has been queued; before that the producer may hold every writable
+  // slot, and a further dequeue would block (WOULD_BLOCK for this queue).
+  if (frames_ > 0 && !dequeued_.empty()) return -ENOSYS;  // Android INVALID_OPERATION.
+  if (dequeued_.size() >= kMaxDequeuedBuffers) return -EAGAIN;
+  android::sp<Buffer> slot;
+  if (locked_ || !dequeued_.empty()) {
     int width, height;
     Size(&width, &height);
-    dequeued_ = android::sp<Buffer>::make(width, height, format_);
+    slot = android::sp<Buffer>::make(width, height, format_);
   } else {
     EnsureBuffer();
-    dequeued_ = std::move(buffer_);
+    slot = std::move(buffer_);
     buffer_contents_valid_ = false;
   }
-  *buffer = dequeued_.get();
+  *buffer = slot.get();
+  dequeued_.push_back(std::move(slot));
   if (fence_fd != nullptr) *fence_fd = -1;
   return 0;
 }
 
+android::sp<QueueSurface::Buffer> QueueSurface::TakeDequeued(ANativeWindowBuffer* buffer) {
+  for (auto it = dequeued_.begin(); it != dequeued_.end(); ++it) {
+    if (static_cast<ANativeWindowBuffer*>(it->get()) != buffer) continue;
+    auto owned = std::move(*it);
+    dequeued_.erase(it);
+    return owned;
+  }
+  return nullptr;
+}
+
 int QueueSurface::cancelBuffer(ANativeWindowBuffer* buffer, int) {
   std::lock_guard<std::mutex> lock(mutex_);
-  if (dequeued_ == nullptr || dequeued_.get() != buffer) {
-    return abandoned_ ? -ENODEV : -EINVAL;
-  }
-  // Discard writable storage containing unpublished pixels.
-  dequeued_ = nullptr;
-  return abandoned_ ? -ENODEV : 0;
+  // Discard writable storage containing unpublished pixels. Like Surface,
+  // returning an owned buffer succeeds even after the consumer is abandoned.
+  if (TakeDequeued(buffer) == nullptr) return abandoned_ ? -ENODEV : -EINVAL;
+  return 0;
 }
 
 int QueueSurface::queueBuffer(ANativeWindowBuffer* buffer, int) {
   std::function<void()> listener;
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (dequeued_ == nullptr || dequeued_.get() != buffer) {
+    auto owned = TakeDequeued(buffer);
+    if (owned == nullptr) {
       return abandoned_ ? -ENODEV : -EINVAL;
     }
-    auto owned = std::move(dequeued_);
     if (abandoned_) {
       return -ENODEV;
     }
