@@ -30,7 +30,7 @@ class PortablePackageTests(unittest.TestCase):
             'icudt68l.dat hello.dex framework.jar framework-res.apk build.prop gesher-app.jar '
             'org.apache.http.legacy.jar com.android.location.provider.jar android.test.base.jar '
             'android.test.mock.jar android.test.runner.jar binderd.exe '
-            'servicemanager.exe gesher-exec.exe gesher-launch.exe gesher_shellext.dll '
+            'servicemanager.exe gesher-exec.exe gesher-launch.exe gesher-app.exe gesher_shellext.dll '
             'dex2oat.exe profman.exe oatdump.exe lifecycle.apk gesher-camera.apk gesher-tts.apk gesher-stt.apk libEGL.dll '
             'libGLESv2.dll gesher_arm64.dll ANGLE-NOTICES.txt DYNARMIC-NOTICES.txt '
             'FONTS-NOTICES.txt TZDATA-NOTICES.txt NET-NOTICES.txt '
