@@ -113,7 +113,9 @@ jobs:
         run: |
           mkdir -p dist-webview
           cp out-webview/*.exe out-webview/WebView2Loader.dll dist-webview/
-          cp -r out-webview/webview-auth-extension dist-webview/
+          if [[ "${{ inputs.apk }}" != "true" ]]; then
+            cp -r out-webview/webview-auth-extension dist-webview/
+          fi
           ls -la dist-webview
 
       - name: Build agile content stream COM gate
