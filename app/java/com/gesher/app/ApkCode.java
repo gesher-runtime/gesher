@@ -17,6 +17,13 @@ public final class ApkCode {
     private ApkCode() { }
 
     public static File snapshot(String sourcePath) throws IOException {
+        File source = new File(sourcePath);
+        // Code that is already read-only (an installed base.apk, or an APK its owner
+        // published read-only) satisfies the dynamic-code admission boundary as it
+        // is. Keep its path: the oat file, app image and JIT profile are keyed by it.
+        if (source.isFile() && !source.canWrite()) {
+            return source;
+        }
         Path root = new File(new File(Device.dataDir()).getCanonicalFile(), "standalone-code").toPath();
         Files.createDirectories(root);
         if (!Files.isDirectory(root, LinkOption.NOFOLLOW_LINKS)) {

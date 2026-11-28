@@ -132,6 +132,8 @@ try {
   $sharedFilesCreated = $true
   Copy-Item "$Dir/shared-base-v1.jar" $sharedBase
   Copy-Item "$Dir/shared-entry.jar" $sharedEntry
+  # System shared-library code is read-only, as Android's dynamic-code rule requires.
+  Set-ItemProperty -LiteralPath $sharedBase, $sharedEntry -Name IsReadOnly -Value $true
   $baseAttribute = [Security.SecurityElement]::Escape((NoDrive $sharedBase))
   $entryAttribute = [Security.SecurityElement]::Escape((NoDrive $sharedEntry))
   [IO.File]::WriteAllText($sharedConfig, "<permissions><library name=`"gesher.shared.base`" file=`"$baseAttribute`"/><library name=`"gesher.shared.entry`" file=`"$entryAttribute`" dependency=`"gesher.shared.base`"/></permissions>", [Text.UTF8Encoding]::new($false))
@@ -212,7 +214,9 @@ try {
   $oldOat = (Get-FileHash "$sharedCode/oat/x86_64/base.odex").Hash
   $oldIdentity = [IO.File]::ReadAllText("$sharedCode/oat/x86_64/shared-libraries.txt")
   # Same registered dependency path, different actual DEX code. Do not install first.
+  Set-ItemProperty -LiteralPath $sharedBase -Name IsReadOnly -Value $false
   Copy-Item "$Dir/shared-base-v2.jar" $sharedBase -Force
+  Set-ItemProperty -LiteralPath $sharedBase -Name IsReadOnly -Value $true
   Aot3SharedRunModes 1037000 $false
   Aot3SharedCheck 'stale-artifact counterfactual leaves the original oat bytes and manifest untouched' `
     ((Get-FileHash "$sharedCode/oat/x86_64/base.odex").Hash -eq $oldOat -and

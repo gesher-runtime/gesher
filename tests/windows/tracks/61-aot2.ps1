@@ -191,6 +191,9 @@ $single = Join-Path $aotRoot 'single'
 New-Item -ItemType Directory -Force $single | Out-Null
 $apk = Join-Path $single 'lifecycle.apk'
 Copy-Item "$Dir/lifecycle.apk" $apk
+# Application code is read-only, as an installed APK is (Android's target 34+ dynamic
+# code rule). Launch keeps a read-only APK's own path, which keys its oat file and profile.
+Set-ItemProperty -LiteralPath $apk -Name IsReadOnly -Value $true
 $odex = Join-Path $single 'oat/x86_64/lifecycle.odex'
 $pkg = 'com.gesher.lifecycle'
 $curProfile = Join-Path $root "data/misc/profiles/cur/0/$pkg/primary.prof"
