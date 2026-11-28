@@ -24,6 +24,17 @@ rechecks evidence before writing, and revokes a success if a new attempt is
 observed immediately afterwards. API errors fail closed. A schedule and a
 reporting-only manual dispatch recover missed events without rerunning CI.
 
+Aggregate discovery uses the named latest check in the canonical workflow
+run's check suite. Its GitHub Actions job link locates an individual job, whose
+ID, name, run ID, exact `run_attempt`, head and check back-reference must match.
+The check's publisher/head/suite/link are verified before discovery and again
+on readback. A green check from an older attempt is rejected. This avoids the
+job-list endpoints that returned HTTP 502 for successful CI run `46020002278`,
+attempt 2, on 2026-11-28. The changed production reader verified that run and
+the corresponding ARM64 run using read-only live API calls; authenticated App
+publication still requires post-merge validation. No requirement, permission,
+aggregate success condition or fail-closed behavior is removed.
+
 The automerge controller records outcomes as local step output. A separate
 step publishes an App check with a link to that workflow's logs. Confirmed
 protected merges are success, waiting/no merge is neutral, and controller

@@ -14,11 +14,16 @@ function fixture() {
     run: {id: 200, run_attempt: 2, workflow_id: 100, path: '.github/workflows/ci.yml',
       event: 'pull_request', head_sha: HEAD, head_branch: 'topic', repository: {id: 10},
       head_repository: {id: 20}, check_suite_id: 300, status: 'completed', conclusion: 'success'},
-    job: {id: 400, run_id: 200, head_sha: HEAD, name: 'ci-required', status: 'completed',
+    job: {id: 400, run_id: 200, run_attempt: 2, head_sha: HEAD, name: 'ci-required', status: 'completed',
       conclusion: 'success', check_run_url: 'https://api.github.com/repos/o/r/check-runs/500'},
     check: {id: 500, name: 'ci-required', head_sha: HEAD, app: {id: 15368},
+      details_url: 'https://github.com/o/r/actions/runs/200/job/400',
       check_suite: {id: 300}, status: 'completed', conclusion: 'success'}};
-  const page = (field, fn) => async args => ({data: {[field]: fn(args)}});
+  const page = (field, fn) => async args => {
+    const rows = fn(args);
+    return {data: {[field]: clone(rows.slice((args.page - 1) * args.per_page, args.page * args.per_page)),
+      total_count: rows.length}};
+  };
   const github = {rest: {
     pulls: {get: async () => ({data: clone(w.pr)}), list: async () => ({data: [clone(w.pr)]})},
     actions: {
@@ -30,12 +35,23 @@ function fixture() {
         if (w.onRunRead) w.onRunRead(w.reads);
         return {data: clone(w.run)};
       },
-      listJobsForWorkflowRunAttempt: page('jobs', args => {
-        assert.equal(args.attempt_number, w.run.run_attempt);
-        return w.jobs || [clone(w.job)];
-      }),
+      listJobsForWorkflowRunAttempt: async () => assert.fail('the broken attempt-jobs endpoint must not be called'),
+      getJobForWorkflowRun: async args => {
+        assert.equal(args.job_id, 400);
+        if (w.jobError) throw w.jobError;
+        if (w.onJobRead) w.onJobRead();
+        return {data: clone(w.job)};
+      },
     },
-    checks: {get: async () => ({data: clone(w.check)})},
+    checks: {
+      listForSuite: page('check_runs', args => {
+        assert.equal(args.check_suite_id, w.run.check_suite_id);
+        assert.equal(args.filter, 'latest');
+        assert.ok(publish.SOURCES.some(source => source.job === args.check_name));
+        return w.checks || [w.check];
+      }),
+      get: async () => ({data: clone(w.checkReadback || w.check)}),
+    },
     repos: {createCommitStatus: async args => {w.calls.push(clone(args)); return {data: args};}},
   }};
   w.github = github;
@@ -87,13 +103,25 @@ for (const [name, alter] of Object.entries({
 
 for (const [name, alter] of Object.entries({
   'disabled workflow': w => {w.workflow.state = 'disabled_manually';},
-  'missing aggregate': w => {w.jobs = [];},
-  'ambiguous aggregate': w => {w.jobs = [w.job, w.job];},
+  'missing aggregate': w => {w.checks = [];},
+  'ambiguous aggregate': w => {w.checks = [w.check, w.check];},
   'foreign check publisher': w => {w.check.app.id = 5816428;},
   'old check suite': w => {w.check.check_suite.id = 299;},
   'job from another run': w => {w.job.run_id = 199;},
+  'individual job response has another ID': w => {w.job.id = 401;},
+  'job from an older attempt': w => {w.job.run_attempt = 1;},
+  'job without an attempt': w => {delete w.job.run_attempt;},
+  'job with another name': w => {w.job.name = 'build';},
+  'job with another check': w => {w.job.check_run_url = 'https://api.github.com/repos/o/r/check-runs/499';},
   'job from another head': w => {w.job.head_sha = 'b'.repeat(40);},
   'foreign check URL': w => {w.job.check_run_url = 'https://example.org/check-runs/500';},
+  'foreign job link': w => {w.check.details_url = 'https://example.org/actions/runs/200/job/400';},
+  'another repository job link': w => {w.check.details_url = 'https://github.com/o/other/actions/runs/200/job/400';},
+  'another run job link': w => {w.check.details_url = 'https://github.com/o/r/actions/runs/199/job/400';},
+  'malformed job link': w => {w.check.details_url += '?job=401';},
+  'missing job link': w => {delete w.check.details_url;},
+  'changed check source on readback': w => {w.checkReadback = {...w.check, app: {id: 42}};},
+  'changed check job link on readback': w => {w.checkReadback = {...w.check, details_url: w.check.details_url + '1'};},
 })) {
   test(name + ' fails closed', async () => {
     const w = fixture(); alter(w);
@@ -122,7 +150,7 @@ test('a failed workflow cannot be hidden by a green aggregate', async () => {
 
 test('publishes pending before checking evidence; changed attempts never publish success', async () => {
   const w = fixture();
-  w.onRunRead = n => {if (n === 2) w.run.run_attempt++;};
+  w.onRunRead = n => {if (n === 2) {w.run.run_attempt++; w.run.status = 'in_progress';}};
   await w.publish();
   assert.equal(w.calls[0].state, 'pending');
   assert.equal(w.calls.filter(c => c.state === 'success').length, 0);
@@ -169,4 +197,30 @@ test('requires the exact installed App before any writes', async () => {
   const w = fixture(); w.args.installationId++;
   await assert.rejects(w.publish(), /verified Gesher App/);
   assert.equal(w.calls.length, 0);
+});
+
+test('publishes real rerun success without invoking the failing job-list endpoint', async () => {
+  const w = fixture();
+  await w.publish();
+  assert.deepEqual(w.calls.filter(c => c.context === 'ci/gesher-required').map(c => c.state),
+    ['pending', 'success']);
+});
+
+test('a rerun starting during the individual job read prevents publication of old success', async () => {
+  const w = fixture();
+  w.onJobRead = () => {w.run.run_attempt++; w.run.status = 'in_progress';};
+  await w.publish();
+  assert.equal(w.calls.filter(c => c.state === 'success').length, 0);
+});
+
+test('individual job API failure keeps the required status pending', async () => {
+  const w = fixture(); w.jobError = new Error('Job API unavailable');
+  await assert.rejects(w.publish());
+  assert.ok(w.calls.every(c => c.state === 'pending'));
+});
+
+test('filtered check discovery paginates before selecting the aggregate', async () => {
+  const w = fixture();
+  w.checks = [...Array.from({length: 100}, (_, i) => ({id: i + 1000, name: 'other/' + i})), w.check];
+  assert.equal((await w.evidence()).state, 'success');
 });
