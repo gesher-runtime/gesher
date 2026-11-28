@@ -16,7 +16,7 @@ def main() -> None:
     for name in ("java-home", "framework-classes", "core-classes", "app-classes", "apksig"):
         parser.add_argument("--" + name, required=True, type=Path)
     parser.add_argument("--source-ref", help="Compile a previous ActiveServices as the negative control")
-    parser.add_argument("--scenario", choices=("all", "base", "types", "permissions", "normalization", "shared-uid"), default="all")
+    parser.add_argument("--scenario", choices=("all", "base", "types", "permissions", "normalization", "shared-uid", "deadline"), default="all")
     args = parser.parse_args()
     compiler = shutil.which("cc")
     if compiler is None:

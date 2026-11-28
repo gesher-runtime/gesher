@@ -4,18 +4,23 @@ package gesher.services;
 import android.Manifest;
 import android.app.IActivityManager;
 import android.app.IApplicationThread;
+import android.app.IBinderSession;
+import android.app.IServiceConnection;
 import android.app.InvalidForegroundServiceTypeException;
 import android.app.MissingForegroundServiceTypeException;
 import android.app.Notification;
 import android.app.NotificationChannel;
+import android.app.RemoteServiceException.ForegroundServiceDidNotStartInTimeException;
 import android.app.Service;
 import android.content.ComponentName;
+import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ParceledListSlice;
 import android.content.pm.PermissionInfo;
 import android.content.pm.ServiceInfo;
 import android.content.res.CompatibilityInfo;
 import android.os.Binder;
+import android.os.Bundle;
 import android.os.IBinder;
 import android.os.IInterface;
 import android.os.Parcel;
@@ -35,6 +40,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.ToIntBiFunction;
 import sun.misc.Unsafe;
@@ -128,9 +134,19 @@ public final class ForegroundServiceAdmissionTest {
         final IBinder binder = new Binder();
         IBinder service;
         int creates;
+        int crashes;
+        String crashMessage;
+        int crashType;
+        Bundle crashExtras;
         @Override public IBinder asBinder() { return binder; }
         @Override public void scheduleCreateService(IBinder token, ServiceInfo info,
                 CompatibilityInfo compatibility, int processState) { service = token; creates++; }
+        @Override public void scheduleCrash(String message, int type, Bundle extras) {
+            crashes++;
+            crashMessage = message;
+            crashType = type;
+            crashExtras = extras;
+        }
     }
     private static final class Harness {
         final ApkPackage owner;
@@ -190,8 +206,10 @@ public final class ForegroundServiceAdmissionTest {
             am = binder ? IActivityManager.Stub.asInterface(remote(
                     StandIn.of(IActivityManager.class, (IActivityManager) implementation).asBinder()))
                     : (IActivityManager) implementation;
-            notifications.createNotificationChannels(OWNER, new ParceledListSlice<>(List.of(
-                    new NotificationChannel("fgs", "Foreground contract", 3))));
+            if (target >= 26) {
+                notifications.createNotificationChannels(OWNER, new ParceledListSlice<>(List.of(
+                        new NotificationChannel("fgs", "Foreground contract", 3))));
+            }
         }
         void asApp(Work action) throws Exception { asUid(UID, PID, action); }
         void asUid(int uid, int pid, Work action) throws Exception {
@@ -203,6 +221,15 @@ public final class ForegroundServiceAdmissionTest {
             asApp(() -> check(SERVICE.equals(am.startService(thread, new Intent().setComponent(SERVICE),
                     null, foreground, OWNER, null, 0)), "Service launch must retain the production resolution path"));
             check(thread.service != null && thread.creates == 1, "Service must be created exactly once");
+        }
+        void stop() throws Exception {
+            asApp(() -> check(am.stopService(thread, new Intent().setComponent(SERVICE), null, 0) == 1,
+                    "The service must have a started lifetime to stop"));
+        }
+        Object promotionDeadline() throws Exception { return get(thread.service, "foregroundStartDeadline"); }
+        void expire(Object deadline) throws Exception {
+            call(services, "foregroundStartTimedOut",
+                    new Class<?>[]{thread.service.getClass(), deadline.getClass()}, thread.service, deadline);
         }
         Notification notice() throws Exception {
             Notification n = new Notification(); field(Notification.class, "mChannelId").set(n, "fgs");
@@ -253,6 +280,7 @@ public final class ForegroundServiceAdmissionTest {
         // A system caller cannot lend its permission to the service's ordinary app UID.
         rejects(SecurityException.class, () -> modern.am.setServiceForeground(SERVICE, modern.thread.service,
                 1, modern.notice(), 0, 0), "System caller cannot authorize an unprivileged service owner");
+        call(modern.services, "stopPackage", new Class<?>[]{String.class}, OWNER);
         Harness permitted = new Harness(28, 0, BASE); permitted.start(false); permitted.promote(2, 0);
         check(permitted.posts.get() == 1, "An ordinary started service may promote with its manifest permission");
     }
@@ -373,6 +401,95 @@ public final class ForegroundServiceAdmissionTest {
         rejects(SecurityException.class, () -> ownerP.promote(1, 0),
                 "The P base permission gate remains tied to the owning app, not the UID minimum target");
     }
+    private static void promotionDeadline() throws Exception {
+        Harness ordinary = new Harness(33, 0, BASE);
+        ordinary.start(false);
+        check(ordinary.promotionDeadline() == null, "Ordinary service start must not arm a deadline");
+
+        Harness legacy = new Harness(25, 0);
+        legacy.start(true);
+        check(legacy.promotionDeadline() == null, "Pre-O service owner must not owe a promotion");
+
+        Harness promoted = new Harness(33, 0, BASE);
+        promoted.start(true);
+        Object first = promoted.promotionDeadline();
+        check(first != null, "Foreground start must arm a deadline at start-argument delivery");
+        ScheduledFuture<?> firstTimer = (ScheduledFuture<?>) get(first, "future");
+        check(!firstTimer.isDone(), "New deadline must be queued");
+        promoted.start(true);
+        check(promoted.promotionDeadline() == first, "Repeated foreground starts must not extend the deadline");
+        promoted.promote(7, 0);
+        check(promoted.promotionDeadline() == null && firstTimer.isCancelled(),
+                "Promotion cancels the original deadline");
+        promoted.expire(first);
+        check(promoted.thread.crashes == 0, "A queued callback after promotion cannot crash the process");
+        promoted.start(true);
+        check(promoted.promotionDeadline() == null, "An already-foreground service owes no new promotion");
+
+        Harness replacedStart = new Harness(33, 0, BASE);
+        replacedStart.start(true);
+        Object replaced = replacedStart.promotionDeadline();
+        replacedStart.start(false);
+        check(replacedStart.promotionDeadline() == null, "A later ordinary start supersedes the foreground requirement");
+        replacedStart.start(true);
+        Object second = replacedStart.promotionDeadline();
+        check(second != null && second != replaced, "A later foreground start may arm a different deadline");
+        replacedStart.expire(replaced);
+        check(replacedStart.promotionDeadline() == second && replacedStart.thread.crashes == 0,
+                "The canceled deadline cannot expire the replacement");
+        call(replacedStart.services, "stopPackage", new Class<?>[]{String.class}, OWNER);
+        replacedStart.expire(second);
+        check(replacedStart.promotionDeadline() == null && replacedStart.thread.crashes == 0,
+                "Package-wide stop must discard its deadlines without a late crash");
+
+        Harness timedOut = new Harness(33, 0, BASE);
+        timedOut.start(true);
+        Object expired = timedOut.promotionDeadline();
+        timedOut.expire(expired);
+        timedOut.expire(expired);
+        check(timedOut.thread.crashes == 1, "The exact deadline reports failure only once");
+        check(!((Boolean) get(timedOut.thread.service, "startRequested")),
+                "The timed-out service must no longer be started");
+        check(timedOut.thread.crashType == ForegroundServiceDidNotStartInTimeException.TYPE_ID
+                        && timedOut.thread.crashMessage.contains(SERVICE.flattenToShortString())
+                        && SERVICE.getClassName().equals(ForegroundServiceDidNotStartInTimeException
+                                .getServiceClassNameFromExtras(timedOut.thread.crashExtras)),
+                "The typed app-thread error must name the original service");
+
+        Harness bound = new Harness(33, 0, BASE);
+        bound.start(true);
+        Object beforeBoundTimeout = bound.promotionDeadline();
+        IServiceConnection connection = new IServiceConnection.Stub() {
+            @Override public void connected(ComponentName name, IBinder service, IBinderSession session,
+                    boolean dead) { }
+        };
+        bound.asApp(() -> check(bound.am.bindService(bound.thread, null,
+                new Intent().setComponent(SERVICE), null, connection, Context.BIND_AUTO_CREATE,
+                OWNER, 0) == 1, "Auto-create connection must keep the service instance"));
+        bound.expire(beforeBoundTimeout);
+        check(!((Boolean) get(bound.thread.service, "startRequested")) && bound.thread.crashes == 0,
+                "A timed-out started lifetime must end while its binding keeps the instance");
+        bound.asApp(() -> check(bound.am.unbindService(connection), "Auto-create client can unbind"));
+        check(bound.thread.crashes == 1, "Tearing down the bound instance reports the missed promotion");
+
+        Harness stopped = new Harness(33, 0, BASE);
+        stopped.start(true);
+        Object beforeStop = stopped.promotionDeadline();
+        stopped.stop();
+        stopped.expire(beforeStop);
+        check(stopped.thread.crashes == 1 && stopped.promotionDeadline() == null,
+                "Explicit stop before promotion reports the failure once and removes the timer");
+
+        Harness died = new Harness(33, 0, BASE);
+        died.start(true);
+        Object beforeDeath = died.promotionDeadline();
+        set(died.process, "exiting", true);
+        call(died.services, "processDied", new Class<?>[]{died.process.getClass()}, died.process);
+        died.expire(beforeDeath);
+        check(died.promotionDeadline() == null && died.thread.crashes == 0,
+                "Process death invalidates the previous attachment's timer");
+    }
+
     public static int run(boolean parcel, String scenario) throws Exception {
         binder = parcel; checks = 0;
         try (FixtureServiceContext.Scope owned = new FixtureServiceContext.Scope()) {
@@ -382,6 +499,7 @@ public final class ForegroundServiceAdmissionTest {
             if (scenario.equals("all") || scenario.equals("permissions")) manifestPermissions();
             if (scenario.equals("all") || scenario.equals("normalization")) normalizationAndStop();
             if (scenario.equals("all") || scenario.equals("shared-uid")) sharedUidTargets();
+            if (scenario.equals("all") || scenario.equals("deadline")) promotionDeadline();
         } finally { contexts = null; }
         return checks;
     }

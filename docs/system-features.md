@@ -173,7 +173,6 @@ Not reported:
 
 | Feature | When | What backs it |
 | --- | --- | --- |
-| `android.software.app_widgets` | always | AppWidgetManager service |
 | `android.hardware.touchscreen`, `android.hardware.faketouch` | always | phone-sized window, mouse as touch (DeviceProfile); earlier decision |
 | `android.hardware.screen.portrait`, `.landscape` | always | windows rotate (docs/windows3.md) |
 | `android.hardware.touchscreen.multitouch`, `.multitouch.distinct` | Windows touch digitizer with ≥ 2 contacts (`SM_DIGITIZER` ready with integrated/external touch, `SM_MAXIMUMTOUCHES`) | WM_POINTER contacts become separate MotionEvent pointer ids (`compat/input/translate.cc`, up to 16) |
@@ -201,6 +200,7 @@ promises. Absent (c): nothing implements it.
 
 | Feature | Status | What would be needed |
 | --- | --- | --- |
+| `android.software.app_widgets` | b | Discover providers, allocate and bind widget IDs, and deliver widget updates to a host. The AppWidgetManager Binder answers empty queries today. |
 | `android.hardware.audio.low_latency` | b | Proof of the CDD's latency limits (≤ 45 ms cold output, continuous output ≤ 45 ms, round trip) with the WASAPI shared-mode mixer; measurement on real hardware |
 | `android.hardware.audio.pro` | c | low_latency, plus ≤ 20 ms round trip, USB host audio and MIDI |
 | `android.hardware.audio.spatial.headtracking.low_latency` | c | a spatializer with head tracking |
@@ -242,8 +242,8 @@ promises. Absent (c): nothing implements it.
 ## Validation
 
 - `tests/dex-services/gesher/services/PackageServiceQueriesTest.java`: the
-  production list matches this process's probes (WebView2 Runtime, hardware
-  summary, low-RAM), has exactly one OpenGL ES entry carrying
+  production list omits App Widgets and matches this process's probes (WebView2
+  Runtime, hardware summary, low-RAM), has exactly one OpenGL ES entry carrying
   `ro.opengles.version`, which is the default display's version
   (`WindowsHost.glEsVersion`; 2.0 under `GESHER_EGL_DEVICE=warp`), and builds a
   `SystemFeaturesCache`. It also runs the bounded probe with an answer, with a

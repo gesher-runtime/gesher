@@ -146,6 +146,13 @@ public final class ServiceRebindContractTest {
         }
         @Override public void onServiceDisconnected(ComponentName name) { disconnected++; }
         @Override public void onBindingDied(ComponentName name) { died++; }
+        void binderDied(IBinder service) throws Exception {
+            // The fixture uses local Binders. Drive LoadedApk's real death
+            // dispatch at its transport boundary, as the remote driver would.
+            Method death = dispatcher.getClass().getDeclaredMethod("death", ComponentName.class, IBinder.class);
+            death.setAccessible(true);
+            death.invoke(dispatcher, SERVICE, service);
+        }
         @Override public void onNullBinding(ComponentName name) {
             check(SERVICE.equals(name), "Wrong service identity in null callback"); nulls++;
             if (onNull != null) try { onNull.run(); }
@@ -258,6 +265,10 @@ public final class ServiceRebindContractTest {
             asCaller(clientPid, () -> check(am.bindService(client, null,
                     new Intent(action).setComponent(SERVICE), null, connection.callback,
                     (long) Context.BIND_AUTO_CREATE, OWNER, 0) == 1, "External client did not bind"));
+        }
+        void unbindFrom(int clientPid, Connection connection) throws Exception {
+            asCaller(clientPid, () -> check(am.unbindService(connection.callback),
+                    "External client could not release its binding"));
         }
         @SuppressWarnings("unchecked")
         void clientDied(Object record) throws Exception {
@@ -583,6 +594,88 @@ public final class ServiceRebindContractTest {
         h.unbind(freshClient); h.acknowledge(0, false); h.stop();
     }
 
+    private static void recoveringProcessDeath() throws Exception {
+        Harness h = new Harness();
+        h.start();
+        int clientPid = PID + 100;
+        AppThread client = new AppThread();
+        h.clientProcess(clientPid, client);
+        Connection active = new Connection(Runnable::run);
+        Connection pending = new Connection(Runnable::run);
+        Connection nullBinding = new Connection(Runnable::run);
+        h.bindFrom(clientPid, client, active, "active");
+        h.bindFrom(clientPid, client, pending, "pending");
+        h.bindFrom(clientPid, client, nullBinding, "null");
+        IBinder old = new Binder();
+        h.publish(0, old);
+        h.publish(2, null);
+        nullBinding.nullOnce();
+
+        h.restartProcess();
+        check(active.nulls == 0 && active.died == 0 && active.disconnected == 0,
+                "Recoverable process death fabricated a binding callback");
+        check(pending.nulls == 0 && pending.died == 0 && pending.connected == 0,
+                "Process death published an onBind result before the service had one");
+        nullBinding.nullOnce();
+        active.binderDied(old);
+        check(active.disconnected == 1, "Binder death did not disconnect the surviving client");
+        h.unbindFrom(clientPid, nullBinding);
+
+        Connection wake = new Connection(Runnable::run);
+        h.bind(wake, "active", Context.BIND_AUTO_CREATE);
+        check(h.thread.binds.size() == 2 && !h.thread.binds.get(0).rebind
+                        && !h.thread.binds.get(1).rebind,
+                "Restart did not bind the two retained intent bindings anew");
+        IBinder fresh = new Binder();
+        h.publish(0, fresh);
+        active.binderDied(old);
+        check(active.value == fresh && active.connected == 2 && active.disconnected == 1
+                        && active.nulls == 0 && active.died == 0,
+                "Surviving binding did not reconnect exactly once");
+        h.publish(1, null);
+        pending.nullOnce();
+        h.unbindFrom(clientPid, active);
+        h.unbindFrom(clientPid, pending);
+        h.unbind(wake);
+        h.stop();
+    }
+
+    private static void terminalProcessDeath(boolean forceStop, boolean binderDiedFirst) throws Exception {
+        Harness h = new Harness();
+        h.start();
+        int clientPid = PID + 100;
+        AppThread client = new AppThread();
+        Object clientRecord = h.clientProcess(clientPid, client);
+        Connection active = new Connection(Runnable::run);
+        Connection pending = new Connection(Runnable::run);
+        h.bindFrom(clientPid, client, active, "active");
+        h.bindFrom(clientPid, client, pending, "pending");
+        IBinder old = new Binder();
+        h.publish(0, old);
+        if (binderDiedFirst) {
+            active.binderDied(old);
+            check(active.disconnected == 1 && active.died == 0,
+                    "Binder death alone announced terminal invalidation");
+        }
+        if (forceStop) {
+            h.forceStopBindings();
+        } else {
+            set(h.process, "exiting", true);
+            h.restartProcess();
+        }
+
+        active.binderDied(old);
+        check(active.disconnected == 1 && active.died == 1 && active.nulls == 0,
+                "Terminal service death did not disconnect and invalidate a published binding");
+        check(pending.connected == 0 && pending.disconnected == 0 && pending.died == 1
+                        && pending.nulls == 0,
+                "Terminal service death fabricated an onBind result for a pending binding");
+        h.unbindFrom(clientPid, active);
+        check(h.connections() == 1, "Unbind retained a terminal binding registration");
+        h.clientDied(clientRecord);
+        check(h.connections() == 0, "Client death retained a terminal binding registration");
+    }
+
     public static int contracts(boolean realBinder, String scenario) throws Exception {
         binder = realBinder; checks = 0;
         if (scenario.equals("all") || scenario.equals("retained")) retained();
@@ -601,6 +694,12 @@ public final class ServiceRebindContractTest {
         if (scenario.equals("all") || scenario.equals("retired")) retiredQueued();
         if (scenario.equals("all") || scenario.equals("destroyed")) destroyed();
         if (scenario.equals("all") || scenario.equals("restarted")) restarted();
+        if (scenario.equals("all") || scenario.equals("process-death")) {
+            recoveringProcessDeath();
+            terminalProcessDeath(false, false);
+            terminalProcessDeath(false, true);
+            terminalProcessDeath(true, false);
+        }
         check(checks > 0, "No service rebind scenario selected");
         System.out.println("Service rebinding contracts passed: " + checks
                 + " checks; cached/null Binders, true/false/delayed acknowledgements, reentry, ordering, cleanup and restart");

@@ -488,6 +488,8 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         boolean deferredHistory;
         boolean historyEntry;
         boolean launchScheduled;
+        /** A launch's queued deliveries belong to an in-flight IPC until it returns. */
+        boolean launchDispatching;
         boolean launchingPaused;
         /**
          * The configuration it was launched or relaunched with, or told of last: its
@@ -3703,7 +3705,11 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                     continue;
                 }
                 ActivityRecord root = rootOf(task);
-                if (root == null) continue;
+                // A singleInstance activity owns its task. Its affinity can
+                // never make that task a destination for a different activity.
+                if (root == null || root.info.launchMode == ActivityInfo.LAUNCH_SINGLE_INSTANCE) {
+                    continue;
+                }
                 boolean component = root.component().equals(intent.getComponent());
                 if (info.launchMode == ActivityInfo.LAUNCH_SINGLE_INSTANCE_PER_TASK && !component) continue;
                 if ((flags & Intent.FLAG_ACTIVITY_NEW_DOCUMENT) != 0) {
@@ -5006,6 +5012,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
 
     void processDied(ProcessRecord app) {
         List<ActivityRecord> released = new ArrayList<>();
+        List<ActivityResultRoute> canceledResults = new ArrayList<>();
         java.util.Set<Integer> affectedTasks = new java.util.LinkedHashSet<>();
         synchronized (this) {
             if (!mProcesses.remove(app)) return;
@@ -5036,6 +5043,12 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 recordUsage(r, ActivityUsageHistory.State.TERMINATED);
                 if (r.finishing || r.state == State.DESTROYED
                         || r.savedState == null && (r.info.flags & ActivityInfo.FLAG_STATE_NOT_NEEDED) == 0) {
+                    // A removed activity cannot return its result. A finishing activity
+                    // already submitted its result and must keep that outcome.
+                    if (!r.finishing && r.state != State.DESTROYED && r.resultTo != null) {
+                        canceledResults.add(new ActivityResultRoute(r.resultTo, r.resultWho, r.requestCode));
+                        r.resultTo = null;
+                    }
                     r.state = State.DESTROYED;
                     accountActivityFinished(r);
                     mActivities.remove(r);
@@ -5062,6 +5075,8 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             updateIdle();
             notifyAll();
         }
+        // Make cancellations available before resuming or restoring the caller.
+        for (ActivityResultRoute route : canceledResults) cancelActivityResult(route);
         updateTopResumed();
         SystemServer.log(app + " died");
         if (mAm != null) mAm.processDied(app);
@@ -5308,9 +5323,10 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
         if (activityCodeCurrent(r) && !r.targetCode.componentEnabled(r.info.name, ApkPackage.ComponentKind.ACTIVITY)) {
             finishDisabledActivity(r); return;
         }
-        boolean current;
+        ProcessRecord launchProcess;
         synchronized (this) {
-            if (r.state != State.INITIALIZING || r.launchScheduled || r.finishing || r.deferredHistory
+            if (r.state != State.INITIALIZING || r.launchScheduled || r.launchDispatching
+                    || r.finishing || r.deferredHistory
                     || r.waitingFor != null || r.app == null || !r.app.ready || r.nativeUiCount > 0) return;
             if (r.app.exiting || r.app.dead
                     || r.app.enabledProcessLifetime != null && !r.app.enabledProcessLifetime.getAsBoolean()) return;
@@ -5318,73 +5334,84 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                 r.deferredHistory = true;
                 return;
             }
-            current = mActivities.contains(r) && r.state != State.DESTROYED && activityCodeCurrent(r)
+            boolean current = mActivities.contains(r) && activityCodeCurrent(r)
                     && (r.sourceLifetime == null || r.sourceLifetime.getAsBoolean());
+            launchProcess = current ? r.app : null;
             if (current) r.launchScheduled = true;
         }
-        if (!current) {
+        if (launchProcess == null) {
             mExitStatus.unavailable(r.launchGeneration); r.finishing = true; remove(r); return;
         }
         Configuration config = LocaleManagerService.configurationFor(r.info.packageName);
         Rect task;
         int rotation;
-        Bundle state;
-        PersistableBundle persistentState;
+        List<ResultInfo> results;
+        List<ReferrerIntent> newIntents;
+        boolean andResume;
+        ClientTransaction t = new ClientTransaction(launchProcess.thread);
         synchronized (this) {
+            // Process death can release the reservation while configuration is prepared.
+            if (r.app != launchProcess || r.state != State.INITIALIZING || r.finishing
+                    || launchProcess.dead || launchProcess.exiting) return;
             task = taskBoundsLocked(r.taskId);
             rotation = mTaskRotation.get(r.taskId, Surface.ROTATION_0);
             r.config = effectiveConfiguration(config, task, rotation);
             r.configPending = false;
-            state = r.savedState;
-            persistentState = r.persistentState;
-        }
-        // A task the user resized, or turned for its orientation: the task's configuration
-        // overrides the display's.
-        Configuration override = taskOverride(task, rotation, config);
-        if (rotation != Surface.ROTATION_0) {
-            SystemServer.log(r.name() + " launches in task " + r.taskId + " turned to "
-                    + TaskConfiguration.rotationName(rotation) + " (" + task.width() + "x"
-                    + task.height() + ")");
-        }
-        ActivityWindowInfo windowInfo = windowInfo(task);
-        List<ResultInfo> results = takeResults(r);
-        List<ReferrerIntent> newIntents;
-        boolean andResume;
-        synchronized (this) {
+            // A sized or rotated task overrides the display configuration.
+            Configuration override = taskOverride(task, rotation, config);
+            results = takeResults(r);
             newIntents = r.pendingNewIntents.isEmpty() ? null : new ArrayList<>(r.pendingNewIntents);
             r.pendingNewIntents.clear();
             andResume = !exactAlarmSettingsCoversTask(r.taskId) && r.chooserCoverCount == 0
                     && r.nativeUiCount == 0
                     && (!r.historyEntry || topOf(r.taskId) == r);
-        }
-        ClientTransaction t = new ClientTransaction(r.app.thread);
-        IBinder windowGrant = createActivityWindowGrant(r);
-        if (windowGrant != null) {
-            t.addTransactionItem(new GesherActivityWindowModeItem(r.token, windowGrant));
-        }
-        t.addTransactionItem(new LaunchActivityItem(r.token, r.intent,
-                System.identityHashCode(r), r.info, config, override,
-                Context.DEVICE_ID_DEFAULT, r.launchedFromPackage, null /* voiceInteractor */,
-                ActivityManager.PROCESS_STATE_TOP, state /* state */, persistentState /* persistentState */,
-                results /* pendingResults */, newIntents,
-                null /* sceneTransitionInfo */, true /* isForward */, null /* profilerInfo */,
-                new Binder() /* assistToken */, mClient.asInterface(),
-                new Binder() /* shareableActivityToken */, false /* launchedFromBubble */,
-                null /* taskFragmentToken */, r.initialCallerInfoAccessToken,
-                windowInfo, Display.DEFAULT_DISPLAY));
-        if (andResume) {
-            t.addTransactionItem(new ResumeActivityItem(r.token, true /* isForward */,
-                    false /* shouldSendCompatFakeFocus */));
-        } else {
-            t.addTransactionItem(new PauseActivityItem(r.token, false, false, false, false));
-        }
-        synchronized (this) {
+            IBinder windowGrant = createActivityWindowGrant(r);
+            if (windowGrant != null) {
+                t.addTransactionItem(new GesherActivityWindowModeItem(r.token, windowGrant));
+            }
+            t.addTransactionItem(new LaunchActivityItem(r.token, r.intent,
+                    System.identityHashCode(r), r.info, config, override,
+                    Context.DEVICE_ID_DEFAULT, r.launchedFromPackage, null /* voiceInteractor */,
+                    ActivityManager.PROCESS_STATE_TOP, r.savedState, r.persistentState, results, newIntents,
+                    null /* sceneTransitionInfo */, true /* isForward */, null /* profilerInfo */,
+                    new Binder() /* assistToken */, mClient.asInterface(),
+                    new Binder() /* shareableActivityToken */, false /* launchedFromBubble */,
+                    null /* taskFragmentToken */, r.initialCallerInfoAccessToken,
+                    windowInfo(task), Display.DEFAULT_DISPLAY));
+            if (andResume) {
+                t.addTransactionItem(new ResumeActivityItem(r.token, true /* isForward */,
+                        false /* shouldSendCompatFakeFocus */));
+            } else {
+                t.addTransactionItem(new PauseActivityItem(r.token, false, false, false, false));
+            }
+            r.launchDispatching = true;
             r.launchingPaused = !andResume;
             setState(r, State.LAUNCHING);
-            if (r.app != null && shortcutProcessCurrent(r.app)) r.app.shortcutHasShownUi = true;
+            if (shortcutProcessCurrent(launchProcess)) launchProcess.shortcutHasShownUi = true;
         }
-        schedule(r, t, andResume ? "LaunchActivityItem, ResumeActivityItem"
-                : "LaunchActivityItem, PauseActivityItem");
+        if (rotation != Surface.ROTATION_0) {
+            SystemServer.log(r.name() + " launches in task " + r.taskId + " turned to "
+                    + TaskConfiguration.rotationName(rotation) + " (" + task.width() + "x"
+                    + task.height() + ")");
+        }
+        String what = andResume ? "LaunchActivityItem, ResumeActivityItem"
+                : "LaunchActivityItem, PauseActivityItem";
+        boolean accepted = false;
+        try {
+            accepted = schedule(launchProcess, r, t, what);
+        } finally {
+            boolean retry;
+            synchronized (this) {
+                if (!accepted && !isActivityRetired(r) && !r.finishing) {
+                    // Older deliveries precede anything queued while the process was dying.
+                    if (results != null) r.pendingResults.addAll(0, results);
+                    if (newIntents != null) r.pendingNewIntents.addAll(0, newIntents);
+                }
+                r.launchDispatching = false;
+                retry = r.app != launchProcess && r.app != null && r.state == State.INITIALIZING;
+            }
+            if (retry) realStartActivity(r);
+        }
     }
 
     /** The ActivityWindowInfo of an activity in a task of {@code task} bounds (null: display). */
@@ -6272,12 +6299,18 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     }
 
     private void schedule(ActivityRecord r, ClientTransaction t, String what) {
-        if (r.app == null || r.app.thread == null) return;
-        SystemServer.log("scheduleTransaction " + what + " to " + r.name() + " in " + r.app);
+        schedule(r.app, r, t, what);
+    }
+
+    private boolean schedule(ProcessRecord target, ActivityRecord r, ClientTransaction t, String what) {
+        if (target == null || target.thread == null) return false;
+        SystemServer.log("scheduleTransaction " + what + " to " + r.name() + " in " + target);
         try {
-            r.app.thread.scheduleTransaction(t);
+            target.thread.scheduleTransaction(t);
+            return true;
         } catch (RemoteException e) {
-            SystemServer.log("scheduleTransaction to " + r.app + " failed: " + e);
+            SystemServer.log("scheduleTransaction to " + target + " failed: " + e);
+            return false;
         }
     }
 
