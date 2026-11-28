@@ -2087,6 +2087,11 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
     }
 
     @Override
+    public boolean usesAuthBroker() {
+        return true;
+    }
+
+    @Override
     public int onNetworkEvent(String event, String json) {
         if (event.equals("auth-stop")) { mAuthBridge.stop(); return 1; }
         if (event.equals("auth-destroy")) { mAuthBridge.close(); return 1; }

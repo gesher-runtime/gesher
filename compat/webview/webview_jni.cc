@@ -31,6 +31,7 @@ jclass g_host_class = nullptr;  // com.gesher.app.webview.WebView2Host
 jmethodID g_on_event = nullptr;
 jmethodID g_on_navigation_starting = nullptr;
 jmethodID g_on_network_event = nullptr;
+jmethodID g_uses_auth_broker = nullptr;
 jmethodID g_on_resource_request = nullptr;
 jmethodID g_on_bridge_call = nullptr;
 jmethodID g_on_bridge_request = nullptr;
@@ -76,8 +77,12 @@ void CheckException(JNIEnv* env) {
 
 class JavaListener final : public Listener {
  public:
-  JavaListener(JNIEnv* env, jobject peer) : peer_(env->NewGlobalRef(peer)) {}
-  bool UsesAuthBroker() const override { return true; }
+  JavaListener(JNIEnv* env, jobject peer)
+      : peer_(env->NewGlobalRef(peer)),
+        uses_auth_broker_(env->CallBooleanMethod(peer, g_uses_auth_broker) == JNI_TRUE) {
+    CheckException(env);
+  }
+  bool UsesAuthBroker() const override { return uses_auth_broker_; }
 
   void OnEvent(int32_t type, int64_t id, int32_t arg, const std::wstring& a, const std::wstring& b,
                const std::wstring& c, const std::vector<uint8_t>* bytes) override {
@@ -173,6 +178,7 @@ class JavaListener final : public Listener {
 
  private:
   jobject peer_;
+  bool uses_auth_broker_;
 };
 
 void GlobalCallback(int32_t type, int64_t id, int32_t arg, const std::wstring& a) {
@@ -538,6 +544,7 @@ extern "C" jint JNI_OnLoad_gesher_webview(JavaVM* vm, void*) {
       env->GetMethodID(c, "onNavigationStarting", "(Ljava/lang/String;ZZJ)Z");
   g_on_network_event = env->GetMethodID(c, "onNetworkEvent",
       "(Ljava/lang/String;Ljava/lang/String;)I");
+  g_uses_auth_broker = env->GetMethodID(c, "usesAuthBroker", "()Z");
   g_on_resource_request = env->GetMethodID(
       c, "onResourceRequest", "(JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;IZ)V");
   g_on_bridge_call = env->GetMethodID(
@@ -546,8 +553,8 @@ extern "C" jint JNI_OnLoad_gesher_webview(JavaVM* vm, void*) {
   g_on_bridge_request = env->GetMethodID(c, "onBridgeRequest", "(JLjava/lang/String;)V");
   g_on_global = env->GetStaticMethodID(c, "onGlobal", "(IJILjava/lang/String;)V");
   if (g_on_event == nullptr || g_on_navigation_starting == nullptr || g_on_network_event == nullptr ||
-      g_on_resource_request == nullptr || g_on_bridge_call == nullptr || g_on_global == nullptr
-      || g_on_bridge_request == nullptr) {
+      g_uses_auth_broker == nullptr || g_on_resource_request == nullptr || g_on_bridge_call == nullptr
+      || g_on_global == nullptr || g_on_bridge_request == nullptr) {
     return JNI_ERR;
   }
   if (env->RegisterNatives(c, kMethods, sizeof(kMethods) / sizeof(kMethods[0])) < 0) {

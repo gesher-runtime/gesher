@@ -76,6 +76,7 @@ public final class WebViewAuthBridgeTest {
    check(f.a.replies.size()==1&&f.b.replies.size()==1,"Identical URLs lost exact target ownership");
    f.a.replies.get(0).answer(true,"alice","secret-A");f.b.replies.get(0).answer(false,"","");f.queue.pump();check(f.responses()==2,"Independent consent replies missing");
    f.a.replies.get(0).answer(true,"duplicate","duplicate");f.queue.pump();check(f.responses()==2,"Duplicate reply reused the ticket");
+   f.binding(f.a,auth,f.session,f.context,f.binding);check(f.a.replies.size()==1,"Duplicate ticket delivered after reply");
   }
  }
  static void retirement()throws Exception {

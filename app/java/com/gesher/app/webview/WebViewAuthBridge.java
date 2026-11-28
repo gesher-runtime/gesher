@@ -4,6 +4,7 @@ package com.gesher.app.webview;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -37,6 +38,7 @@ final class WebViewAuthBridge {
         final AtomicLong generation = new AtomicLong();
         final AtomicBoolean closed = new AtomicBoolean();
         final Map<String, Reply> replies = new ConcurrentHashMap<>();
+        final Set<String> offered = ConcurrentHashMap.newKeySet();
         volatile Broker assigned;
         String target = "";
         boolean registered;
@@ -64,18 +66,18 @@ final class WebViewAuthBridge {
             });
         }
         void stop() {
-            generation.incrementAndGet(); replies.clear();
+            generation.incrementAndGet(); replies.clear(); offered.clear();
             Broker current = assigned;
             if (current != null) current.scheduler.post(() -> current.cancel(this, false));
         }
         void close() {
             if (!closed.compareAndSet(false, true)) return;
-            generation.incrementAndGet(); replies.clear();
+            generation.incrementAndGet(); replies.clear(); offered.clear();
             Broker current = assigned;
             if (current != null) current.scheduler.post(() -> current.remove(this));
         }
         void unavailable() {
-            generation.incrementAndGet(); replies.clear();
+            generation.incrementAndGet(); replies.clear(); offered.clear();
             Broker current = assigned;
             if (current != null) current.scheduler.post(current::unavailable);
         }
@@ -85,7 +87,8 @@ final class WebViewAuthBridge {
                 assigned.dispatch(object("op", "respond", "targetId", target, "ticket", ticket, "proceed", false));
                 return;
             }
-            if (replies.containsKey(ticket)) return;
+            if (offered.size() >= 512) offered.clear();
+            if (replies.containsKey(ticket) || !offered.add(ticket)) return;
             long issued = generation.get();
             AtomicBoolean answered = new AtomicBoolean();
             Broker current = assigned;
@@ -129,8 +132,8 @@ final class WebViewAuthBridge {
         final String binding = "gesherAuth_" + channel.replace("-", "");
         String epoch = "", session = "", workerTarget = "";
         long token, round;
-        int context;
-        boolean ready, starting, waking;
+        int context, wakeAttempts;
+        boolean ready, starting;
         Broker(Scheduler scheduler) { this.scheduler = scheduler; }
         void add(Endpoint endpoint) {
             if (endpoint.closed.get() || endpoints.contains(endpoint)) return;
@@ -155,7 +158,7 @@ final class WebViewAuthBridge {
                     .findFirst().orElse(null);
             if (owner == null) return;
             starting = true; ready = false;
-            waking = false;
+            wakeAttempts = 0;
             epoch = UUID.randomUUID().toString(); session = ""; workerTarget = ""; context = 0;
             long attempt = ++round;
             scheduler.later(() -> { if (attempt == round && !ready) unavailable(); }, 10000);
@@ -173,13 +176,17 @@ final class WebViewAuthBridge {
                     }
                 }
                 if (id.isEmpty()) {
-                    if (!waking) {
-                        waking = true;
+                    if (wakeAttempts == 0) {
+                        wakeAttempts = 1;
                         command(owner, "", "ServiceWorker.enable", object(), enabled ->
                                 command(owner, "", "ServiceWorker.startWorker",
                                         object("scopeURL", "chrome-extension://" + EXTENSION + "/"), woke ->
                                             scheduler.later(() -> discover(attempt), 100)));
                         return;
+                    }
+                    if (++wakeAttempts % 5 == 0) {
+                        command(owner, "", "ServiceWorker.startWorker",
+                                object("scopeURL", "chrome-extension://" + EXTENSION + "/"), woke -> {});
                     }
                     scheduler.later(() -> discover(attempt), 100);
                     return;
