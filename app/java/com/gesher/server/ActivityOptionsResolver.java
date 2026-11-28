@@ -36,6 +36,7 @@ final class ActivityOptionsResolver {
     private final Map<String, ApkPackage> mPackages;
     private final boolean mHostBrowser;
     private final ExactAlarmAccessRequests mExactAlarmSettings;
+    private final DeviceAdminRequests mDeviceAdminSettings;
 
     ActivityOptionsResolver(Map<String, ApkPackage> packages, boolean hostBrowser) {
         this(packages, hostBrowser, null);
@@ -43,9 +44,15 @@ final class ActivityOptionsResolver {
 
     ActivityOptionsResolver(Map<String, ApkPackage> packages, boolean hostBrowser,
             ExactAlarmAccessRequests exactAlarmSettings) {
+        this(packages, hostBrowser, exactAlarmSettings, null);
+    }
+
+    ActivityOptionsResolver(Map<String, ApkPackage> packages, boolean hostBrowser,
+            ExactAlarmAccessRequests exactAlarmSettings, DeviceAdminRequests deviceAdminSettings) {
         mPackages = packages;
         mHostBrowser = hostBrowser;
         mExactAlarmSettings = exactAlarmSettings;
+        mDeviceAdminSettings = deviceAdminSettings;
     }
 
     List<ResolveInfo> query(ComponentName caller, Intent[] specifics, String[] specificTypes,
@@ -166,7 +173,11 @@ final class ActivityOptionsResolver {
             ActivityInfo activity = BrowserPackageSupport.activityInfo(component.getClassName(), flags);
             return activity != null && matchesActivity(activity, flags) ? activity : null;
         }
-        if (mExactAlarmSettings != null) return mExactAlarmSettings.activityInfo(component, flags);
+        if (mExactAlarmSettings != null) {
+            ActivityInfo info = mExactAlarmSettings.activityInfo(component, flags);
+            if (info != null) return info;
+        }
+        if (mDeviceAdminSettings != null) return mDeviceAdminSettings.activityInfo(component, flags);
         return null;
     }
 
@@ -243,6 +254,10 @@ final class ActivityOptionsResolver {
         for (List<ResolveInfo> cut : cuts) results.addAll(cut);
         if (mExactAlarmSettings != null) {
             ResolveInfo nativeSettings = mExactAlarmSettings.resolve(original, type, flags);
+            if (nativeSettings != null) results.add(nativeSettings);
+        }
+        if (mDeviceAdminSettings != null) {
+            ResolveInfo nativeSettings = mDeviceAdminSettings.resolve(original, type, flags);
             if (nativeSettings != null) results.add(nativeSettings);
         }
         results.sort(ORDER);

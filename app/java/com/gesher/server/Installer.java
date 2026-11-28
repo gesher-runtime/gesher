@@ -10,6 +10,7 @@ import android.content.pm.dex.DexMetadataHelper;
 import android.content.pm.parsing.result.ParseResult;
 import android.content.pm.parsing.result.ParseTypeImpl;
 
+import com.gesher.app.HostInstallSnapshot;
 import com.gesher.app.NativeLibs;
 import com.gesher.app.PackageBundles;
 
@@ -348,13 +349,7 @@ final class Installer {
     /** Conventional companion filenames for a loose APK. */
     private static File[] companionSplits(File apk) {
         if (apk == null) return null;
-        File dir = apk.getParentFile();
-        if (dir == null) dir = apk.getAbsoluteFile().getParentFile();
-        if (dir == null) return null;
-        // Keep discovery independent of parsing: even an unreadable candidate must
-        // invalidate the base-only source cache and reach companionsOf's validation.
-        return dir.listFiles((d, name) -> (name.startsWith("split_") || name.startsWith("config."))
-                && name.endsWith(".apk") && !name.equals(apk.getName()));
+        return HostInstallSnapshot.companionSplits(apk);
     }
 
     /**
@@ -411,7 +406,13 @@ final class Installer {
         if (count == 0 && keepUnspecified) return true;
         if ((installed != null ? installed.length : 0) != count) return false;
         for (int i = 0; i < count; i++) {
-            if (!sameContent(splits[i], new File(codePath, splitFileName(splits[i])))) return false;
+            File staged = splits[i];
+            String installedName = splitFileName(staged);
+            if (!sameContent(staged, new File(codePath, installedName))
+                    || !sameMetadata(dexMetadata(staged),
+                            new File(codePath, InstallSessionMetadata.dexName(installedName)))) {
+                return false;
+            }
         }
         return true;
     }
@@ -467,7 +468,28 @@ final class Installer {
 
     /** An explicit host install verifies the APK and may refresh installer eligibility. */
     synchronized String[] install(String apk, boolean explicitInstall) throws Exception {
-        return install(apk, null, null, null, null, explicitInstall);
+        return install(apk, null, null, null, null, explicitInstall, null);
+    }
+
+    private record ConfirmedPackage(String name, long version) {}
+
+    synchronized String[] installConfirmed(String apk, String pkg, long version, String digest)
+            throws Exception {
+        if (pkg == null || pkg.isEmpty() || digest == null || !digest.matches("[0-9a-f]{64}")) {
+            throw new IllegalArgumentException("Invalid installation confirmation");
+        }
+        File source = new File(apk);
+        File owned = Files.createTempDirectory(new File(Device.dataDir(), "system").toPath(),
+                "gesher-confirmed-install-").toFile();
+        try {
+            if (!digest.equals(HostInstallSnapshot.capture(source, owned.toPath()))) {
+                throw new SecurityException("The files differ from the confirmed installation");
+            }
+            return install(new File(owned, source.getName()).getPath(), null, null, null, null,
+                    true, new ConfirmedPackage(pkg, version));
+        } finally {
+            delete(owned);
+        }
     }
 
     synchronized String[] install(String apk, InstallSessionMetadata sessionMetadata,
@@ -485,12 +507,14 @@ final class Installer {
     synchronized String[] install(String apk, InstallSessionMetadata sessionMetadata,
             PackageInstallSource installSource, java.util.Collection<String> restrictedAllowlist,
             Runnable authorize) throws Exception {
-        return install(apk, sessionMetadata, installSource, restrictedAllowlist, authorize, true);
+        return install(apk, sessionMetadata, installSource, restrictedAllowlist, authorize, true,
+                null);
     }
 
     private String[] install(String apk, InstallSessionMetadata sessionMetadata,
             PackageInstallSource installSource, java.util.Collection<String> restrictedAllowlist,
-            Runnable authorize, boolean explicitInstall) throws Exception {
+            Runnable authorize, boolean explicitInstall, ConfirmedPackage confirmation)
+            throws Exception {
         if (authorize != null) authorize.run();
         // A failed rollback is in doubt: no subsequent publication may skip it and
         // thereby turn recoverable old data into a committed deletion.
@@ -530,6 +554,10 @@ final class Installer {
             ApkPackage parsed = ApkPackage.parse(source.getAbsolutePath());
             ContactsProviderSupport.checkPackageAdmission(parsed);
             String pkg = parsed.packageName;
+            if (confirmation != null
+                    && (!confirmation.name.equals(pkg) || confirmation.version != parsed.versionCode())) {
+                throw new SecurityException("The package differs from the confirmed installation");
+            }
             if (tempDir == null) {
                 incomingSplits = companionsOf(pkg, incomingSplits);
             } else {
@@ -590,7 +618,7 @@ final class Installer {
                             sessionMetadata == null && tempDir == null)
                     && (sessionMetadata == null || sessionMetadata.matches(new File(old.codePath)))
                     && mPm.get(pkg) != null) {
-                recordSource(original, pkg, old.codePath);
+                if (confirmation == null) recordSource(original, pkg, old.codePath);
                 return unchanged(apk, pkg, ApkPackage.parseCodeDirectory(old.codePath), old,
                         installSource, restrictedAllowlist, authorize, explicitInstall);
             }
@@ -704,7 +732,7 @@ final class Installer {
             SystemServer.log(what + " " + installed.describe() + ", in " + code.getPath()
                     + (libs > 0 ? ", " + libs + " native libraries (" + abi
                             + ")" : ""));
-            recordSource(original, pkg, code.getPath());
+            if (confirmation == null) recordSource(original, pkg, code.getPath());
             mPm.packageInstalled(installed, old != null || previous != null, this);
             persistPermissionAdmission();
             return new String[] {pkg, what, code.getPath(), String.valueOf(installed.versionCode())};
@@ -1047,9 +1075,7 @@ final class Installer {
     }
 
     private static File dexMetadata(File apk) {
-        String path = apk.getPath();
-        return new File(path.endsWith(".apk") ? DexMetadataHelper.buildDexMetadataPathForApk(path)
-                : path + ".dm");
+        return HostInstallSnapshot.dexMetadata(apk);
     }
 
     private static boolean hasSigningMaterial(File apk) throws IOException {

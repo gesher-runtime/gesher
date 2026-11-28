@@ -46,6 +46,11 @@ public final class GesherService extends Binder {
     static final int SETTINGS_SHOWN = IBinder.FIRST_CALL_TRANSACTION + 13;
     static final int SETTINGS_VISIT_CLOSED = IBinder.FIRST_CALL_TRANSACTION + 14;
     static final int SET_SPECIAL_ACCESS_VISIT = IBinder.FIRST_CALL_TRANSACTION + 15;
+    static final int INSTALL_CONFIRMED = IBinder.FIRST_CALL_TRANSACTION + 16;
+    /** Saved accounts as "Base64(UTF-8 type) TAB Base64(UTF-8 name)" rows, and removing one on explicit user request. */
+    static final int LIST_ACCOUNTS = IBinder.FIRST_CALL_TRANSACTION + 17;
+    static final int REMOVE_ACCOUNT = IBinder.FIRST_CALL_TRANSACTION + 18;
+    static final int DEVICE_ADMIN = IBinder.FIRST_CALL_TRANSACTION + 19;
 
     static final String EXIT_DESCRIPTOR = "com.gesher.ILaunchExit";
     static final int EXIT_STATUS = IBinder.FIRST_CALL_TRANSACTION;
@@ -86,11 +91,19 @@ public final class GesherService extends Binder {
 
     /** What the service does; the system server implements it. */
     interface Device {
+        /** Host Settings may query/revoke, never silently activate an administrator. */
+        default boolean deviceAdmin(String packageName, boolean revoke) {
+            throw new UnsupportedOperationException("Device administrator controls unavailable");
+        }
         String[] install(String apk) throws Exception;
         /** Explicit host installation may refresh installer eligibility without replacing code. */
         default String[] install(String apk, boolean explicitInstall) throws Exception {
             if (explicitInstall) throw new UnsupportedOperationException("Explicit host installation unavailable");
             return install(apk);
+        }
+        default String[] installConfirmed(String apk, String pkg, long version, String digest)
+                throws Exception {
+            throw new UnsupportedOperationException("Confirmed host installation unavailable");
         }
         boolean uninstall(String packageName) throws Exception;
         String status();
@@ -128,6 +141,14 @@ public final class GesherService extends Binder {
         default int settingsScreensClosed(int pid, long startedAt, String[] tokens) {
             return settingsScreensClosed(tokens);
         }
+        /** Saved accounts on the device, each as Base64 UTF-8 type TAB Base64 UTF-8 name. */
+        default String[] listAccounts() {
+            throw new UnsupportedOperationException("Account management unavailable");
+        }
+        /** Removes a saved account on explicit host request; returns whether it existed. */
+        default boolean removeAccount(String type, String name) {
+            throw new UnsupportedOperationException("Account management unavailable");
+        }
         /** A call came: the device is not idle. */
         void touch();
         /** A click on a toast of {@code appId} with the toast's {@code arguments}. */
@@ -147,7 +168,7 @@ public final class GesherService extends Binder {
     @Override
     protected boolean onTransact(int code, Parcel data, Parcel reply, int flags)
             throws RemoteException {
-        if (code < INSTALL || code > SET_SPECIAL_ACCESS_VISIT) {
+        if (code < INSTALL || code > DEVICE_ADMIN) {
             return super.onTransact(code, data, reply, flags);
         }
         data.enforceInterface(DESCRIPTOR);
@@ -181,6 +202,17 @@ public final class GesherService extends Binder {
                     // An updated launcher must not mistake an older server ignoring
                     // the extension for a completed explicit reinstall.
                     if (extended) reply.writeInt(explicitInstall ? 1 : 0);
+                    return true;
+                }
+                case INSTALL_CONFIRMED: {
+                    String apk = data.readString();
+                    String pkg = data.readString();
+                    long version = data.readLong();
+                    String digest = data.readString();
+                    data.enforceNoDataAvail();
+                    String[] result = mDevice.installConfirmed(apk, pkg, version, digest);
+                    reply.writeNoException();
+                    reply.writeStringArray(result);
                     return true;
                 }
                 case UNINSTALL: {
@@ -239,6 +271,15 @@ public final class GesherService extends Binder {
                     reply.writeInt(result.taskId); reply.writeStrongBinder(result.exitReceipt);
                     return true;
                 }
+                case DEVICE_ADMIN: {
+                    String pkg = data.readString();
+                    boolean revoke = data.readBoolean();
+                    data.enforceNoDataAvail();
+                    boolean active = mDevice.deviceAdmin(pkg, revoke);
+                    reply.writeNoException();
+                    reply.writeBoolean(active);
+                    return true;
+                }
                 case SPECIAL_ACCESS: {
                     String pkg = data.readString();
                     data.enforceNoDataAvail();
@@ -281,6 +322,21 @@ public final class GesherService extends Binder {
                             : mDevice.settingsScreensClosed(pid, startedAt, tokens);
                     reply.writeNoException();
                     reply.writeInt(count);
+                    return true;
+                }
+                case LIST_ACCOUNTS: {
+                    data.enforceNoDataAvail();
+                    String[] rows = mDevice.listAccounts();
+                    reply.writeNoException();
+                    reply.writeStringArray(rows);
+                    return true;
+                }
+                case REMOVE_ACCOUNT: {
+                    String type = data.readString(), name = data.readString();
+                    data.enforceNoDataAvail();
+                    boolean removed = mDevice.removeAccount(type, name);
+                    reply.writeNoException();
+                    reply.writeBoolean(removed);
                     return true;
                 }
                 default:
@@ -375,6 +431,28 @@ public final class GesherService extends Binder {
             }
         }
 
+        public String[] installConfirmed(String apk, String pkg, long version, String digest)
+                throws RemoteException {
+            Parcel data = Parcel.obtain();
+            Parcel reply = Parcel.obtain();
+            try {
+                data.writeInterfaceToken(DESCRIPTOR);
+                data.writeString(apk);
+                data.writeString(pkg);
+                data.writeLong(version);
+                data.writeString(digest);
+                if (!mBinder.transact(INSTALL_CONFIRMED, data, reply, 0)) {
+                    throw new IllegalStateException(
+                            "Confirmed host installation unavailable; restart the Gesher device after updating");
+                }
+                reply.readException();
+                return reply.createStringArray();
+            } finally {
+                data.recycle();
+                reply.recycle();
+            }
+        }
+
         public boolean uninstall(String packageName) throws RemoteException {
             Parcel reply = call(UNINSTALL, packageName);
             try {
@@ -455,6 +533,19 @@ public final class GesherService extends Binder {
         private static UnsupportedOperationException olderDevice() {
             return new UnsupportedOperationException("The running Gesher device does not support"
                     + " this; restart it (gesher-app shutdown) to use the installed version");
+        }
+
+        /** Queries current enrollment, optionally revoking it; never grants administration. */
+        public boolean deviceAdmin(String packageName, boolean revoke) throws RemoteException {
+            Parcel data = Parcel.obtain(), reply = Parcel.obtain();
+            try {
+                data.writeInterfaceToken(DESCRIPTOR);
+                data.writeString(java.util.Objects.requireNonNull(packageName));
+                data.writeBoolean(revoke);
+                if (!mBinder.transact(DEVICE_ADMIN, data, reply, 0)) throw olderDevice();
+                reply.readException();
+                return reply.readBoolean();
+            } finally { data.recycle(); reply.recycle(); }
         }
 
         /** The installed app's special access switches: rows of "op-name TAB allowed|denied". */
@@ -599,6 +690,40 @@ public final class GesherService extends Binder {
                 LaunchExit result = new LaunchExit(reply.readInt(), reply.readBoolean(), reply.readInt());
                 reply.enforceNoDataAvail();
                 return result;
+            } finally {
+                data.recycle();
+                reply.recycle();
+            }
+        }
+
+        /** Saved accounts on the device, each formatted as Base64 UTF-8 type TAB Base64 UTF-8 name. */
+        public String[] listAccounts() throws RemoteException {
+            Parcel data = Parcel.obtain();
+            Parcel reply = Parcel.obtain();
+            try {
+                data.writeInterfaceToken(DESCRIPTOR);
+                if (!mBinder.transact(LIST_ACCOUNTS, data, reply, 0)) throw olderDevice();
+                reply.readException();
+                String[] rows = reply.createStringArray();
+                if (rows == null) throw olderDevice();
+                return rows;
+            } finally {
+                data.recycle();
+                reply.recycle();
+            }
+        }
+
+        /** Removes a saved account on explicit host request; returns whether it existed. */
+        public boolean removeAccount(String type, String name) throws RemoteException {
+            Parcel data = Parcel.obtain();
+            Parcel reply = Parcel.obtain();
+            try {
+                data.writeInterfaceToken(DESCRIPTOR);
+                data.writeString(java.util.Objects.requireNonNull(type));
+                data.writeString(java.util.Objects.requireNonNull(name));
+                if (!mBinder.transact(REMOVE_ACCOUNT, data, reply, 0)) throw olderDevice();
+                reply.readException();
+                return reply.readBoolean();
             } finally {
                 data.recycle();
                 reply.recycle();

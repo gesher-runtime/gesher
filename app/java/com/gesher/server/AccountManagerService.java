@@ -57,8 +57,9 @@ import java.util.concurrent.TimeUnit;
  *
  * <p>Account secrets belong to their installed authenticator's code identity. Visible
  * clients request real tokens from that authenticator; grants are scoped to client code
- * identity and custom-token expiry. The synthetic Google fallback exists only without
- * an installed GMS package. Apps' own account types work as on Android: {@code addAccount}, {@code hasFeatures} and {@code getAccountsByFeatures}
+ * identity and custom-token expiry. No account exists that an authenticator did not add:
+ * without microG there is no Google authenticator, so no Google account or token
+ * (issue #335). Apps' own account types work as on Android: {@code addAccount}, {@code hasFeatures} and {@code getAccountsByFeatures}
  * go to the type's authenticator (the app's service for
  * {@link AccountManager#ACTION_AUTHENTICATOR_INTENT}, its type in the
  * {@code account-authenticator} XML of its meta-data), bound through the activity manager;
@@ -69,7 +70,12 @@ import java.util.concurrent.TimeUnit;
 public final class AccountManagerService extends IAccountManager.Default {
     private static final String TAG = "accounts: ";
     private static final String GOOGLE_TYPE = "com.google";
-    private static final Account DEFAULT_ACCOUNT = new Account("user@gesher.local", GOOGLE_TYPE);
+    /**
+     * The Google account Gesher once reported without an authenticator. It was never
+     * persisted in the account store, but apps could store sync settings for it; those
+     * are retired at start ({@link #retireSyntheticAccountResidue}).
+     */
+    private static final Account RETIRED_SYNTHETIC_ACCOUNT = new Account("user@gesher.local", GOOGLE_TYPE);
     private static final String ANDROID_NS = "http://schemas.android.com/apk/res/android";
     /** AOSP Session budget, including binding and any login Activity continuation. */
     private static final long AUTHENTICATOR_TIMEOUT_MILLIS = TimeUnit.MINUTES.toMillis(15);
@@ -167,13 +173,19 @@ public final class AccountManagerService extends IAccountManager.Default {
     private java.util.function.BiConsumer<Set<Account>, Set<Account>> mRetireSync =
             (removed, retained) -> { };
     private State mBeforeMutation;
+    // Durable per-account removal intent. Keep the entry sealed until sync cleanup
+    // commits, so neither a restart nor a same-name re-add inherits its sync state.
+    private final Set<Account> mPendingHostRemovals = new HashSet<>();
+    private final Object mHostRemovalLock = new Object();
 
     private static final class State {
         final Map<Account, Entry> accounts = new LinkedHashMap<>();
         final String legacy;
         final Set<String> pendingOwnerRemovals;
-        State(Map<Account, Entry> source, String legacy, Set<String> pendingOwnerRemovals) {
+        final Set<Account> pendingHostRemovals;
+        State(Map<Account, Entry> source, String legacy, Set<String> pendingOwnerRemovals, Set<Account> pendingHostRemovals) {
             this.legacy = legacy;
+            this.pendingHostRemovals = new HashSet<>(pendingHostRemovals);
             this.pendingOwnerRemovals = new HashSet<>(pendingOwnerRemovals);
             for (Map.Entry<Account, Entry> item : source.entrySet()) {
                 Entry old = item.getValue(), copy = new Entry();
@@ -192,7 +204,7 @@ public final class AccountManagerService extends IAccountManager.Default {
 
     private void beginMutation() {
         if (mBeforeMutation == null) {
-            mBeforeMutation = new State(mAccounts, mUnclaimedLegacy, mPendingOwnerRemovals);
+            mBeforeMutation = new State(mAccounts, mUnclaimedLegacy, mPendingOwnerRemovals, mPendingHostRemovals);
         }
     }
     // Calls to authenticators wait on their binding and answer: off the binder threads.
@@ -227,11 +239,6 @@ public final class AccountManagerService extends IAccountManager.Default {
         mAm = am;
         mPm = pm;
         mCallers = am != null ? am.callers() : new CallerIdentity(pm, null);
-        if (pm.get(GmsPackageSupport.PACKAGE_GMS) == null) {
-            Entry dummy = new Entry();
-            dummy.password = "dummy_password";
-            mAccounts.put(DEFAULT_ACCOUNT, dummy);
-        }
         if (persistent) load();
         else mStoreWriter = values -> { /* Stand-in accounts live only in this process. */ };
         if (am != null) am.setAccountManager(this);
@@ -248,6 +255,29 @@ public final class AccountManagerService extends IAccountManager.Default {
 
     void setSyncRetirement(java.util.function.BiConsumer<Set<Account>, Set<Account>> retire) {
         mRetireSync = retire;
+    }
+
+    /**
+     * At start: remove what apps stored for {@link #RETIRED_SYNTHETIC_ACCOUNT} (its sync
+     * settings and periodic syncs), as Android retires a removed account's sync state.
+     * An account of that name that an authenticator really added keeps its settings.
+     */
+    void retireSyntheticAccountResidue() {
+        try { reconcileHostRemovals(); }
+        catch (IllegalStateException e) {
+            SystemServer.log(TAG + "host account retirement remains sealed for retry: " + e);
+        }
+        Set<Account> retained;
+        synchronized (this) {
+            if (mAccounts.containsKey(RETIRED_SYNTHETIC_ACCOUNT)) return;
+            retained = new HashSet<>(mAccounts.keySet());
+        }
+        try {
+            mRetireSync.accept(Set.of(RETIRED_SYNTHETIC_ACCOUNT), retained);
+        } catch (IllegalStateException e) {
+            // The settings stay for the next start; no account or token depends on them.
+            SystemServer.log(TAG + "retired account sync settings not removed yet: " + e);
+        }
     }
 
     /** Before package publication, seal the intent to remove owned accounts and revoke client grants. */
@@ -330,6 +360,9 @@ public final class AccountManagerService extends IAccountManager.Default {
 
     /** Called with this locked. Pending accounts remain sealed for a possible registry rollback. */
     private boolean retiring(Entry entry) {
+        if (entry != null) for (Account pending : mPendingHostRemovals) {
+            if (mAccounts.get(pending) == entry) return true;
+        }
         return entry != null && mPendingOwnerRemovals.contains(entry.owner)
                 && (mCommittedOwnerRemovals.contains(entry.owner)
                         || mPm.isRemovalPending(entry.owner) || mPm.get(entry.owner) == null);
@@ -509,14 +542,6 @@ public final class AccountManagerService extends IAccountManager.Default {
                 && !mPm.isRemovalPending(recipient.name) && mPm.get(recipient.name) == current;
     }
 
-    private static boolean synthetic(Account account, Entry e) {
-        return DEFAULT_ACCOUNT.equals(account) && e != null && e.owner == null && e.ownerIdentity == null;
-    }
-
-    private synchronized boolean dummy(Account account) {
-        return synthetic(account, mAccounts.get(account)) && mPm.get(GmsPackageSupport.PACKAGE_GMS) == null;
-    }
-
     private boolean owns(Caller c, Entry e) {
         return !retiring(e) && (c.system || e != null && c.name != null && c.code != null
                 && c.name.equals(e.owner) && c.code.equals(e.ownerIdentity));
@@ -609,7 +634,6 @@ public final class AccountManagerService extends IAccountManager.Default {
     }
 
     private boolean visible(Caller c, Account account, Entry e) {
-        if (dummy(account)) return true;
         int value = visibility(c, e);
         return value == AccountManager.VISIBILITY_VISIBLE
                 || value == AccountManager.VISIBILITY_USER_MANAGED_VISIBLE;
@@ -694,7 +718,7 @@ public final class AccountManagerService extends IAccountManager.Default {
             if (retiring(e) || accountType != null && !accountType.equals(a.type)) continue;
             if (!c.system && !owns(c, e)
                     && (!packageName.equals(c.name) || !visible(c, a, e))) continue;
-            if (!dummy(a)) result.put(a.name, visibility(target, e));
+            result.put(a.name, visibility(target, e));
         }
         return result;
     }
@@ -827,7 +851,6 @@ public final class AccountManagerService extends IAccountManager.Default {
         List<Account> list = new ArrayList<>();
         for (Map.Entry<Account, Entry> item : mAccounts.entrySet()) {
             Account a = item.getKey();
-            if (synthetic(a, item.getValue()) && !dummy(a)) continue;
             if ((type == null || type.equals(a.type)) && visible(c, a, item.getValue())) list.add(a);
         }
         return list.toArray(new Account[0]);
@@ -848,7 +871,7 @@ public final class AccountManagerService extends IAccountManager.Default {
     synchronized Account[] syncableAccounts() {
         List<Account> list = new ArrayList<>();
         for (Map.Entry<Account, Entry> item : mAccounts.entrySet()) {
-            if (!synthetic(item.getKey(), item.getValue()) && !retiring(item.getValue())) {
+            if (!retiring(item.getValue())) {
                 list.add(item.getKey());
             }
         }
@@ -869,6 +892,7 @@ public final class AccountManagerService extends IAccountManager.Default {
     private boolean addOwnedAccount(Account account, String password, Bundle extras,
             Map initialVisibility, String opPackageName) {
         if (account == null) return false;
+        reconcileHostRemovals();
         Caller c = caller(opPackageName);
         Authenticator owner = authenticator(account.type);
         if (owner == null) throw new SecurityException("No trusted authenticator for account type");
@@ -886,7 +910,7 @@ public final class AccountManagerService extends IAccountManager.Default {
             if (ownerIdentity == null || !c.system && (!ownerName.equals(c.name) || !ownerIdentity.equals(c.code))) {
                 throw new SecurityException("Only a current authenticator can create its accounts");
             }
-            if (mAccounts.containsKey(account)) return false;
+            if (mAccounts.containsKey(account) || mPendingHostRemovals.contains(account)) return false;
             Entry e = new Entry(); e.owner = ownerName; e.ownerIdentity = ownerIdentity; e.password = password;
             if (extras != null) {
                 for (String key : extras.keySet()) {
@@ -915,7 +939,6 @@ public final class AccountManagerService extends IAccountManager.Default {
     @Override
     public boolean removeAccountExplicitly(Account account) {
         if (account == null) return false;
-        synchronized (this) { if (synthetic(account, mAccounts.get(account))) return false; }
         AccountChange change;
         synchronized (this) {
             Entry removed = mAccounts.get(account); requireOwner(caller(null), removed);
@@ -925,6 +948,161 @@ public final class AccountManagerService extends IAccountManager.Default {
             beginMutation(); mAccounts.remove(account); save();
         }
         deliverChange(change); return true;
+    }
+
+    /** Host Control Center / CLI: sorted Base64 UTF-8 type/name pairs, separated by a tab. */
+    synchronized String[] listAccountsForHost() {
+        List<Account> visible = new ArrayList<>();
+        for (Map.Entry<Account, Entry> item : mAccounts.entrySet()) {
+            if (!retiring(item.getValue())) visible.add(item.getKey());
+        }
+        visible.sort(java.util.Comparator.comparing((Account a) -> a.type).thenComparing(a -> a.name));
+        String[] rows = new String[visible.size()];
+        for (int i = 0; i < visible.size(); i++) {
+            Account account = visible.get(i);
+            rows[i] = encodeAccountField(account.type) + "\t" + encodeAccountField(account.name);
+        }
+        return rows;
+    }
+
+    private static String encodeAccountField(String value) {
+        try {
+            java.nio.ByteBuffer utf8 = java.nio.charset.StandardCharsets.UTF_8.newEncoder()
+                    .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+                    .encode(java.nio.CharBuffer.wrap(value));
+            byte[] bytes = new byte[utf8.remaining()];
+            utf8.get(bytes);
+            return Base64.getEncoder().encodeToString(bytes);
+        } catch (java.nio.charset.CharacterCodingException e) {
+            throw new IllegalStateException("Account identity cannot be encoded as UTF-8", e);
+        }
+    }
+
+    /** User removal follows the authenticator's denial, error and Activity continuation. */
+    boolean removeAccountForHost(String type, String name) {
+        if (type == null || type.isEmpty() || name == null || name.isEmpty()) {
+            throw new IllegalArgumentException("Account type and name are required");
+        }
+        Account account = new Account(name, type);
+        boolean pending;
+        synchronized (this) { pending = mPendingHostRemovals.contains(account); }
+        if (pending) { reconcileHostRemovals(); return true; }
+        final Entry expected;
+        final Authenticator owner = authenticator(type);
+        synchronized (this) {
+            expected = mAccounts.get(account);
+            if (expected == null || retiring(expected)) return false;
+            if (owner == null || !owner.service.getPackageName().equals(expected.owner)
+                    || !expected.ownerIdentity.equals(packageIdentity(expected.owner))) {
+                throw new IllegalStateException("Account authenticator unavailable");
+            }
+        }
+        HostRemoval removal = new HostRemoval(account, expected, owner);
+        Answer answer = call(owner, (auth, r) -> auth.getAccountRemovalAllowed(r, account),
+                null, removal.response, removal.current);
+        return removal.await(answer);
+    }
+
+    /** The host's authenticated removal session, including the authenticator Activity. */
+    private final class HostRemoval {
+        final Account account;
+        final Authenticator owner;
+        final CountDownLatch finished = new CountDownLatch(1);
+        final java.util.concurrent.atomic.AtomicBoolean removed = new java.util.concurrent.atomic.AtomicBoolean();
+        final java.util.concurrent.atomic.AtomicReference<RuntimeException> failure = new java.util.concurrent.atomic.AtomicReference<>();
+        final java.util.function.BooleanSupplier current;
+        final IAccountManagerResponse response;
+
+        HostRemoval(Account account, Entry expected, Authenticator owner) {
+            this.account = account;
+            this.owner = owner;
+            current = () -> {
+                synchronized (AccountManagerService.this) {
+                    return mAccounts.get(account) == expected && !retiring(expected) && authenticatorUnchanged(owner);
+                }
+            };
+            response = new IAccountManagerResponse.Stub() {
+                @Override public void onResult(Bundle result) {
+                    try {
+                        Intent intent = result.getParcelable(AccountManager.KEY_INTENT, Intent.class);
+                        if (intent != null) {
+                            long identity = Binder.clearCallingIdentity();
+                            try {
+                                if (mAm == null || mAm.startActivityFor(owner.service.getPackageName(), intent, null, current) < 0) {
+                                    failure.set(new IllegalStateException("Account removal activity could not be opened"));
+                                    finished.countDown();
+                                }
+                            } finally { Binder.restoreCallingIdentity(identity); }
+                            return;
+                        }
+                        if (!result.containsKey(AccountManager.KEY_BOOLEAN_RESULT)) {
+                            throw new IllegalStateException("Authenticator did not authorize account removal");
+                        }
+                        if (!result.getBoolean(AccountManager.KEY_BOOLEAN_RESULT)) {
+                            throw new IllegalStateException("Authenticator denied account removal");
+                        }
+                        if (!current.getAsBoolean()) throw new IllegalStateException("Account changed during removal");
+                        removed.set(commitHostAccountRemoval(account, expected));
+                    } catch (RuntimeException e) { failure.set(e); }
+                    finished.countDown();
+                }
+                @Override public void onError(int code, String message) {
+                    failure.set(new IllegalStateException("Account removal failed (" + code + "): " + message));
+                    finished.countDown();
+                }
+            };
+        }
+
+        boolean await(Answer answer) {
+            // A successful commit removes the original Entry, but must still reach the host.
+            answer.deliverToChooser(response, value -> current.getAsBoolean()
+                    ? validatedResult(owner, value, account) : null, finished,
+                    removed::get, () -> removed.get() || current.getAsBoolean());
+            if (failure.get() != null) throw failure.get();
+            if (!removed.get()) throw new IllegalStateException("Account removal was canceled or the account changed");
+            return true;
+        }
+    }
+
+    /** Commit only the exact account generation the authenticator approved. */
+    private boolean commitHostAccountRemoval(Account account, Entry expected) {
+        synchronized (this) {
+            if (mAccounts.get(account) != expected || retiring(expected)) return false;
+            beginMutation();
+            mPendingHostRemovals.add(account);
+            save();
+        }
+        invalidateAccountListCache();
+        invalidateAccountUserDataCache();
+        reconcileHostRemovals();
+        return true;
+    }
+
+    /** Never hold the accounts monitor while entering SyncManager (it calls back here). */
+    private void reconcileHostRemovals() {
+        synchronized (mHostRemovalLock) {
+            Set<Account> removed, retained;
+            synchronized (this) {
+                if (mPendingHostRemovals.isEmpty()) return;
+                removed = new HashSet<>(mPendingHostRemovals);
+                retained = new HashSet<>(mAccounts.keySet());
+                retained.removeAll(removed);
+            }
+            mRetireSync.accept(removed, retained);
+            List<AccountChange> changes = new ArrayList<>();
+            synchronized (this) {
+                beginMutation();
+                for (Account account : removed) {
+                    Entry entry = mAccounts.get(account);
+                    if (entry != null) changes.add(captureChange(account, true, entry, true));
+                    mAccounts.remove(account);
+                }
+                mPendingHostRemovals.removeAll(removed);
+                save();
+            }
+            enqueueChanges(changes);
+        }
     }
 
     @Override
@@ -1061,10 +1239,19 @@ public final class AccountManagerService extends IAccountManager.Default {
         if (account == null || authTokenType == null) {
             error(response, AccountManager.ERROR_CODE_BAD_ARGUMENTS, "An account and token type are required"); return;
         }
+        boolean known;
         synchronized (this) {
             Entry e = mAccounts.get(account);
-            if (dummy(account)) { reply(response, tokenResult(account, dummyToken(account))); return; }
-            if (e == null || !visible(c, account, e)) throw new SecurityException("Account is not visible to this caller");
+            known = e != null && visible(c, account, e);
+        }
+        if (!known) {
+            // Android binds the type's authenticator before it reads anything about the
+            // account (AccountManagerService.Session.bind): with none, the request fails
+            // with "bind failure", which AccountManager reports as AuthenticatorException.
+            if (authenticator(account.type) == null) {
+                error(response, AccountManager.ERROR_CODE_REMOTE_EXCEPTION, "bind failure"); return;
+            }
+            throw new SecurityException("Account is not visible to this caller");
         }
         mCalls.execute(() -> {
             Authenticator a = authenticator(account.type);
@@ -1122,13 +1309,8 @@ public final class AccountManagerService extends IAccountManager.Default {
         });
     }
 
-    private static String dummyToken(Account account) {
-        return "dummy_token_gesher_" + account.name.replace("@", "_at_");
-    }
-
     @Override
     public synchronized String peekAuthToken(Account account, String authTokenType) {
-        if (dummy(account)) return dummyToken(account);
         Entry e = mAccounts.get(account); requireOwner(caller(null), e);
         return e.tokens.get(authTokenType);
     }
@@ -1136,7 +1318,6 @@ public final class AccountManagerService extends IAccountManager.Default {
     @Override
     public synchronized String getPassword(Account account) {
         Entry e = mAccounts.get(account);
-        if (dummy(account)) return e != null ? e.password : null;
         requireOwner(caller(null), e); return e.password;
     }
 
@@ -1152,7 +1333,6 @@ public final class AccountManagerService extends IAccountManager.Default {
     @Override
     public synchronized String getUserData(Account account, String key) {
         Entry e = mAccounts.get(account);
-        if (dummy(account)) return e != null ? e.data.getOrDefault(key, "dummy_user_data") : null;
         requireOwner(caller(null), e); return e.data.get(key);
     }
 
@@ -1320,7 +1500,7 @@ public final class AccountManagerService extends IAccountManager.Default {
 
     private Boolean hasFeatures(Account account, String[] features) {
         if (features == null || features.length == 0) return exists(account);
-        if (!exists(account) || DEFAULT_ACCOUNT.equals(account)) return false;
+        if (!exists(account)) return false;
         Authenticator a = authenticator(account.type);
         if (a == null) return false;
         synchronized (this) {
@@ -2142,6 +2322,12 @@ public final class AccountManagerService extends IAccountManager.Default {
     /** Load the protected data only after the store has authenticated it. */
     private void loadProtectedState(Properties p) {
         mUnclaimedLegacy = p.getProperty("unclaimedLegacy");
+        for (int i = 0; i < count(p, "hostRemoval.count"); i++) {
+            String name = p.getProperty("hostRemoval." + i + ".name");
+            String type = p.getProperty("hostRemoval." + i + ".type");
+            if (name == null || type == null) throw new IllegalStateException("Invalid host account removal record");
+            mPendingHostRemovals.add(new Account(name, type));
+        }
         boolean legacyPreviousName = !"1".equals(p.getProperty(PREVIOUS_NAME_RECORD));
         for (int i = 0; i < count(p, "pendingRemoval.count"); i++) {
             String name = p.getProperty("pendingRemoval." + i);
@@ -2202,11 +2388,16 @@ public final class AccountManagerService extends IAccountManager.Default {
             Properties p = new Properties();
             if (mUnclaimedLegacy != null) p.setProperty("unclaimedLegacy", mUnclaimedLegacy);
             int i = 0;
+            for (Account pending : mPendingHostRemovals) {
+                p.setProperty("hostRemoval." + i + ".name", pending.name);
+                p.setProperty("hostRemoval." + i + ".type", pending.type); i++;
+            }
+            p.setProperty("hostRemoval.count", Integer.toString(i));
+            i = 0;
             for (String pending : mPendingOwnerRemovals) p.setProperty("pendingRemoval." + i++, pending);
             p.setProperty("pendingRemoval.count", Integer.toString(i));
             i = 0;
             for (Map.Entry<Account, Entry> item : mAccounts.entrySet()) {
-                if (synthetic(item.getKey(), item.getValue())) continue;
                 String prefix = i + "."; Entry e = item.getValue();
                 p.setProperty(prefix + "name", item.getKey().name);
                 p.setProperty(prefix + "type", item.getKey().type);
@@ -2254,6 +2445,7 @@ public final class AccountManagerService extends IAccountManager.Default {
             mAccounts.clear(); mAccounts.putAll(before.accounts);
             mUnclaimedLegacy = before.legacy;
             mPendingOwnerRemovals.clear(); mPendingOwnerRemovals.addAll(before.pendingOwnerRemovals);
+            mPendingHostRemovals.clear(); mPendingHostRemovals.addAll(before.pendingHostRemovals);
             mBeforeMutation = null;
             throw new IllegalStateException("Cannot save protected account storage", e);
         }

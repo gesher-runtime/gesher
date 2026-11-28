@@ -553,8 +553,28 @@ public final class SystemServer {
         }
 
         @Override
+        public String[] installConfirmed(String apk, String pkg, long version, String digest)
+                throws Exception {
+            return mInstaller.installConfirmed(apk, pkg, version, digest);
+        }
+
+        @Override
         public boolean uninstall(String packageName) throws Exception {
             return mInstaller.uninstall(packageName);
+        }
+
+        @Override
+        public boolean deviceAdmin(String packageName, boolean revoke) {
+            if (packageName == null || mServices.pm.get(packageName) == null)
+                throw new IllegalArgumentException("Package is not installed");
+            DeviceAdminPolicyService policy = mServices.pm.deviceAdminPolicy();
+            java.util.List<android.content.ComponentName> admins = policy.getActiveAdmins(0);
+            if (admins == null) return false;
+            for (android.content.ComponentName admin : admins) {
+                if (!packageName.equals(admin.getPackageName())) continue;
+                if (revoke) policy.revoke(admin);
+            }
+            return policy.packageHasActiveAdmins(packageName, 0);
         }
 
         @Override
@@ -592,6 +612,18 @@ public final class SystemServer {
         @Override
         public int settingsScreensClosed(int pid, long startedAt, String[] tokens) {
             return mServices.atm.settingsScreensClosed(pid, startedAt, tokens);
+        }
+
+        @Override
+        public String[] listAccounts() {
+            return mServices.accounts.listAccountsForHost();
+        }
+
+        @Override
+        public boolean removeAccount(String type, String name) {
+            boolean removed = mServices.accounts.removeAccountForHost(type, name);
+            if (removed) log("account removed: " + type + " (host request)");
+            return removed;
         }
 
         @Override

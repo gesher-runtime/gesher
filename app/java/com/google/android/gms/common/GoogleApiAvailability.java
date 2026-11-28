@@ -49,8 +49,12 @@ public class GoogleApiAvailability extends GoogleApiAvailabilityLight {
         return builder.create();
     }
 
+    /** Completes only when Play services is available; this fixture installs nothing. */
     public Task<Void> makeGooglePlayServicesAvailable(Activity activity) {
-        return Tasks.forResult(null);
+        int code = isGooglePlayServicesAvailable(activity);
+        if (code == ConnectionResult.SUCCESS) return Tasks.forResult(null);
+        return Tasks.forException(new com.google.android.gms.common.api.ApiException(
+                new com.google.android.gms.common.api.Status(code, getErrorString(code))));
     }
 
     public void showErrorNotification(Context context, int errorCode) {

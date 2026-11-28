@@ -49,6 +49,8 @@
         <activity android:name=".NetJobActivity" android:exported="true" />
         <activity android:name=".AccountActivity" android:exported="true" />
         <activity android:name=".AccountTokenActivity" android:exported="false" />
+        <activity android:name=".AccountContinuationActivity" android:exported="true" />
+        <activity android:name=".AccountContinuationActivity$Private" android:exported="false" />
         <service android:name=".PrivateAccountService" android:exported="false" />
         <service android:name=".TestPrivateAuthenticator" android:exported="false">
             <intent-filter><action android:name="android.accounts.AccountAuthenticator" /></intent-filter>

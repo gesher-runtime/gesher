@@ -59,7 +59,7 @@ def host_test():
         subprocess.run([java, '-cp', str(cache), 'BluetoothSnapshotTest'], check=True, timeout=20)
 
 
-def native_test(launcher):
+def native_test(launcher, long_report=False):
     from ctypes import wintypes as w
     u = ctypes.WinDLL('user32', use_last_error=True)
     callback = ctypes.WINFUNCTYPE(w.BOOL, w.HWND, w.LPARAM)
@@ -70,6 +70,8 @@ def native_test(launcher):
                                     w.UINT, w.UINT, ctypes.POINTER(ctypes.c_size_t)]
     u.SendMessageTimeoutW.restype = w.LPARAM
     u.GetClassNameW.argtypes = [w.HWND, w.LPWSTR, ctypes.c_int]
+    u.GetDlgItem.argtypes = [w.HWND, ctypes.c_int]
+    u.GetDlgItem.restype = w.HWND
     u.IsWindowVisible.argtypes = [w.HWND]
     u.PostMessageW.argtypes = [w.HWND, w.UINT, w.WPARAM, w.LPARAM]
     expected = {'generic': ('because of an error', 'עקב שגיאה'),
@@ -79,6 +81,8 @@ def native_test(launcher):
     for lang in ('en', 'he'):
         for kind, texts in expected.items():
             package, log, event = 'fixture.pkg{1}', 'C:\\תיקייה עם רווחים\\app{0}.log', 'event{0}'
+            if long_report:
+                log = 'C:\\' + ('תיקייה עם רווחים\\' * 80) + 'app{0}.log'
             env = dict(os.environ, GESHER_LOCALES=lang)
             p = subprocess.Popen([str(launcher), '--app-crash', package, kind, log, event], env=env)
             found = []
@@ -126,6 +130,18 @@ def native_test(launcher):
                     time.sleep(.02)
                 assert found, (lang, kind, 'dialog not shown')
                 assert ready and all(part in text for part in required), (lang, kind, text)
+                # Inspect what both native text controls actually receive, not
+                # only whether the arguments occur somewhere in the message.
+                assert '\u2068' not in text and '\u2069' not in text, (lang, kind, text)
+                for value in (package, log, event):
+                    assert '\u202a' + value + '\u202c' in text, (lang, kind, value)
+                body = u.GetDlgItem(hwnd, 1901)  # GESHER_HOST_MESSAGE_TEXT
+                name = ctypes.create_unicode_buffer(256)
+                u.GetClassNameW(body, name, len(name))
+                if long_report:
+                    assert name.value == 'Edit', name.value
+                elif kind == 'generic':
+                    assert name.value == 'Static', name.value
                 # Verify the real Hebrew text here; the native prompt and
                 # generated catalog tests also check RTL language selection.
                 assert u.PostMessageW(hwnd, 0x10, 0, 0)  # WM_CLOSE: dismiss the notice
@@ -136,7 +152,8 @@ def native_test(launcher):
                     p.wait()
     for args in ([], ['pkg'], ['pkg', 'unknown', 'log', 'event'], ['', 'generic', 'log', 'event'], ['pkg', 'generic', 'log']):
         assert subprocess.run([str(launcher), '--app-crash', *args], timeout=5).returncode == 1
-    print('PASS: 8 actual Windows crash dialogs, literal Unicode arguments, Hebrew and malformed arguments')
+    print('PASS: 8 actual Windows crash dialogs (%s), literal Unicode arguments, Hebrew and malformed arguments'
+          % ('scrolling EDIT' if long_report else 'ordinary text'))
 
 
 if __name__ == '__main__':
@@ -146,3 +163,4 @@ if __name__ == '__main__':
     host_test()
     if args.launcher:
         native_test(args.launcher.resolve())
+        native_test(args.launcher.resolve(), long_report=True)

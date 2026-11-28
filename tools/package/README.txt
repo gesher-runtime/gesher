@@ -97,9 +97,14 @@ Without the device, the app alone in one process with stand-in services:
 
     gesher-app my.apk --single-process
 
-Double-clicking an .apk file runs it with gesher-app too, unless another
-program already opens .apk files; then use "Open with" (the Gesher entry
-runs gesher-app.cmd).
+Double-clicking an .apk file (or a split bundle: .xapk, .apks, .apkm,
+.apk+) first asks: a window shows the app's icon, name and version with
+Install (Update, when another version is installed) and Cancel. Nothing is
+installed until you click Install. Check "Create a desktop shortcut" if you
+want one on the desktop as well as in the Start menu. Once it is installed,
+click Open to start the app, or Done to close the window. If the same
+version is already installed, the app simply opens. If another program
+already opens .apk files, use "Open with" (the Gesher entry).
 
 Web pages in apps (WebView)
 ---------------------------

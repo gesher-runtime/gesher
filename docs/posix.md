@@ -219,6 +219,14 @@ closed three of this layer's leftovers:
   a 64-bit device has its linker; `/proc/self/maps` and `/proc/self/fd` name
   that file `/system/bin/linker64`, as `realpath` does; changes through that
   name fail with `EROFS`.
+  For other mapped files, a Windows directory containing whitespace is shown
+  through its existing 8.3 alias when Windows provides one without whitespace;
+  the library's original basename stays intact. This lets native symbol
+  resolvers that read the pathname with `%s` find the real file even under a
+  Windows profile containing a space (issue #649). `map_files` uses the same
+  pathname, which opens the same backing file. If directory aliases are
+  unavailable, the long name remains; whitespace-sensitive resolvers may still
+  fail on those volumes.
 - An fd open on a `/proc` (or `/sys`) name is a snapshot in an anonymous file
   that carries the name's Linux path (the extended attribute
   `GESHER.PROCFS`): `fstat` reports what `stat` of the name does (size 0,

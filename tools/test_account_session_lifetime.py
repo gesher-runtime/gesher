@@ -43,6 +43,8 @@ def main():
                         str(ROOT/'tests/account-session/AccountSessionLifetimeHost.java'),
                         str(ROOT/'tests/account-session/AccountSessionTimeoutHost.java'),
                         str(ROOT/'tests/account-session/AccountRetirementHost.java'),
+                        str(ROOT/'tests/account-session/AccountHostRemovalHost.java'),
+                        str(ROOT/'tests/account-session/AccountHostAuthenticatorHost.java'),
                         str(ROOT/'tests/account-session/AccountExplicitRemovalRaceHost.java'),
                         str(ROOT/'tests/account-session/AccountRetirementLockHost.java')],check=True)
         cleaner=work/'cleaner/sun/misc'; cleaner.mkdir(parents=True)
@@ -51,6 +53,8 @@ def main():
         env=os.environ.copy(); env['ANDROID_DATA']=str(work/'data'); env['GESHER_MICROG_SPOOF']='0'
         for fixture, arguments in (('AccountSessionLifetimeHost', ()),
                 ('AccountSessionTimeoutHost', ()), ('AccountRetirementHost', ()),
+                ('AccountHostRemovalHost', ()),
+                ('AccountHostAuthenticatorHost', ()),
                 ('AccountExplicitRemovalRaceHost', (str(work/'cleaner'),)),
                 ('AccountRetirementLockHost', ('false',)), ('AccountRetirementLockHost', ('true',))):
             if fixture == 'AccountRetirementLockHost': env['GESHER_MICROG_SPOOF']='1'
