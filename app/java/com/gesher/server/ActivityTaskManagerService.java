@@ -3156,23 +3156,34 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             if (requiredTask != null) return ActivityManager.START_INTENT_NOT_RESOLVED;
             if (intent != null) {
                 String action = intent.getAction();
-                // RoleManager.createRequestRoleIntent builds REQUEST_ROLE without an
-                // installed role controller. Apps that launch it without checking
-                // isRoleAvailable() crash with ActivityNotFoundException unless the
-                // runtime returns RESULT_CANCELED, matching an unavailable/declined role.
+                // RoleManager.createRequestRoleIntent's REQUEST_ROLE, with no installed
+                // activity for it. RoleManager reports no role available (app/README.md),
+                // and Android's role controller answers a request for an unavailable role
+                // by finishing RequestRoleActivity with no UI and no result: the requester
+                // gets RESULT_CANCELED. Apps that skip isRoleAvailable() (Me, #662) would
+                // otherwise crash with ActivityNotFoundException. No role is granted.
                 if ("android.app.role.action.REQUEST_ROLE".equals(action)
                         && intent.getComponent() == null && intent.getPackage() == null) {
-                    if (resultToToken != null && requestCode >= 0) {
-                        ActivityRecord source = forToken(resultToToken);
-                        ProcessRecord sourceProcess = source != null ? source.app : null;
-                        if (sourceProcess != null && sourceProcess == originalProcess
-                                && sourceProcess.pid == originalPid) {
-                            deliverResult(source, resultWho, requestCode,
-                                    android.app.Activity.RESULT_CANCELED, null, sourceProcess);
-                        }
+                    // A PendingIntent started for a result answers its sender's activity.
+                    ProcessRecord expected = internalCreator
+                            ? mVerifiedIntentSenderSource.get() : originalProcess;
+                    ActivityRecord source = resultToToken != null && requestCode >= 0
+                            ? forToken(resultToToken) : null;
+                    ProcessRecord sourceProcess;
+                    synchronized (this) {
+                        // source.app changes while a process attaches or dies.
+                        sourceProcess = source == null ? null : source.app;
                     }
-                    SystemServer.log("startActivity: " + action
-                            + ": no role controller; returning RESULT_CANCELED");
+                    boolean answered = sourceProcess != null && sourceProcess == expected
+                            && (internalCreator || sourceProcess.pid == originalPid);
+                    if (answered) {
+                        // deliverResult rechecks the process under its own lock.
+                        deliverResult(source, resultWho, requestCode,
+                                android.app.Activity.RESULT_CANCELED, null, sourceProcess);
+                    }
+                    SystemServer.log("startActivity: " + action + ": no role is available"
+                            + (answered ? "; RESULT_CANCELED to the requesting activity"
+                                    : "; no result requested"));
                     return ActivityManager.START_SUCCESS;
                 }
                 // Apps such as Gmail open a channel's settings without first resolving

@@ -281,11 +281,7 @@ final class ContentService extends IContentService.Default {
             uri = UriGrants.checkedUri(uri, userHandle);
             owner = authenticatedCaller(null, false);
         }
-        // Match AOSP checkContentProviderPermission: registration succeeds with either
-        // read or write access to the provider/URI; notifyChange still requires read
-        // access before delivering changed URIs to the observer.
-        if (!allowed(owner, uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                && !allowed(owner, uri, Intent.FLAG_GRANT_WRITE_URI_PERMISSION)) {
+        if (!allowed(owner, uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)) {
             throw new SecurityException("Observing content requires URI read access");
         }
         Observer o = new Observer(uri, notifyForDescendants, observer, owner);

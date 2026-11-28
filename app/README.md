@@ -372,7 +372,11 @@ placeholders for them (they need framework types): `android.net.TrafficStats`
 (`handleBindApplication` calls `init`; no traffic accounting),
 `android.app.role.RoleManager` and `OnRoleHoldersChangedListener` (registered
 as `role` by `RoleFrameworkInitializer`: no roles are available or held, and
-`createRequestRoleIntent` returns the request-role `Intent`; privileged APIs
+`createRequestRoleIntent` returns the request-role `Intent`, which the activity
+manager answers as Android's role controller answers a request for an
+unavailable role: no UI, `START_SUCCESS`, and `RESULT_CANCELED` to an activity
+that started it for a result (an intent naming a package or component still
+does not resolve); privileged APIs
 enforce their Context permissions and cross-user admission, result-bearing
 mutations report failure, and unsupported void mutations throw
 `UnsupportedOperationException` without creating role state. The profile-group
