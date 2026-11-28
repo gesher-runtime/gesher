@@ -535,7 +535,7 @@ public final class ActivityRestoreFixture {
     private static void testChildDeathCompletesResult(boolean detachedRecipient) throws Exception {
         Harness h = new Harness();
         int task = 7;
-        Object parent = h.record("ParentAct", task, "a", "STOPPED");
+        Object parent = h.record("ParentAct", task, "a", "STOPPING");
         Bundle snapshot = new Bundle();
         snapshot.putString("screen", "awaiting_result");
         h.activityStopped(parent, snapshot, null);
@@ -587,7 +587,7 @@ public final class ActivityRestoreFixture {
         Object parent = h.record("ParentAct", 8, "a", "STOPPED");
         AppThread childThread = new AppThread();
         Object childProcess = h.newProcess(PID + 2, childThread);
-        Object child = h.record("ChildAct", 8, "a", "STOPPED", childProcess, parent, "child", 51);
+        Object child = h.record("ChildAct", 8, "a", "STOPPING", childProcess, parent, "child", 51);
         h.activityStopped(child, new Bundle(), null);
         h.processDied(childProcess);
         check(h.records.contains(child) && get(child, "resultTo") == parent,
@@ -597,7 +597,7 @@ public final class ActivityRestoreFixture {
 
     private static void testFinishingChildDeathKeepsResult() throws Exception {
         Harness h = new Harness();
-        Object parent = h.record("ParentAct", 9, "a", "STOPPED");
+        Object parent = h.record("ParentAct", 9, "a", "STOPPING");
         Object child = h.record("ChildAct", 9, "a", "RESUMED", parent, "child", 51);
         h.activityStopped(parent, new Bundle(), null);
         h.thread.autoAck = false;
@@ -679,7 +679,7 @@ public final class ActivityRestoreFixture {
     @SuppressWarnings("unchecked")
     private static void testFailedRestoreDelivery(boolean deathDuringIpc) throws Exception {
         Harness h = new Harness();
-        var record = (ActivityTaskManagerService.ActivityRecord) h.record("MainAct", 10, "a", "STOPPED");
+        var record = (ActivityTaskManagerService.ActivityRecord) h.record("MainAct", 10, "a", "STOPPING");
         Bundle saved = new Bundle(); saved.putString("retry", "snapshot");
         h.activityStopped(record, saved, null);
         h.processDied(h.process);
