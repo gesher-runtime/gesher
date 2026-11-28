@@ -763,9 +763,12 @@ public class FeaturesActivity extends Activity {
                         throw new AssertionError("Auth challenge crossed its view identity");
                     }
                     pending[owner] = handler;
-                    if (pending[0] != null && pending[1] != null) {
-                        pending[1].cancel();
-                        mHandler.postDelayed(() -> pending[0].proceed("download", "secret-twoviews"), 150);
+                    if (owner == 1) {
+                        handler.cancel();
+                        pages[0].evaluateJavascript("window.authFixtureMarker=100;"
+                                + "document.getElementById('auth-download').click()", null);
+                    } else {
+                        mHandler.postDelayed(() -> handler.proceed("download", "secret-twoviews"), 150);
                     }
                 }
                 @Override public void onReceivedError(WebView view, WebResourceRequest request,
@@ -782,10 +785,8 @@ public class FeaturesActivity extends Activity {
                     if (url.equals(source) && !loaded[owner]) {
                         loaded[owner] = true;
                         if (loaded[0] && loaded[1]) {
-                            for (int n = 0; n < pages.length; n++) {
-                                pages[n].evaluateJavascript("window.authFixtureMarker=" + (100 + n)
-                                        + ";document.getElementById('auth-download').click()", null);
-                            }
+                            pages[1].evaluateJavascript("window.authFixtureMarker=101;"
+                                    + "document.getElementById('auth-download').click()", null);
                         }
                     } else if (owner == 1 && url.equals(target)) {
                         canceledFinished[0] = true;
