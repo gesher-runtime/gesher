@@ -76,13 +76,11 @@
 #include <propsys.h>
 #include <shellapi.h>
 #include <tlhelp32.h>
-#ifdef small
-#undef small
-#endif
 #include "../locale/ui_locale.h"
 #include "../windows/host_dialog_theme.h"
 #include "apk_info_file.h"
 #include "launch_failure_text.h"
+#include "app_crash_text.h"
 
 #include <algorithm>
 #include <cstring>
@@ -284,15 +282,8 @@ int ShowAppCrash(int argc, LPWSTR* argv) {
   else if (wcscmp(argv[3], L"compatibility") == 0) key = "app_crash_compatibility";
   if (key == nullptr) return 1;
   const auto language = GesherUiCurrentLanguage();
-  const std::wstring pattern = GesherUiText(language, key);
-  std::wstring message;
-  // Substitute once: package/path data containing braces is never a template.
-  for (size_t i = 0; i < pattern.size();) {
-    if (pattern.compare(i, 3, L"{0}") == 0) { message += argv[2]; i += 3; }
-    else if (pattern.compare(i, 3, L"{1}") == 0) { message += argv[4]; i += 3; }
-    else if (pattern.compare(i, 3, L"{2}") == 0) { message += argv[5]; i += 3; }
-    else message += pattern[i++];
-  }
+  const std::wstring message = GesherFormatAppCrashText(
+      GesherUiText(language, key), argv[2], argv[4], argv[5]);
   GesherHostPrompt(GesherUiText(language, "brand"), message.c_str(),
                    GesherUiText(language, "cp_dialog_ok"), nullptr,
                    GesherUiRtl(language), nullptr, MB_ICONERROR);

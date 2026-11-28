@@ -7,7 +7,9 @@
 #ifndef _UNICODE
 #define _UNICODE
 #endif
+#ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
+#endif
 #include <windows.h>
 #include <shellapi.h>
 
@@ -110,16 +112,20 @@ bool CreateDirRecursive(const std::wstring& path) {
   return GetLastError() == ERROR_ALREADY_EXISTS && DirExists(path);
 }
 
-std::wstring FormatText(std::wstring pattern, const std::vector<std::wstring>& args) {
-  for (size_t i = 0; i < args.size(); ++i) {
-    std::wstring token = L"{" + std::to_wstring(i) + L"}";
-    size_t pos = 0;
-    while ((pos = pattern.find(token, pos)) != std::wstring::npos) {
-      pattern.replace(pos, token.size(), args[i]);
-      pos += args[i].size();
+// Substitutes {0}..{9} once: argument text (paths with braces) is never a template.
+std::wstring FormatText(const std::wstring& pattern, const std::vector<std::wstring>& args) {
+  std::wstring out;
+  for (size_t i = 0; i < pattern.size();) {
+    if (i + 2 < pattern.size() && pattern[i] == L'{' && pattern[i + 1] >= L'0' &&
+        pattern[i + 1] <= L'9' && pattern[i + 2] == L'}' &&
+        static_cast<size_t>(pattern[i + 1] - L'0') < args.size()) {
+      out += args[static_cast<size_t>(pattern[i + 1] - L'0')];
+      i += 3;
+    } else {
+      out += pattern[i++];
     }
   }
-  return pattern;
+  return out;
 }
 
 void PrintWide(FILE* stream, const std::wstring& text) {
@@ -304,10 +310,15 @@ std::string WideToUtf8(const std::wstring& s) {
   return out;
 }
 
-std::map<std::wstring, std::wstring> ReadDeviceState(const std::wstring& root) {
+// Like gesher-app.ps1's DeviceState: `exists` says whether the file is there at all
+// (an existing, even empty, file is a device to stop).
+std::map<std::wstring, std::wstring> ReadDeviceState(const std::wstring& root,
+                                                     bool* exists = nullptr) {
   std::map<std::wstring, std::wstring> state;
   std::string raw;
-  if (!ReadTextFile(JoinPath(root, L"data\\system\\gesher-device"), 65536, &raw)) return state;
+  const std::wstring file = JoinPath(root, L"data\\system\\gesher-device");
+  if (exists != nullptr) *exists = FileExists(file);
+  if (!ReadTextFile(file, 1024 * 1024, &raw)) return state;
   std::wstring text = Utf8ToWide(raw);
   size_t pos = 0;
   while (pos < text.size()) {
@@ -357,8 +368,9 @@ HANDLE OpenDeviceProcess(const std::map<std::wstring, std::wstring>& state,
 }
 
 int ShutdownCommand(const std::wstring& root, enum GesherUiLanguage lang) {
-  auto state = ReadDeviceState(root);
-  if (state.empty()) {
+  bool exists = false;
+  auto state = ReadDeviceState(root, &exists);
+  if (!exists) {
     PrintLine(std::wstring(L"gesher-app: ") + GesherUiText(lang, "no_device"));
     return 0;
   }
@@ -669,6 +681,26 @@ bool SyncAllRuntimeFiles(const std::wstring& here, const std::wstring& root,
   return true;
 }
 
+// Whether `path` contains `needle` (read in chunks: the log may be large).
+bool FileContains(const std::wstring& path, const std::string& needle) {
+  HANDLE h = CreateFileW(path.c_str(), GENERIC_READ,
+                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                         OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (h == INVALID_HANDLE_VALUE) return false;
+  std::string window;
+  std::vector<char> buf(65536);
+  bool found = false;
+  DWORD got = 0;
+  while (!found && ReadFile(h, buf.data(), static_cast<DWORD>(buf.size()), &got, nullptr) &&
+         got > 0) {
+    window.append(buf.data(), got);
+    found = window.find(needle) != std::string::npos;
+    if (window.size() > needle.size()) window.erase(0, window.size() - needle.size());
+  }
+  CloseHandle(h);
+  return found;
+}
+
 int RunProcessWait(const std::wstring& exe, const std::vector<std::wstring>& args) {
   std::wstring cmd = BuildCommandLine(exe, args);
   STARTUPINFOW si = {};
@@ -714,13 +746,22 @@ HANDLE StartProcessRedirected(const std::wstring& exe, const std::vector<std::ws
   return pi.hProcess;
 }
 
+// PowerShell's -contains: case-insensitive.
+bool HasFlag(const std::vector<std::wstring>& args, const wchar_t* flag) {
+  for (const auto& a : args) {
+    if (_wcsicmp(a.c_str(), flag) == 0) return true;
+  }
+  return false;
+}
+
 bool IsKnownCommand(const std::wstring& cmd) {
   static const wchar_t* kCommands[] = {
       L"install",         L"uninstall",      L"view",         L"list",
       L"status",          L"start",          L"shutdown",     L"launch",
       L"toast-activated", L"apk-icon",       L"apk-info",     L"proxy",
-      L"windows",         L"special-access", L"settings-closed", L"settings-shown",
-      L"sync-shortcuts",  L"cameras",        L"spell-checker", L"mobile-data"};
+      L"windows",         L"special-access", L"accounts",     L"device-admin",
+      L"settings-closed", L"settings-shown", L"sync-shortcuts", L"cameras",
+      L"spell-checker",   L"mobile-data"};
   for (const wchar_t* c : kCommands) {
     if (cmd == c) return true;
   }
@@ -732,9 +773,18 @@ bool IsKnownCommand(const std::wstring& cmd) {
 int wmain(int argc, wchar_t* argv[]) {
   SetEnvironmentVariableW(kSandboxEnv, nullptr);
 
-  wchar_t exe_buf[MAX_PATH * 4];
-  DWORD exe_len = GetModuleFileNameW(nullptr, exe_buf, static_cast<DWORD>(std::size(exe_buf)));
-  std::wstring here = exe_len > 0 ? DirName(std::wstring(exe_buf, exe_len)) : L".";
+  std::vector<wchar_t> exe_buf(MAX_PATH);
+  DWORD exe_len = 0;
+  for (;;) {
+    exe_len = GetModuleFileNameW(nullptr, exe_buf.data(), static_cast<DWORD>(exe_buf.size()));
+    if (exe_len == 0 || exe_len < exe_buf.size() || exe_buf.size() >= 32768) break;
+    exe_buf.resize(exe_buf.size() * 2);
+  }
+  if (exe_len == 0 || exe_len >= exe_buf.size()) {
+    PrintErrorLine(L"gesher-app: could not locate gesher-app.exe");
+    return 1;
+  }
+  std::wstring here = DirName(std::wstring(exe_buf.data(), exe_len));
   enum GesherUiLanguage lang = GesherUiCurrentLanguage();
 
   std::wstring root = SetupProfileEnv(here);
@@ -746,7 +796,8 @@ int wmain(int argc, wchar_t* argv[]) {
               L"[--activity CLASS] [--ez KEY true|false]... [--proxy host:port|direct|windows] "
               L"[--detach | --wait | --single-process | --system-server]");
     PrintLine(L"       gesher-app launch PACKAGE|APK [options] | install APK [--desktop-shortcut] "
-              L"| uninstall PACKAGE | view PACKAGE URL | list | status | start | shutdown | "
+              L"| uninstall PACKAGE | view PACKAGE URL | accounts [list | remove TYPE NAME] | list | "
+              L"status | start | shutdown | "
               L"proxy [[PACKAGE] host:port|direct|windows] | windows PACKAGE separate|shared");
     PrintLine(L"       gesher-app spell-checker list|use COMPONENT|automatic|enable|disable|language ID");
     PrintLine(L"       gesher-app cameras [rear CAMERA_ID | reset]");
@@ -773,8 +824,9 @@ int wmain(int argc, wchar_t* argv[]) {
 
   if (cmd_lower == L"shutdown") return ShutdownCommand(root, lang);
 
-  if (root.size() >= 2 && here.size() >= 2 && root[1] == L':' && here[1] == L':' &&
-      towupper(root[0]) != towupper(here[0])) {
+  // As gesher-app.ps1: the first two characters (a drive, or \\ of a UNC path) must match.
+  if (root.size() < 2 || here.size() < 2 ||
+      _wcsicmp(root.substr(0, 2).c_str(), here.substr(0, 2).c_str()) != 0) {
     PrintErrorLine(FormatText(GesherUiText(lang, "same_drive"), {root, here.substr(0, 2)}));
     return 1;
   }
@@ -849,7 +901,8 @@ int wmain(int argc, wchar_t* argv[]) {
   std::wstring rear_camera_file = JoinPath(root, L"camera-rear");
   if (Env(kCameraRearEnv).empty()) {
     std::string raw_cam;
-    if (ReadTextFile(rear_camera_file, 1024, &raw_cam)) {
+    if (ReadTextFile(rear_camera_file, 65536, &raw_cam)) {
+      if (raw_cam.compare(0, 3, "\xEF\xBB\xBF") == 0) raw_cam.erase(0, 3);
       std::wstring cam = Trim(Utf8ToWide(raw_cam));
       if (!cam.empty()) SetEnvironmentVariableW(kCameraRearEnv, cam.c_str());
     }
@@ -894,15 +947,15 @@ int wmain(int argc, wchar_t* argv[]) {
     return RunProcessWait(dalvikvm, build_launcher_args(cmd_lower));
   }
 
-  bool has_single_process = std::find(rest.begin(), rest.end(), L"--single-process") != rest.end();
-  bool has_system_server = std::find(rest.begin(), rest.end(), L"--system-server") != rest.end();
+  bool has_single_process = HasFlag(rest, L"--single-process");
+  bool has_system_server = HasFlag(rest, L"--system-server");
   if (!has_single_process && !has_system_server) {
     return RunProcessWait(dalvikvm, build_launcher_args(L"launch"));
   }
 
   std::vector<std::wstring> driver_args;
   for (const auto& a : rest) {
-    if (a != L"--single-process") driver_args.push_back(a);
+    if (_wcsicmp(a.c_str(), L"--single-process") != 0) driver_args.push_back(a);
   }
   if (!has_system_server) {
     std::vector<std::wstring> args = dvm;
@@ -915,28 +968,52 @@ int wmain(int argc, wchar_t* argv[]) {
   // --system-server: ephemeral device for this single run
   std::wstring logs = JoinPath(root, L"logs");
   CreateDirRecursive(logs);
-  std::wstring binder = L"gesher-app-" + std::to_wstring(GetCurrentProcessId()) + L"-" +
-                        std::to_wstring(GetTickCount64());
+  // Unique per run, not only per PID (as gesher-app.ps1): wall-clock milliseconds, hex.
+  FILETIME now_ft = {};
+  GetSystemTimeAsFileTime(&now_ft);
+  ULARGE_INTEGER now;
+  now.LowPart = now_ft.dwLowDateTime;
+  now.HighPart = now_ft.dwHighDateTime;
+  wchar_t stamp[32];
+  swprintf(stamp, 32, L"%llx", (now.QuadPart - 116444736000000000ULL) / 10000ULL);
+  std::wstring binder =
+      L"gesher-app-" + std::to_wstring(GetCurrentProcessId()) + L"-" + std::wstring(stamp);
   SetEnvironmentVariableW(L"GESHER_BINDER", binder.c_str());
 
+  // The run's device processes have their own (hidden) consoles: Ctrl+C or closing this
+  // console ends this process without cleanup, so the job ends them with it.
+  HANDLE job = CreateJobObjectW(nullptr, nullptr);
+  if (job != nullptr) {
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = {};
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof(limits));
+  }
   std::vector<HANDLE> started;
+  auto track = [&](HANDLE h) {
+    if (job != nullptr) AssignProcessToJobObject(job, h);
+    started.push_back(h);
+  };
   auto cleanup = [&]() {
     for (HANDLE h : started) {
       if (WaitForSingleObject(h, 0) == WAIT_TIMEOUT) TerminateProcess(h, 1);
       CloseHandle(h);
     }
     SetEnvironmentVariableW(L"GESHER_BINDER", nullptr);
+    if (job != nullptr) CloseHandle(job);
+  };
+  auto start_failed = [&](const std::wstring& exe) {
+    PrintErrorLine(L"gesher-app: could not start " + exe + L" (error " +
+                   std::to_wstring(GetLastError()) + L")");
+    cleanup();
+    return 1;
   };
 
   DWORD binder_pid = 0;
   HANDLE h_binder = StartProcessRedirected(JoinPath(here, L"binderd.exe"), {binder},
                                            JoinPath(logs, L"run-binderd.out"),
                                            JoinPath(logs, L"run-binderd.log"), &binder_pid);
-  if (h_binder == nullptr) {
-    cleanup();
-    return 1;
-  }
-  started.push_back(h_binder);
+  if (h_binder == nullptr) return start_failed(JoinPath(here, L"binderd.exe"));
+  track(h_binder);
 
   std::vector<std::wstring> wait_args = dvm;
   wait_args.push_back(L"com.gesher.server.RuntimeCommands");
@@ -953,7 +1030,8 @@ int wmain(int argc, wchar_t* argv[]) {
   HANDLE h_sm = StartProcessRedirected(JoinPath(here, L"servicemanager.exe"), {},
                                        JoinPath(logs, L"run-servicemanager.out"),
                                        JoinPath(logs, L"run-servicemanager.log"), nullptr);
-  if (h_sm != nullptr) started.push_back(h_sm);
+  if (h_sm == nullptr) return start_failed(JoinPath(here, L"servicemanager.exe"));
+  track(h_sm);
 
   std::vector<std::wstring> srv_args = dvm;
   srv_args.push_back(L"com.gesher.server.SystemServer");
@@ -961,14 +1039,12 @@ int wmain(int argc, wchar_t* argv[]) {
   std::wstring srv_out = JoinPath(logs, L"run-system_server.out");
   std::wstring srv_log = JoinPath(logs, L"run-system_server.log");
   HANDLE h_srv = StartProcessRedirected(dalvikvm, srv_args, srv_out, srv_log, nullptr);
-  if (h_srv != nullptr) {
-    started.push_back(h_srv);
+  if (h_srv == nullptr) return start_failed(dalvikvm);
+  track(h_srv);
+  {
     for (int i = 0; i < 900 && WaitForSingleObject(h_srv, 0) == WAIT_TIMEOUT; ++i) {
-      std::string s1, s2;
-      ReadTextFile(srv_log, 1024 * 1024, &s1);
-      ReadTextFile(srv_out, 1024 * 1024, &s2);
-      if (s1.find("with servicemanager") != std::string::npos ||
-          s2.find("with servicemanager") != std::string::npos) {
+      if (FileContains(srv_log, "with servicemanager") ||
+          FileContains(srv_out, "with servicemanager")) {
         break;
       }
       Sleep(100);
