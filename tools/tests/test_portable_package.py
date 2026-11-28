@@ -27,6 +27,7 @@ class PortablePackageTests(unittest.TestCase):
         names = (
             'dalvikvm.exe libgesher_account_crypto.so libgesher_install_pipe.so '
             'libgesher_webview_bridge.so core-oj.jar core-libart.jar core-icu4j.jar '
+            'webview-auth-extension/manifest.json webview-auth-extension/worker.js '
             'icudt68l.dat hello.dex framework.jar framework-res.apk build.prop gesher-app.jar '
             'org.apache.http.legacy.jar com.android.location.provider.jar android.test.base.jar '
             'android.test.mock.jar android.test.runner.jar binderd.exe '
@@ -74,7 +75,8 @@ class PortablePackageTests(unittest.TestCase):
                          'App/licenses/ANGLE-NOTICES.txt', 'App/licenses/APKSIG-LICENSE.txt',
                          'App/etc/permissions/org.apache.http.legacy.xml',
                          'App/tzdata/etc/tz/tzdata', 'App/media/audio/notifications/Test.ogg',
-                         'App/framework/x86_64/boot.art', 'App/gesher-tts.apk', 'App/gesher-stt.apk'):
+                         'App/framework/x86_64/boot.art', 'App/gesher-tts.apk', 'App/gesher-stt.apk',
+                         'App/webview-auth-extension/manifest.json', 'App/webview-auth-extension/worker.js'):
                 self.assertIn(prefix + name, names)
             self.assertNotIn(prefix + 'App/unshipped-test-fixture.jar', names)
             self.assertEqual(z.read(prefix + 'Gesher.exe'), (self.build / 'gesher-launch.exe').read_bytes())
@@ -92,6 +94,13 @@ class PortablePackageTests(unittest.TestCase):
         before = {p.name: p.read_bytes() for p in self.out.iterdir()}
         (self.build / 'ANGLE-NOTICES.txt').unlink()
         self.package(success=False)
+        self.assertEqual({p.name: p.read_bytes() for p in self.out.iterdir()}, before)
+
+    def test_missing_auth_worker_preserves_existing_archive(self):
+        self.package()
+        before = {p.name: p.read_bytes() for p in self.out.iterdir()}
+        (self.build / 'webview-auth-extension/worker.js').unlink()
+        self.assertIn('Missing required runtime input', self.package(success=False))
         self.assertEqual({p.name: p.read_bytes() for p in self.out.iterdir()}, before)
 
     def test_existing_portable_data_is_never_removed(self):

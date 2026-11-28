@@ -41,6 +41,8 @@ public final class WebView2Host {
     public static final int EVENT_SERVER_CERT_ERROR = 26;
     public static final int EVENT_FIND = 27;
     public static final int EVENT_FILE_DIALOG = 28;
+    public static final int EVENT_AUTH_BRIDGE = 29;
+    public static final int EVENT_AUTH_EXTENSION = 30;
 
     /** {@link #find} operations, as {@code Host::FindOp}. */
     public static final int FIND_START = 1;
@@ -250,6 +252,18 @@ public final class WebView2Host {
     public void completeBasicAuth(long id, boolean proceed, String user, String password) {
         long h = mHandle;
         if (h != 0) nCompleteBasicAuth(h, id, proceed, user, password);
+    }
+    void authCommand(String session, String method, String parameters, long token) {
+        long h = mHandle;
+        if (h != 0) nAuthCommand(h, session, method, parameters, token);
+    }
+    void authSession(String session, String target) {
+        long h = mHandle;
+        if (h != 0) nAuthSession(h, session, target);
+    }
+    void authReady(boolean ready) {
+        long h = mHandle;
+        if (h != 0) nAuthReady(h, ready);
     }
 
     /** choice: a certificate's index; -1 none; -2 cancels. */
@@ -519,6 +533,9 @@ public final class WebView2Host {
     private static native void nCompletePermission(long h, long id, int state,
             boolean remember);
     private static native void nCompleteNewWindow(long h, long id, long window);
+    private static native void nAuthCommand(long h, String session, String method, String parameters, long token);
+    private static native void nAuthSession(long h, String session, String target);
+    private static native void nAuthReady(long h, boolean ready);
     private static native void nCompleteBasicAuth(long h, long id, boolean proceed, String user,
             String password);
     private static native void nCompleteClientCert(long h, long id, int choice);

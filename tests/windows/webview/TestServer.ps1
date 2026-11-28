@@ -102,7 +102,7 @@ public static class GesherWebTestServer {
           }
           var body = new byte[length];
           for (int read = 0; read < length;) { int n = s.Read(body, read, length - read); if (n <= 0) break; read += n; }
-          Say((tls ? "https " : "http ") + method + " " + path + (auth != null ? " (authorization)" : "") + (length > 0 ? " body " + Encoding.UTF8.GetString(body) : ""));
+          Say((tls ? "https " : "http ") + method + " " + path + (auth != null ? " (authorization)" : "") + (length > 0 ? (path == "/auth-download/largepost" ? " body_bytes " + length : " body " + Encoding.UTF8.GetString(body)) : ""));
           int status = 200; string extra = "", markup = ""; string title;
           string contentType = "text/html; charset=utf-8";
           if (!tls && (path == "/http200-truncated" || path == "/http500-truncated")) {
@@ -114,6 +114,41 @@ public static class GesherWebTestServer {
           if (!tls && path == "/network-failure") return;
           if (tls) {
             title = "tls client certificate: " + clientCert;
+          } else if (path.StartsWith("/auth-download-source/")) {
+            string name = path.Substring("/auth-download-source/".Length);
+            title = "auth source " + name;
+            string target = name == "redirect" ? "/auth-download-redirect" : "/auth-download/" + name;
+            markup = name == "post" || name == "largepost"
+                ? "<form id='auth-form' method='post' action='" + target + "'><textarea id='auth-payload' name='payload'>original+body</textarea></form>"
+                : "<a id='auth-download' href='" + target + "'>authenticated download</a>";
+          } else if (path == "/auth-download-redirect") {
+            status = 302; title = "authentication redirect";
+            extra = "Location: /auth-download/redirect\r\n";
+          } else if (path.StartsWith("/auth-download/")) {
+            string name = path.Substring("/auth-download/".Length);
+            string want = "Basic " + Convert.ToBase64String(Encoding.ASCII.GetBytes("download:secret-" + name));
+            bool accepted = auth == want;
+            Say("auth fixture " + name + " " + method + " accepted=" + accepted);
+            if (accepted) {
+              if (name == "post" && (method != "POST" || Encoding.UTF8.GetString(body) != "payload=original%2Bbody")) {
+                throw new InvalidOperationException("Authentication changed original POST method or body");
+              }
+              if (name == "largepost") {
+                if (method != "POST" || body.Length != (2 << 20) + 8
+                    || Encoding.ASCII.GetString(body, 0, 8) != "payload=") {
+                  throw new InvalidOperationException("Authentication changed large POST method or length");
+                }
+                for (int i = 8; i < body.Length; i++) if (body[i] != (byte)'x') {
+                  throw new InvalidOperationException("Authentication changed large POST content");
+                }
+              }
+              title = "auth payload";
+              contentType = "application/octet-stream";
+              extra = "Content-Disposition: attachment; filename=auth-" + name + ".bin\r\n";
+            } else {
+              status = 401; title = "auth denied " + name;
+              extra = "WWW-Authenticate: Basic realm=\"gesher-auth-" + name + "\"\r\n";
+            }
           } else if (path.StartsWith("/download-source/")) {
             string name = path.Substring("/download-source/".Length);
             title = "download source " + name;

@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "Gesher HTTP Authentication",
+  "version": "1.0.0",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAyBKLFRQw2rLSPzkyaVlBkZdJ7Fm1uawyxP04xkx1+NiiS17mMe5rpM9C26Rfpd4UEdiorEK9n/bWTMniyv2yaNNskRisD6FaDcbbI/UF/HS3gCO7sIgPbVVnKEB62ijkTQCg6/uku6ekCTBocZ4zZ6g/XSQy/2Oa4LLZBdaxiSUlru/rAp++vQB+86JmrTyKyxBxZXZwy6yBua0HwnAnoKJyS1rjv70afWke/oqnIZzTr6OXx5zdK8Pri8DRJGhTIyFAuGLN9SE8bCVemrwqpK8P/5ktF2p+Y5afZS1iCcxqUpXYfiehtGgnRAiNajalXina9ctBAG1+PoLe4XDI7QIDAQAB",
+  "permissions": [
+    "webRequest",
+    "webRequestAuthProvider",
+    "debugger"
+  ],
+  "host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
+  "background": {
+    "service_worker": "worker.js"
+  }
+}

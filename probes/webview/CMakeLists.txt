@@ -10,6 +10,10 @@
 # msvc_shims.cc), webview2_probe_dll.exe loads WebView2Loader.dll.
 cmake_minimum_required(VERSION 3.24)
 project(gesher_webview_probe LANGUAGES C CXX)
+foreach(_auth_file manifest.json worker.js)
+  configure_file(${CMAKE_CURRENT_LIST_DIR}/../../assets/webview-auth-extension/${_auth_file}
+    ${CMAKE_BINARY_DIR}/webview-auth-extension/${_auth_file} COPYONLY)
+endforeach()
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

@@ -53,6 +53,58 @@ exercises attachments, unsupported MIME, redirects, Basic authentication,
 repeated same-URL main/frame downloads and adjacent real failures through
 WebView2. Host tests alone do not establish COM event order or app behavior.
 
+## HTTP authentication while retaining the live source
+
+WebView2's [Basic authentication sequence](https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/basic-authentication#navigations-for-basic-authentication)
+commits a blank document before requesting credentials. A subsequent successful
+download therefore leaves that blank document visible. Gesher handles the
+challenge earlier through a private packaged extension using
+[`webRequest.onAuthRequired`](https://developer.chrome.com/docs/extensions/reference/api/webRequest#event-onAuthRequired).
+The app still receives `WebViewClient.onReceivedHttpAuthRequest` on its WebView's
+Looper and chooses whether to proceed or cancel. The browser resumes the original
+request, including its method, upload body, redirects and credential retries.
+Gesher neither reconstructs the source DOM nor reloads its history entry.
+
+The extension receives authentication and request identity metadata only. Its
+`onBeforeRequest` listener requests no body access. CDP Fetch interception is
+deliberately unused: its request-stage implementation collects full form and
+blob upload bodies independently of Network's POST serialization limit. Actual
+isolated probes confirmed that overhead; the metadata-only extension preserves
+the original browser request without those additional body copies.
+
+`chrome.debugger.getTargets` maps the browser's real tab ID to the exact CDP
+target ID of the owning WebView. URL equality is never an ownership check. The
+native bridge installs the extension from the runtime's source-bound
+`webview-auth-extension/manifest.json` and `worker.js`, rather than an
+app-writable profile directory. The manifest public key gives it the stable ID
+`njmgmkjdhpmipobhjndpkbpegchdmpge`; installation rebinds that ID to the trusted
+runtime folder once per process. Only that worker's verified session and default
+execution context receive a unique per-owner native binding. A readiness and
+target-registration handshake precedes release of queued application loads.
+
+Owners sharing one browser profile have separate channels, epochs, bindings and
+pending responses. Stop and Destroy invalidate view generations; each actual
+request captures its generation before authentication so queued metadata and
+late consent cannot reopen a canceled request. Before prompting, the worker
+rechecks the live target/tab pair to reject recycled tab IDs. The Java broker
+serializes coordination on one Looper and dispatches prompts to each target
+WebView's own Looper. Restart retires old sessions and bindings; live-target
+inspection prunes orphaned owners without canceling another live owner.
+
+Cancellation supplies no credentials. The browser delivers the server's actual
+401/407 response; the implementation does not synthesize one. Credential denial
+and retries remain browser/server decisions. Pending identity and prompt maps
+are bounded, and stale replies are ignored. If the runtime, policy or bridge
+cannot provide early authentication, ordinary content remains usable and HTTP
+authentication fails closed; it does not silently claim a successful download
+or fall back to a second application consent prompt.
+
+Host tests exercise the production worker and Java coordinator, including
+identical URLs, multiple owners, asynchronous registration and stale replies.
+The Windows/ART fixture additionally covers real credential retries, cancellation,
+POST bodies, redirects, retained live DOM state, Stop and Destroy. Passing host
+tests does not by itself establish installed WebView2 extension/session behavior.
+
 Goal: `android.webkit.WebView` works in Gesher's apps, backed by Microsoft
 Edge WebView2 (the Chromium runtime Windows 10/11 ship), with no WebView APK.
 Work happens on branch `wip/webview`; the decision record is

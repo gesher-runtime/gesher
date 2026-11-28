@@ -456,7 +456,7 @@ public class FeaturesActivity extends Activity {
 
     /** Real attachment/unsupported-MIME handoff leaves the loaded page usable. */
     private void downloadStep(int step) {
-        if (step == 4) { downloadIsolation(0); return; }
+        if (step == 4) { authenticatedDownloadStep(0); return; }
         String name = new String[] {"attachment", "mime", "redirect", "auth"}[step];
         final boolean[] clicked = {false};
         final int[] downloads = {0}, errors = {0};
@@ -498,6 +498,90 @@ public class FeaturesActivity extends Activity {
                         downloadStep(step + 1);
                     });
                 }, 2000);
+            }
+        });
+        mNav.loadUrl(source);
+    }
+
+    /** Challenge/retry must authenticate the original request without replacing its source. */
+    private void authenticatedDownloadStep(int step) {
+        if (step == 6) { downloadIsolation(0); return; }
+        String name = new String[] {"retry", "cancel", "post", "largepost", "redirect", "stop"}[step];
+        String source = mServerHttp + "/auth-download-source/" + name;
+        String target = mServerHttp + "/auth-download/" + name;
+        int[] challenges = {0}, downloads = {0}, errors = {0}, httpErrors = {0};
+        boolean[] started = {false}, complete = {false}, verificationQueued = {false};
+        Runnable timeout = () -> { if (!complete[0]) throw new AssertionError("Auth " + name + " timed out"); };
+        mHandler.postDelayed(timeout, 15000);
+        Runnable verify = () -> {
+            int expectedDownloads = (name.equals("cancel") || name.equals("stop")) ? 0 : 1;
+            int expectedChallenges = name.equals("retry") ? 2 : 1;
+            if (downloads[0] != expectedDownloads || challenges[0] != expectedChallenges || errors[0] != 0
+                    || httpErrors[0] != (name.equals("cancel") ? 1 : 0)) {
+                throw new AssertionError("Auth " + name + " callbacks: challenges=" + challenges[0]
+                        + ", downloads=" + downloads[0] + ", errors=" + errors[0] + ", HTTP=" + httpErrors[0]);
+            }
+            String script = name.equals("cancel") ? "document.title"
+                    : "document.title+'|'+window.authFixtureMarker+'|'+location.href";
+            mNav.evaluateJavascript(script, value -> {
+                String expected = name.equals("cancel") ? "auth denied cancel" : "auth source " + name + "|38|" + source;
+                if (!value.equals("\"" + expected + "\"")) {
+                    throw new AssertionError("Auth " + name + " document changed: " + value);
+                }
+                complete[0] = true;
+                mHandler.removeCallbacks(timeout);
+                say("download auth " + name + " original request and consent preserved");
+                authenticatedDownloadStep(step + 1);
+            });
+        };
+        mNav.setDownloadListener((url, agent, disposition, mime, length) -> {
+            if (!url.equals(target) || !mime.equals("application/octet-stream") || length <= 0
+                    || ++downloads[0] != 1 || name.equals("cancel") || name.equals("stop")) {
+                throw new AssertionError("Unexpected auth " + name + " download " + url);
+            }
+            if (verificationQueued[0]) throw new AssertionError("Duplicate auth terminal " + name);
+            verificationQueued[0] = true;
+            mHandler.postDelayed(verify, 500);
+        });
+        mNav.setWebViewClient(new WebViewClient() {
+            @Override public void onReceivedHttpAuthRequest(WebView view, HttpAuthHandler handler,
+                    String host, String realm) {
+                int attempt = ++challenges[0];
+                if (!realm.equals("gesher-auth-" + name) || attempt > (name.equals("retry") ? 2 : 1)) {
+                    throw new AssertionError("Wrong/repeated auth challenge " + realm + " " + attempt);
+                }
+                if (name.equals("cancel")) handler.cancel();
+                else if (name.equals("stop")) {
+                    view.stopLoading();
+                    mHandler.postDelayed(() -> handler.proceed("download", "secret-" + name), 150);
+                    verificationQueued[0] = true;
+                    mHandler.postDelayed(verify, 700);
+                } else handler.proceed("download", name.equals("retry") && attempt == 1 ? "wrong" : "secret-" + name);
+            }
+            @Override public void onReceivedError(WebView view, WebResourceRequest request,
+                    android.webkit.WebResourceError error) {
+                if (request.isForMainFrame()) errors[0]++;
+            }
+            @Override public void onReceivedHttpError(WebView view, WebResourceRequest request,
+                    android.webkit.WebResourceResponse response) {
+                if (request.isForMainFrame()) {
+                    if (!name.equals("cancel") || response.getStatusCode() != 401) {
+                        throw new AssertionError("Auth " + name + " exposed an intermediate denial");
+                    }
+                    httpErrors[0]++;
+                }
+            }
+            @Override public void onPageFinished(WebView view, String url) {
+                if (url.equals(source) && !started[0]) {
+                    started[0] = true;
+                    mNav.evaluateJavascript("window.authFixtureMarker=38;"
+                            + (name.equals("largepost") ? "document.getElementById('auth-payload').value='x'.repeat(2<<20);" : "")
+                            + ((name.equals("post") || name.equals("largepost")) ? "document.getElementById('auth-form').submit()"
+                            : "document.getElementById('auth-download').click()"), null);
+                } else if (name.equals("cancel") && url.equals(target) && !verificationQueued[0]) {
+                    verificationQueued[0] = true;
+                    mHandler.postDelayed(verify, 500);
+                }
             }
         });
         mNav.loadUrl(source);
@@ -617,11 +701,140 @@ public class FeaturesActivity extends Activity {
                     complete[0] = true;
                     mHandler.removeCallbacks(timeout);
                     say("download " + name + " one ordered error and finish preserved");
-                    if (httpFailure) say("done"); else truncatedDownloadResponse(1);
+                    if (httpFailure) authenticatedTwoViews(); else truncatedDownloadResponse(1);
                 }, 500);
             }
         });
         mNav.loadUrl(target);
+    }
+
+    /** Identical URLs in different views must route to independent app consent handlers. */
+    private void authenticatedTwoViews() {
+        WebView[] pages = {mNav, new WebView(this)};
+        FrameLayout parent = (FrameLayout) mNav.getParent();
+        pages[1].getSettings().setJavaScriptEnabled(true);
+        parent.addView(pages[1], new FrameLayout.LayoutParams(1, 1));
+        String source = mServerHttp + "/auth-download-source/twoviews";
+        String target = mServerHttp + "/auth-download/twoviews";
+        HttpAuthHandler[] pending = {null, null};
+        int[] challenges = {0, 0}, downloads = {0, 0}, errors = {0, 0};
+        boolean[] loaded = {false, false}, canceledFinished = {false}, done = {false}, queued = {false};
+        Runnable timeout = () -> { if (!done[0]) throw new AssertionError("Independent auth views timed out"); };
+        mHandler.postDelayed(timeout, 15000);
+        Runnable verify = () -> {
+            if (downloads[0] != 1 || !canceledFinished[0] || queued[0]) return;
+            queued[0] = true;
+            mHandler.postDelayed(() -> {
+                if (challenges[0] != 1 || challenges[1] != 1 || downloads[1] != 0
+                        || errors[0] != 0 || errors[1] != 0) {
+                    throw new AssertionError("Same-URL views shared authentication consent");
+                }
+                pages[0].evaluateJavascript("document.title+'|'+window.authFixtureMarker+'|'+location.href", title -> {
+                    if (!title.equals("\"auth source twoviews|100|" + source + "\"")) {
+                        throw new AssertionError("Independent allowed view lost its live source " + title);
+                    }
+                    pages[1].evaluateJavascript("document.title", denied -> {
+                        if (!denied.equals("\"auth denied twoviews\"")) {
+                            throw new AssertionError("Independent denied view used the other view's credentials " + denied);
+                        }
+                        done[0] = true;
+                        mHandler.removeCallbacks(timeout);
+                        pages[1].destroy();
+                        parent.removeView(pages[1]);
+                        say("download auth same URL views kept independent consent");
+                        authenticatedDownloadDestroy();
+                    });
+                });
+            }, 500);
+        };
+        for (int i = 0; i < pages.length; i++) {
+            final int owner = i;
+            pages[i].setDownloadListener((url, agent, disposition, mime, length) -> {
+                if (owner != 0 || !url.equals(target) || ++downloads[owner] != 1) {
+                    throw new AssertionError("Wrong auth owner received a download " + owner);
+                }
+                verify.run();
+            });
+            pages[i].setWebViewClient(new WebViewClient() {
+                @Override public void onReceivedHttpAuthRequest(WebView view, HttpAuthHandler handler,
+                        String host, String realm) {
+                    if (view != pages[owner] || ++challenges[owner] != 1
+                            || !realm.equals("gesher-auth-twoviews")) {
+                        throw new AssertionError("Auth challenge crossed its view identity");
+                    }
+                    pending[owner] = handler;
+                    if (pending[0] != null && pending[1] != null) {
+                        pending[1].cancel();
+                        mHandler.postDelayed(() -> pending[0].proceed("download", "secret-twoviews"), 150);
+                    }
+                }
+                @Override public void onReceivedError(WebView view, WebResourceRequest request,
+                        android.webkit.WebResourceError error) {
+                    if (request.isForMainFrame()) errors[owner]++;
+                }
+                @Override public void onReceivedHttpError(WebView view, WebResourceRequest request,
+                        android.webkit.WebResourceResponse response) {
+                    if (request.isForMainFrame() && (owner != 1 || response.getStatusCode() != 401)) {
+                        throw new AssertionError("Wrong independent-view HTTP denial");
+                    }
+                }
+                @Override public void onPageFinished(WebView view, String url) {
+                    if (url.equals(source) && !loaded[owner]) {
+                        loaded[owner] = true;
+                        if (loaded[0] && loaded[1]) {
+                            for (int n = 0; n < pages.length; n++) {
+                                pages[n].evaluateJavascript("window.authFixtureMarker=" + (100 + n)
+                                        + ";document.getElementById('auth-download').click()", null);
+                            }
+                        }
+                    } else if (owner == 1 && url.equals(target)) {
+                        canceledFinished[0] = true;
+                        verify.run();
+                    }
+                }
+            });
+            pages[i].loadUrl(source);
+        }
+    }
+
+    /** A retired view cannot resume a request when an old auth handler is answered. */
+    private void authenticatedDownloadDestroy() {
+        String source = mServerHttp + "/auth-download-source/destroy";
+        boolean[] started = {false}, destroyed = {false}, complete = {false};
+        Runnable timeout = () -> { if (!complete[0]) throw new AssertionError("Auth destroy timed out"); };
+        mHandler.postDelayed(timeout, 15000);
+        mNav.setDownloadListener((url, agent, disposition, mime, length) -> {
+            throw new AssertionError("Destroyed authenticated request produced a download");
+        });
+        mNav.setWebViewClient(new WebViewClient() {
+            @Override public void onReceivedHttpAuthRequest(WebView view, HttpAuthHandler handler,
+                    String host, String realm) {
+                if (destroyed[0] || !realm.equals("gesher-auth-destroy")) {
+                    throw new AssertionError("Wrong/repeated destroy challenge " + realm);
+                }
+                destroyed[0] = true;
+                view.destroy();
+                mHandler.postDelayed(() -> handler.proceed("download", "secret-destroy"), 150);
+                mHandler.postDelayed(() -> {
+                    complete[0] = true;
+                    mHandler.removeCallbacks(timeout);
+                    say("download auth destroy ignored late credentials");
+                    say("done");
+                }, 700);
+            }
+            @Override public void onReceivedError(WebView view, WebResourceRequest request,
+                    android.webkit.WebResourceError error) {
+                throw new AssertionError("Destroyed auth request produced an error callback");
+            }
+            @Override public void onPageFinished(WebView view, String url) {
+                if (destroyed[0]) throw new AssertionError("Destroyed auth request produced page finish");
+                if (url.equals(source) && !started[0]) {
+                    started[0] = true;
+                    mNav.evaluateJavascript("document.getElementById('auth-download').click()", null);
+                }
+            }
+        });
+        mNav.loadUrl(source);
     }
 
     /** The default case inherits shouldOverrideUrlLoading, but observes real page callbacks. */

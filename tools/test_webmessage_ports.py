@@ -118,6 +118,7 @@ final class GesherWebViewProvider {
     final CleanupBoundary mGeolocation = new CleanupBoundary();
     // Network state is independently exercised by test_webview_download_navigation.
     final CleanupBoundary mNetworkErrors = new CleanupBoundary();
+    final CleanupBoundary mAuthBridge = new CleanupBoundary();
     static final class MessageListener {}
     final java.util.Map<String,MessageListener> mMessageListeners = new java.util.HashMap<>();
     void removeListeners() {}

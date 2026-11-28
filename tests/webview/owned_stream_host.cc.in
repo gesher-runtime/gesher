@@ -179,6 +179,8 @@ struct ICoreWebView2NavigationStartingEventArgs {
   HRESULT put_Cancel(BOOL value) { cancelled = value; return S_OK; }
 };
 struct StartListener {
+  // Authentication stop notifications are unrelated to stream ownership.
+  int OnNetworkEvent(const std::wstring&, const std::wstring&) { return 0; }
   int calls = 0;
   int64_t handed = -1;
   std::function<bool()> callback;

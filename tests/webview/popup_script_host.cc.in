@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <deque>
 #include <functional>
 #include <map>
@@ -54,6 +55,7 @@ struct FakeWebView {
   HRESULT GoBack() { return RecordCommand(L"back"); }
   HRESULT GoForward() { return RecordCommand(L"forward"); }
   HRESULT OpenDevToolsWindow() { return RecordCommand(L"devtools"); }
+  HRESULT CallDevToolsProtocolMethod(LPCWSTR, LPCWSTR, void*) { return E_FAIL; }
   void Complete(HRESULT hr) {
     if (pending.empty()) { std::fprintf(stderr, "unexpected empty completion queue\n"); std::abort(); }
     Pending p = std::move(pending.front()); pending.pop_front();
@@ -64,6 +66,12 @@ struct FakeWebView {
   size_t Count(const std::wstring& command) const { return std::count_if(records.begin(), records.end(), [&](const Record& r) { return r.command == command; }); }
 };
 struct FakeController { void MoveFocus(int) {} };
+using ICoreWebView2_11 = FakeWebView;
+constexpr int IID_ICoreWebView2_11 = 11;
+// No authentication transport is installed in this popup-only COM envelope.
+// Host::Destroy must still compile its exact session-retirement branch.
+std::wstring JsonString(const std::wstring& value) { return value; }
+
 
 using ICoreWebView2 = FakeWebView;
 struct CoString {
@@ -108,6 +116,10 @@ template<class T> struct Com {
   T* operator->() const { return get(); }
   explicit operator bool() const { return get() != nullptr; }
 };
+struct PopupWebViewPointer : std::shared_ptr<FakeWebView> {
+  PopupWebViewPointer(std::shared_ptr<FakeWebView> value) : std::shared_ptr<FakeWebView>(std::move(value)) {}
+  template<class T> bool As(int, Com<T>*) const { return false; }
+};
 struct PopupArgs {
   std::shared_ptr<ICoreWebView2NewWindowRequestedEventArgs> value;
   bool As(int, Com<ICoreWebView2NewWindowRequestedEventArgs>* out) { out->value=value; return !!value; }
@@ -124,7 +136,13 @@ struct Host {
   void CompleteNewWindow(int64_t id, Host* window);
   void Destroy();
 };
+// Authentication has independent worker/coordinator tests. This boundary lets
+// the exact Stop/Destroy methods notify it without simulating browser CDP.
+struct AuthListenerBoundary { int OnNetworkEvent(const std::wstring&, const std::wstring&) { return 0; } };
 struct Host::Impl : std::enable_shared_from_this<Host::Impl> {
+  AuthListenerBoundary* listener = nullptr;
+  bool auth_ready = false, auth_setup_pending = false;
+  std::map<std::wstring, std::wstring> auth_sessions;
   struct Deferred { PopupArgs args; std::shared_ptr<Deferral> deferral; };
   std::map<int64_t, Deferred> deferred;
   int64_t next_deferred = 1;
@@ -141,7 +159,7 @@ struct Host::Impl : std::enable_shared_from_this<Host::Impl> {
   std::vector<std::function<void(Impl*)>> pending;
   std::deque<std::function<void(Impl*)>> document_script_waiters;
   std::vector<std::function<void(void*)>> service_waiting;
-  std::shared_ptr<FakeWebView> webview = std::make_shared<FakeWebView>();
+  PopupWebViewPointer webview = std::make_shared<FakeWebView>();
   std::shared_ptr<FakeController> controller = std::make_shared<FakeController>();
   HWND container = nullptr;
   int reports = 0;

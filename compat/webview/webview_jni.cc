@@ -77,6 +77,7 @@ void CheckException(JNIEnv* env) {
 class JavaListener final : public Listener {
  public:
   JavaListener(JNIEnv* env, jobject peer) : peer_(env->NewGlobalRef(peer)) {}
+  bool UsesAuthBroker() const override { return true; }
 
   void OnEvent(int32_t type, int64_t id, int32_t arg, const std::wstring& a, const std::wstring& b,
                const std::wstring& c, const std::vector<uint8_t>* bytes) override {
@@ -267,6 +268,17 @@ void JNICALL WebView2Host_callDevTools(JNIEnv* env, jclass, jlong h, jstring met
 
 void JNICALL WebView2Host_listenDevTools(JNIEnv* env, jclass, jlong h, jstring event) {
   Get(h)->ListenDevTools(Str(env, event));
+}
+
+void JNICALL WebView2Host_authCommand(JNIEnv* env, jclass, jlong h, jstring session,
+                                      jstring method, jstring params, jlong token) {
+  Get(h)->AuthCommand(Str(env, session), Str(env, method), Str(env, params), token);
+}
+void JNICALL WebView2Host_authSession(JNIEnv* env, jclass, jlong h, jstring session, jstring worker) {
+  Get(h)->AuthSession(Str(env, session), Str(env, worker));
+}
+void JNICALL WebView2Host_authReady(JNIEnv*, jclass, jlong h, jboolean ready) {
+  Get(h)->AuthReady(ready == JNI_TRUE);
 }
 
 void JNICALL WebView2Host_completePermission(JNIEnv*, jclass, jlong h, jlong id, jint state,
@@ -464,6 +476,11 @@ const JNINativeMethod kMethods[] = {
      reinterpret_cast<void*>(&WebView2Host_callDevTools)},
     {"nListenDevTools", "(JLjava/lang/String;)V",
      reinterpret_cast<void*>(&WebView2Host_listenDevTools)},
+    {"nAuthCommand", "(JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;J)V",
+     reinterpret_cast<void*>(&WebView2Host_authCommand)},
+    {"nAuthSession", "(JLjava/lang/String;Ljava/lang/String;)V",
+     reinterpret_cast<void*>(&WebView2Host_authSession)},
+    {"nAuthReady", "(JZ)V", reinterpret_cast<void*>(&WebView2Host_authReady)},
     {"nCompletePermission", "(JJIZ)V", reinterpret_cast<void*>(&WebView2Host_completePermission)},
     {"nCompleteNewWindow", "(JJJ)V", reinterpret_cast<void*>(&WebView2Host_completeNewWindow)},
     {"nCompleteBasicAuth", "(JJZLjava/lang/String;Ljava/lang/String;)V",

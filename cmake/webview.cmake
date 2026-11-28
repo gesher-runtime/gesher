@@ -6,6 +6,10 @@
 # (with msvc_shims.cc); "dll" loads WebView2Loader.dll from dalvikvm's
 # directory at run time (shipped next to it).
 include(${CMAKE_CURRENT_LIST_DIR}/webview2_sdk.cmake)
+foreach(_auth_file manifest.json worker.js)
+  configure_file(${CMAKE_SOURCE_DIR}/assets/webview-auth-extension/${_auth_file}
+    ${CMAKE_BINARY_DIR}/webview-auth-extension/${_auth_file} COPYONLY)
+endforeach()
 
 set(GESHER_WEBVIEW2_LOADER "static" CACHE STRING "How dalvikvm gets the WebView2 loader: static or dll")
 set_property(CACHE GESHER_WEBVIEW2_LOADER PROPERTY STRINGS static dll)
