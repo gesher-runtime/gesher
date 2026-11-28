@@ -2,8 +2,8 @@
 """Reproducible, offline comparison of two separately pinned SDK platforms.
 
 SDK declarations and resource artifacts are evidence inputs, not runtime providers.
-The existing JVM descriptor parser is deliberately unchanged. This tool does not
-read constant values, signatures, annotations, exceptions, or method bodies.
+An optional pass compares encoded constant values. This tool does not read
+generic signatures, annotations, exceptions, or method bodies.
 """
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ MEASURED_FILES = (
     "data/res/values/public-final.xml", "data/res/values/public-staging.xml",
 )
 UNMEASURED = {
-    "java_constant_values": "ConstantValue attributes are not decoded.",
+    "java_constant_values": "ConstantValue comparison requires --include-constant-values.",
     "java_generics_annotations_exceptions":
         "Signature, annotation, annotation-default and Exceptions attributes are not decoded; data/annotations.zip is not compared.",
     "java_source_access_and_full_linkage":
@@ -256,7 +256,7 @@ def mapping_delta(before, after, category, rows):
     return counts
 
 
-def java_delta(before, after, rows):
+def java_delta(before, after, rows, *, include_constants=False):
     result = {"encoded_class_definitions": mapping_delta(
         {name: header(cls) for name, cls in before.items()},
         {name: header(cls) for name, cls in after.items()}, "java_class_header", rows)}
@@ -300,10 +300,20 @@ def java_delta(before, after, rows):
         role: dict(sorted(Counter("constructor" if item.name == "<init>" else item.kind for item in items.values()).items()))
         for role, items in (("before", old), ("after", new))
     }
+    if include_constants:
+        old_constants, new_constants = (
+            {(cls.name, key[1], key[2]): value
+             for cls in classes.values() for key, value in cls.constant_values.items()}
+            for classes in (before, after)
+        )
+        if not old_constants or not new_constants:
+            # A platform without any encoded constants was not measured, not unchanged.
+            raise ValueError("constant_values_unmeasured")
+        result["constant_values"] = mapping_delta(old_constants, new_constants, "java_constant_value", rows)
     return result
 
 
-def platform(path, pin):
+def platform(path, pin, *, include_constants=False):
     archive = archive_record(path)
     if any(archive[key] != pin["archive"][key] for key in ("bytes", "sha1", "sha256")):
         raise ValueError("platform_archive_pin_mismatch")
@@ -337,7 +347,7 @@ def platform(path, pin):
     with tempfile.TemporaryDirectory(prefix="sdk-platform-diff-") as temporary:
         jar = Path(temporary) / "android.jar"
         jar.write_bytes(blobs["android.jar"])
-        classes, java_manifest = java.archive_members(jar, "sdk", pin["id"])
+        classes, java_manifest = java.archive_members(jar, "sdk", pin["id"], include_constants=include_constants)
     profile.update({
         "id": pin["id"], "package_path": pin["package_path"], "archive": pin["archive"],
         "repository_package": pin["repository_package"], "artifacts": artifacts,
@@ -351,12 +361,13 @@ def platform(path, pin):
             "resource_files": resource_files}
 
 
-def compare(before_path, after_path, manifest):
+def compare(before_path, after_path, manifest, *, include_constants=False):
     if manifest.get("schema_version") != SCHEMA_VERSION or manifest["before"]["id"] == manifest["after"]["id"]:
         raise ValueError("invalid_comparison_manifest")
-    before, after = platform(before_path, manifest["before"]), platform(after_path, manifest["after"])
+    before = platform(before_path, manifest["before"], include_constants=include_constants)
+    after = platform(after_path, manifest["after"], include_constants=include_constants)
     rows = []
-    java_summary = java_delta(before["classes"], after["classes"], rows)
+    java_summary = java_delta(before["classes"], after["classes"], rows, include_constants=include_constants)
     aidl_summary = mapping_delta(before["aidl"], after["aidl"], "preprocessed_aidl_declaration", rows)
     resource_summary = {
         category: mapping_delta(before["resources"][category], after["resources"][category], f"resource_{category}", rows)
@@ -379,7 +390,7 @@ def compare(before_path, after_path, manifest):
         "project_source_context": manifest["project_source_context"],
         "profiles": {"before": before["profile"], "after": after["profile"]},
         "java": java_summary, "preprocessed_aidl": aidl_summary, "resources": resource_summary,
-        "unmeasured": UNMEASURED,
+        "unmeasured": dict(UNMEASURED),
         "generator_files_sha256": {path.name: hashlib.sha256(path.read_bytes()).hexdigest()
                                    for path in (Path(__file__), Path(java.__file__), Path(java.base.__file__))},
         "row_count": len(rows),
@@ -394,6 +405,13 @@ def compare(before_path, after_path, manifest):
             "No aggregate coverage percentage combines Java, preprocessed AIDL, resources, NDK, CompatChanges or behavior. Unmeasured dimensions have no denominator.",
         ],
     }
+    if include_constants:
+        del report["unmeasured"]["java_constant_values"]
+        report["interpretation"].append(
+            "ConstantValue rows compare public/protected static final field declarations. "
+            "The key is [declaring class, field, descriptor]. Longs use decimal strings and floating-point values use exact hexadecimal bits. "
+            "Absence means the input declaration has no measured attribute. Runtime values, field initializers "
+            "and constants already embedded in APKs are outside this comparison.")
     rows.sort(key=canonical)
     report["delta_rows_sha256"] = hashlib.sha256("".join(canonical(row) + "\n" for row in rows).encode("ascii")).hexdigest()
     return report, rows
@@ -417,13 +435,15 @@ def markdown(report):
     entries = [("Encoded class headers", report["java"]["encoded_class_definitions"]),
                ("Public/protected declarations", report["java"]["public_protected_declarations"]),
                ("Preprocessed AIDL declarations", report["preprocessed_aidl"])]
+    if "constant_values" in report["java"]:
+        entries.insert(2, ("Encoded Java constants", report["java"]["constant_values"]))
     entries += [(name.replace("_", " "), report["resources"][name]) for name in
                 ("final_public_ids", "active_staging_names", "staging_slots", "finalized_staging_alias_slots", "groups", "files")]
     for label, value in entries:
         numbers = [value[key] for key in ("before", "after", "added", "removed")]
         numbers += [value.get("changed", value.get("flags_changed", 0)), value["unchanged"]]
         lines.append("| " + label + " | " + " | ".join(f"{number:,}" for number in numbers) + " |")
-    lines += ["", "Changed means differing encoded headers, raw member access flags, annotation lists, ID/slot/group records, or file bytes in the respective row. Added/removed declarations are membership in the public/protected declared set, including visibility transitions.",
+    lines += ["", "Changes are measured within each row's dimension. Added/removed declarations are membership in the public/protected declared set, including visibility transitions.",
               "Resource views overlap: active names, slots, alias slots and file hashes are separate descriptions, not additive API counts.", "",
               "## Lookup of every before declaration in the after SDK", "", "| Outcome | Count |", "| --- | ---: |"]
     for status, count in report["java"]["before_declaration_target_lookup"]["status_counts"].items():
@@ -454,10 +474,13 @@ def main(argv=None):
     parser.add_argument("--before-archive", required=True, type=Path)
     parser.add_argument("--after-archive", required=True, type=Path)
     parser.add_argument("--out-dir", required=True, type=Path)
+    parser.add_argument("--include-constant-values", action="store_true",
+                        help="compare encoded ConstantValue attributes for public/protected static final fields")
     args = parser.parse_args(argv)
     try:
         manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
-        report, rows = compare(args.before_archive, args.after_archive, manifest)
+        report, rows = compare(args.before_archive, args.after_archive, manifest,
+                               include_constants=args.include_constant_values)
         write_report(args.out_dir, report, rows)
     except (OSError, ValueError, KeyError, zipfile.BadZipFile, ET.ParseError) as error:
         print(f"SDK platform comparison failed: {type(error).__name__}: {error}", file=sys.stderr)

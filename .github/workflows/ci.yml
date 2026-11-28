@@ -1595,6 +1595,7 @@ jobs:
             tools/web3
             tests/windows/shell
             tests/windows/graphics
+            tests/e2e
             tools/toolchain
             tools/host-pthread-authority
             .github/workflows
@@ -1662,6 +1663,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           "GESHER_PACKAGE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           $installer = Get-Item -LiteralPath "installer\gesher-setup-$version.exe"
+          python tests/e2e/runtime_provenance.py capture --dist dist --package tools/package --installer $installer.FullName
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $checksum = (Get-FileHash -LiteralPath $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
           "$checksum  $($installer.Name)" | Set-Content -LiteralPath 'installer\SHA256SUMS.txt' -Encoding ascii
           Get-ChildItem installer
@@ -1682,6 +1685,7 @@ jobs:
             installer/*-portable.zip
             installer/*-portable.zip.sha256
             installer/SHA256SUMS.txt
+            installer/gesher-runtime-provenance.json
 
       - name: Install, run Hello, uninstall
         shell: pwsh
@@ -2659,10 +2663,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tests/e2e/test_evidence_process.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tests/e2e/test_runtime_provenance.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $setup = (Get-ChildItem installer\gesher-setup-*.exe).FullName
           $env:GESHER_TRACE_MISSING_BOOT_CLASSES = '1'
           $env:GESHER_TRACE_WEBVIEW_NAVIGATION = '1'
-          pwsh -NoProfile -File tests/e2e/run-e2e.ps1 -Setup $setup -Out e2e-results -InvocationId $invocation -RequireApkIdentity -BuildTools $env:GESHER_TEST_BUILD_TOOLS
+          pwsh -NoProfile -File tests/e2e/run-e2e.ps1 -Setup $setup -Out e2e-results -InvocationId $invocation -RequireApkIdentity -RequireRuntimeProvenance -BuildTools $env:GESHER_TEST_BUILD_TOOLS
           exit $LASTEXITCODE
 
       - name: Show captured WebView navigation event diagnostics
@@ -2681,7 +2687,8 @@ jobs:
         if: always()
         shell: pwsh
         run: |
-          python tests/e2e/coverage.py --manifest tests/e2e/apps.json --observations e2e-results/observations.json --out-dir e2e-results --require-apk-identity
+          $app = Join-Path $env:LOCALAPPDATA 'Programs\Gesher'
+          python tests/e2e/coverage.py --manifest tests/e2e/apps.json --observations e2e-results/observations.json --out-dir e2e-results --require-apk-identity --installer-dir installer --installed-runtime $app
           $result = $LASTEXITCODE
           if (Test-Path e2e-results/coverage.md) {
             Get-Content e2e-results/coverage.md | Add-Content $env:GITHUB_STEP_SUMMARY
@@ -3067,13 +3074,16 @@ jobs:
         run: |
           pwsh -NoProfile -File tests/windows/run-web3-query-component.ps1 -Dir "$PWD/dist" -RuntimeExe "$PWD/dist/dalvikvm-web3-query-test.exe" | Tee-Object -FilePath web3-query-results.txt
           exit $LASTEXITCODE
+      # Preserve process and device logs without copying the staged runtime and host fonts.
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: web3-query-full-logs-${{ matrix.os }}
           path: |
             web3-query-results.txt
-            ${{ runner.temp }}/web3-query-component-${{ github.run_id }}/**
+            ${{ runner.temp }}/web3-query-component-${{ github.run_id }}/*.log
+            ${{ runner.temp }}/web3-query-component-${{ github.run_id }}/logs/**
+            ${{ runner.temp }}/web3-query-component-${{ github.run_id }}/logs-query-device/**
           if-no-files-found: warn
 
   # Ordinary Binder scope is mandatory and separate from production installer

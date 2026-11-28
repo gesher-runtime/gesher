@@ -21,7 +21,7 @@ def uleb(value):
     return bytes(result + bytes([value]))
 
 
-def classfile(name="sample/AChild", parent="sample/ZParent", members=(), interfaces=()):
+def classfile(name="sample/AChild", parent="sample/ZParent", members=(), interfaces=(), constants=None):
     cp = []
     def text(value):
         value = value.encode("utf-8")
@@ -36,12 +36,48 @@ def classfile(name="sample/AChild", parent="sample/ZParent", members=(), interfa
     fields, methods = [], []
     for kind, member, desc, flags in members:
         target = fields if kind == "field" else methods
-        target.append(struct.pack(">HHHH", flags, text(member), text(desc), 0))
+        name_index, desc_index = text(member), text(desc)
+        if member in (constants or {}):
+            tag, raw = constants[member]
+            if tag == 8:
+                raw = struct.pack(">H", text(raw))
+            cp.append(bytes([tag]) + raw)
+            value_index = len(cp)
+            if tag in (5, 6):
+                cp.append(b"")
+            target.append(struct.pack(">HHHHHIH", flags, name_index, desc_index, 1, text("ConstantValue"), 2, value_index))
+        else:
+            target.append(struct.pack(">HHHH", flags, name_index, desc_index, 0))
     return (b"\xca\xfe\xba\xbe" + struct.pack(">HHH", 0, 52, len(cp) + 1) + b"".join(cp)
             + struct.pack(">HHHH", 1, this, sup, len(parents))
             + b"".join(struct.pack(">H", value) for value in parents)
             + struct.pack(">H", len(fields)) + b"".join(fields)
             + struct.pack(">H", len(methods)) + b"".join(methods) + b"\x00\x00")
+
+
+class ClassConstantTests(unittest.TestCase):
+    def test_decodes_exposed_constants_using_declared_type(self):
+        exported = audit.PUBLIC | audit.STATIC | audit.FINAL
+        protected = audit.PROTECTED | audit.STATIC | audit.FINAL
+        private = audit.PRIVATE | audit.STATIC | audit.FINAL
+        data = classfile(members=(("field", "INT", "I", exported), ("field", "LONG", "J", protected),
+                                  ("field", "STR", "Ljava/lang/String;", exported),
+                                  ("field", "FLOAT", "F", exported), ("field", "DOUBLE", "D", exported),
+                                  ("field", "PRIVATE", "I", private), ("field", "DYNAMIC", "I", exported)),
+                         constants={"INT": (3, struct.pack(">i", -10)), "LONG": (5, struct.pack(">q", -(1 << 60))),
+                                    "STR": (8, "sample π"), "FLOAT": (4, bytes.fromhex("80000000")),
+                                    "DOUBLE": (6, bytes.fromhex("7ff8000000000001")), "PRIVATE": (3, bytes(4))})
+        self.assertEqual(audit.class_members(data).constant_values, {})
+        values = audit.class_members(data, include_constants=True).constant_values
+        self.assertEqual(values, {("field", "INT", "I"): -10, ("field", "LONG", "J"): str(-(1 << 60)),
+                                  ("field", "STR", "Ljava/lang/String;"): "sample π", ("field", "FLOAT", "F"): "0x80000000",
+                                  ("field", "DOUBLE", "D"): "0x7ff8000000000001"})
+
+    def test_rejects_constant_pool_tag_mismatch_in_measured_fields(self):
+        flags = audit.PUBLIC | audit.STATIC | audit.FINAL
+        data = classfile(members=(("field", "VALUE", "I", flags),), constants={"VALUE": (4, bytes(4))})
+        with self.assertRaisesRegex(audit.InvalidInput, "invalid_constant_value_pool_entry"):
+            audit.class_members(data, include_constants=True)
 
 
 def fix_dex(data):

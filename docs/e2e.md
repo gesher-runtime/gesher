@@ -109,9 +109,34 @@ Identity fields distinguish measured bytes from declared or unknown values:
   labelled **declared properties**, not measured Java APIs or hardware support.
   `target_sdk` is taken from the actual successful package-parser log when
   available. Neither metadata source is inferred from an app's display name.
-- The test checkout SHA is separate from the runtime source revision. The
-  latter, AOSP tag, selected app ABI, modules, providers, hardware profile and
-  Android reference stay null until a future collector can verify them.
+- The checkout SHA identifies the test code. The verified CI installer chain
+  below separately identifies the runtime source. AOSP tag, app ABI selection,
+  modules, providers, hardware profile and Android reference remain unmeasured.
+
+### CI installer and runtime provenance
+
+The package job records its checkout revision, the completed Setup executable's
+SHA-256 and 18 component fingerprints in `gesher-runtime-provenance.json`.
+The fingerprints come from the verified staging files and the launcher scripts
+used as installer inputs. The receipt travels inside the authenticated
+`gesher-setup` Actions artifact alongside Setup. The public release asset set
+continues to contain the installer, portable ZIP and their checksums.
+
+Before launching an APK, the e2e runner requires Setup to exit successfully,
+then compares Setup and the actual installed files against the package receipt.
+This covers the launcher scripts, ART, framework, the framework boot OAT,
+Binder executables, ANGLE and the ARM64 translator. The coverage reporter
+repeats these checks against the verified artifact and installed bytes and
+matches them to the invocation ledger. Missing receipts, a different
+checkout, changed Setup or component bytes, an unsuccessful install and
+recorded/observed mismatches fail the evidence gate. A retained installer
+accepted by the existing same-source Actions artifact policy is still eligible.
+
+The coverage profiles include the verified runtime revision and Setup digest.
+This verifies the named installed components, with actual ABI selection,
+loaded providers and functional coverage measured separately. Local runs
+without the CI artifact retain the existing measured component hashes and an
+unknown runtime source.
 
 ### Measured APK identity and profile rows
 

@@ -18,10 +18,14 @@ param(
   [string[]] $Only = @(),
   [switch] $SkipInstall,
   [switch] $RequireApkIdentity,
+  [switch] $RequireRuntimeProvenance,
   [string] $BuildTools = '',
   [string] $InvocationId = ([guid]::NewGuid().ToString('N'))
 )
 $ErrorActionPreference = 'Stop'
+if ($RequireRuntimeProvenance -and $SkipInstall) {
+  throw 'Required runtime provenance applies to an installer deployment'
+}
 $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 . (Join-Path $PSScriptRoot 'apks.ps1')
 . (Join-Path $PSScriptRoot 'evidence.ps1')
@@ -55,13 +59,17 @@ if (-not $SkipInstall) {
   $script:E2eEvidence.runtime.installation_mode = 'installer'
   $script:E2eEvidence.runtime.installer_sha256 = (Get-FileHash -LiteralPath $setupExe -Algorithm SHA256).Hash.ToLowerInvariant()
   Write-E2eEvidence
-  Start-Process $setupExe -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait
+  $installation = Start-Process $setupExe -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait -PassThru
+  $script:E2eEvidence.runtime.installer_exit_code = $installation.ExitCode
+  Write-E2eEvidence
+  if ($installation.ExitCode -ne 0) { throw "Gesher installation failed: $($installation.ExitCode)" }
 } else {
   $script:E2eEvidence.runtime.installation_mode = 'existing_install'
   Write-E2eEvidence
 }
 if (-not (Test-Path "$app\gesher-app.cmd")) { throw "Gesher is not installed in $app" }
 Set-E2eRuntime $app
+if ($RequireRuntimeProvenance) { Set-E2eRuntimeProvenance $app $setupExe }
 Report "INFO  e2e: Gesher installed in $app"
 
 $apks = Join-Path $env:TEMP 'gesher-e2e'  # on Gesher's drive

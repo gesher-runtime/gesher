@@ -1,10 +1,12 @@
 """Normal SDK artifact fixtures test distinct evidence dimensions and replay."""
 from copy import deepcopy
 import hashlib
+import contextlib
 import io
 import json
 from pathlib import Path
 import shutil
+import struct
 import sys
 import tempfile
 import unittest
@@ -75,6 +77,76 @@ def cls(name, parent="java.lang.Object", items=(), interfaces=(), flags=diff.jav
 
 
 class SdkPlatformDiffTest(unittest.TestCase):
+    def test_cli_compares_pinned_constants_without_changing_member_deltas(self):
+        flags = diff.java.PUBLIC | diff.java.STATIC | diff.java.FINAL
+        fields = tuple(("field", name, "I", flags) for name in ("ADDED", "CHANGED", "REMOVED", "SAME"))
+
+        def platform_with_constants(path, identity, api, values):
+            jar = io.BytesIO()
+            write_zip(jar, {"sample/AChild.class": classfile(members=fields, constants={
+                name: (3, struct.pack(">i", value)) for name, value in values.items()
+            })})
+            return fixture_platform(path, identity, api, "17", {"android.jar": jar.getvalue()})
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            before, after = root / "before.zip", root / "after.zip"
+            manifest = {"schema_version": 1, "comparison_id": "sdk-constant-fixture",
+                        "before": platform_with_constants(before, "before", "36", {"CHANGED": 1, "REMOVED": 0, "SAME": 8}),
+                        "after": platform_with_constants(after, "after", "37.0", {"ADDED": 0, "CHANGED": 2, "SAME": 8}),
+                        "repository_metadata_provenance": {}, "project_source_context": {}}
+            manifest_path = root / "manifest.json"
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            out = root / "report"
+            args = ["--manifest", str(manifest_path), "--before-archive", str(before),
+                    "--after-archive", str(after), "--out-dir", str(out)]
+
+            self.assertEqual(diff.main([*args, "--include-constant-values"]), 0)
+            report = json.loads((out / "summary.json").read_text(encoding="utf-8"))
+            self.assertNotIn("java_constant_values", report["unmeasured"])
+            self.assertEqual(report["java"]["constant_values"],
+                             {"before": 3, "after": 3, "added": 1, "removed": 1, "changed": 1, "unchanged": 1})
+            self.assertEqual(report["java"]["public_protected_declarations"]["unchanged"], 4)
+            rows = [json.loads(line) for line in (out / "delta.jsonl").read_text(encoding="ascii").splitlines()]
+            self.assertEqual({tuple(row["key"]): (row["change"], row["before"], row["after"]) for row in rows}, {
+                ("sample.AChild", "ADDED", "I"): ("added", None, 0),
+                ("sample.AChild", "CHANGED", "I"): ("changed", 1, 2),
+                ("sample.AChild", "REMOVED", "I"): ("removed", 0, None),
+            })
+            self.assertIn("| Encoded Java constants | 3 | 3 | 1 | 1 | 1 | 1 |",
+                          (out / "README.md").read_text(encoding="utf-8"))
+            self.assertEqual(diff.main(args), 0)
+            default_report = json.loads((out / "summary.json").read_text(encoding="utf-8"))
+            self.assertIn("java_constant_values", default_report["unmeasured"])
+            self.assertEqual((out / "delta.jsonl").read_bytes(), b"")
+
+    def test_constant_comparison_without_constants_fails_instead_of_reporting_zero(self):
+        flags = diff.java.PUBLIC | diff.java.STATIC | diff.java.FINAL
+        fields = (("field", "VALUE", "I", flags),)
+
+        def platform_with(path, identity, api, constants):
+            jar = io.BytesIO()
+            write_zip(jar, {"sample/AChild.class": classfile(members=fields, constants=constants)})
+            return fixture_platform(path, identity, api, "17", {"android.jar": jar.getvalue()})
+
+        for before_constants, after_constants in (({}, {"VALUE": (3, struct.pack(">i", 1))}),
+                                                  ({"VALUE": (3, struct.pack(">i", 1))}, {}), ({}, {})):
+            with tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                before, after = root / "before.zip", root / "after.zip"
+                manifest = {"schema_version": 1, "comparison_id": "sdk-constant-missing",
+                            "before": platform_with(before, "before", "36", before_constants),
+                            "after": platform_with(after, "after", "37.0", after_constants),
+                            "repository_metadata_provenance": {}, "project_source_context": {}}
+                manifest_path = root / "manifest.json"
+                manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+                args = ["--manifest", str(manifest_path), "--before-archive", str(before),
+                        "--after-archive", str(after), "--out-dir", str(root / "report")]
+                with contextlib.redirect_stderr(io.StringIO()) as stderr:
+                    self.assertEqual(diff.main([*args, "--include-constant-values"]), 1)
+                self.assertIn("constant_values_unmeasured", stderr.getvalue())
+                self.assertEqual(diff.main(args), 0)
+
     def test_profiles_keep_minor_extension_revision_and_absent_preview_separate(self):
         before = diff.sdk_profile(sdk_properties(), repository())
         after = diff.sdk_profile(sdk_properties("36.1", "22", "3", "0"), repository("36.1", "22", "3"))

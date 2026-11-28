@@ -5,6 +5,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -234,6 +235,76 @@ public class Probe {
             self.assertEqual(framework_input['class_definitions'], 4)
             self.assertEqual(app_input['class_definitions'], 4)
             self.assertNotEqual(framework_input['sha256'], app_input['sha256'])
+
+
+class RegistryEvidenceTests(unittest.TestCase):
+    def test_registry_matches_direct_code_and_attributes_declared_framework_interface(self):
+        source = r'''
+import android.app.IActivityManager;
+// import other.IActivityManager;
+// services.put("comment", StandIn.of(IActivityManager.class, delegate));
+String quoted = "services.put(\"quoted\", delegate)";
+String textBlock = """
+    services.put("text-block", StandIn.of(IActivityManager.class, delegate));
+    """;
+other.services.put("another-map", delegate);
+services.put("a,b", StandIn.of(IActivityManager.class, delegate).asBinder());
+services.put(
+    Context.DEVICE_IDLE_CONTROLLER,
+    /* wrapper */ StandIn.of(android.os.IDeviceIdleController.class, delegate).asBinder());
+services.put(/* key */ "literal", StandIn.of(android.app.NotAnInterface.class, value));
+services.put(Context.UNKNOWN_SERVICE, StandIn.of(Unknown.class, value));
+services.put("wrapped", register(StandIn.of(IActivityManager.class, delegate)));
+'''
+        def ref(path, text, offset):
+            return {'path': path, 'line': text.count('\n', 0, offset) + 1}
+
+        framework = {
+            'android.app.IActivityManager': cls('android.app.IActivityManager', flags=audit.members.INTERFACE),
+            'android.app.NotAnInterface': cls('android.app.NotAnInterface'),
+        }
+        rows = audit.registry_rows('Services.java', source, {'DEVICE_IDLE_CONTROLLER': 'deviceidle'},
+                                   framework, ref)
+        self.assertEqual([r['resolved_key'] for r in rows], ['a,b', 'deviceidle', 'literal', None, 'wrapped'])
+        self.assertEqual([r['binder_interface'] for r in rows],
+                         ['android.app.IActivityManager', 'android.os.IDeviceIdleController',
+                          'android.app.NotAnInterface', None, None])
+        self.assertEqual([r['binder_interface_status'] for r in rows],
+                         ['framework_interface_attributed', 'framework_interface_unavailable',
+                          'framework_definition_not_interface', 'class_literal_unresolved',
+                          'adapter_not_attributed'])
+        self.assertEqual(rows[3]['binder_interface_class_literal'], 'Unknown')
+        self.assertEqual(rows[0]['source'], {'path': 'Services.java', 'line': 10})
+        self.assertTrue(all(r['status'] == 'registered_source_unverified' for r in rows))
+
+    def test_registry_parses_parenthesised_keys_and_this_receiver(self):
+        source = """
+services.put(keyFor("a"), StandIn.of(android.app.IActivityManager.class, delegate));
+this.services.put("q", z);
+other.services.put("foreign", z);
+"""
+        ref = lambda path, text, offset: {'path': path, 'line': 1}
+        rows = audit.registry_rows('Services.java', source, {}, {}, ref)
+        self.assertEqual([r['key_expression'] for r in rows], ['keyFor("a")', '"q"'])
+        self.assertEqual([r['resolved_key'] for r in rows], [None, 'q'])
+        self.assertEqual(rows[0]['binder_interface'], 'android.app.IActivityManager')
+
+    def test_unparsed_registration_fails_instead_of_disappearing(self):
+        ref = lambda path, text, offset: {'path': path, 'line': 1}
+        with self.assertRaisesRegex(ValueError, '1 services.put registration'):
+            audit.registry_rows('Services.java', 'services.put(unbalanced("a", z);', {}, {}, ref)
+
+    def test_context_values_include_non_service_suffix_and_ignore_failed_javap(self):
+        text = ('  public static final java.lang.String DEVICE_IDLE_CONTROLLER = "deviceidle";\n'
+                '  public static final java.lang.String ACTIVITY_SERVICE = "activity";\n'
+                '  public static final java.lang.String NOT_A_CONSTANT;\n')
+        with patch.object(audit.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, text)):
+            self.assertEqual(audit.read_context_constants(Path('framework.jar')),
+                             ({'DEVICE_IDLE_CONTROLLER': 'deviceidle', 'ACTIVITY_SERVICE': 'activity'},
+                              'context_constants_inspected'))
+        with patch.object(audit.subprocess, 'run', return_value=subprocess.CompletedProcess([], 1, text)):
+            self.assertEqual(audit.read_context_constants(Path('framework.jar')),
+                             ({}, 'context_constants_unmeasured'))
 
 
 class JniEvidenceTests(unittest.TestCase):
