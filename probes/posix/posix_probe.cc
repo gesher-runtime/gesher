@@ -5,12 +5,15 @@
 // (getppid, kill between processes, resource limits), built against gesher-base's Linux headers like AOSP code.
 //
 //   posix_probe                 all checks; prints "all passed" and exits 0
+//   posix_probe --fork-captures  check private descriptor pins across a clone
 //   posix_probe --timezone      prints the content of /etc/timezone
 //   posix_probe --child <mode>  a child for the kill checks (below)
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <ftw.h>
+#include <gesher/file_description.h>
+#include <gesher/fork.h>
 #include <locale.h>
 #include <poll.h>
 #include <pthread.h>
@@ -1233,9 +1236,83 @@ static void Processes() {
   cap_free(caps);
 }
 
+static bool IsOpenHandle(HANDLE handle) {
+  DWORD flags = 0;
+  return GetHandleInformation(handle, &flags) != 0;
+}
+
+static int CheckForkCapturesInChild(int fd, HANDLE own_pin, HANDLE worker_pin) {
+  if (IsOpenHandle(worker_pin)) return 1;
+  if (!IsOpenHandle(own_pin)) return 2;
+  char byte = 0;
+  return read(fd, &byte, 1) == 0 ? 0 : 3;
+}
+
+static int ForkCaptures() {
+  int fd = open("/dev/null", O_RDONLY | O_CLOEXEC);
+  if (fd < 0) return 1;
+  auto own_capture = gesher::CaptureDescriptor(fd);
+  HANDLE ready = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  HANDLE done = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  if (!own_capture || !ready || !done) return 1;
+
+  struct Worker {
+    int fd;
+    HANDLE ready, done, pin = nullptr;
+  } worker{fd, ready, done};
+  HANDLE thread = CreateThread(nullptr, 0, +[](void* raw) -> DWORD {
+    auto& worker = *static_cast<Worker*>(raw);
+    auto capture = gesher::CaptureDescriptor(worker.fd);
+    if (capture) worker.pin = capture->handle;
+    SetEvent(worker.ready);
+    if (WaitForSingleObject(worker.done, 30000) != WAIT_OBJECT_0) return 1;
+    return capture && IsOpenHandle(capture->handle) ? 0 : 1;
+  }, &worker, 0, nullptr);
+  if (!thread) return 1;
+
+  if (WaitForSingleObject(ready, 5000) == WAIT_OBJECT_0 &&
+      worker.pin && IsOpenHandle(worker.pin)) {
+    gesher::PrepareFork();
+    if (gesher::AcquireForkLocks(nullptr, nullptr, 2000) == 0) {
+      HANDLE process = nullptr;
+      DWORD pid = 0;
+      const int cloned = gesher::CloneProcess(&process, &pid);
+      gesher::ReleaseForkLocks(cloned == 0);
+      if (cloned == 0) {
+        TerminateProcess(GetCurrentProcess(), CheckForkCapturesInChild(fd, own_capture->handle, worker.pin));
+      }
+      CHECK(cloned == 1);
+      if (cloned == 1) {
+        DWORD status = STILL_ACTIVE;
+        if (WaitForSingleObject(process, 5000) != WAIT_OBJECT_0) TerminateProcess(process, 4);
+        CHECK(GetExitCodeProcess(process, &status) && status == 0);
+        if (status != 0) printf("fork capture child status: %lu\n", status);
+        CloseHandle(process);
+        gesher::ForgetChildMailbox(pid);
+      }
+    } else {
+      CHECK(false && "could not acquire the fork lock set");
+    }
+  } else {
+    CHECK(false && "the worker did not acquire a private descriptor pin");
+  }
+  SetEvent(done);
+  DWORD worker_status = STILL_ACTIVE;
+  if (WaitForSingleObject(thread, 5000) != WAIT_OBJECT_0) TerminateProcess(GetCurrentProcess(), 5);
+  CHECK(GetExitCodeThread(thread, &worker_status) && worker_status == 0);
+  CHECK(!IsOpenHandle(worker.pin));
+  CloseHandle(thread);
+  CloseHandle(ready);
+  CloseHandle(done);
+  close(fd);
+  if (fails == 0) puts("fork descriptor captures passed");
+  return fails != 0;
+}
+
 int main(int argc, char** argv) {
   setvbuf(stdout, nullptr, _IONBF, 0);
   if (argc == 3 && strcmp(argv[1], "--child") == 0) return RunChild(argv[2]);
+  if (argc == 2 && strcmp(argv[1], "--fork-captures") == 0) return ForkCaptures();
   if (argc == 2 && strcmp(argv[1], "--timezone") == 0) {
     printf("%s\n", ReadAll("/etc/timezone").c_str());
     return 0;

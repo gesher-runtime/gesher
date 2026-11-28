@@ -13,9 +13,11 @@ from __future__ import annotations
 import argparse
 import hashlib
 import os
+import re
 from pathlib import Path
 import shlex
 import subprocess
+import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -26,6 +28,51 @@ def section(source: str, first: str, following: str) -> str:
         raise ValueError("ambiguous production boundary: " + first)
     start = source.index(first)
     return source[start:source.index(following, start)]
+
+
+# Immutable main ancestor: the callback still requires DOS drive-name lookup.
+# Unlike a PR head, this control survives rebases and squash merging.
+BASELINE_REF = "e2685dc71e01122b25283ae17f5a2828bfc3f1f1"
+DOS_DENIED_FAILURE = "FAIL directory identity NT route preserves immediate named modify (errno="
+
+
+def baseline_negative(args: argparse.Namespace) -> bool:
+    command = [sys.executable, str(Path(__file__).resolve()), "--source-ref", BASELINE_REF,
+               "--cxx", args.cxx]
+    if args.sanitize:
+        command += ["--sanitize"]
+    # Keep a small durable log even when generated translation units are temporary.
+    directory = args.keep_dir or ROOT / "out/inotify-routing-controls"
+    directory.mkdir(parents=True, exist_ok=True)
+    log = directory / ("baseline-negative-sanitize.log" if args.sanitize else "baseline-negative.log")
+    try:
+        result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=180)
+        output = result.stdout + result.stderr
+        # A missing ancestor, compile failure, abort, or sanitizer failure cannot
+        # establish the intended before/after behavior. Require the host corpus
+        # to complete and fail at the explicit DOS-denied callback assertion.
+        failed_roles = re.findall(r"(?m)^FAIL (reference|production-host): exit=([^\r\n]+)\r?$", output)
+        reference = re.findall(r"(?m)^inotify routing Linux reference: [1-9]\d* checks, 0 failures\r?$", output)
+        host = re.findall(r"(?m)^inotify routing production host: [1-9]\d* checks, [1-9]\d* failures\r?$", output)
+        intended = re.search(r"(?m)^" + re.escape(DOS_DENIED_FAILURE) + r"\d+\)\r?$", output)
+        passed = result.returncode == 1 and bool(intended) and len(reference) == len(host) == 1 and \
+            failed_roles == [("production-host", "1")] and not any(
+                marker in output for marker in ("ERROR: AddressSanitizer", "runtime error:",
+                                                "LeakSanitizer:", "DEADLYSIGNAL", "Traceback (most recent call last):"))
+    except subprocess.TimeoutExpired as error:
+        def decoded(raw: str | bytes | None) -> str:
+            return raw.decode(errors="replace") if isinstance(raw, bytes) else raw or ""
+        output = decoded(error.stdout) + decoded(error.stderr) + "\ncontrol timed out\n"
+        passed = False
+    encoded = output.encode()
+    bounded = encoded if len(encoded) <= 65536 else (
+        encoded[:32000] + b"\n[log truncated]\n" + encoded[-32000:])
+    log.write_bytes(bounded)
+    print(("BASELINE_NEGATIVE_PASS" if passed else "FAIL baseline negative control") +
+          f" source={BASELINE_REF} log={log}", flush=True)
+    if not passed:
+        print(output[-4000:], flush=True)
+    return passed
 
 
 def main() -> int:
@@ -57,11 +104,21 @@ def main() -> int:
     if source.count(policy_include) > 1:
         raise ValueError("storage policy include is ambiguous")
     source = source.replace(policy_include, "")
+    # The Linux host maps the NT held-directory reopen boundary to a fresh
+    # open of the same Linux descriptor. Historic controls predate the helper.
+    reopen_include = '#include <gesher/directory_reopen.h>\n'
+    if source.count(reopen_include) != int("gesher::directory_reopen::Open(" in source):
+        raise ValueError("directory reopen boundary changed")
+    source = source.replace(reopen_include, "")
     host = (ROOT / "tests/native/inotify_write_routing_host.cc.in").read_text()
+    parent_routing = 'int directory_wd = 0;' in source and 'SameIdentity(held_parent, parent_id)' in source
+    if not args.source_ref and not parent_routing:
+        raise ValueError("current source omitted held-parent identity routing")
     pieces = {
         "INOTIFY_SOURCE": source,
         "TRANSFER_FILE_HANDLE": section(fd, "int TransferFileHandle(", "// Capture the object and shared description"),
         "HAS_ROUTING_INDEX": str(int("std::map<FileIdentity, int> identities;" in source)),
+        "HAS_PARENT_ID_ROUTING": str(int(parent_routing)),
     }
     for name, data in pieces.items():
         marker = "@" + name + "@"
@@ -115,6 +172,9 @@ int main() {
             if result.returncode:
                 failure = True
                 print(f"FAIL {role}: exit={result.returncode}\n{result.stderr[:8000]}", flush=True)
+    # Source controls never recurse, and measurement remains a single-source run.
+    if not failure and not args.source_ref and not args.measure:
+        failure = not baseline_negative(args)
     return int(failure)
 
 

@@ -181,10 +181,8 @@ ADR [0044](decisions/0044-rtl-scripts-and-locale.md). Branch `wip/rtl`.
 - **The folder**: `com.gesher.app.fonts.WindowsFonts.directory()`:
   `$GESHER_WINDOWS_FONTS` (`none` turns it off), else `%WINDIR%\Fonts` from
   the native (`GetSystemWindowsDirectoryW`; `compat/hwui/text/text_natives.cc`)
-  in Gesher's path form. It must be on the current drive (drive-less path,
-  ADR 0010), as an installed Gesher is; the tests, whose root is on `D:`,
-  make a junction `$root/windows-fonts` → `C:\Windows\Fonts` and name it with
-  `$GESHER_WINDOWS_FONTS` (`32-fonts.ps1`).
+  in Gesher's absolute path form. The native lookup omits the current drive
+  (ADR 0010) and uses `/mnt/<drive>/...` for another drive (ADR 0045).
 
 ### The locale from Windows
 

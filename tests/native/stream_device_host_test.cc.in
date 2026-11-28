@@ -37,6 +37,7 @@ namespace gesher {
 // storage authorization and live revocation run in storage_policy_host_test.
 enum class AccessKind { kStat, kRead, kWrite };
 static bool CheckExternalStorageAccess(const std::wstring&, AccessKind) { return true; }
+#include "uncontained_storage_fixture.h"
 enum class Device { kZero, kRandom };
 enum class DescriptorKind { kFile, kZero, kRandom };
 // The complete executable-owned OFD implementation is exercised by the OFD

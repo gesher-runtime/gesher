@@ -42,7 +42,7 @@ int WriteUser(void* destination, const void* source, size_t bytes) {
 }
 }  // namespace
 
-int PrepareOperation(HANDLE anchor, int command, void* user_flock, PreparedOperation* prepared) {
+int PrepareOperation(HANDLE anchor, int command, const void* user_flock, PreparedOperation* prepared) {
   if (!prepared) return EINVAL;
   const bool query = command == 5 || command == 36;  // F_GETLK/F_OFD_GETLK
   const bool ofd = command == 36 || command == 37;
@@ -79,14 +79,13 @@ int PrepareOperation(HANDLE anchor, int command, void* user_flock, PreparedOpera
   std::memcpy(&prepared->input, &input, sizeof(input));
   prepared->file = file;
   prepared->range = range;
-  prepared->user_flock = user_flock;
   prepared->query = query;
   prepared->ofd = ofd;
   return 0;
 }
 
 int ApplyOperation(RegistryState* state, const Owner& owner,
-                    const PreparedOperation& prepared, bool* mutated) {
+                    const PreparedOperation& prepared, LinuxFlock* output, bool* mutated) {
   if (!state || !mutated || state->locks.count > kRecordCapacity) return EINVAL;
   *mutated = false;
   if (static_cast<unsigned>(owner.kind) > 1 || (owner.low == 0 && owner.high == 0) ||
@@ -96,19 +95,19 @@ int ApplyOperation(RegistryState* state, const Owner& owner,
                    prepared.ofd ? -1 : static_cast<int32_t>(owner.low)};
 
   if (prepared.query) {
-    LinuxFlock output;
-    std::memcpy(&output, &prepared.input, sizeof(output));  // Preserve all nonconflicting input fields/padding.
+    if (!output) return EINVAL;
+    std::memcpy(output, &prepared.input, sizeof(*output));  // Preserve unchanged input fields and padding.
     const Record* conflict = FindConflict(state->locks, requested);
-    if (!conflict) output.type = 2;
+    if (!conflict) output->type = 2;
     else {
-      output.type = static_cast<int16_t>(conflict->kind);
-      output.whence = 0;
-      output.start = static_cast<int64_t>(conflict->range.start);
-      output.length = conflict->range.end == kThroughEof ? 0 :
-                      static_cast<int64_t>(conflict->range.end - conflict->range.start);
-      output.pid = conflict->pid;
+      output->type = static_cast<int16_t>(conflict->kind);
+      output->whence = 0;
+      output->start = static_cast<int64_t>(conflict->range.start);
+      output->length = conflict->range.end == kThroughEof ? 0 :
+                       static_cast<int64_t>(conflict->range.end - conflict->range.start);
+      output->pid = conflict->pid;
     }
-    return WriteUser(prepared.user_flock, &output, sizeof(output));
+    return 0;
   }
 
   int error = Replace(&state->locks, requested, kRecordCapacity);
@@ -117,13 +116,19 @@ int ApplyOperation(RegistryState* state, const Owner& owner,
   return 0;
 }
 
+int CopyQueryResult(const LinuxFlock& output, void* user_flock) {
+  return WriteUser(user_flock, &output, sizeof(output));
+}
+
 int NonblockingOperation(RegistryState* state, HANDLE anchor, const Owner& owner,
                          int command, void* user_flock, bool* mutated) {
   if (!mutated) return EINVAL;
   *mutated = false;
   PreparedOperation prepared{};
   int error = PrepareOperation(anchor, command, user_flock, &prepared);
-  return error ? error : ApplyOperation(state, owner, prepared, mutated);
+  LinuxFlock output{};
+  if (!error) error = ApplyOperation(state, owner, prepared, &output, mutated);
+  return !error && prepared.query ? CopyQueryResult(output, user_flock) : error;
 }
 
 }  // namespace gesher::record_locks

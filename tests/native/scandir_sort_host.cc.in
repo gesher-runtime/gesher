@@ -133,6 +133,7 @@ int BIONIC_SYSV CompareEntry(const BionicDirent** a, const BionicDirent** b) {
   return answer;
 }
 std::vector<BionicDirent> Reference(const Directory& dir, Order order) {
+  constexpr bool native_cookie = @SCANDIR_REFERENCE_USES_NATIVE_COOKIE@;
   std::vector<BionicDirent> result;
   DIR* d = ::opendir(dir.path.c_str()); if (!d) std::abort();
   int64_t position = 0;
@@ -141,7 +142,8 @@ std::vector<BionicDirent> Reference(const Directory& dir, Order order) {
     if (e->d_name[0] == '.') continue;
     BionicDirent value{};
     value.d_ino = e->d_ino ? e->d_ino : static_cast<uint64_t>(e->d_off);
-    value.d_off = position; value.d_type = e->d_type; value.d_reclen = sizeof(value);
+    value.d_off = native_cookie ? e->d_off : position;
+    value.d_type = e->d_type; value.d_reclen = sizeof(value);
     std::strcpy(value.d_name, e->d_name); result.push_back(value);
   }
   if (::closedir(d)) std::abort();

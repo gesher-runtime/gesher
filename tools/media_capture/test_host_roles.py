@@ -110,4 +110,81 @@ class CaptureRoles(unittest.TestCase):
         self.assertIn('--name media-capture-test --producer "build"', job)
 
 
+class CompileCommandRecords(unittest.TestCase):
+    """Synthetic metadata controls for the actual shared build-graph reader."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.build = Path(self.temp.name)
+        self.driver = self.build / 'x86_64-w64-mingw32-windres'
+        self.driver.write_text('SYNTHETIC_METADATA_ONLY_NOT_EXECUTABLE')
+        metadata = self.build / 'CMakeFiles' / 'metadata-only'
+        metadata.mkdir(parents=True)
+        (metadata / 'CMakeRCCompiler.cmake').write_text(
+            'set(CMAKE_RC_COMPILER "' + str(self.driver) + '")\n')
+        self.source = self.build / 'protected_runtime.rc'
+        self.row = dict(directory=str(self.build), file=str(self.source),
+                        output=str(self.build / 'protected_runtime.rc.res'),
+                        arguments=[str(self.driver), '-O', 'coff', '-I', str(self.build),
+                                   str(self.source), 'protected_runtime.rc.res'])
+
+    def read(self, rows=None):
+        (self.build / 'compile_commands.json').write_text(json.dumps(rows or [self.row]))
+        return roles.shared.commands(self.build)
+
+    def test_cmake_positional_resource_output_keeps_entire_command(self):
+        before = self.read()
+        key = (str(self.build), str(self.source), 'protected_runtime.rc.res')
+        self.assertEqual(before[key], self.row['arguments'])
+        self.row['arguments'].insert(3, '-DUNRELATED=1')
+        after = self.read()
+        self.assertEqual(before.keys(), after.keys())
+        self.assertNotEqual(before[key], after[key])
+
+    def test_optional_cmake_output_field_is_not_required(self):
+        self.row.pop('output')
+        self.assertEqual(len(self.read()), 1)
+
+    def test_missing_cxx_output_rejected(self):
+        self.row['file'] = str(self.build / 'source.cc')
+        with self.assertRaises(SystemExit): self.read()
+
+    def test_unknown_driver_rejected(self):
+        self.row['arguments'][0] = '/unknown/compiler'
+        with self.assertRaises(SystemExit): self.read()
+
+    def test_other_windres_driver_rejected(self):
+        other = self.build / 'other-windres'
+        other.write_text('SYNTHETIC_METADATA_ONLY_NOT_EXECUTABLE')
+        self.row['arguments'][0] = str(other)
+        with self.assertRaises(SystemExit): self.read()
+
+    def test_unknown_resource_option_rejected(self):
+        self.row['arguments'].insert(3, '--unknown')
+        with self.assertRaises(SystemExit): self.read()
+
+    def test_resource_input_disagreement_rejected(self):
+        self.row['arguments'][-2] = 'other.rc'
+        with self.assertRaises(SystemExit): self.read()
+
+    def test_resource_output_disagreement_rejected(self):
+        self.row['arguments'][-1] = 'other.rc.res'
+        with self.assertRaises(SystemExit): self.read()
+
+    def test_missing_resource_output_rejected(self):
+        self.row['arguments'].pop()
+        with self.assertRaises(SystemExit): self.read()
+
+    def test_duplicate_output_rejected(self):
+        with self.assertRaises(SystemExit): self.read([self.row, self.row])
+
+    def test_explicit_output_requires_one_value(self):
+        for command in (['compiler', '-o'], ['compiler', '-o', '-c'],
+                        ['compiler', '-o', 'a.obj', '-o', 'b.obj']):
+            with self.subTest(command=command):
+                self.row['arguments'] = command
+                with self.assertRaises(SystemExit): self.read()
+
+
 if __name__ == '__main__': unittest.main()

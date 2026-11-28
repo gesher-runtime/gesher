@@ -7,8 +7,8 @@
 // longer UTF-8 names), struct statvfs (bionic has 24 reserved bytes more),
 // struct timespec (64-bit tv_nsec), sysconf's and pathconf's name numbers
 // (bionic's own, not glibc's, which gesher-base uses), and fcntl's pointer
-// argument. A DIR from fdopendir owns its fd, as on Linux; dirfd opens one
-// on demand.
+// argument. The host DIR owns its directory descriptor, including one passed
+// to fdopendir; dirfd borrows that same descriptor.
 
 #include "shim_internal.h"
 
@@ -60,8 +60,6 @@ static_assert(sizeof(off_t) == 8, "gesher-base builds with 64-bit off_t");
 namespace {
 
 constexpr int kAtFdcwd = -100;
-constexpr int kAtRemovedir = 0x200;
-constexpr int kAtEmptyPath = 0x1000;
 constexpr int kODirectory = 0200000;
 
 // --- paths relative to a directory fd -----------------------------------------
@@ -82,7 +80,7 @@ bool PathOfFd(int fd, std::string* out) {
   if (gesher::ProcfsDescriptor(fd, out, &proc_directory)) {
     return proc_directory || (errno = kENOTDIR, false);
   }
-  auto h = reinterpret_cast<HANDLE>(_get_osfhandle(fd));
+  const HANDLE h = snapshot->handle;
   if (h == INVALID_HANDLE_VALUE || h == nullptr) return errno = kEBADF, false;
   wchar_t buf[32768];
   DWORD n = GetFinalPathNameByHandleW(h, buf, 32768, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
@@ -140,34 +138,46 @@ static_assert(sizeof(BionicDirent) == 280);
 
 struct ShimDir {
   DIR* host = nullptr;
-  int fd = -1;  // owned: from fdopendir, or opened by dirfd
   int64_t position = 0;  // opaque guest cookie, never narrowed to Windows long
-  std::string path;
   BionicDirent entry{};
   std::mutex mutex;
 };
 
 ShimDir* BIONIC_SYSV Opendir(const char* name) {
-  DIR* host = opendir(name);
-  if (host == nullptr) return nullptr;
+  // Use the same descriptor enumeration as fdopendir/scandirat: entry inodes,
+  // cookies and the held directory object must agree across all public APIs.
+  int fd = open(name, O_RDONLY | kODirectory | O_CLOEXEC, 0);
+  if (fd < 0) return nullptr;
+  DIR* host = fdopendir(fd);
+  if (host == nullptr) {
+    const int error = errno;
+    close(fd);
+    errno = error;
+    return nullptr;
+  }
   auto* d = new ShimDir();
   d->host = host;
-  d->path = name;
   return d;
 }
 ShimDir* BIONIC_SYSV Fdopendir(int fd) {
-  std::string path;
-  if (!PathOfFd(fd, &path)) return nullptr;
-  ShimDir* d = Opendir(path.c_str());
-  if (d != nullptr) d->fd = fd;
+  DIR* host = fdopendir(fd);
+  if (host == nullptr) return nullptr;
+  auto* d = new ShimDir();
+  d->host = host;
+  // fdopendir starts at the descriptor's current offset. Use the 64-bit
+  // descriptor query rather than Windows' long-sized telldir return type.
+  const int saved = errno;
+  const auto position = lseek(fd, 0, SEEK_CUR);
+  if (position >= 0) d->position = position;
+  errno = saved;
   return d;
 }
 bool Fill(ShimDir* d, BionicDirent* out) {
-  if (d->position == INT64_MAX) return errno = EOVERFLOW, false;
   struct dirent* e = readdir(d->host);
   if (e == nullptr) return false;
   out->d_ino = e->d_ino != 0 ? e->d_ino : static_cast<uint64_t>(e->d_off);
-  out->d_off = ++d->position;
+  d->position = e->d_off;
+  out->d_off = e->d_off;
   out->d_reclen = sizeof(BionicDirent);
   out->d_type = e->d_type;
   size_t n = std::strlen(e->d_name);
@@ -194,10 +204,9 @@ int BIONIC_SYSV ReaddirR(ShimDir* d, BionicDirent* entry, BionicDirent** result)
 }
 int BIONIC_SYSV Closedir(ShimDir* d) {
   if (d == nullptr) return errno = kEBADF, -1;
-  closedir(d->host);
-  if (d->fd >= 0) close(d->fd);
+  const int result = closedir(d->host);
   delete d;
-  return 0;
+  return result;
 }
 void BIONIC_SYSV Rewinddir(ShimDir* d) {
   if (d == nullptr) return;
@@ -223,8 +232,7 @@ void BIONIC_SYSV Seekdir(ShimDir* d, int64_t location) {
 int BIONIC_SYSV Dirfd(ShimDir* d) {
   if (d == nullptr) return errno = kEBADF, -1;
   std::lock_guard<std::mutex> lock(d->mutex);
-  if (d->fd < 0) d->fd = open(d->path.c_str(), O_RDONLY | kODirectory | O_CLOEXEC);
-  return d->fd;
+  return dirfd(d->host);
 }
 
 // scandir with the .so's System V filter and comparator; alphasort is the
@@ -389,14 +397,7 @@ int BIONIC_SYSV Openat(int dirfd, const char* path, int flags, int mode) {
 }
 int BIONIC_SYSV Fstatat(int dirfd, const char* path, struct stat* st, int flags) {
   std::memset(st, 0, sizeof(*st));
-  int r;
-  if ((flags & kAtEmptyPath) != 0 && path != nullptr && path[0] == 0) {
-    r = fstat(dirfd, st);
-  } else {
-    std::string p;
-    if (!AtPath(dirfd, path, &p)) return -1;
-    r = (flags & 0x100 /* AT_SYMLINK_NOFOLLOW */) != 0 ? lstat(p.c_str(), st) : stat(p.c_str(), st);
-  }
+  const int r = fstatat(dirfd, path, st, flags);
   if (r == 0) WidenStat(st);
   return r;
 }
@@ -443,9 +444,7 @@ int BIONIC_SYSV Remove(const char* path) {
   return remove(path);
 }
 int BIONIC_SYSV Unlinkat(int dirfd, const char* path, int flags) {
-  std::string p;
-  if (!AtPath(dirfd, path, &p)) return -1;
-  return PosixDelete(p.c_str(), (flags & kAtRemovedir) != 0);
+  return unlinkat(dirfd, path, flags);
 }
 int BIONIC_SYSV Mkdirat(int dirfd, const char* path, uint32_t mode) {
   std::string p;

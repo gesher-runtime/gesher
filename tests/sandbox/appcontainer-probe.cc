@@ -13,7 +13,17 @@
 // "all passed" and exits 0 when every expectation holds.
 #include <windows.h>
 
+#include <fcntl.h>
+#include <gesher/environment.h>
+#include <gesher/system_properties.h>
+#include <sys/epoll.h>
+#include <sys/eventfd.h>
+#include <sys/ioctl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
 #include <cstdio>
+#include <cerrno>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -24,7 +34,10 @@
 #include "services_zygote.h"
 
 namespace wire = gesher::binder_wire;
+namespace properties = gesher::properties;
 namespace {
+
+const std::string kProbeProperty = "test.gesher.sandbox";
 
 std::u16string U16(const std::wstring& value) {
   return {reinterpret_cast<const char16_t*>(value.data()), value.size()};
@@ -45,6 +58,32 @@ bool Transfer(HANDLE pipe, void* bytes, DWORD size, bool write) {
     size -= count;
   }
   return true;
+}
+
+bool EventLoopDescriptors() {
+  const int event = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+  if (event < 0) std::printf("event-loop: eventfd errno=%d\n", errno);
+  const int poller = epoll_create1(EPOLL_CLOEXEC);
+  if (poller < 0) std::printf("event-loop: epoll_create1 errno=%d\n", errno);
+  const int alias = event >= 0 ? fcntl(event, F_DUPFD_CLOEXEC, 32) : -1;
+  if (event >= 0 && alias < 0) std::printf("event-loop: fcntl duplicate errno=%d\n", errno);
+  epoll_event interest{};
+  interest.events = EPOLLIN;
+  interest.data.u64 = 19;
+  epoll_event ready{};
+  eventfd_t value = 0;
+  const char* failure = nullptr;
+  if (event < 0 || poller < 0 || alias < 32 || fcntl(alias, F_GETFD) != FD_CLOEXEC) failure = "open";
+  else if (epoll_ctl(poller, EPOLL_CTL_ADD, event, &interest) != 0) failure = "epoll_ctl";
+  else if (eventfd_write(alias, 1) != 0) failure = "eventfd_write";
+  else if (epoll_wait(poller, &ready, 1, 1000) != 1 ||
+           (ready.events & EPOLLIN) == 0 || ready.data.u64 != 19) failure = "epoll_wait";
+  else if (eventfd_read(event, &value) != 0 || value != 1) failure = "eventfd_read";
+  if (failure != nullptr) std::printf("event-loop: %s errno=%d\n", failure, errno);
+  if (alias >= 0) close(alias);
+  if (event >= 0) close(event);
+  if (poller >= 0) close(poller);
+  return failure == nullptr;
 }
 
 // Opens the device's pipe and says hello as (pid, uid). Returns the reply's status,
@@ -69,9 +108,96 @@ std::string Hello(const std::wstring& device, uint32_t pid, uint32_t uid) {
   return result;
 }
 
+bool VerifyWakeDescriptors() {
+  const int wake = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+  if (wake < 0) {
+    std::printf("eventfd errno %d\n", errno);
+    return false;
+  }
+  const int epoll = epoll_create1(EPOLL_CLOEXEC);
+  if (epoll < 0) {
+    std::printf("epoll_create1 errno %d\n", errno);
+    close(wake);
+    return false;
+  }
+  // Parcel.readFileDescriptor() takes its own close-on-exec duplicate.
+  const int alias = fcntl(wake, F_DUPFD_CLOEXEC, 10);
+  struct stat status{};
+  epoll_event watch{};
+  watch.events = EPOLLIN;
+  watch.data.u64 = 42;
+  epoll_event ready{};
+  eventfd_t counter = 0;
+  int available = -1, enabled = 1;
+  const bool passed = alias >= 10 && fcntl(alias, F_GETFD) == FD_CLOEXEC &&
+      fcntl(wake, F_GETFD) == FD_CLOEXEC &&
+      fcntl(epoll, F_GETFD) == FD_CLOEXEC && fcntl(epoll, F_GETFL) == O_RDWR &&
+      fcntl(epoll, F_SETFL, O_NONBLOCK) == 0 && fcntl(epoll, F_GETFL) == (O_RDWR | O_NONBLOCK) &&
+      fstat(epoll, &status) == 0 && S_ISCHR(status.st_mode) &&
+      ioctl(epoll, FIONREAD, &available) == 0 && available == 0 &&
+      ioctl(epoll, FIONBIO, &enabled) < 0 && errno == ENOTTY &&
+      epoll_ctl(epoll, EPOLL_CTL_ADD, wake, &watch) == 0 &&
+      epoll_wait(epoll, &ready, 1, 0) == 0 &&
+      eventfd_read(alias, &counter) < 0 && errno == EAGAIN &&
+      eventfd_write(alias, 3) == 0 &&
+      epoll_wait(epoll, &ready, 1, 1000) == 1 && ready.data.u64 == 42 &&
+      (ready.events & EPOLLIN) != 0 && eventfd_read(wake, &counter) == 0 &&
+      counter == 3 && epoll_wait(epoll, &ready, 1, 0) == 0;
+  if (!passed) {
+    std::printf("wake descriptor check failed: alias=%d errno=%d st_mode=%o available=%d counter=%llu\n",
+                alias, errno, static_cast<unsigned>(status.st_mode), available,
+                static_cast<unsigned long long>(counter));
+  }
+  if (alias >= 0) close(alias);
+  close(epoll);
+  close(wake);
+  return passed;
+}
+
+bool VerifyReadOnlyProperties() {
+  DWORD contained = 0, size = 0;
+  if (!GetTokenInformation(GetCurrentProcessToken(), TokenIsAppContainer,
+                           &contained, sizeof(contained), &size)) return false;
+  if (!contained) return true;
+
+  uint32_t initial_serial = 0;
+  std::string value;
+  if (!properties::Get(kProbeProperty, &value, &initial_serial) || value != "initial" ||
+      properties::Set(kProbeProperty, "unauthorized")) return false;
+  wchar_t data_root[MAX_PATH];
+  const DWORD root_length = GetEnvironmentVariableW(L"ANDROID_DATA", data_root, MAX_PATH);
+  if (root_length == 0 || root_length >= MAX_PATH) return false;
+  const std::wstring area_dir = std::wstring(data_root, root_length) + L"\\system\\gesher-properties\\";
+  WIN32_FIND_DATAW entry{};
+  HANDLE find = FindFirstFileW((area_dir + L"*.area").c_str(), &entry);
+  if (find == INVALID_HANDLE_VALUE) return false;
+  FindClose(find);
+  HANDLE writer = CreateFileW((area_dir + entry.cFileName).c_str(), GENERIC_WRITE,
+                              FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
+  if (writer != INVALID_HANDLE_VALUE) {
+    CloseHandle(writer);
+    return false;
+  }
+  if (GetLastError() != ERROR_ACCESS_DENIED) return false;
+  const uint32_t initial_area_serial = properties::AreaSerial();
+  const properties::WaitTimeout timeout{5, 0};
+  uint32_t serial = 0;
+  std::printf("property-reader-ready\n");
+  if (!properties::Wait(&kProbeProperty, initial_serial, &serial, &timeout) ||
+      serial == initial_serial || properties::AreaSerial() == initial_area_serial) return false;
+  const auto values = properties::List();
+  const auto current = values.find(kProbeProperty);
+  return current != values.end() && current->second.text == "updated" &&
+      current->second.serial == serial;
+}
+
 // In the container: what it may do. One line per check: "<check> <result>".
 int Child(const std::wstring& device, const std::wstring& canary, DWORD parent) {
   std::setvbuf(stdout, nullptr, _IONBF, 0);  // every line reaches the log, even on a crash
+  const bool wake_descriptors = VerifyWakeDescriptors();
+  std::printf("wake-descriptors %s\n", wake_descriptors ? "pass" : "fail");
+  close(STDIN_FILENO);
+  std::printf("event-loop %s\n", EventLoopDescriptors() ? "ready" : "failed");
   HANDLE file = CreateFileW(canary.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
                             OPEN_EXISTING, 0, nullptr);
   if (file != INVALID_HANDLE_VALUE) {
@@ -94,6 +220,7 @@ int Child(const std::wstring& device, const std::wstring& canary, DWORD parent) 
   std::printf("hello-app %s\n", Hello(device, self, 10123).c_str());
   std::printf("hello-system %s\n", Hello(device, self, 1000).c_str());
   std::printf("hello-other-pid %s\n", Hello(device, parent, 10123).c_str());
+  std::printf("read-only-properties %s\n", VerifyReadOnlyProperties() ? "pass" : "fail");
   std::fflush(stdout);
   return 0;
 }
@@ -179,6 +306,7 @@ std::string RunContained(const std::wstring& exe, const std::wstring& container,
                          const std::wstring& device, const std::wstring& canary,
                          const std::wstring& log) {
   DeleteFileW(log.c_str());
+  if (!properties::Set(kProbeProperty, "initial")) return "property setup failed\n";
   gesher::zygote::AppContainerSpec spec{U16(container), U16(container), capabilities};
   std::wstring command = L"\"" + exe + L"\" --child " + device + L" \"" + canary + L"\" " +
                          std::to_wstring(GetCurrentProcessId());
@@ -186,11 +314,20 @@ std::string RunContained(const std::wstring& exe, const std::wstring& container,
   if (pid <= 0) return "spawn error " + std::to_string(-pid) + "\n";
   // A freshly built probe's first start can be slow (an antivirus scan): wait long,
   // and say so rather than return an empty log.
-  for (int i = 0; i < 1200 && gesher::zygote::ExitCode(pid) == STILL_ACTIVE; ++i) Sleep(100);
-  if (gesher::zygote::ExitCode(pid) == STILL_ACTIVE) {
+  int code = gesher::zygote::ExitCode(pid);
+  bool published = false;
+  for (int i = 0; i < 1200 && code == STILL_ACTIVE; ++i) {
+    if (!published && ReadAll(log).find("property-reader-ready") != std::string::npos) {
+      published = properties::Set(kProbeProperty, "updated");
+    }
+    Sleep(100);
+    code = gesher::zygote::ExitCode(pid);
+  }
+  if (code == STILL_ACTIVE) {
     gesher::zygote::Kill(pid);
     return ReadAll(log) + "timed out after 120 s\n";
   }
+  if (code != 0) return ReadAll(log) + "child exit " + std::to_string(code) + "\n";
   return ReadAll(log);
 }
 
@@ -252,8 +389,11 @@ std::string RunLowIntegrity(const std::wstring& exe, const std::wstring& device,
     CloseHandle(pi.hProcess);
     return ReadAll(log) + "timed out after 120 s\n";
   }
+  DWORD code = 0;
+  GetExitCodeProcess(pi.hProcess, &code);
   CloseHandle(pi.hThread);
   CloseHandle(pi.hProcess);
+  if (code != 0) return ReadAll(log) + "child exit " + std::to_string(code) + "\n";
   return ReadAll(log);
 }
 
@@ -454,15 +594,28 @@ int main(int argc, char** argv) {
     ++failures;
   }
   const std::wstring log = std::wstring(temp) + L"gesher-sandbox-probe-" + stamp + L".log";
+  const std::wstring property_root = dir + L"-data";
+  const std::wstring property_dir = property_root + L"\\system\\gesher-properties";
+  if (gesher::SetWideEnvironment(L"ANDROID_DATA", property_root.c_str()) != 0 ||
+      gesher::SetWideEnvironment(L"GESHER_BINDER", device.c_str()) != 0 ||
+      !properties::Initialize() ||
+      gesher::zygote::GrantToCapability(U16(property_dir), u"gesherRuntimeFiles", 0x00120089, true) != 0) {
+    std::puts("FAIL initializing the read-only property fixture");
+    ++failures;
+  }
 
   std::string admitted = RunContained(exe, container, {u"gesherRuntimeFiles", u"gesherBinderClient"},
                                       device, canary, log);
   std::printf("-- contained, with gesherBinderClient:\n%s", admitted.c_str());
   failures += !Expect(admitted, "canary error 5", "the user's file is closed to the container (ERROR_ACCESS_DENIED)");
+  failures += !Expect(admitted, "event-loop ready",
+                      "eventfd, duplicate and epoll work inside the AppContainer after closing stdin");
   failures += !Expect(admitted, "hello-app status 0", "binderd admits the container as an app UID at its own pid");
   failures += !Expect(admitted, "hello-system status -1", "binderd refuses the container's claim of SYSTEM_UID (EPERM)");
   failures += !Expect(admitted, "hello-other-pid status -1", "binderd refuses the container's claim of another pid (EPERM)");
   failures += !Expect(admitted, "serve-instance error 5", "a container cannot serve an instance of the device's pipe");
+  failures += !Expect(admitted, "wake-descriptors pass", "a container can wake epoll through an eventfd");
+  failures += !Expect(admitted, "read-only-properties pass", "a container reads and waits for property updates");
 
   std::string refused = RunContained(exe, container, {u"gesherRuntimeFiles"}, device, canary, log);
   std::printf("-- contained, without gesherBinderClient:\n%s", refused.c_str());
@@ -480,6 +633,10 @@ int main(int argc, char** argv) {
   std::string broker = "hello-system " + Hello(device, GetCurrentProcessId(), 1000) + "\n";
   std::printf("-- the user's own token:\n%s", broker.c_str());
   failures += !Expect(broker, "hello-system status 0", "binderd admits an uncontained Medium process with SYSTEM_UID");
+  if (!VerifyWakeDescriptors()) {
+    std::printf("FAIL  eventfd/epoll wake under the user's token\n");
+    ++failures;
+  }
 
   failures += StorageProbe(exe, container, dir,
                             std::wstring(temp) + L"gesher-storage-probe-" + stamp, log);

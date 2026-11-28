@@ -7,6 +7,8 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <aclapi.h>
+#include <objbase.h>
 #include <stdio.h>
 #include <wchar.h>
 
@@ -47,6 +49,59 @@ static char* ReadSmall(const WCHAR* path, DWORD maximum) {
   CloseHandle(file);
   return text;
 }
+typedef BOOL (WINAPI* DeriveCapabilities)(LPCWSTR, PSID**, DWORD*, PSID**, DWORD*);
+
+/* This desktop belongs exclusively to the fixture. Give Gesher's trusted
+   runtime capability the same five desktop rights used by its launcher.
+   Preserve the integrity label. The controller never switches the desktop
+   or changes the ACL of the existing desktop or window station. */
+static BOOL GrantOwnedDesktop(HDESK desktop) {
+  HMODULE kernelbase = GetModuleHandleW(L"kernelbase.dll");
+  DeriveCapabilities derive = kernelbase ?
+      (DeriveCapabilities)(void*)GetProcAddress(kernelbase, "DeriveCapabilitySidsFromName") : NULL;
+  if (derive == NULL) return FALSE;
+  PSID *groups = NULL, *sids = NULL;
+  DWORD groupCount = 0, sidCount = 0;
+  if (!derive(L"gesherRuntimeFiles", &groups, &groupCount, &sids, &sidCount)) return FALSE;
+  BOOL ok = FALSE;
+  PSECURITY_DESCRIPTOR original = NULL;
+  PACL updated = NULL, existing = NULL;
+  SECURITY_INFORMATION info = DACL_SECURITY_INFORMATION;
+  DWORD needed = 0, originalSize = 0;
+  BOOL present = FALSE, defaulted = FALSE;
+  if (sidCount == 1 && IsValidSid(sids[0]) &&
+      !GetUserObjectSecurity(desktop, &info, NULL, 0, &needed) &&
+      GetLastError() == ERROR_INSUFFICIENT_BUFFER && needed <= 65536) {
+    originalSize = needed;
+    original = HeapAlloc(GetProcessHeap(), 0, originalSize);
+  }
+  if (original != NULL && GetUserObjectSecurity(desktop, &info, original, originalSize, &needed) &&
+      GetSecurityDescriptorDacl(original, &present, &existing, &defaulted) && present && existing) {
+    EXPLICIT_ACCESSW entry = {0};
+    entry.grfAccessPermissions = DESKTOP_CREATEMENU | DESKTOP_CREATEWINDOW | DESKTOP_ENUMERATE |
+        DESKTOP_READOBJECTS | DESKTOP_WRITEOBJECTS;
+    entry.grfAccessMode = GRANT_ACCESS;
+    entry.Trustee.TrusteeForm = TRUSTEE_IS_SID;
+    entry.Trustee.ptstrName = (LPWSTR)sids[0];
+    SECURITY_DESCRIPTOR descriptor;
+    DWORD aclError = SetEntriesInAclW(1, &entry, existing, &updated);
+    if (aclError == ERROR_SUCCESS) {
+      ok = InitializeSecurityDescriptor(&descriptor, SECURITY_DESCRIPTOR_REVISION) &&
+          SetSecurityDescriptorDacl(&descriptor, TRUE, updated, FALSE) &&
+          SetUserObjectSecurity(desktop, &info, &descriptor);
+    } else SetLastError(aclError);
+  }
+  DWORD error = GetLastError();
+  if (original != NULL) HeapFree(GetProcessHeap(), 0, original);
+  if (updated != NULL) LocalFree(updated);
+  for (DWORD i = 0; i < groupCount; ++i) LocalFree(groups[i]);
+  for (DWORD i = 0; i < sidCount; ++i) LocalFree(sids[i]);
+  if (groups) LocalFree(groups);
+  if (sids) LocalFree(sids);
+  SetLastError(error);
+  return ok;
+}
+
 int wmain(int argc, WCHAR** argv) {
   BOOL ok = FALSE;
   int checks = 0;
@@ -65,9 +120,14 @@ int wmain(int argc, WCHAR** argv) {
   WCHAR* command = (WCHAR*)commandBytes;
   if (command[0] == 0xfeff) ++command;
   WCHAR name[80];
-  swprintf(name, 80, L"GesherPromotionTest-%lu-%llu", GetCurrentProcessId(), GetTickCount64());
+  WCHAR suffix[40];
+  GUID unique;
+  CHECK(SUCCEEDED(CoCreateGuid(&unique)) && StringFromGUID2(&unique, suffix, 40) > 0);
+  CHECK(swprintf(name, 80, L"GesherPromotionTest-%ls", suffix) > 0);
+  SetLastError(ERROR_SUCCESS);
   desktop = CreateDesktopW(name, NULL, NULL, 0, GENERIC_ALL, NULL);
-  CHECK(desktop != NULL && original != NULL && SetThreadDesktop(desktop));
+  CHECK(desktop != NULL && GetLastError() != ERROR_ALREADY_EXISTS && original != NULL);
+  CHECK(GrantOwnedDesktop(desktop) && SetThreadDesktop(desktop));
   job = CreateJobObjectW(NULL, NULL);
   CHECK(job != NULL);
   JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = {0};

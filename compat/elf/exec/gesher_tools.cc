@@ -1,13 +1,13 @@
 // gesher-exec --tool <name> [args]: the Android /system/bin programs apps
-// really call, as toybox/AOSP provide them (docs/exec.md, ADR 0055). No root,
-// so `su` is absent; these cover ls, cat, id, ps, getprop, setprop, logcat, pm,
-// am, kill, sleep, which and mount. exec_spawn.h routes a bare name or a
-// /system/bin path here.
+// really call, as toybox/AOSP provide them (docs/exec.md, ADR 0055).
+// exec_spawn routes a bare name or a /system/bin path here; its separate su
+// path requires the optional protected authority and an approved media grant.
 //
 // They read and write bytes unchanged (binary stdio, set by main()).
 
 #include "exec_spawn.h"
 
+#include <gesher/binder_bootstrap.h>
 #include <gesher/system_properties.h>
 #include <gesher/logging.h>
 #include <gesher/reserved_names.h>
@@ -18,12 +18,28 @@
 #include <tlhelp32.h>
 
 #include <algorithm>
+#include <array>
 #include <cerrno>
+#include <charconv>
+#include <chrono>
+#include <climits>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <dirent.h>
+#include <fcntl.h>
+#include <linux/fs.h>
+#include <limits>
 #include <map>
+#include <memory>
+#include <new>
+#include <regex>
 #include <string>
+#include <string_view>
+#include <sys/ioctl.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <vector>
 
 extern "C" int gesher_kill_other(int pid, int sig);
@@ -45,7 +61,7 @@ int CatFile(FILE* in) {
   while ((n = std::fread(buf, 1, sizeof(buf), in)) > 0) {
     if (std::fwrite(buf, 1, n, stdout) != n) return 1;
   }
-  return 0;
+  return std::ferror(in) ? 1 : 0;
 }
 
 int Cat(const std::vector<std::string>& args) {
@@ -53,24 +69,530 @@ int Cat(const std::vector<std::string>& args) {
   bool any = false;
   for (const std::string& a : args) {
     if (a == "-" ) {
-      CatFile(stdin);
+      if (CatFile(stdin) != 0) status = 1;
       any = true;
       continue;
     }
     if (!a.empty() && a[0] == '-') continue;  // ignore options
     any = true;
-    FILE* f = _wfopen(WindowsPath(a).c_str(), L"rb");
+    FILE* f = std::fopen(a.c_str(), "rb");
     if (f == nullptr) {
-      std::fprintf(stderr, "cat: %s: No such file or directory\n", a.c_str());
+      std::fprintf(stderr, "cat: %s: %s\n", a.c_str(), std::strerror(errno));
       status = 1;
       continue;
     }
     if (CatFile(f) != 0) status = 1;
     std::fclose(f);
   }
-  if (!any) CatFile(stdin);
-  std::fflush(stdout);
-  return status;
+  if (!any && CatFile(stdin) != 0) status = 1;
+  return std::fflush(stdout) != 0 ? 1 : status;
+}
+
+// --- dd ------------------------------------------------------------------------
+
+struct DdFile {
+  int fd;
+  bool owned;
+  ~DdFile() { if (owned && fd >= 0) close(fd); }
+};
+
+int DdError(const char* operation) {
+  const int error = errno;
+  std::fprintf(stderr, "dd: %s: %s\n", operation, std::strerror(error));
+  return 1;
+}
+
+bool DdNumber(std::string_view text, uint64_t* value) {
+  if (text.empty()) return false;
+  uint64_t scale = 1;
+  switch (text.back()) {
+    case 'c': text.remove_suffix(1); break;
+    case 'w': scale = 2; text.remove_suffix(1); break;
+    case 'b': scale = 512; text.remove_suffix(1); break;
+    case 'k': case 'K': scale = 1024; text.remove_suffix(1); break;
+    case 'M': scale = 1024 * 1024; text.remove_suffix(1); break;
+    case 'G': scale = 1024 * 1024 * 1024; text.remove_suffix(1); break;
+    default: break;
+  }
+  if (text.empty()) return false;
+  uint64_t n = 0;
+  const auto end = text.data() + text.size();
+  auto result = std::from_chars(text.data(), end, n);
+  if (result.ec != std::errc{} || result.ptr != end || n > UINT64_MAX / scale) return false;
+  *value = n * scale;
+  return true;
+}
+
+ssize_t ReadToolBytes(int fd, void* buffer, size_t length) {
+  ssize_t n;
+  do {
+    n = read(fd, buffer, length);
+  } while (n < 0 && errno == EINTR);
+  return n;
+}
+
+bool WriteToolBytes(int fd, const char* buffer, size_t length) {
+  while (length > 0) {
+    ssize_t n = write(fd, buffer, length);
+    if (n < 0 && errno == EINTR) continue;
+    if (n <= 0) {
+      if (n == 0) errno = EIO;
+      return false;
+    }
+    buffer += n;
+    length -= static_cast<size_t>(n);
+  }
+  return true;
+}
+
+int Dd(const std::vector<std::string>& args) {
+  const char* input = nullptr;
+  const char* output = nullptr;
+  constexpr auto kMaxPosition = static_cast<uint64_t>(std::numeric_limits<off_t>::max());
+  uint64_t block = 512, skip = 0, seek = 0, count = 0;
+  bool limited = false;
+  bool notrunc = false;
+  bool noerror = false, pad = false, flush = false;
+  bool quiet = false, progress = false;
+  for (const std::string& arg : args) {
+    const size_t separator = arg.find('=');
+    if (separator != std::string::npos) {
+      const std::string_view key(arg.data(), separator);
+      const char* value = arg.c_str() + separator + 1;
+      if (key == "if") { input = value; continue; }
+      if (key == "of") { output = value; continue; }
+      if (key == "conv") {
+        std::string_view modes(value);
+        bool valid = !modes.empty();
+        while (!modes.empty() && valid) {
+          size_t comma = modes.find(',');
+          auto mode = modes.substr(0, comma);
+          if (mode == "notrunc") notrunc = true;
+          else if (mode == "noerror") noerror = true;
+          else if (mode == "sync") pad = true;
+          else if (mode == "fsync") flush = true;
+          else valid = false;
+          if (comma == std::string_view::npos) break;
+          modes.remove_prefix(comma + 1);
+          if (modes.empty()) valid = false;
+        }
+        if (valid) continue;
+      }
+      if (key == "status") {
+        std::string_view status(value);
+        if (status == "none" || status == "noxfer" || status == "progress") {
+          quiet = status == "none";
+          progress = status == "progress";
+          continue;
+        }
+      }
+      if (key == "bs" && DdNumber(value, &block) && block != 0 && block <= INT32_MAX) continue;
+      if (key == "skip" && DdNumber(value, &skip)) continue;
+      if (key == "seek" && DdNumber(value, &seek)) continue;
+      if (key == "count" && DdNumber(value, &count)) { limited = true; continue; }
+    }
+    std::fprintf(stderr, "dd: unsupported or invalid operand: %s\n", arg.c_str());
+    return 1;
+  }
+  if (skip > kMaxPosition / block || seek > kMaxPosition / block ||
+      (limited && count > UINT64_MAX / block)) {
+    errno = EOVERFLOW;
+    return DdError("block offset");
+  }
+  std::unique_ptr<char[]> buffer(new (std::nothrow) char[block]);
+  if (!buffer) { errno = ENOMEM; return DdError("buffer"); }
+
+  DdFile in{input ? open(input, O_RDONLY | O_CLOEXEC) : STDIN_FILENO, input != nullptr};
+  if (in.fd < 0) return DdError(input);
+  if (skip && lseek(in.fd, static_cast<off_t>(skip * block), SEEK_CUR) == -1) {
+    if (errno != ESPIPE) return DdError("input seek");
+    uint64_t remaining = skip * block;
+    while (remaining != 0) {
+      ssize_t received = ReadToolBytes(in.fd, buffer.get(), std::min(block, remaining));
+      if (received < 0) return DdError("input skip");
+      if (received == 0) { errno = EIO; return DdError("input skip"); }
+      remaining -= static_cast<uint64_t>(received);
+    }
+  }
+  int output_flags = O_WRONLY | O_CREAT | O_CLOEXEC;
+  if (!notrunc && seek == 0) output_flags |= O_TRUNC;
+  DdFile out{output ? open(output, output_flags, 0666) : STDOUT_FILENO, output != nullptr};
+  if (out.fd < 0) return DdError(output);
+  if (seek) {
+    const off_t position = lseek(out.fd, static_cast<off_t>(seek * block), SEEK_CUR);
+    if (position == -1) return DdError("output seek");
+    if (output && !notrunc) {
+      struct stat info{};
+      if (fstat(out.fd, &info) != 0) return DdError(output);
+      if (S_ISREG(info.st_mode) && ftruncate(out.fd, position) != 0) return DdError(output);
+    }
+  }
+  uint64_t full = 0, partial = 0, out_full = 0, out_partial = 0, records = 0, bytes = 0;
+  bool read_error = false;
+  const auto began = std::chrono::steady_clock::now();
+  auto reported = began;
+  while (!limited || records < count) {
+    const off_t before = noerror ? lseek(in.fd, 0, SEEK_CUR) : -1;
+    ssize_t received = 0;
+    bool failed_read = false;
+    // Keep the runtime's full-block pipe semantics: Java's OutputStream can
+    // deliver one sector in several pipe writes without changing dd's count.
+    while (static_cast<uint64_t>(received) < block) {
+      ssize_t part = ReadToolBytes(in.fd, buffer.get() + received,
+                                  static_cast<size_t>(block) - static_cast<size_t>(received));
+      if (part < 0) { failed_read = true; break; }
+      if (part == 0) break;
+      received += part;
+    }
+    if (failed_read) {
+      const int error = errno;
+      DdError("read");
+      // A bad sector may be skipped. Revocation, removal, permission denial,
+      // expired grants and invalid descriptors must never become zero-filled
+      // apparent success; only an actual EIO on a seekable input is recoverable.
+      if (!noerror || error != EIO || before < 0 ||
+          static_cast<uint64_t>(before) > kMaxPosition - block) return 1;
+      if (lseek(in.fd, before + static_cast<off_t>(block), SEEK_SET) < 0) return DdError("skip bad input block");
+      read_error = true;
+      ++records;
+      if (!pad && received == 0) continue;
+      if (received > 0) ++partial;
+    } else {
+      if (received == 0) break;
+      ++records;
+      if (static_cast<uint64_t>(received) == block) ++full;
+      else ++partial;
+    }
+    size_t emitted = static_cast<size_t>(received);
+    if (pad && emitted < block) {
+      std::memset(buffer.get() + emitted, 0, static_cast<size_t>(block) - emitted);
+      emitted = static_cast<size_t>(block);
+    }
+    if (!WriteToolBytes(out.fd, buffer.get(), emitted)) return DdError("write");
+    bytes += emitted;
+    if (emitted == block) ++out_full; else ++out_partial;
+    const auto now = std::chrono::steady_clock::now();
+    if (progress && now - reported >= std::chrono::seconds(1)) {
+      std::fprintf(stderr, "%llu bytes copied\n", static_cast<unsigned long long>(bytes));
+      reported = now;
+    }
+  }
+  if (flush && fsync(out.fd) < 0) return DdError("sync output");
+  if (out.owned) {
+    out.owned = false;
+    if (close(out.fd) != 0) return DdError("close output");
+  }
+  if (!quiet) std::fprintf(stderr, "%llu+%llu records in\n%llu+%llu records out\n",
+               static_cast<unsigned long long>(full), static_cast<unsigned long long>(partial),
+               static_cast<unsigned long long>(out_full), static_cast<unsigned long long>(out_partial));
+  if (progress) std::fprintf(stderr, "%llu bytes copied\n", static_cast<unsigned long long>(bytes));
+  return read_error ? 1 : 0;
+}
+
+// Line tools use the same descriptor APIs as the application, including actual
+// procfs/sysfs files. Unsupported awk programs fail explicitly.
+template <class Visit> int ToolLines(int fd, Visit visit) {
+  std::string line;
+  std::array<char, 8192> buffer;
+  while (true) {
+    ssize_t n = ReadToolBytes(fd, buffer.data(), buffer.size());
+    if (n < 0) return -1;
+    if (n == 0) return line.empty() || visit(line) ? 0 : 1;
+    for (ssize_t i = 0; i < n; ++i) {
+      if (buffer[static_cast<size_t>(i)] == '\n') {
+        if (!visit(line)) return 1;
+        line.clear();
+      } else {
+        if (line.size() == 16 * 1024 * 1024) return errno = EOVERFLOW, -1;
+        line.push_back(buffer[static_cast<size_t>(i)]);
+      }
+    }
+  }
+}
+
+int Grep(const std::vector<std::string>& args) {
+  bool invert = false, quiet = false, numbers = false, fixed = false;
+  auto flags = std::regex_constants::basic;
+  size_t at = 0;
+  for (; at < args.size() && args[at].size() > 1 && args[at][0] == '-'; ++at) {
+    if (args[at] == "--") { ++at; break; }
+    for (char c : args[at].substr(1)) {
+      if (c == 'v') invert = true;
+      else if (c == 'q') quiet = true;
+      else if (c == 'n') numbers = true;
+      else if (c == 'F') fixed = true;
+      else if (c == 'E') flags = std::regex_constants::extended;
+      else { std::fprintf(stderr, "grep: unsupported option -%c\n", c); return 2; }
+    }
+  }
+  if (at == args.size()) { std::fprintf(stderr, "grep: missing pattern\n"); return 2; }
+  const std::string pattern = args[at++];
+  std::regex expression;
+  if (!fixed) {
+    try { expression.assign(pattern, flags); }
+    catch (const std::regex_error&) { std::fprintf(stderr, "grep: invalid regular expression\n"); return 2; }
+  }
+  std::vector<std::string> files(args.begin() + at, args.end());
+  if (files.empty()) files.emplace_back("-");
+  bool matched = false, failed = false;
+  for (const auto& file : files) {
+    DdFile input{file == "-" ? STDIN_FILENO : open(file.c_str(), O_RDONLY | O_CLOEXEC), file != "-"};
+    if (input.fd < 0) { std::fprintf(stderr, "grep: %s: %s\n", file.c_str(), std::strerror(errno)); failed = true; continue; }
+    size_t line_number = 0;
+    bool write_failed = false;
+    int result = ToolLines(input.fd, [&](const std::string& line) {
+      ++line_number;
+      bool hit = fixed ? line.find(pattern) != std::string::npos : std::regex_search(line, expression);
+      if (hit == invert) return true;
+      matched = true;
+      if (quiet) return false;
+      std::string output;
+      if (files.size() > 1) output = file + ":";
+      if (numbers) output += std::to_string(line_number) + ":";
+      output += line + "\n";
+      if (!WriteToolBytes(STDOUT_FILENO, output.data(), output.size())) { write_failed = true; return false; }
+      return true;
+    });
+    if (result < 0 || write_failed) { std::fprintf(stderr, "grep: %s\n", std::strerror(errno)); failed = true; }
+    if (quiet && matched) return 0;
+  }
+  return failed ? 2 : matched ? 0 : 1;
+}
+
+int Awk(const std::vector<std::string>& args) {
+  size_t at = !args.empty() && args[0] == "--" ? 1 : 0;
+  if (at == args.size()) { std::fprintf(stderr, "awk: missing program\n"); return 2; }
+  std::string program = args[at++];
+  program.erase(std::remove_if(program.begin(), program.end(), [](unsigned char c) {
+    return c == ' ' || c == '\t' || c == '\r' || c == '\n';
+  }), program.end());
+  if (!program.starts_with("{print$") || !program.ends_with('}')) {
+    std::fprintf(stderr, "awk: supported program is {print $N} or {print $NF}\n"); return 2;
+  }
+  std::string_view field(program.data() + 7, program.size() - 8);
+  uint64_t number = 0;
+  const bool last = field == "NF";
+  if (!last && (!DdNumber(field, &number) || field.find_first_not_of("0123456789") != std::string_view::npos)) {
+    std::fprintf(stderr, "awk: invalid or unsupported field program\n"); return 2;
+  }
+  std::vector<std::string> files(args.begin() + at, args.end());
+  if (files.empty()) files.emplace_back("-");
+  for (const auto& file : files) {
+    DdFile input{file == "-" ? STDIN_FILENO : open(file.c_str(), O_RDONLY | O_CLOEXEC), file != "-"};
+    if (input.fd < 0) { std::fprintf(stderr, "awk: %s: %s\n", file.c_str(), std::strerror(errno)); return 2; }
+    bool write_failed = false;
+    int result = ToolLines(input.fd, [&](const std::string& line) {
+      std::string_view selected;
+      if (!last && number == 0) selected = line;
+      else {
+        size_t cursor = 0;
+        uint64_t index = 0;
+        while (cursor < line.size()) {
+          size_t begin = line.find_first_not_of(" \t\r\n", cursor);
+          if (begin == std::string::npos) break;
+          size_t end = line.find_first_of(" \t\r\n", begin);
+          if (end == std::string::npos) end = line.size();
+          ++index;
+          if (last || index == number) selected = std::string_view(line).substr(begin, end - begin);
+          cursor = end;
+        }
+      }
+      if (!WriteToolBytes(STDOUT_FILENO, selected.data(), selected.size()) ||
+          !WriteToolBytes(STDOUT_FILENO, "\n", 1)) { write_failed = true; return false; }
+      return true;
+    });
+    if (result < 0 || write_failed) { std::fprintf(stderr, "awk: %s\n", std::strerror(errno)); return 2; }
+  }
+  return 0;
+}
+
+int Sync(const std::vector<std::string>& args) {
+  std::vector<std::string> files = args;
+  if (files.empty()) {
+    // A guest can flush its selected broker medium, not arbitrary Windows
+    // volumes. The selected volume was already excluded/dismounted at grant.
+    DIR* directory = opendir("/dev/block");
+    if (!directory) { std::fprintf(stderr, "sync: no authorized block media: %s\n", std::strerror(errno)); return 1; }
+    while (dirent* entry = readdir(directory)) {
+      if (entry->d_name[0] != '.') files.push_back(std::string("/dev/block/") + entry->d_name);
+    }
+    closedir(directory);
+    if (files.empty()) { std::fprintf(stderr, "sync: no authorized block media\n"); return 1; }
+  }
+  for (const auto& file : files) {
+    if (file.empty() || file.front() == '-') { std::fprintf(stderr, "sync: unsupported operand\n"); return 1; }
+    DdFile output{open(file.c_str(), O_RDONLY | O_CLOEXEC), true};
+    if (output.fd < 0 || fsync(output.fd) < 0) {
+      std::fprintf(stderr, "sync: %s: %s\n", file.c_str(), std::strerror(errno)); return 1;
+    }
+  }
+  return 0;
+}
+
+int Umount(const std::vector<std::string>& args) {
+  size_t at = !args.empty() && args[0] == "-l" ? 1 : 0;
+  if (at < args.size() && args[at] == "--") ++at;
+  if (at + 1 != args.size() || args[at].empty() || args[at][0] == '-') {
+    std::fprintf(stderr, "usage: umount [-l] [--] TARGET\n"); return 1;
+  }
+  // Gesher exposes no guest filesystem mounts. Windows volume exclusion is
+  // performed by the broker before authorizing writes, not by this command.
+  // Report the same not-mounted failure as an unmounted Linux block device.
+  struct stat info{};
+  if (stat(args[at].c_str(), &info) == 0) errno = EINVAL;
+  std::fprintf(stderr, "umount: %s: %s\n", args[at].c_str(), std::strerror(errno));
+  return 1;
+}
+
+int Blockdev(const std::vector<std::string>& args) {
+  if (args.size() < 2 || (args[0] != "--getro" && args[0] != "--setrw" && args[0] != "--setro" &&
+      args[0] != "--getsize64" && args[0] != "--getsz" && args[0] != "--getss" && args[0] != "--flushbufs")) {
+    std::fprintf(stderr, "usage: blockdev {--getro|--setrw|--setro|--getsize64|--getsz|--getss|--flushbufs} [--] DEVICE...\n");
+    return 1;
+  }
+  const bool end_options = args[1] == "--";
+  const size_t first_device = end_options ? 2 : 1;
+  if (first_device == args.size()) {
+    std::fprintf(stderr, "blockdev: missing device\n");
+    return 1;
+  }
+  if (!end_options && std::any_of(args.begin() + first_device, args.end(),
+      [](const std::string& arg) { return arg.size() > 1 && arg.front() == '-'; })) {
+    std::fprintf(stderr, "blockdev: unsupported option\n");
+    return 1;
+  }
+
+  for (size_t i = first_device; i < args.size(); ++i) {
+    const char* path = args[i].c_str();
+    const int fd = open(path, O_RDONLY | O_CLOEXEC);
+    int number = args[0] == "--setro" ? 1 : 0;
+    uint64_t bytes = 0;
+    if (fd < 0) {
+      std::fprintf(stderr, "blockdev: %s: %s\n", path, std::strerror(errno));
+      return 1;
+    }
+    unsigned long operation = BLKROGET;
+    void* value = &number;
+    bool print_number = true;
+    if (args[0] == "--setrw" || args[0] == "--setro") { operation = BLKROSET; print_number = false; }
+    else if (args[0] == "--getsize64" || args[0] == "--getsz") { operation = BLKGETSIZE64; value = &bytes; }
+    else if (args[0] == "--getss") operation = BLKSSZGET;
+    else if (args[0] == "--flushbufs") { operation = BLKFLSBUF; value = nullptr; print_number = false; }
+    const int result = ioctl(fd, operation, value);
+    const int saved = errno;
+    close(fd);
+    if (result < 0) {
+      std::fprintf(stderr, "blockdev: %s: %s\n", path, std::strerror(saved));
+      return 1;
+    }
+    if (print_number) {
+      if (operation == BLKGETSIZE64) {
+        if (std::printf("%llu\n", static_cast<unsigned long long>(args[0] == "--getsz" ? bytes / 512 : bytes)) < 0) return 1;
+      } else if (std::printf("%d\n", number) < 0) return 1;
+    }
+  }
+  return std::fflush(stdout) != 0;
+}
+
+int Basename(const std::vector<std::string>& args) {
+  const bool end_options = !args.empty() && args.front() == "--";
+  const size_t first = end_options ? 1 : 0;
+  if (args.size() <= first || args.size() > first + 2 ||
+      (!end_options && args[first].size() > 1 && args[first].front() == '-')) {
+    std::fprintf(stderr, "usage: basename [--] NAME [SUFFIX]\n");
+    return 1;
+  }
+  std::string_view name(args[first]);
+  const size_t end = name.find_last_not_of('/');
+  if (end == std::string_view::npos && !name.empty()) {
+    name = "/";
+  } else if (end != std::string_view::npos) {
+    name = name.substr(0, end + 1);
+    const size_t separator = name.find_last_of('/');
+    if (separator != std::string_view::npos) name.remove_prefix(separator + 1);
+    if (args.size() == first + 2) {
+      std::string_view suffix(args[first + 1]);
+      if (name.size() > suffix.size() && name.ends_with(suffix)) name.remove_suffix(suffix.size());
+    }
+  }
+  return std::fprintf(stdout, "%.*s\n", static_cast<int>(name.size()), name.data()) < 0 ||
+      std::fflush(stdout) != 0;
+}
+
+// tr supports byte translations, octal/character escapes and ascending ranges.
+// Reject extensions such as character classes and repetition syntax until their
+// behavior can be provided. In particular they must not translate as literals.
+bool TrSet(std::string_view text, std::vector<unsigned char>* values) {
+  bool range = false;
+  while (!text.empty()) {
+    unsigned int byte = static_cast<unsigned char>(text.front());
+    text.remove_prefix(1);
+    if (byte == '-' && !values->empty() && !text.empty() && !range) {
+      range = true;
+      continue;
+    }
+    if (byte == '[' && text.find(']') != std::string_view::npos) return false;
+    if (byte == '\\') {
+      if (text.empty()) return false;
+      byte = static_cast<unsigned char>(text.front());
+      text.remove_prefix(1);
+      switch (byte) {
+        case 'a': byte = '\a'; break;
+        case 'b': byte = '\b'; break;
+        case 'f': byte = '\f'; break;
+        case 'n': byte = '\n'; break;
+        case 'r': byte = '\r'; break;
+        case 't': byte = '\t'; break;
+        case 'v': byte = '\v'; break;
+        default:
+          if (byte >= '0' && byte <= '7') {
+            byte -= '0';
+            for (int i = 0; i < 2 && !text.empty() && text.front() >= '0' && text.front() <= '7'; ++i) {
+              byte = byte * 8 + text.front() - '0';
+              text.remove_prefix(1);
+            }
+            if (byte > UCHAR_MAX) return false;
+          }
+          break;
+      }
+    }
+    if (range) {
+      const unsigned int start = values->back();
+      if (byte < start) return false;
+      for (unsigned int c = start + 1; c <= byte; ++c) values->push_back(static_cast<unsigned char>(c));
+      range = false;
+    } else {
+      values->push_back(static_cast<unsigned char>(byte));
+    }
+  }
+  return true;
+}
+
+int Tr(const std::vector<std::string>& args) {
+  const bool end_options = !args.empty() && args.front() == "--";
+  const size_t first = end_options ? 1 : 0;
+  std::vector<unsigned char> from;
+  std::vector<unsigned char> to;
+  if (args.size() != first + 2 ||
+      (!end_options && args[first].size() > 1 && args[first].front() == '-') ||
+      !TrSet(args[first], &from) || !TrSet(args[first + 1], &to) || to.empty()) {
+    std::fprintf(stderr, "usage: tr [--] SET1 SET2 (byte translation)\n");
+    return 1;
+  }
+  std::array<unsigned char, 256> mapping;
+  for (size_t i = 0; i < mapping.size(); ++i) mapping[i] = static_cast<unsigned char>(i);
+  for (size_t i = 0; i < from.size(); ++i) mapping[from[i]] = to[std::min(i, to.size() - 1)];
+  char bytes[8192];
+  ssize_t count;
+  while ((count = ReadToolBytes(STDIN_FILENO, bytes, sizeof(bytes))) > 0) {
+    for (ssize_t i = 0; i < count; ++i) bytes[i] = static_cast<char>(mapping[static_cast<unsigned char>(bytes[i])]);
+    if (!WriteToolBytes(STDOUT_FILENO, bytes, static_cast<size_t>(count))) break;
+  }
+  if (count != 0) {
+    std::fprintf(stderr, "tr: %s\n", std::strerror(errno));
+    return 1;
+  }
+  return 0;
 }
 
 // --- ls ------------------------------------------------------------------------
@@ -141,11 +663,22 @@ int Ls(const std::vector<std::string>& args) {
 
 // --- id ------------------------------------------------------------------------
 
-int Id(const std::vector<std::string>&) {
-  int uid = std::atoi(EnvOr("GESHER_UID", "10000").c_str());
-  std::fprintf(stdout, "uid=%d(u0_a%d) gid=%d(u0_a%d) groups=%d(u0_a%d)\n", uid,
-               uid >= 10000 ? uid - 10000 : uid, uid, uid >= 10000 ? uid - 10000 : uid, uid,
-               uid >= 10000 ? uid - 10000 : uid);
+int Id(const std::vector<std::string>& args) {
+  if (args.size() == 1 && args.front() == "-u") {
+    return std::fprintf(stdout, "%u\n", static_cast<unsigned>(geteuid())) < 0 ||
+        std::fflush(stdout) != 0;
+  }
+  if (!args.empty()) { std::fprintf(stderr, "id: unsupported arguments\n"); return 1; }
+  const unsigned uid = static_cast<unsigned>(geteuid());
+  const unsigned gid = static_cast<unsigned>(getegid());
+  auto name = [](unsigned id) {
+    if (id == 0) return std::string("root");
+    if (id == 1000) return std::string("system");
+    if (id % 100000 >= 10000) return "u" + std::to_string(id / 100000) + "_a" + std::to_string(id % 100000 - 10000);
+    return std::to_string(id);
+  };
+  std::fprintf(stdout, "uid=%u(%s) gid=%u(%s) groups=%u(%s)\n", uid, name(uid).c_str(),
+               gid, name(gid).c_str(), gid, name(gid).c_str());
   std::fflush(stdout);
   return 0;
 }
@@ -365,7 +898,12 @@ int DeviceCommand(const std::string& tool, const std::vector<std::string>& args)
     boot_class_path += vm_path(directory + jar);
   }
   std::vector<std::string> command{Narrow(directory + L"dalvikvm.exe"),
-      boot_class_path, "-Ximage:" + vm_path(image), "-Xusejit:false", "com.gesher.server.RuntimeCommands", tool};
+      boot_class_path, "-Ximage:" + vm_path(image), "-Xusejit:false", "com.gesher.server.RuntimeCommands"};
+  if (binder_bootstrap::GuestUid() == 0 &&
+      EnvOr("GESHER_SANDBOX", "") == "appcontainer-trusted") {
+    command.emplace_back("--device-operator");
+  }
+  command.push_back(tool);
   command.insert(command.end(), args.begin(), args.end());
   Launch launch;
   int error = PrepareLaunch(command, Narrow(directory), &launch);
@@ -388,8 +926,10 @@ int DeviceCommand(const std::string& tool, const std::vector<std::string>& args)
 // (-a: every match), exit 1 if any NAME has none. A name with a '/' is that
 // file if it is one. A bare name exec runs as Gesher's own /system/bin
 // program (sh, the tools here) is /system/bin/<name>, found first, as exec
-// finds it; otherwise $PATH is searched as exec searches it. `su` is neither:
-// Gesher has no root, so `which su` prints nothing and fails.
+// finds it; otherwise $PATH is searched as exec searches it. FindAllInPath
+// also resolves the authenticated protected runtime's su/sealed-tool aliases.
+// Ordinary Android has no supplied su route. Discovery never grants media
+// access; the authority still requires live consent at the actual launch.
 
 int Which(const std::vector<std::string>& args) {
   bool all = false, options = true;
@@ -414,20 +954,14 @@ int Which(const std::vector<std::string>& args) {
   }
   int status = 0;
   for (const std::string& name : names) {
-    if (name.find('/') != std::string::npos) {
+    if (name.find_first_of("/\\") != std::string::npos) {
       if (IsShellName(name) || IsToolName(name)) {
         std::fprintf(stdout, "%s\n", name.c_str());
         continue;
       }
-      DWORD attributes = GetFileAttributesW(WindowsPath(name).c_str());
-      if (attributes != INVALID_FILE_ATTRIBUTES) {
-        if ((attributes & FILE_ATTRIBUTE_DIRECTORY) == 0) std::fprintf(stdout, "%s\n", name.c_str());
-        else status = 1;
-        continue;
-      }
     }
     std::vector<std::string> found;
-    if (name.find('/') == std::string::npos && (IsShellName(name) || IsToolName(name)))
+    if (name.find_first_of("/\\") == std::string::npos && (IsShellName(name) || IsToolName(name)))
       found.push_back("/system/bin/" + name);
     for (std::string& path : FindAllInPath(name, EnvOr("PATH", ""))) found.push_back(std::move(path));
     if (found.empty()) status = 1;
@@ -442,7 +976,8 @@ int Which(const std::vector<std::string>& args) {
 
 // --- mount ---------------------------------------------------------------------
 //
-// toybox mount as an app's uid (Gesher has no root). With no device or
+// toybox mount as an app's uid (including the protected realm, where scoped
+// block access grants no host mount capability). With no device or
 // directory it lists /proc/mounts, the same table Gesher's /proc/mounts and
 // getmntent serve, as "DEVICE on DIR type TYPE (OPTIONS)". Mounting as
 // non-root goes through /etc/fstab first (toybox mount_main): a missing fstab,
@@ -650,9 +1185,10 @@ int Mount(const std::vector<std::string>& args) {
 }  // namespace
 
 int RunTool(const std::string& name, const std::vector<std::string>& args) {
+  try {
   if (name == "toybox") {
     if (args.empty()) {
-      std::fprintf(stdout, "toybox (gesher)\nls cat id ps getprop setprop logcat kill sleep pm am\n");
+      std::fprintf(stdout, "toybox (gesher)\nls cat dd grep awk sync umount blockdev basename tr id ps getprop setprop logcat kill sleep pm am which mount\n");
       std::fflush(stdout);
       return 0;
     }
@@ -660,6 +1196,14 @@ int RunTool(const std::string& name, const std::vector<std::string>& args) {
   }
   if (name == "ls") return Ls(args);
   if (name == "cat") return Cat(args);
+  if (name == "dd") return Dd(args);
+  if (name == "grep") return Grep(args);
+  if (name == "awk") return Awk(args);
+  if (name == "sync") return Sync(args);
+  if (name == "umount") return Umount(args);
+  if (name == "blockdev") return Blockdev(args);
+  if (name == "basename") return Basename(args);
+  if (name == "tr") return Tr(args);
   if (name == "id") return Id(args);
   if (name == "ps") return Ps(args);
   if (name == "getprop") return Getprop(args);
@@ -672,6 +1216,10 @@ int RunTool(const std::string& name, const std::vector<std::string>& args) {
   if (name == "pm" || name == "am") return DeviceCommand(name, args);
   std::fprintf(stderr, "%s: not found\n", name.c_str());
   return 127;
+  } catch (const std::bad_alloc&) {
+    std::fprintf(stderr, "%s: out of memory\n", name.c_str());
+    return 1;
+  }
 }
 
 }  // namespace gesher::exec

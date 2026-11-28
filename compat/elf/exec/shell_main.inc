@@ -60,7 +60,17 @@ int RunShell(const std::vector<std::string>& argv) {
   HANDLE input = sh.io.fd[0];
   HandleP script;
   size_t at = 0;
-  if (argv.size() >= 4 && argv[0] == "--gesher-script-fd") {
+  if (argv.size() == 4 && argv[0] == "--gesher-script-text") {
+    source = argv[1];
+    char* end = nullptr;
+    const unsigned long pid = strtoul(argv[2].c_str(), &end, 10);
+    if (!pid || !end || *end || pid > MAXDWORD) return 2;
+    sh.shell_pid = static_cast<DWORD>(pid);
+    sh.pos[0] = argv[3];
+    command = true;
+    sh.is_subshell = true;
+    at = argv.size();
+  } else if (argv.size() >= 4 && argv[0] == "--gesher-script-fd") {
     int fd = atoi(argv[1].c_str());
     HANDLE handle = fd == 63 ? InheritedHandle(fd) : nullptr;
     if (!handle) return 2;

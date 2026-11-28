@@ -97,6 +97,21 @@ def main() -> int:
             source = work / "environment_native.cc"
             source.write_text(native, encoding="utf-8")
             environment_sources.append(source)
+        if windows and '#include "rooted_storage_client.h"' in (work / "system_properties.cc").read_text():
+            for name in ("binder_bootstrap", "cohost_bootstrap", "rooted_storage_wire"):
+                (work / f"include/gesher/{name}.h").write_text(
+                    read(f"compat/posix/include/gesher/{name}.h"), encoding="utf-8")
+            (work / "rooted_storage_client.h").write_text(
+                read("compat/posix/src/rooted_storage_client.h"), encoding="utf-8")
+            # This fixture starts a normal Windows process, without inherited
+            # cohost authority. Fail if it attempts to use the storage broker.
+            source = work / "rooted_storage_boundary.cc"
+            source.write_text(
+                '#include "rooted_storage_client.h"\n#include <cstdlib>\n'
+                'int gesher::storage_root::OpenBootstrap(gesher::rooted_storage_wire::Op, HANDLE*) {\n'
+                '  std::abort();\n'
+                '}\n', encoding="utf-8")
+            environment_sources.append(source)
         revised = "struct Revision" in (work / "include/gesher/system_properties.h").read_text()
         redaction = "RedactCredentials" in (work / "include/gesher/logging.h").read_text()
         flags = ["-std=c++20", "-O2", "-g", "-Wall", "-Wextra", "-Werror", "-fno-exceptions", "-pthread",

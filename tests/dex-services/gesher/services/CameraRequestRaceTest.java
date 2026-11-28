@@ -52,7 +52,10 @@ public final class CameraRequestRaceTest {
 
     public static void main(String[] args) throws Exception {
         Class<?> cameraClass = Class.forName("com.gesher.server.CameraDeviceUser");
-        Constructor<?> cameraConstructor = cameraClass.getDeclaredConstructors()[0];
+        Constructor<?> cameraConstructor = cameraClass.getDeclaredConstructor(
+                Class.forName("com.gesher.server.CameraService"), String.class,
+                Class.forName("com.gesher.server.WindowsCamera$Device"),
+                ICameraDeviceCallbacks.class);
         cameraConstructor.setAccessible(true);
         Object camera = cameraConstructor.newInstance(null, "request-race", null,
                 new ICameraDeviceCallbacks.Default());

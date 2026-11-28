@@ -94,6 +94,8 @@ public final class SystemBindingCleanupTest {
             } finally { Binder.restoreCallingIdentity(original); }
             field(processType, "packageName").set(app, owner);
             field(processType, "processName").set(app, owner);
+            // Model the exact installed code generation required at attachment.
+            field(processType, "packageCode").set(app, apk);
             field(processType, "ready").setBoolean(app, true);
             ((List<Object>) field(atmType, "mProcesses").get(atm)).add(app);
         }

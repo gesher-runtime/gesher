@@ -40,6 +40,7 @@ target_link_libraries(gesher-exec PRIVATE gesher_media_drm)
 
 set(GESHER_MEDIA_AUDIO_SOURCES
   ${_media}/audio/engine.cc
+  ${_media}/audio/brokered_audio.cc
   ${_media}/audio/shared_state.cc
   ${_media}/audio/sink_file.cc
   ${_media}/audio/sink_wasapi.cc
@@ -53,6 +54,9 @@ add_library(gesher_media_audio OBJECT ${GESHER_MEDIA_AUDIO_SOURCES}
   ${_media}/audio/record_permission.cc)
 target_link_libraries(gesher_media_audio PUBLIC log ole32 uuid)
 target_compile_options(gesher_media_audio PRIVATE -Wall -Wextra -Werror -Wno-unused-parameter)
+target_link_libraries(binderd PRIVATE gesher_media_audio)
+target_include_directories(binderd PRIVATE ${_media}/audio)
+target_compile_definitions(binderd PRIVATE GESHER_AUDIO_RENDER_BROKER=1)
 
 add_library(gesher_media OBJECT
   ${_media}/jni/jni_util.cc

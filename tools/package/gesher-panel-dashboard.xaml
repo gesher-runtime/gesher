@@ -331,6 +331,7 @@
                                             <Button Content="{DynamicResource Text_cp_btn_proxy}" ToolTip="{DynamicResource Text_cp_btn_proxy_tip}" Tag="{Binding Package}" Margin="0,0,8,0"/>
                                             <Button Content="{DynamicResource Text_cp_btn_launch}" Tag="{Binding Package}" Visibility="{Binding LaunchVisibility}" Margin="0,0,8,0"/>
                                             <Button Content="{DynamicResource Text_cp_btn_app_info}" Tag="{Binding Package}" Margin="0,0,8,0"/>
+                                            <Button Content="{DynamicResource Text_cp_btn_app_isolation}" Tag="{Binding Package}" Visibility="{DynamicResource AppIsolationVisibility}" Margin="0,0,8,0"/>
                                             <Button Style="{StaticResource DangerButton}" Content="{DynamicResource Text_cp_btn_uninstall}" Tag="{Binding Package}"/>
                                         </StackPanel>
                                     </Grid>

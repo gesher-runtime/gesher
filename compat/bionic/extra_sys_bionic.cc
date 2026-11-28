@@ -836,6 +836,12 @@ int BIONIC_SYSV Fstatfs(int fd, BionicStatfs* out) {
   std::string virtual_path;
   bool directory;
   if (::gesher::ProcfsDescriptor(fd, &virtual_path, &directory)) {
+    // USB /dev/block directories also carry their virtual identity. They
+    // retain Statfs(path)'s existing backing-volume policy, never procfs's
+    // type merely because their readonly metadata file has a tag.
+    if (virtual_path.rfind("/proc", 0) != 0 && virtual_path.rfind("/sys", 0) != 0) {
+      return Statfs(virtual_path.c_str(), out);
+    }
     FillVirtualStatfs(virtual_path, out);
     return 0;
   }

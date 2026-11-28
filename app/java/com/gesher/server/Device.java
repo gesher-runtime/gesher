@@ -40,6 +40,7 @@ public final class Device {
     }
 
     public static final String STATE_DEVICE = "device";
+    public static final String STATE_PROTECTED = "protected_binder";
     public static final String STATE_SHUTDOWN_EVENT = "shutdown_event";
     public static final String BINDERD = "binderd";
     public static final String SERVICEMANAGER = "servicemanager";
@@ -57,6 +58,14 @@ public final class Device {
 
     public static File readyFile() {
         return new File(dataDir(), "system/gesher-device.ready");
+    }
+
+    public static File cohostOwnerFile() {
+        return new File(dataDir(), "system/gesher-cohost-owner");
+    }
+
+    public static File cohostOwnerReadyFile() {
+        return new File(dataDir(), "system/gesher-cohost-owner.ready");
     }
 
     public static File logsDir() {

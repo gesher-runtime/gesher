@@ -142,6 +142,65 @@ jobs:
         run: |
           & .\cost-events-test.exe
           if ($LASTEXITCODE -ne 0) { throw 'Required Windows client cost subscription failed' }
+  # A successfully unloaded service profile can remain locked by Windows.
+  # Both launch modes require a fresh machine: never delete or reuse a prior
+  # profile to make the observer-free safety precondition pass.
+  windows-protected-launch-unobserved:
+    needs: [plan, source-identity]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'windows-protected-launch-unobserved') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Actual protected runtime launch without a diagnostic observer
+        if: ${{ !cancelled() }}
+        timeout-minutes: 3
+        shell: cmd
+        run: |
+          cl /nologo /std:c++20 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /DNOMINMAX tests\native\usb_protected_launch_test.cc tests\native\usb_scm_profile_control.cc tests\native\usb_lowbox_iat_trace.cc compat\usb_storage\protected_identity.cc compat\usb_storage\authority_launch.cc compat\framework\app_container.cc /Fe:usb_protected_launch_test.exe advapi32.lib userenv.lib wtsapi32.lib user32.lib ole32.lib shell32.lib uuid.lib > usb-protected-launch.log 2>&1
+          set "GESHER_PROTECTED_LAUNCH_COMPILE_EXIT=%errorlevel%"
+          >> usb-protected-launch.log echo Protected launch compiler exit: %GESHER_PROTECTED_LAUNCH_COMPILE_EXIT%
+          if not "%GESHER_PROTECTED_LAUNCH_COMPILE_EXIT%"=="0" (
+            type usb-protected-launch.log
+            exit /b %GESHER_PROTECTED_LAUNCH_COMPILE_EXIT%
+          )
+          cl /nologo /std:c11 /GS- /W4 /WX /D_WIN32_WINNT=0x0A00 tests\native\usb_guest_loader_probe.c /Fe:guest-kernel32.exe /link /NODEFAULTLIB /ENTRY:GuestLoaderProbeEntry /SUBSYSTEM:CONSOLE kernel32.lib >> usb-protected-launch.log 2>&1
+          if errorlevel 1 (
+            type usb-protected-launch.log
+            exit /b 1
+          )
+          cl /nologo /std:c11 /GS- /W4 /WX /D_WIN32_WINNT=0x0A00 /DGESHER_PROBE_USER32 tests\native\usb_guest_loader_probe.c /Fe:guest-user32.exe /link /NODEFAULTLIB /ENTRY:GuestLoaderProbeEntry /SUBSYSTEM:CONSOLE kernel32.lib user32.lib >> usb-protected-launch.log 2>&1
+          if errorlevel 1 (
+            type usb-protected-launch.log
+            exit /b 1
+          )
+          cl /nologo /std:c11 /GS- /W4 /WX /D_WIN32_WINNT=0x0A00 /DGESHER_PROBE_USER32_LATE tests\native\usb_guest_loader_probe.c /Fe:guest-user32-late.exe /link /NODEFAULTLIB /ENTRY:GuestLoaderProbeEntry /SUBSYSTEM:CONSOLE kernel32.lib >> usb-protected-launch.log 2>&1
+          if errorlevel 1 (
+            type usb-protected-launch.log
+            exit /b 1
+          )
+          python -c "from datetime import datetime, timezone; print('Protected launch: fixture-start-utc=' + datetime.now(timezone.utc).isoformat(timespec='microseconds'))" >> usb-protected-launch.log 2>&1
+          usb_protected_launch_test.exe --scm-profile-control >> usb-protected-launch.log 2>&1
+          set "GESHER_PROTECTED_LAUNCH_NATIVE_EXIT=%errorlevel%"
+          >> usb-protected-launch.log echo Protected launch native exit: %GESHER_PROTECTED_LAUNCH_NATIVE_EXIT%
+          type usb-protected-launch.log
+          exit /b %GESHER_PROTECTED_LAUNCH_NATIVE_EXIT%
+      - name: Preserve observer-free protected launch evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: protected-launch-unobserved-native-${{ matrix.os }}
+          path: usb-protected-launch.log
+          if-no-files-found: error
+
   # Short Windows host contracts share one runner per OS: separate jobs each
   # paid for a runner, checkout and queue slot to run a minute of checks.
   # Every check step runs even after an earlier one fails, so one failure
@@ -165,6 +224,74 @@ jobs:
         with:
           distribution: temurin
           java-version: '21.0.13'
+      - name: Prepare bounded USER32 diagnostic map from this Windows image
+        if: ${{ !cancelled() }}
+        # Diagnostic setup cannot replace the required native launch result.
+        continue-on-error: true
+        timeout-minutes: 3
+        shell: cmd
+        run: |
+          python -m venv out\user32-cfg-tool
+          if errorlevel 1 exit /b 1
+          out\user32-cfg-tool\Scripts\python.exe -m pip install --require-hashes --no-deps --only-binary=:all: -r tools\ci\user32-cfg-requirements.txt
+          if errorlevel 1 exit /b 1
+          out\user32-cfg-tool\Scripts\python.exe tools\ci\prepare_user32_cfg.py --output user32-cfg.bin --selftest
+          if errorlevel 1 exit /b 1
+      - name: Actual protected runtime identity, AppContainer launch and bounded cleanup
+        id: protected_launch_observed
+        if: ${{ !cancelled() }}
+        timeout-minutes: 3
+        shell: cmd
+        run: |
+          cl /nologo /std:c++20 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /DNOMINMAX tests\native\usb_protected_launch_test.cc tests\native\usb_scm_profile_control.cc tests\native\usb_lowbox_iat_trace.cc compat\usb_storage\protected_identity.cc compat\usb_storage\authority_launch.cc compat\framework\app_container.cc /Fe:usb_protected_launch_test.exe advapi32.lib userenv.lib wtsapi32.lib user32.lib ole32.lib shell32.lib uuid.lib > usb-protected-launch.log 2>&1
+          set "GESHER_PROTECTED_LAUNCH_COMPILE_EXIT=%errorlevel%"
+          >> usb-protected-launch.log echo Protected launch compiler exit: %GESHER_PROTECTED_LAUNCH_COMPILE_EXIT%
+          if not "%GESHER_PROTECTED_LAUNCH_COMPILE_EXIT%"=="0" (
+            type usb-protected-launch.log
+            exit /b %GESHER_PROTECTED_LAUNCH_COMPILE_EXIT%
+          )
+          cl /nologo /std:c11 /GS- /W4 /WX /D_WIN32_WINNT=0x0A00 tests\native\usb_guest_loader_probe.c /Fe:guest-kernel32.exe /link /NODEFAULTLIB /ENTRY:GuestLoaderProbeEntry /SUBSYSTEM:CONSOLE kernel32.lib >> usb-protected-launch.log 2>&1
+          if errorlevel 1 (
+            type usb-protected-launch.log
+            exit /b 1
+          )
+          cl /nologo /std:c11 /GS- /W4 /WX /D_WIN32_WINNT=0x0A00 /DGESHER_PROBE_USER32 tests\native\usb_guest_loader_probe.c /Fe:guest-user32.exe /link /NODEFAULTLIB /ENTRY:GuestLoaderProbeEntry /SUBSYSTEM:CONSOLE kernel32.lib user32.lib >> usb-protected-launch.log 2>&1
+          if errorlevel 1 (
+            type usb-protected-launch.log
+            exit /b 1
+          )
+          cl /nologo /std:c11 /GS- /W4 /WX /D_WIN32_WINNT=0x0A00 /DGESHER_PROBE_USER32_LATE tests\native\usb_guest_loader_probe.c /Fe:guest-user32-late.exe /link /NODEFAULTLIB /ENTRY:GuestLoaderProbeEntry /SUBSYSTEM:CONSOLE kernel32.lib >> usb-protected-launch.log 2>&1
+          if errorlevel 1 (
+            type usb-protected-launch.log
+            exit /b 1
+          )
+          python -c "from datetime import datetime, timezone; print('Protected launch: fixture-start-utc=' + datetime.now(timezone.utc).isoformat(timespec='microseconds'))" >> usb-protected-launch.log 2>&1
+          usb_protected_launch_test.exe --scm-profile-control --lowbox-iat-trace >> usb-protected-launch.log 2>&1
+          set "GESHER_PROTECTED_LAUNCH_NATIVE_EXIT=%errorlevel%"
+          >> usb-protected-launch.log echo Protected launch native exit: %GESHER_PROTECTED_LAUNCH_NATIVE_EXIT%
+          if not "%GESHER_PROTECTED_LAUNCH_NATIVE_EXIT%"=="0" out\user32-cfg-tool\Scripts\python.exe tools\ci\prepare_user32_cfg.py --explain-log usb-protected-launch.log >> usb-protected-launch.log 2>&1
+          if not "%GESHER_PROTECTED_LAUNCH_NATIVE_EXIT%"=="0" pwsh -NoLogo -NoProfile -NonInteractive -File tools\ci\protected_profile_diagnostics.ps1 -LogPath usb-protected-launch.log >> usb-protected-launch.log 2>&1
+          type usb-protected-launch.log
+          exit /b %GESHER_PROTECTED_LAUNCH_NATIVE_EXIT%
+      - name: Preserve early protected launch diagnostics
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: protected-launch-native-${{ matrix.os }}
+          path: usb-protected-launch*.log
+          if-no-files-found: error
+      - name: Protected local thread signals under restrictive Windows ACLs
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: python tools/test_protected_thread_signals.py --cxx cl
+      - name: Protected inherited NUL handle ownership across POSIX modules
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: python tools/test_appcontainer_null_owner.py --cxx cl
+      - name: Protect original legacy keys before publishing sanitized app metadata
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: python tools/test_legacy_keystore_archive.py --cxx cl
       - name: Launch failure text with native Windows direction classification
         if: ${{ !cancelled() }}
         shell: pwsh
@@ -230,9 +357,11 @@ jobs:
           python -m unittest discover -s tools/tests -p test_jdbc_fixture_download.py
           python tools/test_download_manager_contracts.py --java-home "$JAVA_HOME"
       - name: Build actual app identity restart implementation
+        if: ${{ !cancelled() }}
         shell: cmd
-        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 compat\framework\services_zygote.cc compat\framework\app_container.cc tests\clipboard\standalone_restart_windows_test.cc /Fe:app-identity-restart.exe user32.lib advapi32.lib ole32.lib
+        run: cl /nologo /std:c++20 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 compat\framework\services_zygote.cc compat\usb_storage\protected_runtime_client.cc compat\binder\protected_data_client.cc compat\framework\app_container.cc compat\posix\src\binder_endpoint.cc tests\clipboard\standalone_restart_windows_test.cc /Fe:app-identity-restart.exe user32.lib advapi32.lib ole32.lib shell32.lib uuid.lib
       - name: Check UID re-entry, inherited I/O, exact exit and parent-death cleanup
+        if: ${{ !cancelled() }}
         shell: pwsh
         run: |
           & .\app-identity-restart.exe
@@ -244,7 +373,7 @@ jobs:
       - name: Build actual dexopt child waiting and resource budgets
         if: ${{ !cancelled() }}
         shell: cmd
-        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 compat\framework\services_zygote.cc compat\framework\app_container.cc compat\framework\services_dexopt_watch.cc tests\native\dexopt_child_wait_test.cc /Fe:dexopt-child-wait.exe user32.lib advapi32.lib ole32.lib
+        run: cl /nologo /std:c++20 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 compat\framework\services_zygote.cc compat\usb_storage\protected_runtime_client.cc compat\binder\protected_data_client.cc compat\framework\app_container.cc compat\posix\src\binder_endpoint.cc compat\framework\services_dexopt_watch.cc tests\native\dexopt_child_wait_test.cc /Fe:dexopt-child-wait.exe user32.lib advapi32.lib ole32.lib shell32.lib uuid.lib
       - name: Verify real compiler cancellation, reaping, CPU and memory budgets
         if: ${{ !cancelled() }}
         shell: pwsh
@@ -308,6 +437,16 @@ jobs:
         run: |
           & .\hello-windows.exe
           if ($LASTEXITCODE -ne 0) { throw 'Windows Hello verifier contracts failed' }
+      - name: Build actual Windows Hello prompt-owner contracts (ADR 0091)
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /Icompat\devices tests\biometrics\hello_owner_windows_test.cc compat\devices\hello_owner.cc compat\devices\hello_win.cc compat\devices\winrt.cc /Fe:hello-owner.exe ole32.lib user32.lib
+      - name: Windows build number and prompt-owner classification without UI
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          & .\hello-owner.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Windows Hello prompt-owner contracts failed' }
       - name: Exact native reader ownership and handle reuse controls
         if: ${{ !cancelled() }}
         shell: pwsh
@@ -316,6 +455,117 @@ jobs:
         if: ${{ !cancelled() }}
         shell: pwsh
         run: python tools/test_windows_host_events.py --java-home "$env:JAVA_HOME"
+      - name: USB authority authentic AppContainer peer identity
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: |
+          cl /nologo /std:c++20 /EHsc /D_WIN32_WINNT=0x0A00 /DNOMINMAX tests\native\usb_authority_peer_test.cc compat\usb_storage\authority_peer.cc compat\framework\app_container.cc /Fe:usb_authority_peer_test.exe advapi32.lib ole32.lib
+          if errorlevel 1 exit /b 1
+          usb_authority_peer_test.exe
+      - name: USB block cross-process capability revocation
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: |
+          cl /nologo /std:c++20 /EHsc /D_WIN32_WINNT=0x0A00 /DNOMINMAX /Icompat\usb_storage tests\native\usb_block_channel_test.cc compat\usb_storage\block_channel.cc compat\usb_storage\block_broker_client.cc /Fe:usb_block_channel_test.exe bcrypt.lib advapi32.lib
+          if errorlevel 1 exit /b 1
+          usb_block_channel_test.exe
+      - name: Simulated USB media through the Windows block broker
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: |
+          cl /nologo /std:c++20 /EHsc /D_WIN32_WINNT=0x0A00 /DNOMINMAX /Icompat\usb_storage tests\native\usb_block_simulated_disk_test.cc compat\usb_storage\block_channel.cc compat\usb_storage\block_broker_client.cc compat\usb_storage\block_broker_server.cc /Fe:usb_block_simulated_disk_test.exe bcrypt.lib advapi32.lib
+          if errorlevel 1 exit /b 1
+          usb_block_simulated_disk_test.exe
+      - name: Real program break reservation, growth, shrink and concurrent allocations
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: |
+          cl /nologo /std:c++20 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /DNOMINMAX tests\native\program_break_test.cc /Fe:program_break_test.exe
+          if errorlevel 1 exit /b 1
+          program_break_test.exe
+      - name: Retire failed USB child handoffs without joining under the session lock
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: |
+          cl /nologo /std:c++20 /EHsc /D_WIN32_WINNT=0x0A00 /DNOMINMAX tests\native\usb_block_session_test.cc compat\usb_storage\block_session.cc compat\usb_storage\block_channel.cc /Fe:usb_block_session_test.exe bcrypt.lib advapi32.lib
+          if errorlevel 1 exit /b 1
+          usb_block_session_test.exe
+      - name: Reject actual non-USB disks through production USB admission
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: |
+          cl /nologo /std:c++20 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /DNOMINMAX tests\native\usb_internal_disk_test.cc compat\usb_storage\host_disk.cc /Fe:usb_internal_disk_test.exe cfgmgr32.lib
+          if errorlevel 1 exit /b 1
+          usb_internal_disk_test.exe
+      - name: Protected Binder bootstrap and data-pipe identity
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          cmake -S probes/binder-protected -B out/binder-protected-ci -G Ninja -DCMAKE_BUILD_TYPE=Release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build out/binder-protected-ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ctest --test-dir out/binder-protected-ci --output-on-failure
+          exit $LASTEXITCODE
+      - name: Authenticated native role query boundaries and stable protected profile names
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: |
+          cl /nologo /std:c11 /W4 /WX tests\native\protected_role_test.c /Fe:protected_role_test.exe
+          if errorlevel 1 exit /b 1
+          protected_role_test.exe
+          if errorlevel 1 exit /b 1
+          cl /nologo /std:c11 /W4 /WX /DGESHER_TEST_MISSING_SERVER_QUERY tests\native\protected_role_test.c /Fe:protected_role_missing_test.exe
+          if errorlevel 1 exit /b 1
+          protected_role_missing_test.exe
+          if errorlevel 1 exit /b 1
+          cl /nologo /std:c++20 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /DNOMINMAX tests\native\protected_profile_name_test.cc /Fe:protected_profile_name_test.exe bcrypt.lib
+          if errorlevel 1 exit /b 1
+          protected_profile_name_test.exe
+      - name: Protected installation owner, retirement and inherited ACL contracts
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          $ownerContractRoot = Join-Path $env:RUNNER_TEMP ('gesher-owner-' + [guid]::NewGuid().ToString('N'))
+          New-Item -ItemType Directory -Path $ownerContractRoot -ErrorAction Stop | Out-Null
+          $compileFlags = @('/nologo', '/std:c++20', '/EHsc', '/W4', '/WX', '/D_WIN32_WINNT=0x0A00', '/DNOMINMAX')
+          $containerObject = Join-Path $ownerContractRoot 'container.obj'
+          & cl @compileFlags /c compat/framework/app_container.cc "/Fo:$containerObject"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          foreach ($kind in 'journal', 'marker', 'revocation', 'wire', 'job') {
+            $source = "tests/native/protected_owner_${kind}_test.cc"
+            $binary = Join-Path $ownerContractRoot ($kind + '.exe')
+            $object = Join-Path $ownerContractRoot ($kind + '.obj')
+            $arguments = $compileFlags + @($source, "/Fo:$object", "/Fe:$binary", 'bcrypt.lib')
+            if ($kind -eq 'revocation') { $arguments += @($containerObject, 'advapi32.lib', 'ole32.lib', 'userenv.lib') }
+            & cl @arguments
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            if ($kind -in 'journal', 'marker', 'revocation') {
+              & $binary (Join-Path $ownerContractRoot ($kind + '-state'))
+            } else {
+              & $binary
+            }
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+
+      - name: Protected USB observation bounds, identity epochs and malformed metadata
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: |
+          cl /nologo /std:c++20 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /DNOMINMAX tests\native\protected_usb_observation_test.cc compat\usb_storage\protected_usb_observation.cc /Fe:protected_usb_observation_test.exe
+          if errorlevel 1 exit /b 1
+          protected_usb_observation_test.exe
+          if errorlevel 1 exit /b 1
+          cl /nologo /std:c++20 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /DNOMINMAX tests\native\usb_attachment_versions_test.cc /Fe:usb_attachment_versions_test.exe cfgmgr32.lib setupapi.lib ole32.lib advapi32.lib winusb.lib
+          if errorlevel 1 exit /b 1
+          usb_attachment_versions_test.exe
+      - name: Protected runtime wire layout and malformed payload bounds
+        if: ${{ !cancelled() }}
+        shell: cmd
+        run: |
+          cl /nologo /std:c++20 /EHsc /W4 /WX tests\native\protected_runtime_wire_test.cc /Fe:protected_runtime_wire_test.exe
+          if errorlevel 1 exit /b 1
+          protected_runtime_wire_test.exe
       - name: Build native clipboard foreground actor before timed startup
         if: ${{ !cancelled() }}
         shell: cmd
@@ -612,6 +862,9 @@ jobs:
           python3 tools/test_bionic_semaphore_contracts.py --sanitize
           python3 tools/test_file_allocation_contracts.py --sanitize
           python3 tools/test_positioned_io_contracts.py --sanitize
+          python3 tools/test_usb_block_io_contracts.py --sanitize
+          c++ -std=c++20 -Wall -Wextra -Werror -fsanitize=address,undefined -fno-omit-frame-pointer tests/native/protected_runtime_wire_test.cc -o /tmp/gesher-protected-runtime-wire-test
+          /tmp/gesher-protected-runtime-wire-test
           python3 tools/test_ofd_transfer_contracts.py --sanitize
           python3 tools/test_file_io_contracts.py --sanitize
           python3 tools/test_pipe_io_contracts.py --sanitize
@@ -626,6 +879,7 @@ jobs:
           python3 tools/test_i420_crop.py --sanitize --negative-controls
           python3 tools/test_utc_time_contracts.py --sanitize
           python3 tools/test_sleep_contracts.py --sanitize
+          python3 tools/test_storage_tools.py
 
       - name: Native TLS, wait, DNS, clock, affinity, finalizer and media lifecycle contracts
         if: matrix.group == 'native'
@@ -1208,7 +1462,7 @@ jobs:
           ninja -C out thread_watch_clock_test dlopen_errors_test
           ninja -C out
           # Native fixtures are CI-only; none is installed by gesher.iss.
-          ninja -C out install_pipe_test account_chooser_test window_promotion_test permission_dialog_test device_admin_dialog_test window_frame_test
+          ninja -C out install_pipe_test account_chooser_test window_promotion_test permission_dialog_test device_admin_dialog_test binder_protected_admission_test loopback_relay_test loopback_relay_frames_test relay_worker_exit_test canonical_file_name_test window_frame_test
           ninja -C out arm64_numeric_return_host arm64_numeric_fenv_test
           ninja -C out font_environment_test
 
@@ -1262,7 +1516,9 @@ jobs:
           cp out/*.exe out/dalvikvm.map out/dex2oat.map dist/
           cp tools/package/licenses/BIONIC-GDTOA-NOTICES.txt dist/
           cp out/gesher_shellext.dll dist/
+          cp out/gesher-drop-worker.exe dist/
           cp out/futex_test_module.dll dist/
+          cp out/gesher_usb_block_owner_module_test.dll dist/
           cp -r out/dlopen-fixtures dist/
           cp out/libgesher_account_crypto.so dist/
           cp out/libgesher_install_pipe.so dist/
@@ -1576,7 +1832,7 @@ jobs:
   # The Windows installer (tools/package/gesher.iss), installed and tried on a
   # clean runner: Hello through the installed `gesher` command, then uninstall.
   package:
-    needs: [plan, build, framework, graphics, angle, boot-image, media, arm64]
+    needs: [plan, build, framework, graphics, angle, boot-image, media, arm64, exec]
     if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'package') }}
     runs-on: windows-2022
     env:
@@ -1600,6 +1856,15 @@ jobs:
             .github/workflows
             tools/fonts
             tools/binder
+            compat/bionic
+
+      - name: Verify the optional filesystem tool and ABI test suppliers
+        shell: pwsh
+        run: |
+          python tools/ci/artifact_receipt.py --name filesystem-tools --producer "exec / exec" --destination fs-tools-input
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tools/ci/artifact_receipt.py --name exec --producer "exec / exec" --destination exec-input
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify PowerShell UI translations
         shell: powershell
@@ -1650,6 +1915,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build installer
+        id: build_installer
         shell: pwsh
         run: |
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
@@ -1683,8 +1949,133 @@ jobs:
             installer/*-portable.zip.sha256
             installer/SHA256SUMS.txt
 
-      - name: Install, run Hello, uninstall
+      - name: Ensure the protected account has the machine WebView2 runtime
+        id: machine_webview2
         shell: pwsh
+        run: |
+          $client = '{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+          $keys = @("HKLM:\SOFTWARE\Microsoft\EdgeUpdate\Clients\$client",
+                    "HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\$client")
+          function Has-MachineWebView {
+            foreach ($key in $keys) {
+              $version = (Get-ItemProperty -LiteralPath $key -Name pv -ErrorAction SilentlyContinue).pv
+              if ($version -and $version -ne '0.0.0.0') { return $true }
+            }
+            return $false
+          }
+          if (-not (Has-MachineWebView)) {
+            $bootstrapper = Join-Path $env:RUNNER_TEMP 'MicrosoftEdgeWebview2Setup.exe'
+            Invoke-WebRequest -Uri 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile $bootstrapper
+            $signature = Get-AuthenticodeSignature -LiteralPath $bootstrapper
+            if ($signature.Status -ne 'Valid' -or
+                $signature.SignerCertificate.GetNameInfo([Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false) -ne 'Microsoft Corporation') {
+              throw 'WebView2 prerequisite is not a valid Microsoft-signed installer'
+            }
+            $installation = Start-Process -FilePath $bootstrapper -ArgumentList '/silent', '/install' -PassThru -Wait
+            if ($installation.ExitCode -ne 0 -or -not (Has-MachineWebView)) {
+              throw "Machine WebView2 prerequisite installation failed: $($installation.ExitCode)"
+            }
+          }
+          'Machine WebView2 runtime verified for the protected service account' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+
+      - name: Build the optional USB authority installer
+        id: build_usb_authority
+        if: ${{ !cancelled() && steps.build_installer.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          $version = $env:GESHER_PACKAGE_VERSION
+          $compilerArgs = @('/Qp', "/DBuildDir=$PWD\dist", "/DAppVersion=$version",
+                            "/DFilesystemToolsDir=$PWD\fs-tools-input\filesystem-tools",
+                            "/O$PWD\usb-authority-installer", 'tools\package\gesher-usb-broker.iss')
+          & $iscc @compilerArgs
+          if ($LASTEXITCODE -ne 0) {
+            choco upgrade innosetup --no-progress -y | Out-Null
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            & $iscc @compilerArgs
+          }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $setup = Get-Item -LiteralPath "usb-authority-installer\gesher-usb-broker-setup-$version.exe"
+          $checksum = (Get-FileHash -LiteralPath $setup.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$checksum  $($setup.Name)" | Set-Content -LiteralPath 'usb-authority-installer\SHA256SUMS.txt' -Encoding ascii
+
+      # Each runtime gate remains a hard failure. Independent gates continue
+      # after a failure so an ELF issue cannot hide installer or APK evidence.
+      - name: Protected Binder, USB ownership and Android locale execution
+        if: ${{ !cancelled() && steps.build_installer.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          & .\dist\binder_protected_admission_test.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & .\dist\loopback_relay_test.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & .\dist\loopback_relay_frames_test.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          foreach ($owner in 'exe', 'dll') {
+            & .\dist\gesher_usb_block_owner_test.exe "$PWD\dist\gesher_usb_block_owner_module_test.dll" $owner
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          & .\dist\gesher-exec.exe --elf "$PWD\exec-input\locale-info-x86_64" locale-info
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Real relay thread exit excludes native fork
+        if: ${{ !cancelled() && steps.build_installer.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          $negative = & .\dist\relay_worker_exit_test.exe --omit-gate 2>&1
+          $negativeCode = $LASTEXITCODE
+          $negative | Write-Output
+          if ($negativeCode -ne 1 -or ($negative -join "`n") -notmatch 'FAIL relay exit: fork accepted while real FLS exit callback was active') {
+            throw 'Relay exit negative control did not reproduce the original fork admission defect'
+          }
+          & .\dist\relay_worker_exit_test.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Real relay exit gate failed' }
+
+      - name: Canonical file identity and case preservation
+        if: ${{ !cancelled() && steps.build_installer.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          $canonicalRoot = Join-Path $env:RUNNER_TEMP ('gesher-canonical-' + [guid]::NewGuid().ToString('N'))
+          New-Item -ItemType Directory -Path $canonicalRoot -ErrorAction Stop | Out-Null
+          & .\dist\canonical_file_name_test.exe $canonicalRoot
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Remove-Item -LiteralPath $canonicalRoot -ErrorAction Stop
+
+      - name: Upstream filesystem programs on isolated broker-backed media
+        if: ${{ !cancelled() && steps.build_installer.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          & .\dist\usb_filesystem_tools_test.exe --tools "$PWD\fs-tools-input\filesystem-tools\bin"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Optional authority installation and original CardWake APK
+        if: ${{ !cancelled() && steps.build_usb_authority.outcome == 'success' && steps.machine_webview2.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          $version = $env:GESHER_PACKAGE_VERSION
+          $setup = Get-Item -LiteralPath "usb-authority-installer\gesher-usb-broker-setup-$version.exe"
+          $apk = Join-Path $env:RUNNER_TEMP 'cardwake-otg-root-v1.1.1-release.apk'
+          Invoke-WebRequest -Uri 'https://github.com/jcool-j/cardwake-otg-root/releases/download/v1.1.1/cardwake-otg-root-v1.1.1-release.apk' -OutFile $apk
+          if ((Get-FileHash -LiteralPath $apk -Algorithm SHA256).Hash.ToLowerInvariant() -ne 'd0afc9864ab0dd1305537cc0f7e2e8e127c11a31cecb012a1e18e210eaf2b313') {
+            throw 'Original CardWake APK digest mismatch'
+          }
+          tests/windows/shell/UsbAuthorityInstaller.ps1 -Setup $setup.FullName -BrokerImage 'dist\gesher-usb-authority.exe' -CardWakeApk $apk
+
+      - name: Upload optional USB authority installer preview
+        if: ${{ !cancelled() && steps.build_usb_authority.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: gesher-usb-authority-preview
+          path: usb-authority-installer/
+          if-no-files-found: error
+
+      - name: Install, run Hello, uninstall
+        if: ${{ !cancelled() && steps.build_installer.outcome == 'success' }}
+        shell: pwsh
+        env:
+          # Exercise the candidate through the installed launcher before changing the shipping default.
+          GESHER_SANDBOX: appcontainer-trusted
+          GESHER_LOCALES: en-US
         run: |
           $setup = (Get-ChildItem installer\gesher-setup-*.exe).FullName
           # Every run of the installed Gesher below must load the installed boot
@@ -1742,22 +2133,12 @@ jobs:
           foreach ($f in [regex]::Matches((Get-Content -Raw "$app\fonts\fonts.xml"), '[A-Za-z0-9_-]+\.ttf') | ForEach-Object Value | Sort-Object -Unique) {
             if (-not (Test-Path "$app\fonts\$f")) { throw "The installer left out fonts\$f, which fonts.xml names" }
           }
-          $out = & "$app\gesher-app.cmd" "$app\lifecycle.apk" --single-process 2>&1 | Out-String
-          $code = $LASTEXITCODE
-          Write-Host "gesher-app lifecycle.apk --single-process (exit $code):"
-          Write-Host (($out -split "`n" | Select-Object -Last 15) -join "`n")
-          if ($code -ne 0 -or $out -notmatch 'gesher-app: done' -or $out -notmatch 'stand-in services in this process') {
-            throw "The installed gesher-app --single-process did not take lifecycle.apk to onResume (exit $code)"
-          }
-          $fonts = $out -split "`n" | Select-String -Pattern 'gesher-app: system fonts' | Select-Object -First 1
-          Write-Host $fonts
-          if ($out -notmatch 'gesher-app: system fonts: \d+ typefaces') { throw 'The installed gesher-app did not load the system fonts' }
-          if ($out -notmatch 'gesher: boot image loaded: 5 spaces') { throw 'The installed gesher-app did not load the installed boot image with its extensions' }
-          'PASS  installer: the installed boot image loads (gesher: the primary image, 3 spaces; gesher-app: with the framework and gesher-app extensions, 5 spaces)' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
-          'PASS  installer: gesher-app loads the installed system fonts' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           # The default: the Gesher device (binderd, servicemanager and a
           # persistent system server, detached), the APK installed, its
           # process started by the system server (docs/services.md).
+          # Run the cold device launch before the single-process probe. A
+          # protected single-process launch can start a policy owner that the
+          # default launch would reuse instead of starting a fresh device.
           $device = "$env:LOCALAPPDATA\Gesher\data\system\gesher-device"
           function DevicePids {
             if (-not (Test-Path $device)) { return @() }
@@ -1772,13 +2153,17 @@ jobs:
           $env:GESHER_APP_WINDOW = 'headless'
           # The device's processes log how they execute (checked below, ADR 0081).
           $env:GESHER_LOG_EXECUTION = '1'
-          $out = & "$app\gesher-app.cmd" "$app\lifecycle.apk" 2>&1 | Out-String
+          # CardWake (#407) looks up UsbManager during Activity.onCreate.
+          $out = & "$app\gesher-app.cmd" "$app\lifecycle.apk" --ez com.gesher.lifecycle.CHECK_USB_SERVICE true --ez com.gesher.lifecycle.CHECK_ANDROID_DATA true --ez com.gesher.lifecycle.CHECK_SYSTEM_LINKER true 2>&1 | Out-String
           $code = $LASTEXITCODE
           Remove-Item Env:GESHER_LOG_EXECUTION
           Write-Host "gesher-app lifecycle.apk (exit $code):"
           Write-Host (($out -split "`n" | Select-Object -Last 15) -join "`n")
           if ($code -ne 0 -or $out -notmatch 'gesher-app: done' -or $out -notmatch 'started the Gesher device' -or
-              $out -notmatch 'installed com\.gesher\.lifecycle' -or $out -notmatch 'LifecycleActivity onResume') {
+              $out -notmatch 'installed com\.gesher\.lifecycle' -or $out -notmatch 'LifecycleActivity onResume' -or
+              $out -notmatch 'LifecycleActivity onCreate: USB service available' -or
+              $out -notmatch 'LifecycleActivity Android data capacity and device-state isolation verified' -or
+              $out -notmatch 'LifecycleActivity verified the read-only x86-64 system linker file and mapping') {
             Get-Content "$env:LOCALAPPDATA\Gesher\logs\*.log" -ErrorAction SilentlyContinue | Select-Object -Last 60 | Out-Host
             throw "The installed gesher-app did not run lifecycle.apk on the Gesher device (exit $code)"
           }
@@ -1789,6 +2174,9 @@ jobs:
             throw "gesher-app list does not show the installed lifecycle.apk"
           }
           'PASS  installer: gesher-app installs lifecycle.apk and runs it on the Gesher device (a persistent system server); list shows it' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          if ((Get-Content $device) -cnotcontains 'protected_binder=true') {
+            throw 'The installer qualification did not start the candidate isolated device'
+          }
           # The installed device compiled it at install with the installed dex2oat (ADR 0054).
           $dexopt = Get-Content "$env:LOCALAPPDATA\Gesher\logs\system_server.log" -ErrorAction SilentlyContinue | Select-String 'dexopt: com\.gesher\.lifecycle: verify \(reason install\)' | Select-Object -First 1
           if (-not $dexopt) {
@@ -1819,6 +2207,19 @@ jobs:
           }
           if ($out -notmatch 'Windows AppUserModelID Gesher\.App\.com\.gesher\.lifecycle') { throw 'The app process did not set its AppUserModelID' }
           'PASS  installer: the first launch of lifecycle.apk makes its Start menu shortcut; its process sets the AppUserModelID Gesher.App.com.gesher.lifecycle' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          $out = & "$app\gesher-app.cmd" "$app\lifecycle.apk" --single-process 2>&1 | Out-String
+          $code = $LASTEXITCODE
+          Write-Host "gesher-app lifecycle.apk --single-process (exit $code):"
+          Write-Host (($out -split "`n" | Select-Object -Last 15) -join "`n")
+          if ($code -ne 0 -or $out -notmatch 'gesher-app: done' -or $out -notmatch 'stand-in services in this process') {
+            throw "The installed gesher-app --single-process did not take lifecycle.apk to onResume (exit $code)"
+          }
+          $fonts = $out -split "`n" | Select-String -Pattern 'gesher-app: system fonts' | Select-Object -First 1
+          Write-Host $fonts
+          if ($out -notmatch 'gesher-app: system fonts: \d+ typefaces') { throw 'The installed gesher-app did not load the system fonts' }
+          if ($out -notmatch 'gesher: boot image loaded: 5 spaces') { throw 'The installed gesher-app did not load the installed boot image with its extensions' }
+          'PASS  installer: the installed boot image loads (gesher: the primary image, 3 spaces; gesher-app: with the framework and gesher-app extensions, 5 spaces)' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          'PASS  installer: gesher-app loads the installed system fonts' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           $out = & "$app\gesher-app.cmd" uninstall com.gesher.lifecycle 2>&1 | Out-String
           $code = $LASTEXITCODE
           Write-Host $out
@@ -1965,8 +2366,10 @@ jobs:
           $code = $LASTEXITCODE
           Write-Host "gesher-app lifecycle.apk --system-server (exit $code):"
           Write-Host (($out -split "`n" | Select-Object -Last 12) -join "`n")
-          if ($code -ne 0 -or $out -notmatch 'gesher-app: done' -or $out -notmatch '\(in another process\)') {
-            Get-Content "$env:LOCALAPPDATA\Gesher\logs\run-system_server.*" -ErrorAction SilentlyContinue | Select-Object -Last 40 | Out-Host
+          if ($code -ne 0 -or $out -notmatch 'gesher-app: done' -or $out -notmatch 'LifecycleActivity onResume' -or
+              $out -notmatch 'gesher-app: attached to the system server \(pid \d+\)' -or
+              (DevicePids).Count -ne 0) {
+            Get-Content "$env:LOCALAPPDATA\Gesher\logs\run-*\system_server.log" -ErrorAction SilentlyContinue | Select-Object -Last 40 | Out-Host
             throw "The installed gesher-app --system-server did not take lifecycle.apk to onResume (exit $code)"
           }
           'PASS  installer: gesher-app --system-server runs the app with the services in a system server process' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
@@ -2105,9 +2508,18 @@ jobs:
           if (Test-Path $desktopLnk) { $problems += 'the deleted desktop shortcut was made again' }
           if ((Get-GesherShortcutRecordValue $lifecycleRecord 'desktop_link') -ne $desktopLnk) { $problems += 'shortcut.properties lost desktop_link' }
           if ($problems) { Write-Host $out; throw "A deleted desktop shortcut: $($problems -join '; ')" }
+          # A user can reuse the deleted shortcut's name for their own link.
+          $replacement = $wsh.CreateShortcut($desktopLnk)
+          $replacement.TargetPath = "$env:WINDIR\notepad.exe"
+          $replacement.Save()
+          $replacementSha = (Get-FileHash -LiteralPath $desktopLnk).Hash
           $out = & "$app\gesher-app.cmd" uninstall com.gesher.lifecycle 2>&1 | Out-String
           $code = $LASTEXITCODE
           if ($code -ne 0 -or (Test-LifecycleListed)) { Write-Host $out; throw "gesher-app uninstall com.gesher.lifecycle failed (exit $code)" }
+          if ((Get-FileHash -LiteralPath $desktopLnk).Hash -ne $replacementSha) {
+            throw "App uninstall changed the user's replacement at $desktopLnk"
+          }
+          Remove-Item -LiteralPath $desktopLnk -Force
           'PASS  installer: a desktop shortcut the user deleted is not made again by a later install or sync-shortcuts (desktop_link kept)' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           # Install (the box left unchecked), then Open: launched as the Start menu launches it.
           $run = Start-ApkOpen "$app\lifecycle.apk"
@@ -2175,6 +2587,10 @@ jobs:
             $profile = $dm.CreateEntry('primary.prof').Open()
             try { $profile.WriteByte(0) } finally { $profile.Dispose() }
           } finally { $dm.Dispose() }
+          # A second APK in Downloads has a conventional split name. Its sidecar
+          # is unrelated even when it is not a readable dex-metadata file.
+          Copy-Item -LiteralPath "$app\lifecycle.apk" -Destination (Join-Path $loose 'split_foreign.apk')
+          New-Item -ItemType Directory -Path (Join-Path $loose 'split_foreign.dm') | Out-Null
           $baseApk = Join-Path $loose 'base.apk'
           $splitPackage = 'com.gesher.splitcontract'
           $wrong = & "$app\gesher-app.cmd" install $baseApk --confirmed $splitPackage 1 ('0' * 64) 2>&1 | Out-String
@@ -2203,6 +2619,9 @@ jobs:
           if ($row.Count -ne 1) { throw 'confirmed loose APK did not publish an installed package' }
           $codeDir = (($row[0] -split "`t")[1] -split '[/\\]')[-1]
           $installedDir = "$env:LOCALAPPDATA\Gesher\data\app\$codeDir"
+          if (Test-Path -LiteralPath (Join-Path $installedDir 'split_foreign.apk')) {
+            throw 'confirmed loose APK unexpectedly installed another package''s split'
+          }
           foreach ($name in @($looseInputs.Values) + 'base.dm') {
             if ((Get-FileHash -LiteralPath (Join-Path $installedDir $name)).Hash -ne $expectedHashes[$name]) {
               throw "confirmed loose APK install did not preserve $name"
@@ -2309,6 +2728,7 @@ jobs:
           }
           'PASS  installer: gesher-app runs uiapp.apk on the Gesher device in a Win32 window of its app process (hwui''s frame read back with PrintWindow; the Activity''s label, AppUserModelID Gesher.App.com.gesher.uiapp, its icon); closing it ends the app' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           'PASS  installer: input reaches uiapp.apk''s views on the Gesher device (a click runs the Button''s onClick, keys and a WM_CHAR type into its EditText, the wheel scrolls, the resized window redraws at 600x700)' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          tests/windows/shell/InstalledAppIsolationChecks.ps1 -RuntimeDirectory $app -EvidenceDirectory "$PWD/out/installed-isolation"
           # gesher-launch's splash (compat/shell/gesher_launch.cc, docs/installer.md):
           # `gesher-launch install` shows none; `gesher-launch launch com.gesher.uiapp`
           # (the shortcut's command, the app's window shown) shows a GesherSplash
@@ -2587,12 +3007,14 @@ jobs:
           'PASS  installer: uninstall removes the Gesher Apps Start menu folder with the apps'' shortcuts, and nothing else of the Start menu' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           'PASS  installer: installs, runs Hello and gesher-app, uninstalls' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
 
-      - name: Preserve portable Windows runtime and Setup evidence
+      - name: Preserve portable runtime and installer isolation evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: portable-runtime-windows-2022
-          path: ${{ runner.temp }}/gesher-portable-runtime-*/logs/**
+          path: |
+            ${{ runner.temp }}/gesher-portable-runtime-*/logs/**
+            out/installed-isolation/**
           if-no-files-found: warn
 
   # End-to-end with real apps (docs/e2e.md): the installer from the package job on a
@@ -2929,6 +3351,7 @@ jobs:
 
       - name: Run tests
         env:
+          GESHER_SANDBOX: appcontainer-trusted
           GESHER_TRACE_TOAST_IDENTITY: ${{ matrix.shard == 'services' && '1' || '0' }}
           GESHER_FONT_REGRESSION_SCOPE: ${{ matrix.os == 'windows-2022' && 'functional-and-strict' || matrix.os == 'windows-2025' && 'functional' || 'unselected' }}
         shell: pwsh
@@ -3397,7 +3820,7 @@ jobs:
   ci-required:
     name: ci-required
     if: always()
-    needs: [plan, source-identity, automerge-script, network-cost-client, windows-host-contracts, api37-report-tests, union-tsf, union-services, union-native-blocking, artifact-preflight, build-framework-assets, build, native3-locks-reference, native3-locks-regression, framework, native-libs, bluetooth, exec, libs, arm64, native2, posix, graphics, angle, webview, boot-image, media, surfaces, asm-port, package, e2e, core-suppliers, test-shards, test, web3-query-regression, binder2-sg-fixtures, binder2-sg-regression, compile, linux-reference, supplier-correlation, windows]
+    needs: [plan, source-identity, automerge-script, network-cost-client, windows-host-contracts, windows-protected-launch-unobserved, api37-report-tests, union-tsf, union-services, union-native-blocking, artifact-preflight, build-framework-assets, build, native3-locks-reference, native3-locks-regression, framework, native-libs, bluetooth, exec, libs, arm64, native2, posix, graphics, angle, webview, boot-image, media, surfaces, asm-port, package, e2e, core-suppliers, test-shards, test, web3-query-regression, binder2-sg-fixtures, binder2-sg-regression, compile, linux-reference, supplier-correlation, windows]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:

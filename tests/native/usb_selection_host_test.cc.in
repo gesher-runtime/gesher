@@ -1,0 +1,102 @@
+// Copyright (C) 2026 The Gesher Authors
+// SPDX-License-Identifier: Apache-2.0
+// Exercise the production selection method with isolated handle and media boundaries.
+#include <cstdint>
+#include <memory>
+#include <mutex>
+
+using DWORD = unsigned;
+using HANDLE = int;
+constexpr HANDLE INVALID_HANDLE_VALUE = -1;
+constexpr DWORD ERROR_SUCCESS = 0, ERROR_INVALID_PARAMETER = 87, ERROR_NOT_SUPPORTED = 50,
+    ERROR_MEDIA_CHANGED = 1110, ERROR_ACCESS_DENIED = 5, ERROR_SHARING_VIOLATION = 32;
+constexpr DWORD GENERIC_READ = 1, GENERIC_WRITE = 2, FILE_SHARE_READ = 4;
+
+struct Scenario {
+  HANDLE reopened = 2;
+  DWORD candidate_status = 0;
+  DWORD prepare_status = 0;
+  unsigned disk = 4;
+  unsigned generation = 7;
+  unsigned bytes = 4096;
+  unsigned sector = 512;
+  bool removed_during_open = false;
+  unsigned old_checks = 0;
+  unsigned opens = 0;
+  unsigned prepares = 0;
+  unsigned candidate_closes = 0;
+} scenario;
+
+HANDLE ReOpenFile(HANDLE original, DWORD access, DWORD share, DWORD flags) {
+  ++scenario.opens;
+  if (original != 1 || access != (GENERIC_READ | GENERIC_WRITE) ||
+      share != FILE_SHARE_READ || flags != 0) return INVALID_HANDLE_VALUE;
+  return scenario.reopened;
+}
+DWORD GetLastError() { return ERROR_ACCESS_DENIED; }
+
+struct DiskHandle {
+  HANDLE value;
+  explicit DiskHandle(HANDLE handle) : value(handle) {}
+  ~DiskHandle() { if (value == 2) ++scenario.candidate_closes; }
+  HANDLE release() { const HANDLE handle = value; value = 0; return handle; }
+};
+
+struct HostDisk {
+  explicit HostDisk(HANDLE handle) : handle_(handle) {}
+  ~HostDisk() { if (handle_ == 2) ++scenario.candidate_closes; }
+  DWORD OpenSelectedForWrite(std::unique_ptr<HostDisk>* disk);
+  DWORD Inspect() {
+    disk_number_ = scenario.disk;
+    media_generation_ = scenario.generation;
+    info_.bytes = scenario.bytes;
+    info_.sector_bytes = scenario.sector;
+    return scenario.candidate_status;
+  }
+  DWORD PrepareWriteAccess() {
+    ++scenario.prepares;
+    return scenario.prepare_status;
+  }
+  DWORD CheckMedia() {
+    ++scenario.old_checks;
+    return scenario.removed_during_open && scenario.opens ? ERROR_MEDIA_CHANGED : ERROR_SUCCESS;
+  }
+  DWORD Validate() { return ERROR_SUCCESS; }
+  std::mutex mutex_;
+  HANDLE handle_;
+  bool track_media_ = true;
+  unsigned disk_number_ = 4;
+  unsigned media_generation_ = 7;
+  struct {
+    bool write_consented = false;
+    bool removable = true;
+    unsigned bytes = 4096;
+    unsigned sector_bytes = 512;
+  } info_;
+};
+
+@SELECTION@
+
+int main() {
+  HostDisk original(1);
+  std::unique_ptr<HostDisk> selected;
+  for (Scenario change : {Scenario{.disk = 5}, Scenario{.generation = 8}, Scenario{.bytes = 8192},
+                          Scenario{.sector = 1024}, Scenario{.removed_during_open = true}}) {
+    scenario = change;
+    if (original.OpenSelectedForWrite(&selected) != ERROR_MEDIA_CHANGED || selected ||
+        scenario.prepares != 0 || scenario.opens != 1 || scenario.candidate_closes != 1) return 1;
+  }
+  scenario = {.reopened = INVALID_HANDLE_VALUE};
+  if (original.OpenSelectedForWrite(&selected) != ERROR_ACCESS_DENIED || selected ||
+      scenario.prepares != 0 || scenario.opens != 1) return 2;
+  scenario = {.candidate_status = ERROR_NOT_SUPPORTED};
+  if (original.OpenSelectedForWrite(&selected) != ERROR_NOT_SUPPORTED || selected ||
+      scenario.prepares != 0 || scenario.candidate_closes != 1) return 3;
+  scenario = {.prepare_status = ERROR_SHARING_VIOLATION};
+  if (original.OpenSelectedForWrite(&selected) != ERROR_SHARING_VIOLATION || selected ||
+      scenario.prepares != 1 || scenario.candidate_closes != 1) return 4;
+  scenario = {};
+  if (original.OpenSelectedForWrite(&selected) != ERROR_SUCCESS || !selected ||
+      selected->handle_ != 2 || scenario.old_checks != 2 || scenario.prepares != 1 ||
+      scenario.candidate_closes != 0) return 5;
+}

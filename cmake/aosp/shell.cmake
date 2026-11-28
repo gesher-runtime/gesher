@@ -7,7 +7,7 @@ target_sources(framework_runtime PRIVATE
   ${CMAKE_SOURCE_DIR}/compat/shell/shell_natives.cc
   ${CMAKE_SOURCE_DIR}/compat/shell/shell_win32.cc)
 target_include_directories(framework_runtime PRIVATE ${CMAKE_SOURCE_DIR}/compat/shell)
-target_link_libraries(framework_runtime PUBLIC ole32 uuid advapi32)
+target_link_libraries(framework_runtime PUBLIC ole32 uuid advapi32 bcrypt)
 
 # gesher-launch.exe: what an app's shortcut, a double-clicked .apk and a toast
 # click start (Windows subsystem: no console window flashes; it hands on the
@@ -29,7 +29,13 @@ add_executable(gesher-launch WIN32 ${CMAKE_SOURCE_DIR}/compat/shell/gesher_launc
   ${CMAKE_CURRENT_BINARY_DIR}/gesher_launch_icon.obj)
 target_compile_options(gesher-launch PRIVATE -Wall -Wextra -Werror -municode)
 target_link_options(gesher-launch PRIVATE -municode)
-target_link_libraries(gesher-launch PRIVATE user32 gdi32 shell32 ole32 advapi32)
+target_link_libraries(gesher-launch PRIVATE user32 gdi32 shell32 ole32 advapi32 bcrypt)
+add_executable(desktop_shortcut_test EXCLUDE_FROM_ALL
+  ${CMAKE_SOURCE_DIR}/tests/native/desktop_shortcut_test.cc
+  ${CMAKE_SOURCE_DIR}/compat/shell/shell_win32.cc)
+set_property(TARGET desktop_shortcut_test PROPERTY LINK_LIBRARIES "")
+target_compile_options(desktop_shortcut_test PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(desktop_shortcut_test PRIVATE ole32 shell32 advapi32 bcrypt)
 add_library(gesher_shellext SHARED
   ${CMAKE_SOURCE_DIR}/compat/shell/gesher_shellext.cc
   ${CMAKE_SOURCE_DIR}/compat/shell/gesher_shellext.def)

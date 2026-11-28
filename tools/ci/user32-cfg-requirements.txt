@@ -1,0 +1,2 @@
+# Test-only decoder. Official PyPI Windows x64 wheel, no transitive packages.
+capstone @ https://files.pythonhosted.org/packages/70/39/2138d890a8e827636b9de9924fbc8527fe83e38b6d26605b30ac55e30ebe/capstone-5.0.7-py3-none-win_amd64.whl --hash=sha256:4ab8bcb7da8f221ff45926ca168ca33e76f7237d06fbf3c10780002faa2670e1

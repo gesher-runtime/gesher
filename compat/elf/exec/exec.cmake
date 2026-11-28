@@ -14,6 +14,8 @@ target_compile_options(gesher_exec_spawn PRIVATE -Wall -Wextra -Werror)
 # return ERROR_NOT_ENOUGH_MEMORY at the Spawn/SpawnWithFds status boundaries.
 set_source_files_properties(${CMAKE_CURRENT_LIST_DIR}/exec_spawn.cc PROPERTIES
   COMPILE_OPTIONS "-fexceptions")
+set_source_files_properties(${CMAKE_CURRENT_LIST_DIR}/gesher_tools.cc PROPERTIES
+  COMPILE_OPTIONS "-fexceptions")
 
 add_executable(ofd_native_child ${CMAKE_SOURCE_DIR}/tests/exec/ofd-native-child.cc)
 # posix.cmake supplies a directory-wide link_libraries default. This fixture
@@ -72,6 +74,34 @@ target_include_directories(appcontainer_probe PRIVATE
   ${CMAKE_SOURCE_DIR}/compat/framework ${CMAKE_SOURCE_DIR}/compat)
 target_compile_options(appcontainer_probe PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(appcontainer_probe PRIVATE advapi32 ole32)
+
+add_executable(appcontainer_property_probe
+  ${CMAKE_SOURCE_DIR}/tests/sandbox/property-area-probe.cc
+  ${CMAKE_SOURCE_DIR}/compat/framework/services_zygote.cc
+  ${CMAKE_SOURCE_DIR}/compat/framework/app_container.cc)
+target_include_directories(appcontainer_property_probe PRIVATE ${CMAKE_SOURCE_DIR}/compat/framework)
+target_compile_options(appcontainer_property_probe PRIVATE -Wall -Wextra -Werror)
+target_link_options(appcontainer_property_probe PRIVATE -municode)
+target_link_libraries(appcontainer_property_probe PRIVATE advapi32 ole32)
+
+add_executable(appcontainer_record_lock_probe
+  ${CMAKE_SOURCE_DIR}/tests/sandbox/record-lock-probe.cc
+  ${CMAKE_SOURCE_DIR}/compat/framework/rooted_storage_server.cc
+  ${CMAKE_SOURCE_DIR}/compat/framework/services_zygote.cc
+  ${CMAKE_SOURCE_DIR}/compat/framework/app_container.cc)
+target_include_directories(appcontainer_record_lock_probe PRIVATE ${CMAKE_SOURCE_DIR}/compat/framework)
+target_compile_options(appcontainer_record_lock_probe PRIVATE -Wall -Wextra -Werror)
+target_link_options(appcontainer_record_lock_probe PRIVATE -municode)
+target_link_libraries(appcontainer_record_lock_probe PRIVATE gesher_bionic gesher_exec_spawn advapi32 ole32)
+
+add_executable(appcontainer_installed_media_probe
+  ${CMAKE_SOURCE_DIR}/tests/sandbox/installed-media-probe.cc
+  ${CMAKE_SOURCE_DIR}/compat/framework/services_zygote.cc
+  ${CMAKE_SOURCE_DIR}/compat/framework/app_container.cc)
+target_include_directories(appcontainer_installed_media_probe PRIVATE ${CMAKE_SOURCE_DIR}/compat/framework)
+target_compile_options(appcontainer_installed_media_probe PRIVATE -Wall -Wextra -Werror)
+target_link_options(appcontainer_installed_media_probe PRIVATE -municode)
+target_link_libraries(appcontainer_installed_media_probe PRIVATE gesher_bionic gesher_exec_spawn advapi32 ole32)
 
 add_executable(exec3_property_host_probe ${CMAKE_SOURCE_DIR}/tests/exec/property-host-probe.cc)
 target_compile_options(exec3_property_host_probe PRIVATE -Wall -Wextra -Werror)

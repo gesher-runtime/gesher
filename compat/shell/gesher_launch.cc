@@ -75,10 +75,12 @@
 #include <propidl.h>
 #include <propsys.h>
 #include <shellapi.h>
+#include <shlobj.h>
 #include <tlhelp32.h>
 #include "../locale/ui_locale.h"
 #include "../windows/host_dialog_theme.h"
 #include "apk_info_file.h"
+#include "desktop_shortcut_file.h"
 #include "launch_failure_text.h"
 #include "app_crash_text.h"
 
@@ -169,8 +171,8 @@ void EndHandover() {
 // one, so the arguments are not the bare-file form, and they show no app window
 // (except launch).
 const wchar_t* const kCommands[] = {
-    L"launch", L"install", L"uninstall", L"view", L"list", L"status", L"start", L"shutdown",
-    L"toast-activated", L"apk-icon", L"apk-info", L"proxy", L"windows", L"special-access",
+    L"launch", L"protected-launch", L"install", L"uninstall", L"view", L"list", L"status", L"start", L"shutdown",
+    L"toast-activated", L"apk-icon", L"apk-info", L"proxy", L"windows", L"app-isolation", L"special-access",
     L"settings-closed", L"settings-shown", L"sync-shortcuts", L"cameras", L"spell-checker",
     L"mobile-data", L"control-panel", L"settings", L"dashboard", L"gui", L"--app-crash"};
 
@@ -1489,7 +1491,23 @@ bool DesktopLinkRecorded(const std::wstring& data, const std::wstring& package) 
     return false;
   }
   const std::wstring link = PropertiesValue(record, L"desktop_link");
-  return !link.empty() && IsFile(link);
+  const std::wstring receipt = PropertiesValue(record, L"desktop_link_receipt");
+  return !link.empty() && gesher::shell::CheckDesktopShortcut(link.c_str(), receipt, false);
+}
+
+bool RemoveRecordedDesktopShortcut(const wchar_t* path, const wchar_t* digest) {
+  wchar_t desktop[MAX_PATH];
+  if (FAILED(SHGetFolderPathW(nullptr, CSIDL_DESKTOPDIRECTORY, nullptr, SHGFP_TYPE_CURRENT,
+                              desktop))) return false;
+  const std::wstring file(path);
+  const size_t separator = file.find_last_of(L"\\/");
+  if (separator == std::wstring::npos || file.size() < separator + 6 ||
+      file.find(L':', separator) != std::wstring::npos ||
+      CompareStringOrdinal(file.substr(0, separator).c_str(), -1, desktop, -1, TRUE) != CSTR_EQUAL ||
+      CompareStringOrdinal(file.c_str() + file.size() - 4, -1, L".lnk", -1, TRUE) != CSTR_EQUAL) {
+    return false;
+  }
+  return gesher::shell::CheckDesktopShortcut(path, digest, true);
 }
 
 // `gesher-launch <file>`: reads the APK, asks before installing it, offers to open it.
@@ -1643,6 +1661,10 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
         int result = ShowAppCrash(argc, argv);
         LocalFree(argv);
         return result;
+      } else if (argc == 4 && wcscmp(argv[1], L"--remove-desktop-shortcut") == 0) {
+        const bool removed = RemoveRecordedDesktopShortcut(argv[2], argv[3]);
+        LocalFree(argv);
+        return removed ? 0 : 1;
       }
       LocalFree(argv);
     }

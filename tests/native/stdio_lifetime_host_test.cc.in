@@ -40,6 +40,7 @@ namespace gesher {
 // storage_policy_host_test owns policy and live-revocation coverage.
 enum class AccessKind { kStat, kRead, kWrite };
 static bool CheckExternalStorageAccess(const std::wstring&, AccessKind) { return true; }
+#include "uncontained_storage_fixture.h"
 void ForgetStreamDevice(int,bool) {}
 static constexpr int INVALID_HANDLE_VALUE = -1;
 int HandleFromFd(int fd) { return fcntl(fd, F_GETFD) >= 0 ? fd : INVALID_HANDLE_VALUE; }

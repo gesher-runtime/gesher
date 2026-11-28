@@ -11,6 +11,24 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
+# Shared by the archived baseline and candidate, including 7e205878, 3a309b7
+# and the qualified pre-Native2 endpoint. Only this exact legacy reader
+# synthesizes ordinals. Current tests require the host's actual opaque cookie.
+ORDINAL_READER_SHA256 = '5063dedb9c3bb0e8eaf6374b2917dc9893a0ca2004dd6bfaaa89864d62e31f5d'
+COOKIE_MARKER = '@SCANDIR_REFERENCE_USES_NATIVE_COOKIE@'
+
+
+def reference_cookie(section, explicit_source):
+    boundary = "// scandir with the .so's System V filter and comparator; alphasort is the"
+    assert section.count(boundary) == 1, 'directory reader/sort boundary changed'
+    reader = section[:section.index(boundary)]
+    if explicit_source and hashlib.sha256(reader.encode()).hexdigest() == ORDINAL_READER_SHA256:
+        return 'false'
+    start, end = 'bool Fill(ShimDir* d, BionicDirent* out) {', 'BionicDirent* BIONIC_SYSV Readdir('
+    assert reader.count(start) == reader.count(end) == 1, 'directory reader boundaries changed'
+    fill = reader[reader.index(start):reader.index(end)]
+    assert fill.count('out->d_off = e->d_off;') == 1, 'current reader must return the native cookie'
+    return 'true'
 
 
 def main():
@@ -35,10 +53,11 @@ def main():
     start, end = 'struct BionicDirent {', '// --- the *at() calls and other path calls'
     assert source.count(start) == source.count(end) == 1
     section = source[source.index(start):source.index(end)]
+    native_cookie = reference_cookie(section, args.source_ref is not None or args.source is not None)
     if args.build_benchmark:
         template = (ROOT / 'tests/native/scandir_sort_bench.cc.in').read_text()
-        assert template.count('@DIRECTORY_IMPLEMENTATION@') == 1
-        generated = template.replace('@DIRECTORY_IMPLEMENTATION@', section)
+        assert template.count('@DIRECTORY_IMPLEMENTATION@') == template.count(COOKIE_MARKER) == 1
+        generated = template.replace('@DIRECTORY_IMPLEMENTATION@', section).replace(COOKIE_MARKER, native_cookie)
         cpp = out / 'scandir_bench.cc'; cpp.write_text(generated)
         binary = out / 'scandir_bench'
         command = shlex.split(os.environ.get('CXX', 'c++')) + ['-std=gnu++20', '-O3', '-DNDEBUG', '-g', '-Wall', '-Wextra', '-Werror',
@@ -69,8 +88,8 @@ def main():
         assert host.count(marker) == 1
         host = host.replace(marker, value)
     template = (ROOT / 'tests/native/scandir_sort_host.cc.in').read_text()
-    assert template.count('@HOST_TEMPLATE@') == 1
-    generated = template.replace('@HOST_TEMPLATE@', host)
+    assert template.count('@HOST_TEMPLATE@') == template.count(COOKIE_MARKER) == 1
+    generated = template.replace('@HOST_TEMPLATE@', host).replace(COOKIE_MARKER, native_cookie)
     cpp = out / 'scandir_sort.cc'
     cpp.write_text(generated)
     binary = out / 'scandir_sort'
@@ -78,7 +97,7 @@ def main():
         '-std=c++20', '-O1', '-g', '-Wall', '-Wextra', '-Werror', '-Wno-unused-function', '-fno-exceptions',
         '-fno-builtin', '-pthread', '-I', str(ROOT / 'compat/bionic'), '-I', str(ROOT / 'compat/arm64/include'),
         '-I', str(ROOT / 'tests/native'), str(cpp),
-        '-Wl,--wrap=malloc,--wrap=realloc,--wrap=free,--wrap=readdir,--wrap=closedir', '-o', str(binary)]
+        '-Wl,--wrap=malloc,--wrap=realloc,--wrap=free,--wrap=readdir,--wrap=closedir,--wrap=fdopendir', '-o', str(binary)]
     if args.sanitize:
         command += ['-fsanitize=address,undefined', '-fno-omit-frame-pointer']
     subprocess.run(command, check=True, timeout=120)

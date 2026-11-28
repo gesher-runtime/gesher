@@ -5,8 +5,14 @@
 
 #include <stdint.h>
 
+#include <array>
+#include <functional>
 #include <string>
 #include <vector>
+
+namespace gesher::usb_storage { struct ProtectedSpawnSpec; }
+#include "../posix/include/gesher/capture_policy.h"
+#include "../posix/include/gesher/rooted_storage_wire.h"
 
 namespace gesher {
 namespace zygote {
@@ -20,6 +26,10 @@ namespace zygote {
 int Spawn(const std::u16string& command_line, const std::vector<std::u16string>& set,
           const std::vector<std::u16string>& unset, const std::u16string& log_path,
           bool breakaway, uint32_t compiler_memory_mib = 0, uint32_t compiler_cpu_rate = 0);
+
+// The optional authority owns these children's process handles. Their exact
+// creation identities are retained here for the ordinary Android lifecycle API.
+int SpawnProtected(const usb_storage::ProtectedSpawnSpec& spec);
 
 // Compiler-only wait. Pins the retained creation identity, waits without g_lock,
 // and reaps before returning. -2 deadline, -3 cancellation/low memory, -1 failure.
@@ -42,6 +52,64 @@ int SpawnInAppContainer(const std::u16string& command_line,
                         const std::vector<std::u16string>& set,
                         const std::vector<std::u16string>& unset, const std::u16string& log_path,
                         const AppContainerSpec& sandbox);
+
+// Start the broker, service manager and server as one device bootstrap.
+// Only the broker and server inherit their respective private control handles.
+// A scoped device retains the actual launcher lifetime and lends its streams
+// once, to the first application started with a pinned source.
+std::vector<int> StartProtectedDevice(const std::u16string& device,
+    const std::vector<std::u16string>& commands, const std::vector<std::u16string>& logs,
+    const std::vector<std::u16string>& environment, bool scoped = false);
+// After a scoped device ends, drain any launcher-side console byte relays.
+void FinishScopedStandardStreams();
+uint32_t CaptureCohostStandardStreams(std::array<void*, 3>* handles);
+
+// The system server enrolls the exact child before it runs. Only an explicit
+// operator exception may launch it under the desktop user's full token.
+int SpawnProtectedApp(const std::u16string& command_line, const std::vector<std::u16string>& set,
+    const std::vector<std::u16string>& unset, const std::u16string& log_path,
+    const AppContainerSpec& sandbox, uint32_t uid, const std::array<uint8_t, 16>& installation,
+    uint64_t start_sequence, uint64_t code_pin, bool unisolated_approved);
+bool ChangeProtectedInstallation(const std::array<uint8_t, 16>& installation, bool revoke);
+bool StopProtectedInstallation(const std::array<uint8_t, 16>& installation, uint64_t stop_through);
+uint32_t RunContainedStandalone(const std::u16string& command, const AppContainerSpec& spec,
+                               const std::u16string& code, uint32_t uid, uint32_t* exit_code);
+// A file pinned before code admission remains the same Windows object at spawn.
+uint32_t PinStandaloneInput(const std::u16string& code, uint64_t* pin);
+void ReleaseStandaloneInput(uint64_t pin);
+uint32_t ReadStandaloneInput(uint64_t pin, int64_t offset, void* bytes,
+                             uint32_t capacity, uint32_t* copied);
+uint32_t RunPinnedContainedStandalone(const std::u16string& command, const AppContainerSpec& spec,
+                                      uint64_t pin, uint32_t uid, uint32_t* exit_code);
+struct CohostExternalRoot {
+  std::u16string path;
+  std::u16string canonical;
+  std::u16string nt;
+};
+struct CohostSpec {
+  std::u16string credential;
+  std::u16string device;
+  std::u16string storage_pipe;
+  std::u16string permission_pipe;
+  // Called before resuming the actual AppContainer process. Borrowed native
+  // handles are valid only during the callback unless explicitly duplicated.
+  std::function<uint32_t(void* process, void* job)> start_services;
+  std::u16string credential_canonical{};
+  std::u16string device_canonical{};
+  std::u16string credential_nt{};
+  std::u16string device_nt{};
+  std::array<void*, 3> standard_handles{};
+  std::u16string build_prop{};
+  std::u16string framework_res{};
+  std::function<bool(const capture_policy::Request&)> capture_allowed{};
+  std::array<CohostExternalRoot, rooted_storage_wire::kExternalAreaCount> external{};
+};
+uint32_t RunPinnedCohost(const std::u16string& command, const AppContainerSpec& spec,
+                        uint64_t pin, uint32_t uid, const CohostSpec& services, uint32_t* exit_code);
+bool HasProtectedLaunchAuthority(bool scoped = false);
+bool RegisterProtectedCapturePolicy(
+    std::function<bool(const capture_policy::Request&)> allowed);
+bool PrepareProtectedOperator(int broker_pid, uint64_t birth);
 
 // The container's profile for this Windows user, created if it does not exist.
 uint32_t EnsureAppContainer(const std::u16string& name, const std::u16string& display_name);
@@ -71,6 +139,9 @@ int64_t StartTime(int pid);
 
 // Creation identity from the original retained Spawn handle, or 0 if unavailable.
 int64_t ChildStartTime(int pid);
+// Returns an owned, readable regular-file handle or nullptr. The filesystem
+// access is checked using the exact live child AppContainer token.
+void* OpenProtectedChildFile(int pid, int64_t birth, const std::u16string& path);
 
 // A spawned process's exit code: 259 (STILL_ACTIVE) while it runs, -1 when
 // this process did not start it or does not know.

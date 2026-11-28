@@ -27,8 +27,7 @@ jstring ToJava(JNIEnv* env, const wchar_t* s, size_t n) {
 
 jstring ToJava(JNIEnv* env, const std::wstring& s) { return ToJava(env, s.data(), s.size()); }
 
-// %WINDIR%\Fonts with '/' separators and, as gesher-base's paths come out
-// (ADR 0010), without the drive when it is the current one.
+// %WINDIR%\Fonts as a Gesher absolute path (ADR 0010, ADR 0045).
 jstring JNICALL WindowsFonts_nativeFontsDirectory(JNIEnv* env, jclass) {
   wchar_t buf[MAX_PATH];
   UINT n = GetSystemWindowsDirectoryW(buf, MAX_PATH);
@@ -40,9 +39,12 @@ jstring JNICALL WindowsFonts_nativeFontsDirectory(JNIEnv* env, jclass) {
     if (c == L'\\') c = L'/';
   }
   int drive = _getdrive();  // 1 = A:, 0 when the current directory is a UNC path
-  if (drive > 0 && dir.size() >= 3 && dir[1] == L':' && dir[2] == L'/' &&
-      towupper(dir[0]) == static_cast<wchar_t>(L'A' + drive - 1)) {
-    dir.erase(0, 2);
+  if (dir.size() >= 3 && dir[1] == L':' && dir[2] == L'/') {
+    if (drive > 0 && towupper(dir[0]) == static_cast<wchar_t>(L'A' + drive - 1)) {
+      dir.erase(0, 2);
+    } else {
+      dir = std::wstring(L"/mnt/") + static_cast<wchar_t>(towlower(dir[0])) + dir.substr(2);
+    }
   }
   return ToJava(env, dir);
 }

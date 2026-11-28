@@ -35,7 +35,7 @@ def percentile(values, p):
     hi = min(lo + 1, len(values) - 1)
     return values[lo] + (values[hi] - values[lo]) * (point - lo)
 
-def main():
+def main(*, check_current_sources=False):
     report = json.loads(REPORT.read_text(encoding='utf-8'))
     # These pins identify the historical measurement, independently of today's tree.
     require(report['archive'] == {
@@ -62,6 +62,11 @@ def main():
     for path, expected in manifest['members'].items():
         require(digest(members[path]) == expected['sha256'], 'member digest: ' + path)
         require(len(members[path]) == expected['bytes'], 'member size: ' + path)
+    if check_current_sources:
+        from scandir_consolidation import historical_sources
+        source_bytes = historical_sources(ROOT, report, members, '2384b02660f6c74f6f2f9385d76170aeb4b74cbec336ae50c5f567e5a53300fb')
+        for path, expected in report['sources'].items():
+            require(digest(source_bytes[path]) == expected, 'current source: ' + path)
     for path, expected in report['sources'].items():
         require(digest(members['repo/' + path]) == expected, 'archived source: ' + path)
     current = members['repo/compat/bionic/posix_bionic.cc']
@@ -145,4 +150,4 @@ def main():
     print(f'SCANDIR_REPORT_PASS checks={checks} archive_members={len(members)} final_processes=360 pilot_processes=60 final_observations=1440 pilot_observations=240')
 
 if __name__ == '__main__':
-    main()
+    main(check_current_sources=True)

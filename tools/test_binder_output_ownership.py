@@ -5,8 +5,9 @@
 Linux uses real local byte-stream sockets and self-process descriptor duplication
 at an explicit Windows I/O boundary. Windows uses actual byte-mode named pipes
 and handle duplication. Neither path replaces Binder parsing/ownership/results.
-The AppContainer hello/admission path is outside this component; its one global
-flag is annotated unused in the extracted core, never activated or simulated.
+Connection admission and AF_UNIX rights are outside this component. Its peer
+registry boundary aborts if activated: this fixture tests legacy self-process
+FD transport, never simulates a protected admission or an identity verdict.
 """
 from __future__ import annotations
 
@@ -36,8 +37,18 @@ def generated(source: str) -> str:
     if core.count(sandbox_flag) > 1:
         raise RuntimeError('AppContainer admission flag boundary is not unique')
     core = core.replace(sandbox_flag, '[[maybe_unused]] ' + sandbox_flag)
+    for declaration in ('bool g_record_only = false;',
+                        'gesher::process_identity::Sid g_record_container;',
+                        'std::atomic<unsigned> g_loopback_queries{0};'):
+        if core.count(declaration) > 1:
+            raise RuntimeError('Record admission boundary is not unique')
+        core = core.replace(declaration, '[[maybe_unused]] ' + declaration)
     io = section(source, 'bool ReadExact(HANDLE pipe,', 'uint64_t RandomKey() {')
-    dispatch = section(source, 'int DoIoctl(Proc* proc,', 'void Serve(HANDLE pipe) {')
+    # Keep ServeThread, which the fixture calls for real framed I/O. End before
+    # connection routing on both current and pre-protected comparison refs.
+    connection = ('bool ReadStandaloneRequest(' if 'bool ReadStandaloneRequest(' in source else
+                  'void ServeConnection(' if 'void ServeConnection(' in source else 'void Serve(HANDLE pipe) {')
+    dispatch = section(source, 'int DoIoctl(Proc* proc,', connection)
     start = dispatch.index('if (op == wire::kWriteRead) {') + len('if (op == wire::kWriteRead) {')
     end = dispatch.index('} else if (op == wire::kClaimBuffer', start)
     body = dispatch[start:end]

@@ -16,6 +16,7 @@
 #include <gesher/font_environment.h>
 #include <gesher/environment.h>
 #include <gesher/file_description.h>
+#include <gesher/canonical_file_name.h>
 
 #include <atomic>
 #include <mutex>
@@ -23,7 +24,12 @@
 #include <utility>
 #include <vector>
 
+#include <gesher/binder_bootstrap.h>
+
 #include "internal.h"
+#include "ofd_internal.h"
+#include "usb_block_internal.h"
+#include "../../usb_storage/protected_runtime_client.h"
 #include "revocable_internal.h"
 #include "binder_internal.h"
 #include "event_internal.h"
@@ -32,6 +38,7 @@
 #include "pipe_io.h"
 #include "system_linker.h"
 #include "storage_policy.h"
+#include "rooted_storage_client.h"
 
 namespace {
 
@@ -40,6 +47,8 @@ namespace {
 // process's uid does not change).
 uid_t AppUid() {
   static const uid_t uid = [] {
+    const uint32_t protected_uid = gesher::binder_bootstrap::GuestUid();
+    if (protected_uid != 0) return static_cast<uid_t>(protected_uid);
     const char* env = getenv("GESHER_UID");
     char* end = nullptr;
     unsigned long value = env != nullptr ? strtoul(env, &end, 10) : 0;
@@ -49,16 +58,38 @@ uid_t AppUid() {
   }();
   return uid;
 }
-#define kAppUid AppUid()
+uid_t CurrentUid() {
+  uint32_t uid = 0, gid = 0;
+  return gesher::usb_storage::ProtectedRuntimeCredentials(&uid, &gid)
+      ? static_cast<uid_t>(uid) : AppUid();
+}
+gid_t CurrentGid() {
+  uint32_t uid = 0, gid = 0;
+  return gesher::usb_storage::ProtectedRuntimeCredentials(&uid, &gid)
+      ? static_cast<gid_t>(gid) : AppUid();
+}
+#define kAppUid CurrentUid()
 
 std::atomic<unsigned long long> rand_state{0x853c49e6748fea9bULL};
 
 // The file open on a handle, as a Linux path (LinuxPath). False with errno
 // set if it has no file name (a pipe, a console, NUL).
-bool FinalPath(HANDLE h, std::string* out) {
+bool FinalPath(HANDLE h, std::string* out, const std::wstring* original = nullptr) {
+  if (const auto scoped = gesher::storage_root::DescriptorPath(h); !scoped.empty()) {
+    *out = gesher::LinuxPath(scoped.c_str());
+    return true;
+  }
   wchar_t buf[32768];
   DWORD n = GetFinalPathNameByHandleW(h, buf, 32768, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
   if (n == 0) {
+    const DWORD error = GetLastError();
+    std::wstring canonical;
+    if (error == ERROR_ACCESS_DENIED && original &&
+        gesher::canonical_file_name::RevalidatedDosName(h, *original, &canonical)) {
+      *out = gesher::LinuxPath(canonical.c_str());
+      return true;
+    }
+    SetLastError(error);
     gesher::FailWithLastError();
     return false;
   }
@@ -266,7 +297,7 @@ long PathconfValue(int name) {
 // chown as a process without CAP_CHOWN: only "no change" is allowed.
 int CheckOwner(uid_t owner, gid_t group) {
   bool same_owner = owner == static_cast<uid_t>(-1) || owner == kAppUid;
-  bool same_group = group == static_cast<gid_t>(-1) || group == kAppUid;
+  bool same_group = group == static_cast<gid_t>(-1) || group == CurrentGid();
   return same_owner && same_group ? 0 : (errno = EPERM, -1);
 }
 
@@ -301,7 +332,7 @@ int fchown(int fd, uid_t owner, gid_t group) {
 // The ids cannot change, but setting them to what they are succeeds.
 int setuid(uid_t uid) { return uid == kAppUid ? 0 : (errno = EPERM, -1); }
 int seteuid(uid_t uid) { return setuid(uid); }
-int setgid(gid_t gid) { return gid == kAppUid ? 0 : (errno = EPERM, -1); }
+int setgid(gid_t gid) { return gid == CurrentGid() ? 0 : (errno = EPERM, -1); }
 int setegid(gid_t gid) { return setgid(gid); }
 
 int setreuid(uid_t ruid, uid_t euid) {
@@ -322,8 +353,8 @@ int gesher_gethostname(char* name, size_t len) {
 }
 
 int setregid(gid_t rgid, gid_t egid) {
-  bool ok = (rgid == static_cast<gid_t>(-1) || rgid == kAppUid) &&
-            (egid == static_cast<gid_t>(-1) || egid == kAppUid);
+  bool ok = (rgid == static_cast<gid_t>(-1) || rgid == CurrentGid()) &&
+            (egid == static_cast<gid_t>(-1) || egid == CurrentGid());
   return ok ? 0 : (errno = EPERM, -1);
 }
 
@@ -331,8 +362,8 @@ int getpagesize(void) { return static_cast<int>(sysconf(_SC_PAGESIZE)); }
 
 uid_t getuid(void) { return kAppUid; }
 uid_t geteuid(void) { return kAppUid; }
-gid_t getgid(void) { return kAppUid; }
-gid_t getegid(void) { return kAppUid; }
+gid_t getgid(void) { return CurrentGid(); }
+gid_t getegid(void) { return CurrentGid(); }
 pid_t gettid(void) { return static_cast<pid_t>(GetCurrentThreadId()); }
 pid_t setsid(void) { return static_cast<pid_t>(GetCurrentProcessId()); }
 
@@ -431,6 +462,8 @@ int WriteBackCachedData(HANDLE file) {
 int fsync(int fd) {
   auto snapshot = gesher::CaptureDescriptor(fd);
   if (!snapshot) return -1;
+  int block_result;
+  if (gesher::usb_block::Sync(snapshot, &block_result)) return block_result;
   gesher::record_locks::File identity{};
   {
     gesher::FileOperationLease operation(snapshot);
@@ -685,6 +718,9 @@ static ssize_t PositionedIo(int fd, void* buf, size_t count, off_t offset, bool 
     is_device = gesher::DeviceFromFd(fd, &device);
   }
   if (!snapshot) return -1;
+  int block_result;
+  if (gesher::usb_block::Io(snapshot, buf, want, writing, offset, &block_result)) return block_result;
+  if (snapshot->description && !snapshot->description->virtual_directory.empty()) return errno = EISDIR, -1;
   gesher::FileOperationLease operation(snapshot);
   if (operation.Error()) return errno = operation.Error(), -1;
   const HANDLE file = snapshot->handle;
@@ -770,6 +806,10 @@ off_t lseek(int fd, off_t offset, int whence) {
                   gesher::DeviceFromFd(fd, &device);
   }
   if (!snapshot) return -1;
+  int64_t block_result;
+  if (gesher::usb_block::Seek(snapshot, offset, whence, &block_result)) return block_result;
+  // USB virtual directories use the tagged readonly file's shared cursor,
+  // just like procfs directories; aliases observe the same getdents position.
   gesher::FileOperationLease operation(snapshot);
   if (operation.Error()) return errno = operation.Error(), -1;
   const int flags = gesher::FileDescriptionIoFlags(snapshot);
@@ -878,20 +918,35 @@ char* realpath(const char* path, char* resolved_path) {
   }
   if (kind == gesher::PathKind::kFile) {
     if (!gesher::CheckExternalStorageAccess(wpath, gesher::AccessKind::kStat)) return nullptr;
-    HANDLE h = gesher::CreateFileFollowingFifo(wpath.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE |
-                                               FILE_SHARE_DELETE, FILE_FLAG_BACKUP_SEMANTICS);
+    const auto rooted = gesher::storage_root::Lookup(wpath);
+    HANDLE h;
+    if (rooted) {
+      const int error = gesher::storage_root::Open(rooted, gesher::rooted_storage_wire::kMetadata, &h);
+      if (error != 0) return errno = error, nullptr;
+    } else {
+      h = gesher::CreateFileFollowingFifo(wpath.c_str(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                       FILE_FLAG_BACKUP_SEMANTICS);
+    }
     if (h == INVALID_HANDLE_VALUE) {
       gesher::FailWithLastError();
       return nullptr;
     }
-    if (!gesher::CheckExternalStorageHandle(h, gesher::AccessKind::kStat)) {
+    if (!rooted.IsInstalledMedia() && !gesher::CheckExternalStorageHandle(h, gesher::AccessKind::kStat)) {
       CloseHandle(h);
       errno = EACCES;
       return nullptr;
     }
     // Gesher's ELF loader by its name, however it was reached (system_linker.h).
-    bool ok = gesher::system_linker::IsFileHandle(h) ? (out = gesher::system_linker::kPath, true)
-                                                      : FinalPath(h, &out);
+    bool ok;
+    if (rooted.drop_alias || rooted.IsInstalledMedia()) {
+      out = gesher::LinuxPath(wpath.c_str());
+      ok = true;
+    } else if (gesher::system_linker::IsFileHandle(h)) {
+      out = gesher::system_linker::kPath;
+      ok = true;
+    } else {
+      ok = FinalPath(h, &out, &wpath);
+    }
     CloseHandle(h);
     if (!ok) return nullptr;
   } else if (kind != gesher::PathKind::kVirtual) {
@@ -924,6 +979,10 @@ namespace gesher {
 int64_t WriteFileDescriptionAt(const DescriptorSnapshotPtr& snapshot, const void* bytes,
                               unsigned count, int64_t offset) {
   if (offset < 0) return errno = EINVAL, -1;
+  int block_result;
+  if (usb_block::Io(snapshot, const_cast<void*>(bytes), count, true, offset, &block_result)) {
+    return block_result;
+  }
   FileOperationLease operation(snapshot);
   if (operation.Error()) return errno = operation.Error(), -1;
   const int flags = FileDescriptionIoFlags(snapshot);

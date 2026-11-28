@@ -62,7 +62,9 @@ public class CaptureActivity extends Activity {
     private ImageReader mPreviewReader;
     private ImageReader mStillReader;
     private volatile boolean mDone;
+    private volatile boolean mResumed;
     private boolean mCameraStarted;
+    private boolean mAwaitingCameraPermission;
     private long mLastShown;
 
     static void log(String message) {
@@ -91,13 +93,28 @@ public class CaptureActivity extends Activity {
         buttons.addView(cancel);
         root.addView(buttons, new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM));
         setContentView(root);
+    }
 
-        requestCameraAccess();
+    @Override
+    protected void onResume() {
+        super.onResume();
+        mResumed = true;
+        // Let ActivityThread publish the resumed state before camera admission.
+        mMain.post(this::requestCameraAccess);
+    }
+
+    @Override
+    protected void onPause() {
+        mResumed = false;
+        if (mCameraStarted) done(RESULT_CANCELED, null, "camera left the foreground");
+        super.onPause();
     }
 
     private void requestCameraAccess() {
-        if (mDone || isFinishing() || isDestroyed()) return;
+        if (!mResumed || mCameraStarted || mAwaitingCameraPermission
+                || mDone || isFinishing() || isDestroyed()) return;
         if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            mAwaitingCameraPermission = true;
             requestPermissions(new String[] {Manifest.permission.CAMERA}, REQUEST_CAMERA);
             return;
         }
@@ -108,11 +125,12 @@ public class CaptureActivity extends Activity {
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
         super.onRequestPermissionsResult(requestCode, permissions, results);
         if (requestCode != REQUEST_CAMERA || mDone || isFinishing() || isDestroyed()) return;
+        mAwaitingCameraPermission = false;
         // Recheck the live grant as it may have been revoked while the result was queued.
         if (permissions.length == 1 && Manifest.permission.CAMERA.equals(permissions[0])
                 && results.length == 1 && results[0] == PackageManager.PERMISSION_GRANTED
                 && checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
-            startCamera();
+            mMain.post(this::requestCameraAccess);
         } else {
             done(RESULT_CANCELED, null, "camera permission denied");
         }
@@ -161,6 +179,11 @@ public class CaptureActivity extends Activity {
         cm.openCamera(id, mHandler::post, new CameraDevice.StateCallback() {
             @Override
             public void onOpened(CameraDevice camera) {
+                if (!canCapture()) {
+                    camera.close();
+                    done(RESULT_CANCELED, null, "camera access ended before opening");
+                    return;
+                }
                 mDevice = camera;
                 startSession();
             }
@@ -187,6 +210,11 @@ public class CaptureActivity extends Activity {
                     mHandler::post, new CameraCaptureSession.StateCallback() {
                         @Override
                         public void onConfigured(CameraCaptureSession session) {
+                            if (!canCapture()) {
+                                session.close();
+                                done(RESULT_CANCELED, null, "camera access ended before preview");
+                                return;
+                            }
                             mSession = session;
                             try {
                                 CaptureRequest.Builder b =
@@ -215,10 +243,12 @@ public class CaptureActivity extends Activity {
         if (image == null) return;
         try {
             long now = System.currentTimeMillis();
-            if (now - mLastShown < 200) return;
+            if (now - mLastShown < 200 || !canCapture()) return;
             mLastShown = now;
             Bitmap b = bitmap(image);
-            mMain.post(() -> mPreview.setImageBitmap(b));
+            mMain.post(() -> {
+                if (canCapture()) mPreview.setImageBitmap(b);
+            });
         } catch (Throwable t) {
             // a frame not shown
         } finally {
@@ -257,11 +287,18 @@ public class CaptureActivity extends Activity {
     private static int clamp(int v) {
         return v < 0 ? 0 : v > 255 ? 255 : v;
     }
+
+    private boolean canCapture() {
+        return mResumed && !mDone
+                && checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED;
+    }
+
     private void capture() {
-        if (mDone || mHandler == null) return;
+        if (!canCapture() || mHandler == null) return;
         mHandler.post(() -> {
-            if (mSession == null || mDone) {
-                if (!mDone) mMain.postDelayed(this::capture, 300);  // not open yet
+            if (!canCapture()) return;
+            if (mSession == null) {
+                mMain.postDelayed(this::capture, 300);  // not open yet
                 return;
             }
             try {
@@ -284,6 +321,7 @@ public class CaptureActivity extends Activity {
         int w = image.getWidth();
         int h = image.getHeight();
         try {
+            if (!canCapture()) return;
             ByteBuffer b = image.getPlanes()[0].getBuffer();
             jpeg = new byte[b.remaining()];
             b.get(jpeg);
@@ -292,7 +330,9 @@ public class CaptureActivity extends Activity {
         }
         Uri output = getIntent().getParcelableExtra(MediaStore.EXTRA_OUTPUT, Uri.class);
         if (output != null) {
+            if (!canCapture()) return;
             try (OutputStream out = getContentResolver().openOutputStream(output)) {
+                if (!canCapture()) return;
                 out.write(jpeg);
             } catch (Exception e) {
                 done(RESULT_CANCELED, null, "writing " + output + ": " + e);
@@ -336,6 +376,13 @@ public class CaptureActivity extends Activity {
         mDone = true;
         mMain.post(() -> {
             if (isDestroyed()) return;
+            if (result == RESULT_OK && (!mResumed || checkSelfPermission(Manifest.permission.CAMERA)
+                    != PackageManager.PERMISSION_GRANTED)) {
+                log("cancelled: camera access ended before delivering the result");
+                setResult(RESULT_CANCELED);
+                finish();
+                return;
+            }
             log((result == RESULT_OK ? "done: " : "cancelled: ") + why);
             setResult(result, data);
             finish();

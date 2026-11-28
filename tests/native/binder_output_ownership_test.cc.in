@@ -1,6 +1,7 @@
 // Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0
 // The driver core and dispatch below are extracted verbatim from binderd.cc.
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cerrno>
 #include <chrono>
@@ -99,6 +100,31 @@ void* operator new[](size_t size) { return ::operator new(size); }
 void operator delete[](void* value) noexcept { ::operator delete(value); }
 void operator delete[](void* value, size_t) noexcept { ::operator delete(value); }
 #endif
+
+namespace gesher::binder { class ProtectedPeer; }
+// Admission is excluded from this component on both platforms. Keep the actual
+// core's handle lifetime, but fail immediately if a test starts using a peer
+// registry instead of the explicitly tested legacy self-process boundary.
+namespace gesher::process_identity { struct Sid {}; }
+namespace gesher::binder_launch {}
+namespace gesher::binder_peer {
+struct HandleCloser {
+  void operator()(void* handle) const { if (handle) CloseHandle(handle); }
+};
+using OwnedHandle = std::unique_ptr<void, HandleCloser>;
+enum class Role { kServiceManager };
+struct Peer {
+  const OwnedHandle process;
+  const Role role;
+  // Keep excluded connection declarations well-formed; admission still aborts.
+  const std::array<uint8_t, 16> installation{};
+};
+struct Registry {
+  using Lease = std::shared_ptr<const Peer>;
+  bool Live(const Lease&) const { std::abort(); }
+  Lease Authenticate(HANDLE) const { std::abort(); }
+};
+}
 
 @PRODUCTION@
 

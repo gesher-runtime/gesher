@@ -55,7 +55,8 @@ public final class PackageManagerService extends IPackageManager.Default {
     private volatile VisibilitySnapshot mVisibilitySnapshot; // metadata, never decisions
     private PackageEnabledStore mEnabledStore; // guarded by this; snapshot reads are immutable
     private final boolean mTransientEnabled;
-    private final PermissionPolicy mPermissions = new PermissionPolicy(this);
+    private final boolean mCohost;
+    private final PermissionPolicy mPermissions;
     /** Windows' mailto/tel/sms/geo handlers (WindowsUriHandlers), present only when registered. */
     private final WindowsUriHandlers mUriHandlers = new WindowsUriHandlers(WindowsHost::hasUrlHandler);
     private final Executor mPackageEventExecutor = Executors.newSingleThreadExecutor(task -> {
@@ -243,7 +244,13 @@ public final class PackageManagerService extends IPackageManager.Default {
     }
 
     PackageManagerService(Collection<ApkPackage> packages, boolean persistentEnabled) {
+        this(packages, persistentEnabled, false);
+    }
+
+    PackageManagerService(Collection<ApkPackage> packages, boolean persistentEnabled, boolean cohost) {
         mTransientEnabled = !persistentEnabled;
+        mCohost = cohost;
+        mPermissions = new PermissionPolicy(this, cohost);
         Map<String, ApkPackage> map = new LinkedHashMap<>();
         for (ApkPackage p : packages) {
             if (ContactsProviderSupport.hasBuiltInConflict(p)) {
@@ -253,14 +260,21 @@ public final class PackageManagerService extends IPackageManager.Default {
             }
             if (map.put(p.packageName, p) != null) throw new IllegalArgumentException("Duplicate installed package");
         }
-        try (PackageUids.Admission identity = PackageUids.prepare(map.values(), List.of())) {
-            identity.commit();
+        if (cohost) {
             publishPackages(map);
             enabledStore();
-            identity.accept();
+        } else {
+            try (PackageUids.Admission identity = PackageUids.prepare(map.values(), List.of())) {
+                identity.commit();
+                publishPackages(map);
+                enabledStore();
+                identity.accept();
+            }
         }
         mPermissions.initializePackages();
     }
+
+    boolean isCohost() { return mCohost; }
 
     private synchronized PackageEnabledStore enabledStore() {
         if (mEnabledStore == null) {
@@ -1211,6 +1225,7 @@ public final class PackageManagerService extends IPackageManager.Default {
      * WindowsLocation#hasGnssReceiver}). Google Play filters
      * on these (a RECORD_AUDIO or location permission implies the feature unless the app
      * marks it not required), so an absent one hides an app the device can run.
+     * FEATURE_SECURE_LOCK_SCREEN follows Windows Hello ({@link #addSecureLockScreenFeature}).
      * The rest (docs/system-features.md lists every SDK feature and why it is or is not
      * here) follow what Windows has when the system server starts: FEATURE_WEBVIEW with a
      * WebView2 Runtime behind android.webkit.WebView ({@link #addWebViewFeature}),
@@ -1257,6 +1272,11 @@ public final class PackageManagerService extends IPackageManager.Default {
         }
         addLocationFeatures(FEATURES, WindowsLocation.hasGnssReceiver());
         try {
+            addSecureLockScreenFeature(FEATURES, DeviceCredential.system().supported());
+        } catch (LinkageError e) {
+            // No runtime natives (a host JVM loading the class): no verifier to report.
+        }
+        try {
             addPrintingFeature(FEATURES, PrintManagerService.supported());
         } catch (LinkageError e) {
             // No runtime natives (a host JVM loading the class): no printing to report.
@@ -1286,6 +1306,17 @@ public final class PackageManagerService extends IPackageManager.Default {
         addWifiFeature(FEATURES, com.gesher.net.WindowsWifi.hardware());
         // ro.opengles.version, set before app processes start (they may read it).
         glEsVersion();
+    }
+
+    /**
+     * FEATURE_SECURE_LOCK_SCREEN when Windows has a credential verifier Gesher can use
+     * (Windows Hello on build 22000 or later, set up by the user or not), decided once
+     * when the system server starts ({@link DeviceCredential#supported}, ADR 0091).
+     */
+    static void addSecureLockScreenFeature(
+            android.util.ArrayMap<String, android.content.pm.FeatureInfo> features,
+            boolean supported) {
+        if (supported) addFeature(features, PackageManager.FEATURE_SECURE_LOCK_SCREEN);
     }
 
     /**

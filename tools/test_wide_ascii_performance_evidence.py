@@ -5,7 +5,9 @@ import json
 import math
 from pathlib import Path, PurePosixPath
 import statistics
+import subprocess
 import tarfile
+import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 DOC = ROOT / 'docs/performance'
@@ -29,6 +31,31 @@ def digest(data):
 
 def close(a, b, description):
     check(math.isclose(a, b, rel_tol=1e-13, abs_tol=1e-12), description)
+
+
+def locale_before_langinfo(current, frozen):
+    """Retain the measured source while admitting the separate langinfo API."""
+    check(digest(current) == '49cc5c2a1a4ec6099530568a22474a268ad6ef336aa177a3b650ee8d7028ccbc',
+          'current locale including langinfo')
+    delta = (ROOT / 'tools/net-tcp-priority/qualified/locale-langinfo-source.patch').read_bytes()
+    check(digest(delta) == '85e25c8bdcb8daddc13c12760cdd039af59c7d0328db29ddbe94893d95b87625',
+          'exact langinfo source transition')
+    name = 'compat/bionic/locale_bionic.cc'
+    check([line for line in delta.splitlines() if line.startswith(b'diff --git ')] ==
+          [('diff --git a/' + name + ' b/' + name).encode()], 'langinfo transition scope')
+    with tempfile.TemporaryDirectory(prefix='gesher-locale-source-') as temporary:
+        work = Path(temporary)
+        target = work / name
+        target.parent.mkdir(parents=True)
+        target.write_bytes(current)
+        command = ['git', '-c', 'core.autocrlf=false', 'apply']
+        subprocess.run([*command, '--reverse', '--check', '-'], input=delta, cwd=work, check=True)
+        subprocess.run([*command, '--reverse', '-'], input=delta, cwd=work, check=True)
+        check(target.read_bytes() == frozen, 'exact measured locale after langinfo reversal')
+        subprocess.run([*command, '--check', '-'], input=delta, cwd=work, check=True)
+        subprocess.run([*command, '-'], input=delta, cwd=work, check=True)
+        check(target.read_bytes() == current, 'exact current locale after forward transition')
+    return frozen
 
 
 def main():
@@ -66,7 +93,17 @@ def main():
         check(hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest() == value['blob'], 'frozen Git blob: ' + name)
         # The preserved workflows are source-phase build context. New evidence
         # steps and unrelated later CI jobs are not measured conversion bodies.
-        if name == 'tests/native2/native3_wide_ascii_contracts.h':
+        if name == 'compat/bionic/locale_bionic.cc':
+            current = (ROOT / name).read_bytes()
+            check(locale_before_langinfo(current, data) == data, 'measured conversion source retained')
+            for changed in (current + b'\n', current.replace(b'"UTF-8"', b'"UTF-7"', 1)):
+                try:
+                    locale_before_langinfo(changed, data)
+                except AssertionError:
+                    pass
+                else:
+                    raise AssertionError('changed locale source accepted')
+        elif name == 'tests/native2/native3_wide_ascii_contracts.h':
             # The live qualification captures errno before formatting assertions.
             # The archived header and executable still verify the original run.
             check(digest((ROOT / name).read_bytes()) ==

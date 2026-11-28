@@ -24,6 +24,9 @@
 #include <vector>
 
 #include "binder_internal.h"
+#include "binder_transport.h"
+#include <gesher/binder_endpoint.h>
+
 #include "binder_wire.h"
 #include "event_internal.h"
 #include "internal.h"
@@ -98,14 +101,18 @@ HANDLE Connect() {
   const std::wstring name = std::wstring(wire::kPipePrefix) + Widen(device.c_str());
   HANDLE pipe = INVALID_HANDLE_VALUE;
   for (int attempt = 0; attempt < 50 && pipe == INVALID_HANDLE_VALUE; ++attempt) {
-    pipe = CreateFileW(name.c_str(), wire::kPipeClientAccess, 0, nullptr, OPEN_EXISTING, 0,
-                       nullptr);
+    pipe = CreateFileW(name.c_str(), wire::kPipeClientAccess, 0, nullptr, OPEN_EXISTING,
+                       SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, nullptr);
     if (pipe == INVALID_HANDLE_VALUE) {
       if (GetLastError() != ERROR_PIPE_BUSY) return INVALID_HANDLE_VALUE;
       WaitNamedPipeW(name.c_str(), 100);
     }
   }
   if (pipe == INVALID_HANDLE_VALUE) return pipe;
+  if (!binder_endpoint::Current().VerifyPipe(pipe)) {
+    CloseHandle(pipe);
+    return INVALID_HANDLE_VALUE;
+  }
   Request hello;
   hello.Put<uint32_t>(wire::kHelloRights);
   hello.Put<uint32_t>(wire::kMagic);
@@ -126,6 +133,7 @@ HANDLE Connect() {
 // One request and its reply; false (errno set) if the broker cannot be reached.
 // g_mutex held.
 bool Call(Request& request, Reply* reply) {
+  if (ProtectedBinderEndpoint()) return errno = EOPNOTSUPP, false;
   const uint32_t len = static_cast<uint32_t>(request.bytes.size() - 4);
   memcpy(request.bytes.data(), &len, 4);
   for (int attempt = 0; attempt < 2; ++attempt) {
@@ -197,6 +205,7 @@ bool ReadDelivered(Reply& reply, std::vector<int>* fds, bool adopt, bool close_o
 
 // A view of one of the broker's sections (binder_wire.h), or null.
 void* MapBrokerSection(const wchar_t* prefix, DWORD access, size_t size) {
+  if (ProtectedBinderEndpoint()) return nullptr;
   const std::string device = Device();
   if (device.empty()) return nullptr;
   const std::wstring name = std::wstring(prefix) + Widen(device.c_str());
@@ -253,6 +262,8 @@ uint64_t AdvanceStream(uint16_t port, bool sent, uint64_t bytes) {
 
 bool DepositRights(const std::vector<int>& fds, uint64_t queue, uint64_t position,
                    ws::RightsToken* token) {
+  // The private data endpoint provisions no shared rights sections.
+  if (ProtectedBinderEndpoint()) return errno = EOPNOTSUPP, false;
   if (fds.empty() || fds.size() > wire::kRightsMaxPerMessage) return errno = EINVAL, false;
   Request request;
   request.Put<uint32_t>(wire::kRightsDeposit);
@@ -268,6 +279,9 @@ bool DepositRights(const std::vector<int>& fds, uint64_t queue, uint64_t positio
     DescriptorSnapshotPtr snapshot;
     {
       record_locks::DescriptorGuard guard;
+      SocketFd socket_state;
+      if (LookupSocket(fd, &socket_state) && ws::HasLoopbackRelay(socket_state.description))
+        return errno = EOPNOTSUPP, false;
       // A completed native fence travels as its typed read-only event, not as
       // the NUL reservation behind its descriptor (which cannot be shared).
       fence = TransferNativeFence(fd, &handle, &metadata);

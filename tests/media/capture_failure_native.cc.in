@@ -1,5 +1,5 @@
-// Complete production capture worker/stream; WASAPI and thread priority alone
-// are declared test boundaries. Native Windows clocks and synchronization run.
+// Complete production capture worker/stream with a controlled WASAPI boundary.
+// Native Windows clocks and synchronization run.
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -18,6 +18,16 @@
 #define private public
 #include "@ROOT@/compat/media/audio/capture.h"
 #undef private
+#include <gesher/binder_endpoint.h>
+
+namespace gesher::binder_endpoint {
+Binding& Current() {
+  // The standalone worker fixture has no protected startup or Binder pipe.
+  static Binding unbound;
+  return unbound;
+}
+}
+
 namespace fixture {
 std::atomic<bool> available{true}, start_ok{true}, pull_ok{true}, block_start{false}, start_entered{false};
 std::atomic<int> pulls{0};
@@ -86,6 +96,10 @@ bool HasWasapiCaptureEndpoint(std::string* name) {
   if (fixture::available && name) *name = "test input";
   return fixture::available;
 }
+// This fixture has no protected broker. Entering that path would invalidate
+// the assertions about which backend produced each failure.
+std::unique_ptr<CaptureSource> OpenBrokeredCapture(std::string*) { std::abort(); }
+bool HasBrokeredCaptureEndpoint(std::string*) { std::abort(); }
 void CaptureComInit() {}
 void RaiseAudioThreadPriority(bool) {}
 size_t BytesPerSample(PcmFormat format) {

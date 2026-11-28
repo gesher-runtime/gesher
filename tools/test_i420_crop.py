@@ -20,6 +20,7 @@ from test_media_surface_contracts import method
 
 ROOT = Path(__file__).resolve().parents[1]
 VIDEO = 'compat/media/video/video_decoder.cc'
+DAMAGE = 'compat/hwui/window/surface_damage.h'
 INPUTS = (VIDEO, 'compat/media/video/video_decoder.h', 'compat/media/video/yuv_rgba.h',
           'compat/media/player/extractor.h', 'compat/media/player/data_source.h',
           'compat/media/audio/log.h',
@@ -59,8 +60,11 @@ def generate(output, ref=None, observe=True, mutation=None):
     constants.discard('NATIVE_WINDOW_TIMESTAMP_AUTO')
     boundary = sources['tests/media/surface_geometry_host.cc.in'].split('@PRODUCTION@')[0]
     boundary = boundary.replace('@CONSTANTS@', 'enum { ' + ', '.join(sorted(constants)) + ' };')
-    # The current host adapter uses PixelRect even when building the older runtime.
-    boundary = boundary.replace('@DAMAGE_TYPES@', '#include "compat/hwui/window/surface_damage.h"')
+    # The current window adapter uses the production rectangle on both refs.
+    sources[DAMAGE] = read(DAMAGE)
+    if boundary.count('@DAMAGE_TYPES@') != 1:
+        raise ValueError('surface damage adapter boundary changed')
+    boundary = boundary.replace('@DAMAGE_TYPES@', portable(sources[DAMAGE]))
     boundary = boundary.replace('int64_t systemTime(int)', 'inline int64_t systemTime(int)')
     boundary = '#pragma once\n#include "compat/media/video/video_decoder.h"\n' + boundary
     boundary += '\nnamespace android { constexpr int OK = 0, BAD_VALUE = -EINVAL, NO_INIT = -ENODEV; }\n'

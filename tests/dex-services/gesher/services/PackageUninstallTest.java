@@ -8,6 +8,7 @@ import android.content.pm.*;
 import android.content.res.AssetManager;
 import android.os.*;
 import com.gesher.server.ApkPackage;
+import com.gesher.server.Device;
 import com.gesher.server.PackageManagerService;
 import java.io.*;
 import java.lang.reflect.*;
@@ -176,6 +177,13 @@ public final class PackageUninstallTest {
         File deviceData=new File(data,"user_de/0/"+name);
         require(deviceData.isDirectory(),"Installer omitted device-protected data root");
         Files.writeString(new File(deviceData,"private-marker").toPath(),"synthetic old DE data");
+        File nestedProfile=new File(data,"misc/profiles/cur/0/"+name+"/fixture/sub/marker");
+        File packageLog=Device.packageLog(name);
+        File packageLogcat=new File(packageLog.getPath()+".logcat");
+        for (File path:List.of(nestedProfile,packageLog,packageLogcat)) {
+            Files.createDirectories(path.getParentFile().toPath());
+            Files.writeString(path.toPath(),"owned old installation fixture");
+        }
         Method pendingRemoval=method(PackageManagerService.class,"isRemovalPending",String.class);
         AtomicBoolean preflightBlocked=new AtomicBoolean(true);AtomicInteger cleanups=new AtomicInteger();
         method(PackageManagerService.class,"onPackageRemovalCheck",Consumer.class).invoke(pm,(Consumer<String>)removed->{
@@ -204,6 +212,10 @@ public final class PackageUninstallTest {
         require(!shellSteps.toString().contains("retired"),"Failed or refused removal retired the Windows shell: "+shellSteps);
         require(pm.get(name)==beforeFailure&&new File(privateData,"private-marker").isFile()
                 &&new File(deviceData,"private-marker").isFile(),"Failed removal lost publication/data");
+        for (File path : List.of(nestedProfile, packageLog, packageLogcat)) {
+            require(Files.readString(path.toPath()).equals("owned old installation fixture"),
+                    "Failed removal lost profile or package log bytes");
+        }
         require(Files.readString(new File(data,"system/packages.list").toPath()).contains(name+"\t")&&events.isEmpty(),"Failed removal changed registry/events");
         require(!(Boolean)pendingRemoval.invoke(pm,name),"Successful rollback retained removal barrier");
         Files.delete(temporary.toPath());
@@ -277,6 +289,8 @@ public final class PackageUninstallTest {
         drain(eventExecutor);require(eventFailure.get()==null,"Removal callback failed: "+eventFailure.get());
         require(pm.get(name)==null&&!privateData.exists()&&!deviceData.exists(),
                 "Removed package still visible or has reusable CE/DE data");
+        require(!nestedProfile.exists()&&!packageLog.exists()&&!packageLogcat.exists(),
+                "Removed package retained visible profile or log records");
         require(!(Boolean)pendingRemoval.invoke(pm,name),"Committed removal retained barrier");
         require(uris.list(owner.packageName,true,true).isEmpty()&&jobs.isEmpty()&&!persisted.exists(),
                 "URI or persisted job capability survived removal");
@@ -294,6 +308,8 @@ public final class PackageUninstallTest {
                 "Pre-uninstall paused persistence recreated a removed job file");
         require(pm.get(name).uid()==uid&&!new File(privateData,"private-marker").exists()
                 &&!new File(deviceData,"private-marker").exists(),"Reinstall reused old CE/DE data or changed reserved UID");
+        require(!nestedProfile.exists()&&!packageLog.exists()&&!packageLogcat.exists(),
+                "Reinstall reused a removed package's profile or log records");
         require((Boolean)field(held.getClass(),"canceled").get(held),"Old pending-intent capability revived");
         require(jobs.isEmpty()&&!persisted.exists()&&uris.list(owner.packageName,true,true).isEmpty()
                 &&!uris.canAccess(pm.get(owner.packageName),grantedUri,Intent.FLAG_GRANT_READ_URI_PERMISSION,0),

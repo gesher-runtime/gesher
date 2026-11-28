@@ -8,6 +8,7 @@
 #include <netioapi.h>
 #include <windns.h>
 #include <tlhelp32.h>
+#include <gesher/binder_endpoint.h>
 
 #include <errno.h>
 #include <stdio.h>
@@ -26,8 +27,30 @@
 #include "netlink_internal.h"
 #include "socket_internal.h"
 #include "socket_user_copy.h"
+#include "../../binder/loopback_relay.h"
+#if __has_include(<gesher/fork.h>)
+#include <gesher/fork.h>
+#endif
+
+namespace gesher { void WakePollers(); }
 
 namespace gesher::ws {
+#ifdef GESHER_FORK_LOCK
+namespace {
+// Process-local queues and their owner thread cannot be cloned as a live TCP
+// connection. Descriptor locks precede this guard, blocking new publication.
+bool RelayForkReady(void*) { return loopback_relay::TryLockForkGate(); }
+void RelayForkRelease(void*) { loopback_relay::UnlockForkGate(); }
+void RelayForkChild(void*) { loopback_relay::ResetForkGateAfterChild(); }
+void* RelayForkIdentity() { static int identity; return &identity; }
+const ForkLockOps relay_fork_ops{RelayForkReady, RelayForkRelease, RelayForkChild};
+struct RelayForkRegistration {
+  RelayForkRegistration() {
+    RegisterForkLock(kForkOrderLeaf, "loopback relay workers", RelayForkIdentity, &relay_fork_ops);
+  }
+} relay_fork_registration;
+}  // namespace
+#endif
 bool CopyFromUser(void* destination, const void* source, size_t size) {
   return usercopy::From(destination, source, size);
 }
@@ -290,6 +313,304 @@ bool Startup() {
   return true;
 }
 
+namespace {
+std::shared_ptr<loopback_relay::Client> Relay(const std::shared_ptr<SocketDescription>& description) {
+  if (!description) return {};
+  std::lock_guard lock(description->error_mutex);
+  return description->relay;
+}
+bool RelayEndpoint(const Address& address, loopback_relay::Endpoint* result) {
+  sockaddr_storage native{}; int size = 0;
+  if (!ToWin(address, &native, &size)) return false;
+  *result = {};
+  if (native.ss_family == AF_INET) {
+    const auto& value = *reinterpret_cast<const sockaddr_in*>(&native);
+    result->family = 4; result->port = ntohs(value.sin_port);
+    memcpy(result->address, &value.sin_addr, 4);
+  } else if (native.ss_family == AF_INET6) {
+    const auto& value = *reinterpret_cast<const sockaddr_in6*>(&native);
+    result->family = 6; result->port = ntohs(value.sin6_port); result->scope = value.sin6_scope_id;
+    memcpy(result->address, &value.sin6_addr, 16);
+  } else return false;
+  return true;
+}
+bool RelayAddress(const loopback_relay::Endpoint& endpoint, Address* result) {
+  if (endpoint.family == 4) {
+    sockaddr_in value{}; value.sin_family = AF_INET; value.sin_port = htons(endpoint.port);
+    memcpy(&value.sin_addr, endpoint.address, 4);
+    FromWin(reinterpret_cast<const sockaddr*>(&value), sizeof(value), result);
+  } else if (endpoint.family == 6) {
+    sockaddr_in6 value{}; value.sin6_family = AF_INET6; value.sin6_port = htons(endpoint.port);
+    value.sin6_scope_id = endpoint.scope; memcpy(&value.sin6_addr, endpoint.address, 16);
+    FromWin(reinterpret_cast<const sockaddr*>(&value), sizeof(value), result);
+  } else return errno = ENOTCONN, false;
+  return true;
+}
+void RefreshRelay(const std::shared_ptr<SocketDescription>& description) {
+  auto relay = Relay(description);
+  if (!relay) return;
+  const auto state = relay->State();
+  std::lock_guard lock(description->error_mutex);
+  if (description->relay != relay || description->native_closing || description->native_closed) return;
+  if (state.connecting) description->state.store(ConnectState::kConnecting);
+  else {
+    description->state.store(state.connected ? ConnectState::kConnected : ConnectState::kFailed);
+    if (state.error && !description->relay_error_recorded) {
+      description->connect_error = description->connect_result = ErrnoFromWsa(state.error);
+      description->relay_error_recorded = true;
+    }
+  }
+}
+void ReleaseRelayWait(void* raw) {
+  static_cast<std::shared_ptr<loopback_relay::Client>*>(raw)->reset();
+}
+}  // namespace
+
+bool HasLoopbackRelay(const std::shared_ptr<SocketDescription>& description) { return Relay(description) != nullptr; }
+namespace {
+bool RelayOption(Option option, loopback_relay::Option* mapped) {
+  using R = loopback_relay::Option;
+  switch (option) {
+    case Option::kTcpNoDelay: *mapped = R::kNoDelay; return true;
+    case Option::kKeepAlive: *mapped = R::kKeepAlive; return true;
+    case Option::kOobInline: *mapped = R::kOobInline; return true;
+    case Option::kRcvBuf: *mapped = R::kReceiveBuffer; return true;
+    case Option::kSndBuf: *mapped = R::kSendBuffer; return true;
+    case Option::kRcvLowat: *mapped = R::kReceiveLowWater; return true;
+    case Option::kSndLowat: *mapped = R::kSendLowWater; return true;
+    case Option::kDontRoute: *mapped = R::kDontRoute; return true;
+    case Option::kTcpKeepIdle: *mapped = R::kKeepIdle; return true;
+    case Option::kTcpKeepIntvl: *mapped = R::kKeepInterval; return true;
+    case Option::kTcpKeepCnt: *mapped = R::kKeepCount; return true;
+    case Option::kIpTos: *mapped = R::kIpTos; return true;
+    case Option::kIpTtl: *mapped = R::kIpTtl; return true;
+    case Option::kIpv6V6Only: *mapped = R::kIpv6Only; return true;
+    case Option::kIpv6UnicastHops: *mapped = R::kIpv6Hops; return true;
+    case Option::kIpv6TClass: *mapped = R::kIpv6TrafficClass; return true;
+    default: return false;
+  }
+}
+}  // namespace
+
+int LoopbackRelayOption(const std::shared_ptr<SocketDescription>& description,
+                        Option option, bool set, int* value) {
+  std::lock_guard native(description->native_call_mutex);
+  auto relay = Relay(description);
+  if (!relay) return errno = ENOTCONN, -1;
+  {
+    std::lock_guard lock(description->error_mutex);
+    if (description->native_closed || description->native_closing) return errno = EBADF, -1;
+  }
+  loopback_relay::Option mapped{};
+  if (!RelayOption(option, &mapped)) return errno = EOPNOTSUPP, -1;
+  int32_t actual = *value;
+  const int error = relay->Control(mapped, set, &actual);
+  if (error) return errno = ErrnoFromWsa(error), -1;
+  if (set) {
+    auto& values = description->relay_option_values;
+    auto entry = std::find_if(values.begin(), values.end(),
+        [option](const auto& value) { return value.first == option; });
+    if (entry == values.end()) values.emplace_back(option, actual);
+    else entry->second = actual;
+  }
+  *value = actual;
+  return 0;
+}
+bool IsLoopbackRelayTarget(const Address& target) {
+  loopback_relay::Endpoint endpoint{};
+  return RelayEndpoint(target, &endpoint) && loopback_relay::IsLoopback(endpoint) &&
+      binder_endpoint::Current().IsGuest();
+}
+
+bool NativeListenerMatches(Socket socket, const Address& target,
+                            const std::shared_ptr<SocketDescription>& description) {
+  std::lock_guard native(description->native_call_mutex);
+  {
+    std::lock_guard lock(description->error_mutex);
+    if (description->native_closed || description->native_closing || description->relay || description->netlink) return false;
+  }
+  int listening = 0;
+  if (GetOption(socket, Option::kAcceptConn, &listening) < 0 || !listening) return false;
+  Address local;
+  loopback_relay::Endpoint bound{}, destination{};
+  if (GetSockName(socket, &local) < 0 || !RelayEndpoint(local, &bound) ||
+      !RelayEndpoint(target, &destination) || bound.port != destination.port) return false;
+  auto mapped = [](loopback_relay::Endpoint* address) {
+    static const uint8_t prefix[12] = {0,0,0,0,0,0,0,0,0,0,255,255};
+    if (address->family == 6 && memcmp(address->address, prefix, sizeof(prefix)) == 0) {
+      memmove(address->address, address->address + 12, 4);
+      memset(address->address + 4, 0, 12);
+      address->family = 4; address->scope = 0;
+    }
+  };
+  const bool ipv6_listener = bound.family == 6;
+  mapped(&bound); mapped(&destination);
+  bool any = true;
+  for (size_t i = 0; i < (bound.family == 4 ? 4u : 16u); ++i) any &= bound.address[i] == 0;
+  if (bound.family == 6 && any && destination.family == 4 && ipv6_listener) {
+    int only = 1;
+    if (GetOption(socket, Option::kIpv6V6Only, &only) < 0 || only) return false;
+    bound.family = 4;
+  }
+  return bound.family == destination.family &&
+      (any || (bound.scope == destination.scope &&
+          memcmp(bound.address, destination.address, bound.family == 4 ? 4 : 16) == 0));
+}
+
+int StartLoopbackRelay(Socket socket, const Address& target,
+                        const std::shared_ptr<SocketDescription>& description) {
+  loopback_relay::Request request{};
+  if (!RelayEndpoint(target, &request.target) || !loopback_relay::IsLoopback(request.target) ||
+      !description->relay_eligible || !binder_endpoint::Current().IsGuest()) return 0;
+  HANDLE token = nullptr; DWORD contained = 0, bytes = 0;
+  if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) return errno = EACCES, -1;
+  const BOOL inspected = GetTokenInformation(token, TokenIsAppContainer, &contained, sizeof(contained), &bytes);
+  CloseHandle(token);
+  if (!inspected) return errno = EACCES, -1;
+  if (!contained) return 0;
+  // An app's own native listener is already reachable inside its AppContainer.
+  // Keep that real operation in the original namespace, without a host attempt.
+  if (gesher::HasNativeListener(target, description)) return 0;
+  std::lock_guard native(description->native_call_mutex);
+  int type = 0;
+  if (GetOption(socket, Option::kType, &type) < 0 || type != static_cast<int>(Type::kStream)) return 0;
+  WSAPROTOCOL_INFOW protocol{}; int protocol_bytes = sizeof(protocol);
+  if (Api().getsockopt(static_cast<SOCKET>(socket), SOL_SOCKET, SO_PROTOCOL_INFOW,
+          reinterpret_cast<char*>(&protocol), &protocol_bytes) != 0 ||
+      protocol_bytes != static_cast<int>(sizeof(protocol)) || protocol.iAddressFamily != ToWinFamily(target.family) ||
+      protocol.iSocketType != SOCK_STREAM || protocol.iProtocol != IPPROTO_TCP ||
+      protocol.ProtocolChain.ChainLen != BASE_PROTOCOL) return 0;
+  Address source;
+  if (GetSockName(socket, &source) == 0) {
+    if (!RelayEndpoint(source, &request.source) || request.source.port) return 0;
+  }
+  request.source = {};
+  if (BoundInterface(socket, &request.interface_index) < 0 || request.interface_index) return 0;
+  // Preserve pre-connect mutations on the actual host endpoint before its
+  // bind/connect. Options outside the closed wire set keep their native path.
+  const Socket defaults = Open(target.family, Type::kStream, 0, false);
+  if (defaults == kInvalidSocket) return 0;
+  bool compatible = true;
+  for (Option option : {Option::kTcpNoDelay, Option::kKeepAlive, Option::kRcvBuf, Option::kSndBuf,
+       Option::kOobInline, Option::kDontRoute, Option::kTcpKeepIdle, Option::kTcpKeepIntvl,
+       Option::kTcpKeepCnt, Option::kIpTos, Option::kIpTtl, Option::kIpv6V6Only, Option::kIpv6UnicastHops,
+       Option::kIpv6TClass, Option::kBroadcast, Option::kRcvLowat, Option::kSndLowat}) {
+    int actual = 0, initial = 0;
+    const int a = GetOption(socket, option, &actual), b = GetOption(defaults, option, &initial);
+    if (a != b) compatible = false;
+    if (a == 0 && actual != initial) {
+      loopback_relay::Option mapped{};
+      if (!RelayOption(option, &mapped)) compatible = false;
+      else {
+        const auto index = static_cast<uint32_t>(mapped);
+        request.options.mask |= 1u << index;
+        request.options.values[index] = actual;
+      }
+    }
+  }
+  bool a_on = false, b_on = false; int a_seconds = 0, b_seconds = 0;
+  if (GetLinger(socket, &a_on, &a_seconds) != GetLinger(defaults, &b_on, &b_seconds) ||
+      a_on != b_on || a_seconds != b_seconds) compatible = false;
+  Close(defaults);
+  if (!compatible) return 0;
+  std::lock_guard lock(description->error_mutex);
+  if (description->native_closed || description->native_closing) return errno = EBADF, -1;
+  if (description->connect_operation || description->legacy_connect_active || description->relay)
+    return errno = EALREADY, -1;
+  if (description->connect_generation == UINT64_MAX) return errno = EOVERFLOW, -1;
+  auto relay = loopback_relay::Client::Start(request,
+      [](const auto& operation) { return binder_endpoint::OpenLoopbackRelay(operation); },
+      [] { gesher::WakePollers(); },
+#ifdef GESHER_FORK_LOCK
+      &gesher::ThreadLeaving
+#else
+      nullptr
+#endif
+      );
+  if (!relay) return errno = ENOMEM, -1;
+  ++description->connect_generation;
+  description->connect_error = description->connect_result = 0;
+  description->refusal_generation = 0;
+  description->relay_error_recorded = false;
+  GetOption(socket, Option::kSndTimeo, &description->relay_connect_timeout);
+  description->relay = std::move(relay);
+  description->state.store(ConnectState::kConnecting);
+  return 1;
+}
+
+int AwaitLoopbackRelay(const std::shared_ptr<SocketDescription>& description, bool nonblocking) {
+  auto relay = Relay(description);
+  if (!relay) return errno = ENOTCONN, -1;
+  int timeout = 0;
+  { std::lock_guard lock(description->error_mutex); timeout = description->relay_connect_timeout; }
+  const ULONGLONG deadline = timeout > 0 ? GetTickCount64() + timeout : ~ULONGLONG{0};
+  int result = -1, error = EINPROGRESS;
+  pthread_cleanup_push(ReleaseRelayWait, &relay);
+  for (;;) {
+    const auto state = relay->State();
+    if (!state.connecting) {
+      RefreshRelay(description);
+      result = state.connected && !state.error ? 0 : -1;
+      error = state.error ? ErrnoFromWsa(state.error) : ENOTCONN;
+      if (!nonblocking) {
+        std::lock_guard lock(description->error_mutex);
+        description->connect_error = 0;
+      }
+      break;
+    }
+    if (nonblocking || GetTickCount64() >= deadline) break;
+    pthread_testcancel();
+    relay->WaitForChange(state.revision, 10);
+  }
+  pthread_cleanup_pop(0);
+  if (result < 0) errno = error;
+  return result;
+}
+
+int DisconnectLoopbackRelay(Socket socket, const std::shared_ptr<SocketDescription>& description) {
+  std::lock_guard native(description->native_call_mutex);
+  {
+    std::lock_guard lock(description->error_mutex);
+    if (description->native_closed || description->native_closing) return errno = EBADF, -1;
+  }
+  // Retained host options are the descriptor's options. Restore each confirmed
+  // mutation before exposing the original native endpoint again, including a
+  // reconnect to a non-loopback destination. A real failure leaves the relay
+  // attached, so a failed reset cannot pretend that this state was preserved.
+  for (const auto& [option, value] : description->relay_option_values) {
+    if (SetOption(socket, option, value) < 0) return -1;
+  }
+  std::shared_ptr<loopback_relay::Client> relay;
+  {
+    std::lock_guard lock(description->error_mutex);
+    relay = std::move(description->relay);
+    description->relay_option_values.clear();
+    description->state.store(ConnectState::kInitial);
+    description->connect_result = description->connect_error = 0;
+    description->relay_error_recorded = false;
+  }
+  if (relay) relay->Close();
+  gesher::WakePollers();
+  return 0;
+}
+
+int PollLoopbackRelay(const std::shared_ptr<SocketDescription>& description, int events) {
+  auto relay = Relay(description);
+  if (!relay) return 0;
+  RefreshRelay(description);
+  const auto state = relay->State();
+  std::lock_guard lock(description->error_mutex);
+  if (description->relay != relay) return 0;
+  if (description->native_closing || description->native_closed) return kPollNval;
+  if (state.connecting) return 0;
+  int result = 0;
+  if ((events & kPollIn) && (state.readable || state.read_eof || state.error)) result |= kPollIn;
+  if ((events & kPollOut) && (state.writable || state.write_closed || state.error)) result |= kPollOut;
+  if (description->connect_error) result |= kPollErr;
+  if (state.error || (state.read_eof && state.write_closed)) result |= kPollHup;
+  return result;
+}
+
 Socket Open(Family family, Type type, int protocol, bool process_binding) {
   int win_family = ToWinFamily(family);
   int win_type = ToWinType(type);
@@ -455,6 +776,7 @@ int Close(Socket s, const std::shared_ptr<SocketDescription>& description, bool 
     return 0;
   }
   if (!description) return closesocket(static_cast<SOCKET>(s)) == 0 ? 0 : Fail();
+  if (auto relay = Relay(description)) relay->Close();
   {
     std::lock_guard<std::mutex> lock(description->error_mutex);
     description->native_closing = true;
@@ -518,6 +840,7 @@ int Bind(Socket s, const Address& address, const std::shared_ptr<SocketDescripti
     native_call = std::unique_lock<std::mutex>(description->native_call_mutex);
     std::lock_guard<std::mutex> lock(description->error_mutex);
     if (description->native_closed || description->native_closing) return errno = EBADF, -1;
+    if (description->relay) return errno = EINVAL, -1;
   }
   sockaddr_storage ss;
   int len;
@@ -792,6 +1115,7 @@ bool ReadConnectOwnerCensus(OwnerCensus* result) {
 }
 
 void RefreshConnect(const std::shared_ptr<SocketDescription>& description) {
+  RefreshRelay(description);
   std::lock_guard<std::mutex> lock(description->error_mutex);
   auto operation = description->connect_operation;
   if (operation && WaitForSingleObject(operation->submitted, 0) == WAIT_OBJECT_0) FinishConnect(operation);
@@ -843,6 +1167,7 @@ int Listen(Socket s, int backlog, const std::shared_ptr<SocketDescription>& desc
     native_call = std::unique_lock<std::mutex>(description->native_call_mutex);
     std::lock_guard<std::mutex> lock(description->error_mutex);
     if (description->native_closed || description->native_closing) return errno = EBADF, -1;
+    if (description->relay) return errno = EINVAL, -1;
   }
   return Api().listen(static_cast<SOCKET>(s), backlog) == 0 ? 0 : Fail();
 }
@@ -861,7 +1186,25 @@ Socket Accept(Socket s, Address* peer) {
   return static_cast<Socket>(result);
 }
 
-int GetSockName(Socket s, Address* address) {
+int GetSockName(Socket s, Address* address, const std::shared_ptr<SocketDescription>& description) {
+  if (auto relay = Relay(description)) {
+    auto state = relay->State();
+    const ULONGLONG deadline = GetTickCount64() + 5000;
+    int cancel_state = 0;
+    pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &cancel_state);
+    // Wait only for the control handshake's real native bind. The source
+    // phase precedes connect, so a remote timeout never delays getsockname.
+    while (!state.local.family && state.connecting && GetTickCount64() < deadline) {
+      relay->WaitForChange(state.revision, 10);
+      state = relay->State();
+    }
+    const int result = RelayAddress(state.local, address) ? 0 : -1;
+    const int saved = result < 0 && state.error ? ErrnoFromWsa(state.error) : errno;
+    relay.reset();
+    pthread_setcancelstate(cancel_state, nullptr);
+    errno = saved;
+    return result;
+  }
   sockaddr_storage ss;
   int len = sizeof(ss);
   if (Api().getsockname(static_cast<SOCKET>(s), reinterpret_cast<sockaddr*>(&ss), &len) != 0) {
@@ -871,7 +1214,12 @@ int GetSockName(Socket s, Address* address) {
   return 0;
 }
 
-int GetPeerName(Socket s, Address* address) {
+int GetPeerName(Socket s, Address* address, const std::shared_ptr<SocketDescription>& description) {
+  if (auto relay = Relay(description)) {
+    const auto state = relay->State();
+    if (!state.connected) return errno = ENOTCONN, -1;
+    return RelayAddress(state.peer, address) ? 0 : -1;
+  }
   sockaddr_storage ss;
   int len = sizeof(ss);
   if (Api().getpeername(static_cast<SOCKET>(s), reinterpret_cast<sockaddr*>(&ss), &len) != 0) {
@@ -881,12 +1229,20 @@ int GetPeerName(Socket s, Address* address) {
   return 0;
 }
 
-int Shutdown(Socket s, bool read, bool write) {
+int Shutdown(Socket s, bool read, bool write, const std::shared_ptr<SocketDescription>& description) {
+  if (auto relay = Relay(description)) {
+    const int error = relay->Shutdown(read, write);
+    return error ? (errno = ErrnoFromWsa(error), -1) : 0;
+  }
   int how = read && write ? SD_BOTH : read ? SD_RECEIVE : SD_SEND;
   return Api().shutdown(static_cast<SOCKET>(s), how) == 0 ? 0 : Fail();
 }
 
-int Available(Socket s, int* bytes) {
+int Available(Socket s, int* bytes, const std::shared_ptr<SocketDescription>& description) {
+  if (auto relay = Relay(description)) {
+    *bytes = static_cast<int>(std::min<size_t>(relay->State().readable, INT_MAX));
+    return 0;
+  }
   u_long n = 0;
   if (ioctlsocket(static_cast<SOCKET>(s), FIONREAD, &n) != 0) return Fail();
   *bytes = static_cast<int>(n);
@@ -1410,12 +1766,105 @@ bool StreamPorts(Socket s, SocketDescription& description, uint16_t* local, uint
   return true;
 }
 
+namespace {
+struct RelayIoReferences {
+  std::shared_ptr<loopback_relay::Client>* relay;
+  std::vector<std::byte>* bytes;
+  std::shared_ptr<SocketDescription>* description;
+};
+void ReleaseRelayIo(void* raw) {
+  auto& references = *static_cast<RelayIoReferences*>(raw);
+  references.relay->reset();
+  std::vector<std::byte>().swap(*references.bytes);
+  references.description->reset();
+}
+ptrdiff_t RelayIo(Socket socket, Buffer* buffers, size_t count, int flags, bool writing,
+                  std::shared_ptr<SocketDescription>& description, bool dont_wait) {
+  if (count > kMaxBuffers) return errno = EMSGSIZE, -1;
+  if (flags & ~(writing ? 0 : (kMsgPeek | kMsgWaitAll))) return errno = EOPNOTSUPP, -1;
+  size_t requested = 0;
+  for (size_t i = 0; i < count; ++i) {
+    if (buffers[i].len > SIZE_MAX - requested) return errno = EINVAL, -1;
+    requested += buffers[i].len;
+  }
+  auto relay = Relay(description);
+  if (!relay) return errno = ENOTCONN, -1;
+  if (requested == 0) {
+    size_t transferred = 0;
+    const int error = writing ? relay->Send({}, &transferred) : relay->Recv({}, &transferred);
+    return error ? (errno = ErrnoFromWsa(error), -1) : 0;
+  }
+  std::vector<std::byte> bytes(std::min<size_t>(requested, 64 * 1024));
+  if (writing) {
+    size_t offset = 0;
+    for (size_t i = 0; i < count && offset < bytes.size(); ++i) {
+      const size_t copied = std::min(buffers[i].len, bytes.size() - offset);
+      if (!CopyFromUser(bytes.data() + offset, buffers[i].data, copied)) return errno = EFAULT, -1;
+      offset += copied;
+    }
+  }
+  int timeout = 0;
+  GetOption(socket, writing ? Option::kSndTimeo : Option::kRcvTimeo, &timeout);
+  const ULONGLONG deadline = timeout > 0 ? GetTickCount64() + timeout : ~ULONGLONG{0};
+  size_t completed = 0;
+  ptrdiff_t result = -1;
+  int error = EAGAIN;
+  RelayIoReferences references{&relay, &bytes, &description};
+  pthread_cleanup_push(ReleaseRelayIo, &references);
+  for (;;) {
+    const auto state = relay->State();
+    size_t transferred = 0;
+    const bool peek = (flags & kMsgPeek) != 0;
+    const int status = writing
+        ? relay->Send(bytes, &transferred)
+        : relay->Recv(std::span(bytes).first(std::min(bytes.size(), requested - completed)), &transferred, peek);
+    if (status == 0) {
+      if (!writing && transferred) {
+        size_t skip = completed, offset = 0;
+        for (size_t i = 0; i < count && offset < transferred; ++i) {
+          if (skip >= buffers[i].len) { skip -= buffers[i].len; continue; }
+          const size_t copied = std::min(buffers[i].len - skip, transferred - offset);
+          if (!CopyToUser(static_cast<std::byte*>(buffers[i].data) + skip, bytes.data() + offset, copied)) {
+            error = EFAULT; break;
+          }
+          offset += copied; skip = 0;
+        }
+        if (offset != transferred) { result = completed ? static_cast<ptrdiff_t>(completed) : -1; break; }
+      }
+      completed += transferred;
+      if (writing || !transferred || peek || !(flags & kMsgWaitAll) || completed == requested ||
+          dont_wait || description->nonblocking.load()) {
+        result = static_cast<ptrdiff_t>(completed); break;
+      }
+      continue;
+    }
+    if (status != WSAEWOULDBLOCK) {
+      error = ErrnoFromWsa(status);
+      result = completed ? static_cast<ptrdiff_t>(completed) : -1;
+      break;
+    }
+    if (dont_wait || description->nonblocking.load() || GetTickCount64() >= deadline) {
+      result = completed ? static_cast<ptrdiff_t>(completed) : -1; break;
+    }
+    pthread_testcancel();
+    relay->WaitForChange(state.revision, 10);
+  }
+  pthread_cleanup_pop(0);
+  if (result < 0) errno = error;
+  return result;
+}
+}  // namespace
+
 ptrdiff_t SendOwned(Socket s, const Buffer* buffers, size_t count, int flags, const Address* to,
                     std::shared_ptr<SocketDescription>& description, bool dont_wait,
                     const RightsToken* rights) {
   if (description && description->netlink) {
     if (rights != nullptr && rights->count != 0) return errno = EOPNOTSUPP, -1;
     return gesher::NetlinkSend(*description->netlink, buffers, count, 0, nullptr, 0);
+  }
+  if (HasLoopbackRelay(description)) {
+    if (to || (rights && rights->count)) return errno = EOPNOTSUPP, -1;
+    return RelayIo(s, const_cast<Buffer*>(buffers), count, flags, true, description, dont_wait);
   }
   if (description->unix_datagram_pair.load()) {
     return SendUnixDatagram(s, buffers, count, flags, to, description, dont_wait, rights);
@@ -1441,6 +1890,14 @@ ptrdiff_t RecvOwned(Socket s, Buffer* buffers, size_t count, int flags, Address*
     if (credentials != nullptr) *credentials = {};
     return gesher::NetlinkRecv(description, buffers, count, 0, nullptr, nullptr,
                                dont_wait, result_flags);
+  }
+  if (HasLoopbackRelay(description)) {
+    if (rights) *rights = {};
+    if (credentials) *credentials = {};
+    if (result_flags) *result_flags = 0;
+    const ptrdiff_t result = RelayIo(s, buffers, count, flags, false, description, dont_wait);
+    if (result >= 0 && from) GetPeerName(s, from, description);
+    return result;
   }
   if (description->unix_datagram_pair.load()) {
     return RecvUnixDatagram(s, buffers, count, flags, from, description, dont_wait, result_flags,
@@ -1698,7 +2155,14 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms, NativePollObserver ob
   bool has_owned_pending = false;
   bool has_netlink = false;
   bool has_netlink_ready = false;
+  bool has_relay = false, has_relay_ready = false;
   for (size_t i = 0; i < count; ++i) {
+    if (HasLoopbackRelay(entries[i].description)) {
+      has_relay = true;
+      fds[i].fd = INVALID_SOCKET;
+      has_relay_ready |= PollLoopbackRelay(entries[i].description, entries[i].events) != 0;
+      continue;
+    }
     if (entries[i].description && entries[i].description->netlink) {
       has_netlink = true;
       fds[i].fd = INVALID_SOCKET;
@@ -1759,9 +2223,9 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms, NativePollObserver ob
   }
   // Band-only WSAPoll never wakes for failed ConnectEx. Sample its owned
   // completion on the same bounded slices already used for mixed poll sources.
-  const int wait = (has_lifecycle_hup || has_netlink_ready)
+  const int wait = (has_lifecycle_hup || has_netlink_ready || has_relay_ready)
                        ? 0
-                       : (has_owned_pending || has_netlink) &&
+                       : (has_owned_pending || has_netlink || has_relay) &&
                                  (timeout_ms < 0 || timeout_ms > 10)
                              ? 10
                              : timeout_ms;
@@ -1775,7 +2239,7 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms, NativePollObserver ob
   active.reserve(count + (wake != kInvalidSocket ? 1 : 0));
   active_index.reserve(count);
   for (size_t i = 0; i < count; ++i) {
-    if (!owned_pending[i] && !closed[i] &&
+    if (!owned_pending[i] && !closed[i] && !HasLoopbackRelay(entries[i].description) &&
         !(entries[i].description && entries[i].description->netlink)) {
       active.push_back(fds[i]);
       active_index.push_back(i);
@@ -1835,6 +2299,11 @@ int Poll(PollEntry* entries, size_t count, int timeout_ms, NativePollObserver ob
   bool suppressed_datagram_read = false;
   for (size_t i = 0; i < count; ++i) {
     SHORT r = fds[i].revents;
+    if (HasLoopbackRelay(entries[i].description)) {
+      entries[i].revents = PollLoopbackRelay(entries[i].description, entries[i].events);
+      if (entries[i].revents) ++ready;
+      continue;
+    }
     if (entries[i].description && entries[i].description->netlink) {
       const auto& description = *entries[i].description;
       entries[i].revents = description.netlink_poll(*description.netlink, entries[i].events);

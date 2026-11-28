@@ -19,8 +19,10 @@
 // gesher-exec, a PE as itself, sh/scripts/tools in the launcher).
 
 #include "shim_internal.h"
+#include "program_break.h"
 
 #include <gesher/bionic_shim.h>
+#include <gesher/binder_endpoint.h>
 #include <gesher/elf_loader.h>
 #include <gesher/environment.h>
 #include <gesher/fork.h>
@@ -193,7 +195,11 @@ bool CurrentEnv(std::vector<std::string>* out) {
   }, out);
 }
 
-std::string CurrentDir() {
+// NULL preserves the process's existing cwd handle even when the restricted
+// child cannot reopen its host path. A fork broker has its own cwd, so that
+// route must receive the forked caller's actual directory explicitly.
+std::string SpawnDirectory() {
+  if (!gesher::InForkedChild()) return {};
   DWORD n = GetCurrentDirectoryW(0, nullptr);
   std::wstring d(n, L'\0');
   n = GetCurrentDirectoryW(n, d.data());
@@ -272,6 +278,12 @@ bool InheritedFds(std::vector<ex::ChildFd>* out, bool include_close_on_exec = fa
 
 int BIONIC_SYSV ForkUnsupported() { return errno = ENOSYS, -1; }
 
+int BIONIC_SYSV DaemonUnsupported(int, int) { return errno = ENOSYS, -1; }
+
+ProgramBreak& ProcessBreak() { static ProgramBreak value; return value; }
+void* BIONIC_SYSV Sbrk(intptr_t increment) { return ProcessBreak().Increment(increment); }
+int BIONIC_SYSV Brk(void* address) { return ProcessBreak().Set(address); }
+
 // --- execve / execvp and friends ----------------------------------------------
 
 // Returns only on failure (errno set); on success it exits the process.
@@ -298,7 +310,7 @@ void ExecReplace(const std::string& program, const std::vector<std::string>& arg
       return;
     }
   }
-  int pid = SpawnProgram(program, argv, env, CurrentDir(), search, fds, job);
+  int pid = SpawnProgram(program, argv, env, SpawnDirectory(), search, fds, job);
   fds.clear();  // snapshots must not keep child pipe endpoints open while waiting
   if (pid < 0) {
     if (job != nullptr) {
@@ -556,7 +568,7 @@ int BIONIC_SYSV System(const char* command) {
   if (!InheritedFds(&fds)) return -1;
   std::vector<std::string> env;
   if (!CurrentEnv(&env)) return -1;
-  int pid = SpawnProgram("/system/bin/sh", argv, env, CurrentDir(), false, fds);
+  int pid = SpawnProgram("/system/bin/sh", argv, env, SpawnDirectory(), false, fds);
   fds.clear();
   if (pid < 0) return -1;
   int status = 0;
@@ -617,7 +629,7 @@ void* BIONIC_SYSV Popen(const char* command, const char* mode) {
   if (!found) fds.push_back({target, child_description->handle, child_description});
   std::vector<std::string> argv{"/system/bin/sh", "-c", command};
   std::vector<std::string> env;
-  int pid = CurrentEnv(&env) ? SpawnProgram("/system/bin/sh", argv, env, CurrentDir(), false, fds) : -1;
+  int pid = CurrentEnv(&env) ? SpawnProgram("/system/bin/sh", argv, env, SpawnDirectory(), false, fds) : -1;
   fds.clear();
   CloseHandle(child_end);
   child_description.reset();
@@ -827,7 +839,7 @@ int DoPosixSpawn(int* pid_out, const char* path, const BionicFileActions* const*
   std::vector<std::string> env;
   if (envp) env = FromList(envp);
   else if (!CurrentEnv(&env)) return errno;
-  int pid = SpawnPrepared(launch, env, CurrentDir(), fds);
+  int pid = SpawnPrepared(launch, env, SpawnDirectory(), fds);
   if (pid < 0) return errno;  // posix_spawn returns the error number
   if (pid_out != nullptr) *pid_out = pid;
   return 0;
@@ -949,6 +961,7 @@ void ForkChildProcessState() {
 // clone system call, as on Linux).
 int BIONIC_SYSV GuestFork(int exit_signal, int run_atfork, const ForkHooks* hooks) {
   if (run_atfork) RunAtforkPrepare();
+  const bool protected_guest = binder_endpoint::Current().IsGuest();
   // Forked children create processes through this one (gesher/fork.h).
   gesher::StartSpawnBroker();
   gesher::PrepareFork();
@@ -972,16 +985,19 @@ int BIONIC_SYSV GuestFork(int exit_signal, int run_atfork, const ForkHooks* hook
   const bool leases = gesher::ForkHasMemfdWriteLeases();
   HANDLE leases_renewed = leases ? CreateEventW(nullptr, TRUE, FALSE, nullptr) : nullptr;
   HANDLE leases_go = leases ? CreateEventW(nullptr, TRUE, FALSE, nullptr) : nullptr;
+  HANDLE admission_go = protected_guest ? CreateEventW(nullptr, TRUE, FALSE, nullptr) : nullptr;
   HANDLE parent_self = nullptr;
-  if (leases) {
+  if (leases || protected_guest) {
     DuplicateHandle(GetCurrentProcess(), GetCurrentProcess(), GetCurrentProcess(), &parent_self, SYNCHRONIZE,
                     FALSE, 0);
   }
   // Set by the child once its signal mailbox, its ptrace state and their
   // threads run: until then fork has not succeeded (ReinitializeAfterFork).
   HANDLE child_ready = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-  if (child_ready == nullptr || (leases && (leases_renewed == nullptr || leases_go == nullptr || parent_self == nullptr))) {
-    for (HANDLE h : {child_ready, leases_renewed, leases_go, parent_self}) {
+  if (child_ready == nullptr || ((leases || protected_guest) && parent_self == nullptr) ||
+      (leases && (leases_renewed == nullptr || leases_go == nullptr)) ||
+      (protected_guest && admission_go == nullptr)) {
+    for (HANDLE h : {child_ready, leases_renewed, leases_go, admission_go, parent_self}) {
       if (h != nullptr) CloseHandle(h);
     }
     gesher::ReleaseForkLocks(false);
@@ -1011,10 +1027,20 @@ int BIONIC_SYSV GuestFork(int exit_signal, int run_atfork, const ForkHooks* hook
       // waiting ends this process instead of saying go.
       HANDLE waits[2] = {leases_go, parent_self};
       WaitForMultipleObjects(2, waits, FALSE, INFINITE);
-      for (HANDLE h : {leases_renewed, leases_go, parent_self}) CloseHandle(h);
+      for (HANDLE h : {leases_renewed, leases_go}) CloseHandle(h);
     }
     serial.release();
     new (&g_fork_mutex) std::mutex();
+    if (protected_guest) {
+      // Wait before starting the signal mailbox or calling guest atfork
+      // handlers. Parent death cannot release an unregistered child.
+      HANDLE waits[2] = {admission_go, parent_self};
+      if (WaitForMultipleObjects(2, waits, FALSE, INFINITE) != WAIT_OBJECT_0) {
+        TerminateProcess(GetCurrentProcess(), 0x7f);
+      }
+      CloseHandle(admission_go);
+    }
+    if (parent_self != nullptr) CloseHandle(parent_self);
     if (!gesher::ReinitializeAfterFork()) {
       // It could not watch its own signals (or be traced): not a child the
       // parent may return. The parent sees it end without being ready.
@@ -1037,8 +1063,9 @@ int BIONIC_SYSV GuestFork(int exit_signal, int run_atfork, const ForkHooks* hook
       // (it waits for this word, so it has run no guest code either way).
       if (lease_wait == WAIT_OBJECT_0) SetEvent(leases_go);
     }
-    for (HANDLE h : {leases_renewed, leases_go, parent_self}) CloseHandle(h);
+    for (HANDLE h : {leases_renewed, leases_go}) CloseHandle(h);
   }
+  if (parent_self != nullptr) CloseHandle(parent_self);
   const bool leases_failed = cloned > 0 && lease_wait != WAIT_OBJECT_0;
   if (leases_failed) {
     // The child did not take its leases in time (or ended first): returning
@@ -1057,20 +1084,31 @@ int BIONIC_SYSV GuestFork(int exit_signal, int run_atfork, const ForkHooks* hook
   // no guest code (it signals before fork returns in it), so it is ended and
   // fork fails, rather than return a child that loses signals.
   DWORD ready_wait = WAIT_OBJECT_0;
+  bool admission_failed = false;
   if (cloned > 0 && !leases_failed) {
-    HANDLE waits[2] = {child_ready, process};
-    ready_wait = WaitForMultipleObjects(2, waits, FALSE, kChildReadyMs);
-    if (ready_wait != WAIT_OBJECT_0) {
+    // This IPC runs outside the fork set; its Binder and environment locks
+    // may now be taken normally.
+    if (protected_guest) {
+      admission_failed = !binder_endpoint::EnrollChild(process) || !SetEvent(admission_go);
+    }
+    if (!admission_failed) {
+      HANDLE waits[2] = {child_ready, process};
+      ready_wait = WaitForMultipleObjects(2, waits, FALSE, kChildReadyMs);
+    }
+    if (ready_wait != WAIT_OBJECT_0 || admission_failed) {
       TerminateProcess(process, 0);
       WaitForSingleObject(process, kLeaseWaitMs);
       CloseHandle(process);
     }
   }
   CloseHandle(child_ready);
-  if (cloned > 0 && !leases_failed && ready_wait != WAIT_OBJECT_0) {
+  if (admission_go != nullptr) CloseHandle(admission_go);
+  if (cloned > 0 && !leases_failed && (ready_wait != WAIT_OBJECT_0 || admission_failed)) {
     gesher::ForgetChildMailbox(pid);
     gesher::logging::Record(0 /*LOG_ID_MAIN*/, 5 /*ANDROID_LOG_WARN*/, "gesher-fork",
-                            "fork: the child could not start its signal and ptrace threads; EAGAIN");
+                            admission_failed
+                                ? "fork: the protected broker could not admit the child; EAGAIN"
+                                : "fork: the child could not start its signal and ptrace threads; EAGAIN");
     if (run_atfork) RunAtforkParent();
     return errno = EAGAIN, -1;
   }
@@ -1148,6 +1186,9 @@ void RegisterProcess(SymbolTable& t) {
 #define E(name, fn) t[name] = reinterpret_cast<void*>(&fn)
   E("fork", ForkUnsupported);
   E("vfork", ForkUnsupported);
+  E("daemon", DaemonUnsupported);
+  E("sbrk", Sbrk);
+  E("brk", Brk);
   // For gesher_arm64.dll's guest fork/vfork/clone (ADR 0092); x86-64 code's
   // fork stays unsupported (ADR 0055).
   E("__gesher_fork", GuestFork);

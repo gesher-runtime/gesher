@@ -3,9 +3,11 @@
 param(
     [Parameter(Mandatory)] [string] $Dir,
     [string] $ServicesDex,
+    [string] $ProbeApk,
     [string] $SigningFixtures,
     [string] $EvidenceDir,
-    [switch] $RequireBootImages
+    [switch] $RequireBootImages,
+    [switch] $LegacyCallerDenial
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2
@@ -14,6 +16,7 @@ if ($Dir -notmatch '^[A-Za-z]:\\') { throw 'Dir must be a local Windows runtime 
 if (-not $ServicesDex) { $ServicesDex = Join-Path $Dir 'services-tests.dex' }
 if (-not $SigningFixtures) { $SigningFixtures = Join-Path $PSScriptRoot '../dex-services/fixtures' }
 $ServicesDex = (Resolve-Path -LiteralPath $ServicesDex).Path
+if (-not $ProbeApk) { $ProbeApk = Join-Path $Dir 'microgprobe.apk' }
 $apk = (Resolve-Path -LiteralPath (Join-Path $SigningFixtures 'v2only.apk')).Path
 foreach ($name in 'dalvikvm.exe','binderd.exe','servicemanager.exe','core-oj.jar','core-libart.jar',
         'core-icu4j.jar','framework.jar','gesher-app.jar','framework-res.apk','build.prop',
@@ -41,6 +44,7 @@ $known = @{}
 $failed = $false
 $sequence = 0
 $vm = @()
+$protectedDevice = $false
 function AndroidPath([string] $Path) {
     $value = [IO.Path]::GetFullPath($Path) -replace '\\','/'
     if ($value -notmatch '^([A-Za-z]):(.*)$') { throw 'Unsupported Android path.' }
@@ -87,6 +91,12 @@ function InvokeFixture([string] $Label, [string] $Executable, [string[]] $Argume
                     $imageText.Contains('imageless')) { throw "$Label did not use the complete boot image chain" }
         }
         if ($process.ExitCode -ne 0 -or ($Marker -and -not $text.Contains($Marker))) {
+            # These are disposable offline fixture processes, with no user APK or account.
+            foreach ($entry in @(@('stdout', $text), @('stderr', $stderr.Result))) {
+                $tail = (($entry[1] -split '\r?\n') | Select-Object -Last 24) -join "`n"
+                if ($tail.Length -gt 4096) { $tail = $tail.Substring($tail.Length - 4096) }
+                Write-Host "INFO  $Label $($entry[0]) tail:`n$tail"
+            }
             throw "$Label failed; see $base.*.log"
         }
     } finally { $process.Dispose() }
@@ -112,6 +122,7 @@ function RememberDevice {
         }
     }
     if ($state.ContainsKey('device')) { $env:GESHER_BINDER = $state['device'] }
+    $script:protectedDevice = $state['protected_binder'] -eq 'true'
 }
 try {
     Set-Location -LiteralPath $Dir
@@ -155,20 +166,45 @@ try {
     InvokeFixture 'start-device' "$Dir/dalvikvm.exe" ($vm + @('com.gesher.app.Launcher','start'))
     RememberDevice
     if (-not $env:GESHER_BINDER) { throw 'Disposable installer device was not recorded.' }
-    $env:GESHER_UID = '2000'; $env:GESHER_BINDER_UID = '2000'
-    InvokeFixture 'framework-serial' "$Dir/dalvikvm.exe" ($vm + @('-cp', (AndroidPath $ServicesDex),
-        'gesher.services.DeviceSerialIpcTest')) 'DeviceSerialIpcTest: remote Build.getSerial equals Build.UNKNOWN'
-    $test = $vm + @('-cp', (AndroidPath $ServicesDex), 'gesher.services.PackageInstallerIpcTest')
-    InvokeFixture 'remote-stream' "$Dir/dalvikvm.exe" ($test + @('stream', (AndroidPath $apk))) 'PackageInstallerIpcTest all passed'
-    InvokeFixture 'retained-client-cancellation' "$Dir/dalvikvm.exe" ($test + 'cancel') 'PackageInstallerIpcTest all passed'
-    $env:GESHER_UID = '12345'; $env:GESHER_BINDER_UID = '12345'
-    InvokeFixture 'untrusted-client' "$Dir/dalvikvm.exe" ($test + 'untrusted') 'PackageInstallerIpcTest all passed'
-    if ($RequireBootImages) {
-        $serverImages = ReadSharedLog (Join-Path $logs 'system_server.log')
-        if (-not $serverImages.Contains('gesher: boot image loaded: 5 spaces (boot.art boot-core-libart.art boot-core-icu4j.art boot-framework.art boot-gesher-app.art)') -or
-                $serverImages.Contains('imageless')) { throw 'Installer server did not use the complete boot image chain' }
+    if ($LegacyCallerDenial) {
+        if ($protectedDevice) { throw 'Legacy caller-denial control unexpectedly started a protected device.' }
+        $env:GESHER_UID = '12345'; $env:GESHER_BINDER_UID = '12345'
+        InvokeFixture 'legacy-untrusted-client' "$Dir/dalvikvm.exe" ($vm + @('-cp', (AndroidPath $ServicesDex),
+            'gesher.services.PackageInstallerIpcTest', 'untrusted')) 'PackageInstallerIpcTest all passed'
+        Write-Host 'PASS  legacy installer service authorization denials complete'
+    } else {
+        $env:GESHER_UID = '2000'; $env:GESHER_BINDER_UID = '2000'
+        InvokeFixture 'framework-serial' "$Dir/dalvikvm.exe" ($vm + @('-cp', (AndroidPath $ServicesDex),
+            'gesher.services.DeviceSerialIpcTest')) 'DeviceSerialIpcTest: remote Build.getSerial equals Build.UNKNOWN'
+        $test = $vm + @('-cp', (AndroidPath $ServicesDex), 'gesher.services.PackageInstallerIpcTest')
+        InvokeFixture 'remote-stream' "$Dir/dalvikvm.exe" ($test + @('stream', (AndroidPath $apk))) 'PackageInstallerIpcTest all passed'
+        InvokeFixture 'retained-client-cancellation' "$Dir/dalvikvm.exe" ($test + 'cancel') 'PackageInstallerIpcTest all passed'
+        $env:GESHER_UID = '12345'; $env:GESHER_BINDER_UID = '12345'
+        if ($protectedDevice) {
+            InvokeFixture 'forged-uid-client' "$Dir/dalvikvm.exe" ($test + 'forged-uid') 'PackageInstallerIpcTest: naked forged UID transport denied'
+            $probe = (Resolve-Path -LiteralPath $ProbeApk).Path
+            $env:GESHER_UID = $null; $env:GESHER_BINDER_UID = $null
+            InvokeFixture 'enrolled-untrusted-app' "$Dir/dalvikvm.exe" ($vm + @('com.gesher.app.Launcher',
+                'launch', (AndroidPath $probe), '--activity', '.InstallerDenialActivity', '--headless', '--keep-task')) `
+                'PackageInstaller enrolled app ownership denials passed:'
+            $sandbox = $env:GESHER_SANDBOX
+            try {
+                $env:GESHER_SANDBOX = 'appcontainer'
+                InvokeFixture 'legacy-service-denial-control' 'powershell.exe' @('-NoProfile', '-ExecutionPolicy',
+                    'Bypass', '-File', $PSCommandPath, '-Dir', $Dir, '-ServicesDex', $ServicesDex,
+                    '-SigningFixtures', $SigningFixtures, '-EvidenceDir', (Join-Path $run 'legacy-control'),
+                    '-LegacyCallerDenial') 'PASS  legacy installer service authorization denials complete'
+            } finally { $env:GESHER_SANDBOX = $sandbox }
+        } else {
+            InvokeFixture 'untrusted-client' "$Dir/dalvikvm.exe" ($test + 'untrusted') 'PackageInstallerIpcTest all passed'
+        }
+        if ($RequireBootImages) {
+            $serverImages = ReadSharedLog (Join-Path $logs 'system_server.log')
+            if (-not $serverImages.Contains('gesher: boot image loaded: 5 spaces (boot.art boot-core-libart.art boot-core-icu4j.art boot-framework.art boot-gesher-app.art)') -or
+                    $serverImages.Contains('imageless')) { throw 'Installer server did not use the complete boot image chain' }
+        }
+        Write-Host 'PASS  package installer real Binder stream, cancellation and role integration complete'
     }
-    Write-Host 'PASS  package installer real Binder stream, cancellation and role integration complete'
 } catch {
     $failed = $true
     [IO.File]::WriteAllText((Join-Path $run 'failure.txt'), $_.Exception.ToString())

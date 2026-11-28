@@ -9,6 +9,7 @@
 #include <stdint.h>
 
 #include <memory>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <utility>
@@ -17,6 +18,8 @@
 #include "camera_trace.h"
 
 namespace gesher::devices::camera {
+
+inline constexpr char kTestDeviceId[] = "gesher-test";
 
 struct Device {
   std::string id;    // the symbolic link, or "gesher-test"
@@ -40,6 +43,11 @@ enum FocusOp {
 // Foundation answered, for the logs).
 const std::vector<Device>& List(std::string* status);
 
+// The actual source of an open capture. Older brokers do not report it.
+enum class CaptureBackend { kUnreported, kMfDevice, kMfTestSource, kSoftwareTestSource };
+
+const char* DescribeCaptureBackend(CaptureBackend backend);
+
 // An open device, producing NV12 frames of width x height.
 class Capture {
  public:
@@ -56,7 +64,7 @@ class Capture {
     return E_NOTIMPL;
   }
   int width = 0, height = 0;
-  const char* via = "";  // how frames are read, for the logs
+  CaptureBackend backend = CaptureBackend::kUnreported;
   // nativeRead keeps one scratch frame for this capture. Its mutex also keeps
   // a second caller from changing bytes before the first has published them.
   // Width/height are fixed after opening; destruction releases the scratch.
@@ -67,5 +75,13 @@ class Capture {
 
 // Opens `id` at the offered size nearest to width x height.
 std::unique_ptr<Capture> Open(const std::string& id, int width, int height, HRESULT* hr);
+#ifdef GESHER_CAMERA_BROKER_HOST
+// Fixture selection comes from the trusted broker's own process environment.
+bool BrokerTestCameraEnabled();
+std::vector<Device> EnumerateBrokerDevices(std::string* status);
+// Give the broker a bounded wait while a driver owes a sample.
+std::unique_ptr<Capture> OpenRevocable(const std::string& id, int width, int height,
+                                       HRESULT* hr, std::function<bool()> admitted);
+#endif
 
 }  // namespace gesher::devices::camera

@@ -21,6 +21,18 @@ struct FILETIME { uint32_t dwLowDateTime = 0, dwHighDateTime = 0; };
 constexpr int FALSE = 0, WAIT_TIMEOUT = 258;
 static std::mutex g_lock;
 static std::map<int, HANDLE> g_children;
+static std::map<int, uint64_t> g_protected_children;
+constexpr unsigned ERROR_SUCCESS = 0;
+namespace usb_storage {
+static unsigned calls;
+static int last_pid;
+static uint64_t last_identity;
+static unsigned status;
+unsigned ProtectedKill(int pid, uint64_t identity) {
+  ++calls; last_pid = pid; last_identity = identity;
+  return status;
+}
+}
 static unsigned checks;
 static void Check(bool value, const char* message) {
   if (!value) { std::fprintf(stderr, "FAIL: %s\n", message); std::abort(); }
@@ -98,5 +110,17 @@ int main() {
   Check(original.terminated == 2 && replacement.terminated == 0, "Concurrent replacement changed termination target");
   Check(!KillChild(101, original.creation), "Retired expected identity gained new child authority");
   Check(KillChild(101, replacement.creation) && replacement.terminated == 1, "New generation could not retire itself");
+  g_protected_children[202] = original.creation;
+  Check(ChildStartTime(202) == original.creation, "Protected creation identity was lost");
+  Check(!KillChild(202, replacement.creation) && usb_storage::calls == 0,
+        "Wrong protected generation reached the authority");
+  Check(KillChild(202, original.creation) && usb_storage::calls == 1 &&
+        usb_storage::last_pid == 202 &&
+        usb_storage::last_identity == static_cast<uint64_t>(original.creation),
+        "Protected termination did not carry the retained identity");
+  usb_storage::status = 5;
+  Check(!KillChild(202, original.creation), "Authority refusal became termination success");
+  g_protected_children.erase(202);
+  Check(!KillChild(202, original.creation), "Retired protected child fell back to an ambient PID");
   std::printf("Zygote child lifetime contracts: %u checks, 0 failures\n", checks);
 }

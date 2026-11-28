@@ -84,9 +84,28 @@ public final class DeviceAdminPolicyRuntimeTest {
         rejects(SecurityException.class, () -> service.removeActiveAdmin(admin, 0));
         check(service.isAdminActive(admin, 0), "foreign caller revoked authority");
         rejects(SecurityException.class, () -> pm.checkPackageRemoval(valid.packageName));
+        // Match Installer.uninstall: seal first, then run the removal veto.
+        // The ordinary API stays unavailable without erasing the saved consent.
+        caller.set(valid);
+        pm.beginPackageRemoval(valid);
+        try {
+            check(!service.isAdminActive(admin, 0) && service.getActiveAdmins(0) == null
+                    && !service.packageHasActiveAdmins(valid.packageName, 0), "pending admin remains visible");
+            check(!service.hasGrantedPolicy(admin, DeviceAdminInfo.USES_POLICY_FORCE_LOCK, 0),
+                    "pending administrator retains ordinary policy authority");
+            check(service.prepare(admin) == null && !service.activate(request), "pending removal accepts enrollment");
+            rejects(SecurityException.class, () -> service.lockNow(0, valid.packageName, false));
+            rejects(SecurityException.class, () -> service.removeActiveAdmin(admin, 0));
+            rejects(SecurityException.class, () -> pm.checkPackageRemoval(valid.packageName));
+            check(locks.get() == 1, "pending administrator reached host lock");
+        } finally { pm.endPackageRemoval(valid); }
+        check(service.isAdminActive(admin, 0), "blocked uninstall erased administrator consent");
         service.revoke(admin);
         check(!service.isAdminActive(admin, 0), "trusted revocation failed");
-        pm.checkPackageRemoval(valid.packageName);
+        pm.beginPackageRemoval(valid);
+        try { pm.checkPackageRemoval(valid.packageName); }
+        finally { pm.endPackageRemoval(valid); }
+        check(!service.isAdminActive(admin, 0), "revoked enrollment restored after removal check");
         caller.set(valid);
         check(service.activate(request), "re-enrollment failed");
         service.removeActiveAdmin(admin, 0);
@@ -100,6 +119,22 @@ public final class DeviceAdminPolicyRuntimeTest {
         check(!service.activate(request), "stale consent activated replacement APK");
         caller.set(changed);
         rejects(SecurityException.class, () -> service.lockNow(0, changed.packageName, false));
+        pm.beginPackageRemoval(changed);
+        try { pm.checkPackageRemoval(changed.packageName); }
+        finally { pm.endPackageRemoval(changed); }
+        check(!service.isAdminActive(admin, 0), "unsupported current policy gained a removal veto");
+        // Retain the old policy row across real PM owner retirement/reallocation.
+        // Even a supported receiver with the reused package name must not inherit it.
+        String previousOwner = changed.enabledStateOwner();
+        pm.remove(changed.packageName);
+        ApkPackage reinstalled = ApkPackage.parse(args[0]);
+        pm.add(reinstalled);
+        check(!previousOwner.equals(reinstalled.enabledStateOwner()), "reinstall retained installation owner");
+        pm.beginPackageRemoval(reinstalled);
+        try { pm.checkPackageRemoval(reinstalled.packageName); }
+        finally { pm.endPackageRemoval(reinstalled); }
+        check(!service.isAdminActive(admin, 0) && !service.activate(request),
+                "retired owner's enrollment or stale APK consent survived reinstall");
         // This is the actual Services registration, not a test-created policy wrapper.
         IDevicePolicyManager registered = wire(Services.createInProcess(List.of())
                 .get(android.content.Context.DEVICE_POLICY_SERVICE));

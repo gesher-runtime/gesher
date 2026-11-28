@@ -7,10 +7,19 @@
 #include <pwd.h>
 #include <string.h>
 #include <unistd.h>
+#include <string>
 
 namespace {
 
-constexpr const char* kName = "u0_a0";
+std::string IdentityName(unsigned id) {
+  if (id == 0) return "root";
+  if (id == 1000) return "system";
+  const unsigned app = id % 100000;
+  if (app >= 10000 && app < 20000) {
+    return "u" + std::to_string(id / 100000) + "_a" + std::to_string(app - 10000);
+  }
+  return std::to_string(id);
+}
 constexpr const char* kHome = "/data";
 constexpr const char* kShell = "/system/bin/sh";
 
@@ -27,7 +36,7 @@ char* Put(const char* s, char* buf, size_t buflen, size_t* used) {
 int FillPasswd(struct passwd* pwd, char* buf, size_t buflen, struct passwd** result) {
   *result = nullptr;
   size_t used = 0;
-  pwd->pw_name = Put(kName, buf, buflen, &used);
+  pwd->pw_name = Put(IdentityName(getuid()).c_str(), buf, buflen, &used);
   pwd->pw_passwd = Put("", buf, buflen, &used);
   pwd->pw_gecos = Put("", buf, buflen, &used);
   pwd->pw_dir = Put(kHome, buf, buflen, &used);
@@ -51,7 +60,7 @@ int FillGroup(struct group* grp, char* buf, size_t buflen, struct group** result
   if (buflen < used) return ERANGE;
   char** members = reinterpret_cast<char**>(buf + pad);
   members[0] = nullptr;
-  grp->gr_name = Put(kName, buf, buflen, &used);
+  grp->gr_name = Put(IdentityName(getgid()).c_str(), buf, buflen, &used);
   grp->gr_passwd = Put("", buf, buflen, &used);
   if (grp->gr_name == nullptr || grp->gr_passwd == nullptr) return ERANGE;
   grp->gr_gid = getgid();
@@ -80,7 +89,7 @@ int getpwuid_r(uid_t uid, struct passwd* pwd, char* buf, size_t buflen, struct p
 
 int getpwnam_r(const char* name, struct passwd* pwd, char* buf, size_t buflen,
                struct passwd** result) {
-  if (name == nullptr || strcmp(name, kName) != 0) {
+  if (name == nullptr || IdentityName(getuid()) != name) {
     *result = nullptr;
     return 0;
   }
@@ -111,7 +120,7 @@ int getgrgid_r(gid_t gid, struct group* grp, char* buf, size_t buflen, struct gr
 
 int getgrnam_r(const char* name, struct group* grp, char* buf, size_t buflen,
                struct group** result) {
-  if (name == nullptr || strcmp(name, kName) != 0) {
+  if (name == nullptr || IdentityName(getgid()) != name) {
     *result = nullptr;
     return 0;
   }

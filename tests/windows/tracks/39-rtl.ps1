@@ -2,7 +2,7 @@
 # ADR 0044). Dot-sourced by run-tests.ps1 after 34-windows.ps1, whose
 # WindowAppCheck and $dvmWindows it uses (and WindowChecks.ps1's GesherWin32 and
 # WaitForLog), and after 32-fonts.ps1, which installs the system fonts and
-# points $GESHER_WINDOWS_FONTS at Windows' fonts.
+# the fallback map for Windows' fonts.
 #
 # 1. LocaleTest (graphics-tests.dex): the locale list, first day of the week,
 #    24-hour time and number format SystemLocale gives, against Windows' own
@@ -272,10 +272,10 @@ function RtlAppPixels($px, [string] $Text, [bool] $Rtl, [string] $Resources) {
   # forced left to right.
   $m = $v['mirror']; $f = $v['forced']
   $redLeft = if ($Rtl) { 0x0000ff } else { 0xff0000 }
-  $out += @(Regions $px @(@('mirror row, left half', $m[0], $m[1], $m[0] + 200, $m[1] + $m[3], $redLeft),
-                          @('mirror row, right half', $m[0] + 200, $m[1], $m[0] + 400, $m[1] + $m[3], ($redLeft -bxor 0xff00ff)),
-                          @('forced LTR row, left half', $f[0], $f[1], $f[0] + 200, $f[1] + $f[3], 0xff0000),
-                          @('forced LTR row, right half', $f[0] + 200, $f[1], $f[0] + 400, $f[1] + $f[3], 0x0000ff)))
+  $out += @(Regions $px @(@('mirror row, left half', $m[0], $m[1], ($m[0] + 200), ($m[1] + $m[3]), $redLeft),
+                          @('mirror row, right half', ($m[0] + 200), $m[1], ($m[0] + 400), ($m[1] + $m[3]), ($redLeft -bxor 0xff00ff)),
+                          @('forced LTR row, left half', $f[0], $f[1], ($f[0] + 200), ($f[1] + $f[3]), 0xff0000),
+                          @('forced LTR row, right half', ($f[0] + 200), $f[1], ($f[0] + 400), ($f[1] + $f[3]), 0x0000ff)))
   # Colored runs: in logical order red then blue (Hebrew, Arabic); red, green, magenta,
   # blue mixing Hebrew with "ABC 123": drawn right to left, an LTR run inside.
   foreach ($n in 'hebrew', 'arabic', 'mixed') {
@@ -371,6 +371,26 @@ function RtlAppCursor([IntPtr] $Hwnd, [scriptblock] $ReadLog) {
   return $out
 }
 
+function RtlAppPointer([IntPtr] $Hwnd, [scriptblock] $ReadLog) {
+  $edit = (RtlViews "$(& $ReadLog)")['edit']
+  if (-not $edit) { return 'no position for the RTL EditText' }
+  $y = $edit[1] + [int]($edit[3] / 2)
+  $out = @()
+  foreach ($step in @(@('left', ($edit[0] + 3), '4-4'), @('right', ($edit[0] + $edit[2] - 3), '0-0'))) {
+    $pattern = 'RtlActivity selection ' + $step[2]
+    $before = ([regex]::Matches("$(& $ReadLog)", $pattern)).Count
+    [GesherWin32]::Click($Hwnd, $step[1], $y)
+    $deadline = (Get-Date).AddSeconds(10)
+    while ((Get-Date) -lt $deadline -and ([regex]::Matches("$(& $ReadLog)", $pattern)).Count -le $before) {
+      Start-Sleep -Milliseconds 200
+    }
+    if (([regex]::Matches("$(& $ReadLog)", $pattern)).Count -le $before) {
+      $out += "clicking the $($step[0]) edge of the RTL EditText did not select $($step[2])"
+    }
+  }
+  return $out
+}
+
 if (-not (Get-Command WindowAppCheck -ErrorAction SilentlyContinue)) {
   Write-Host 'FAIL  rtl: WindowAppCheck (34-windows.ps1) is not defined'
   $failed++
@@ -391,7 +411,7 @@ if (-not (Get-Command WindowAppCheck -ErrorAction SilentlyContinue)) {
   try {
     WindowAppCheck 'rtlapp.apk under he-IL: the layout mirrored (layoutDirection from the locale, supportsRtl), Hebrew resources, textAlignment viewStart on the right; arrow keys move the cursor through the RTL EditText as it looks (single process)' `
       rtlapp.apk @('com.gesher.app.Main', '--hidden-window', '--display', '400x800@160', (NoDrive "$Dir/rtlapp.apk")) `
-      { param($px, $hwnd, $text, $readLog) & $showLog $text; @(RtlAppPixels $px $text $true 'rtl-he') + @(RtlAppCursor $hwnd $readLog) } `
+      { param($px, $hwnd, $text, $readLog) & $showLog $text; @(RtlAppPixels $px $text $true 'rtl-he') + @(RtlAppPointer $hwnd $readLog) + @(RtlAppCursor $hwnd $readLog) } `
       ($rtlExpect + 'RtlActivity locales he-IL,en-US')
   } finally {
     Remove-Item Env:GESHER_LOCALES -ErrorAction SilentlyContinue
@@ -409,7 +429,7 @@ if (-not (Get-Command WindowAppCheck -ErrorAction SilentlyContinue)) {
   try {
     WindowAppCheck 'the Gesher device under ar-EG: rtlapp.apk''s app process gets the system server''s right-to-left configuration (mirrored layout, Arabic resources), its Hebrew and Arabic text drawn right to left' `
       rtlapp.apk @('com.gesher.app.Launcher', 'launch', (NoDrive "$Dir/rtlapp.apk"), '--hidden-window') `
-      { param($px, $hwnd, $text, $readLog) & $showLog $text; @(RtlAppPixels $px $text $true 'rtl-ar') } `
+      { param($px, $hwnd, $text, $readLog) & $showLog $text; @(RtlAppPixels $px $text $true 'rtl-ar') + @(RtlAppPointer $hwnd $readLog) } `
       @('gesher-app: app process for com.gesher.rtlapp: pid ', 'RtlActivity locales ar-EG', 'RtlActivity onResume',
         'closed by the user', 'RtlActivity onDestroy', 'gesher-app: the process of com.gesher.rtlapp ended (exit code 0)',
         'gesher-app: done')
@@ -431,3 +451,96 @@ if (-not (Get-Command WindowAppCheck -ErrorAction SilentlyContinue)) {
   }
 }
 if ($null -ne $savedLocales) { $env:GESHER_LOCALES = $savedLocales }
+
+# Run a separate visible fixture on a disposable GitHub-hosted desktop. The
+# composed PrintWindow cases above are still the acceptance checks. Retain only
+# region counts from the screen; the fixture pixel array never leaves memory.
+function Write-RtlVisibleEvidence {
+  $startVm = {
+    param([string[]] $Arguments, [string] $Log)
+    $quoted = (@($dvmWindows) + 'com.gesher.app.Launcher' + $Arguments | ForEach-Object {
+      if ($_ -match '[\s"]') { '"' + $_ + '"' } else { $_ }
+    }) -join ' '
+    $psi = [Diagnostics.ProcessStartInfo]::new('cmd.exe', "/d /s /c `"`"$Dir/dalvikvm.exe`" $quoted > `"$Log`" 2>&1`"")
+    $psi.WorkingDirectory = $Dir
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.Environment['ANDROID_DATA'] = NoDrive "$probeRoot/data"
+    $psi.Environment['GESHER_LOGS'] = NoDrive "$probeRoot/logs"
+    $psi.Environment['GESHER_SANDBOX'] = 'appcontainer-trusted'
+    $psi.Environment['GESHER_LOCALES'] = 'ar-EG'
+    $psi.Environment['GESHER_SHORTCUTS'] = '0'
+    $psi.Environment['GESHER_WINDOW_DEBUG'] = '1'
+    return [Diagnostics.Process]::Start($psi)
+  }
+  $process = $null
+  $owner = $null
+  $stop = $null
+  try {
+    Add-Type -Path "$PSScriptRoot/../graphics/RtlVisibleEvidence.cs" -ErrorAction Stop
+    [RtlVisibleEvidence]::VerifyInputDesktop()
+    $probeRoot = Join-Path $root ('rtl-visible-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory "$probeRoot/data" -ErrorAction Stop | Out-Null
+    $log = Join-Path $probeRoot 'launch.log'
+    $notBefore = [DateTime]::UtcNow.ToFileTimeUtc()
+    $process = & $startVm @('launch', (NoDrive "$Dir/rtlapp.apk"), '--window', '--wait') $log
+    $deadline = [Diagnostics.Stopwatch]::StartNew()
+    do {
+      $appText = "$(Get-Content -LiteralPath $log -Raw -ErrorAction SilentlyContinue)"
+      $window = [regex]::Match($appText, 'window "Gesher RTL test" 400x800: first frame drawn \(\d+ presented\), \w+, hwnd 0x([0-9a-f]+)')
+      $reported = [regex]::Matches($appText, '(?m)^gesher-app: app process for com\.gesher\.rtlapp: pid (\d+), start seq \d+\s*$')
+      if ($reported.Count -gt 1) { throw 'fixture reported multiple app launches' }
+      if ($window.Success -and $reported.Count -eq 1) { break }
+      Start-Sleep -Milliseconds 250
+    } while ($deadline.ElapsedMilliseconds -lt 40000 -and !$process.HasExited)
+    if (!$window.Success -or $reported.Count -ne 1) { throw 'no visible Arabic fixture launch with a unique PID' }
+    $hwnd = [IntPtr][Convert]::ToInt64($window.Groups[1].Value, 16)
+    $processId = [uint32]$reported[0].Groups[1].Value
+    $owner = [RtlVisibleEvidence]::new($hwnd, $processId, $notBefore)
+    $deadline.Restart()
+    do {
+      $foreground = $owner.TryForeground()
+      if (!$foreground) { Start-Sleep -Milliseconds 250 }
+    } while (!$foreground -and $deadline.ElapsedMilliseconds -lt 4000)
+    if (!$foreground) { throw 'Windows did not foreground the owned fixture' }
+    Start-Sleep -Milliseconds 750
+    $appText = Get-Content -LiteralPath $log -Raw -ErrorAction Stop
+    $views = RtlViews $appText
+    if ($appText -notmatch 'RtlActivity locales ar-EG,[^\r\n]*layout direction rtl, root rtl, resources rtl-ar, supportsRtl true' -or
+        ($views['mirror'] -join ',') -ne '0,0,400,40' -or ($views['forced'] -join ',') -ne '0,40,400,40') {
+      throw 'fixture configuration or diagnostic rows differ from the known Arabic RTL layout'
+    }
+    $screen = $owner.Capture(0, 80)
+    Write-Host "INFO  RTL actual screen client: $($owner.Describe())"
+    $problems = @(Regions $screen @(@('screen mirror row left', 0, 0, 200, 40, 0x0000ff),
+      @('screen mirror row right', 200, 0, 400, 40, 0xff0000), @('screen forced LTR row left', 0, 40, 200, 80, 0xff0000),
+      @('screen forced LTR row right', 200, 40, 400, 80, 0x0000ff)))
+    if ($problems.Count) { Write-Host "INFO  RTL actual screen DIAGNOSTIC MISMATCH ($($problems -join '; '))" }
+    else { Write-Host 'INFO  RTL actual screen DIAGNOSTIC MATCH for the mirrored and forced-LTR rows' }
+  } catch {
+    Write-Host "INFO  RTL actual screen DIAGNOSTIC UNAVAILABLE ($($_.Exception.Message))"
+  } finally {
+    if ($null -ne $owner) {
+      try { $owner.CloseFixture() }
+      catch { Write-Host "INFO  RTL visible fixture close: $($_.Exception.Message)" }
+      finally { $owner.Dispose() }
+    }
+    if ($null -ne $process) {
+      try {
+        [void]$process.WaitForExit(4000)
+        $stop = & $startVm @('shutdown') (Join-Path $probeRoot 'shutdown.log')
+        if (!$stop.WaitForExit(12000)) { $stop.Kill($true); throw 'isolated device shutdown timed out' }
+        if ($stop.ExitCode -ne 0) { throw "isolated device shutdown returned $($stop.ExitCode)" }
+      } catch { Write-Host "INFO  RTL visible fixture cleanup: $($_.Exception.Message)" }
+      finally {
+        if ($null -ne $stop) { $stop.Dispose() }
+        try { if (!$process.WaitForExit(3000)) { $process.Kill($true) } }
+        catch { Write-Host "INFO  RTL visible fixture termination: $($_.Exception.Message)" }
+        finally { $process.Dispose() }
+      }
+    }
+  }
+}
+if ($env:GITHUB_ACTIONS -eq 'true' -and $env:RUNNER_ENVIRONMENT -eq 'github-hosted') {
+  Write-RtlVisibleEvidence
+}

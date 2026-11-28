@@ -10,7 +10,10 @@
 #include "internal.h"
 #include "ofd_internal.h"
 #include "revocable_internal.h"
+#include "usb_block_internal.h"
 #include "storage_policy.h"
+#include "rooted_storage_client.h"
+#include "standalone_input.h"
 
 extern "C" int gesher_is_socket(int fd);
 
@@ -138,10 +141,36 @@ int StatPath(const char* path, struct stat* buf, bool follow, int depth = 0) {
       if (!gesher::CheckExternalStorageAccess(windows, gesher::AccessKind::kStat)) return -1;
       // Directories need backup semantics to be opened; no access right is
       // needed to read attributes.
-      HANDLE h = gesher::CreateFileFollowingFifo(windows.c_str(), FILE_READ_ATTRIBUTES,
+      auto& selected = gesher::standalone_input::Current();
+      const bool inherited = selected.Matches(windows);
+      if (!inherited) {
+        if (const auto bootstrap = gesher::storage_root::LookupBootstrap(windows)) {
+          HANDLE h;
+          const int error = gesher::storage_root::OpenBootstrap(*bootstrap, &h);
+          if (error != 0) return errno = error, -1;
+          const int result = gesher::CheckExternalStorageHandle(h, gesher::AccessKind::kStat)
+                       ? FromHandle(h, buf) : -1;
+          CloseHandle(h);
+          return result;
+        }
+        if (const auto rooted = gesher::storage_root::Lookup(windows)) {
+          HANDLE h;
+          const int error = gesher::storage_root::Open(rooted, gesher::rooted_storage_wire::kMetadata, &h);
+          if (error != 0) return errno = error, -1;
+          const int result = (rooted.IsInstalledMedia() ||
+              gesher::CheckExternalStorageHandle(h, gesher::AccessKind::kStat))
+                       ? FromHandle(h, buf) : -1;
+          if (result == 0 && rooted.drop_alias) buf->st_mode &= ~0222;
+          CloseHandle(h);
+          return result;
+        }
+      }
+      HANDLE h = inherited ? selected.Open(true) : gesher::CreateFileFollowingFifo(windows.c_str(), FILE_READ_ATTRIBUTES,
                              FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                              FILE_FLAG_BACKUP_SEMANTICS | (follow ? 0 : FILE_FLAG_OPEN_REPARSE_POINT));
-      if (h == INVALID_HANDLE_VALUE) return gesher::FailWithLastError();
+      if (h == INVALID_HANDLE_VALUE) {
+        return inherited ? (errno = EACCES, -1) : gesher::FailWithLastError();
+      }
       int result = gesher::CheckExternalStorageHandle(h, gesher::AccessKind::kStat)
                        ? FromHandle(h, buf) : -1;
       if (result == 0 && !follow && gesher::IsSymlinkHandle(h)) {
@@ -158,6 +187,8 @@ int StatPath(const char* path, struct stat* buf, bool follow, int depth = 0) {
       // One lookup for the name (a map_files entry's costs a VirtualQuery).
       const gesher::procfs::NameStatus name = gesher::procfs::Describe(windows);
       if (name.type == 0) break;
+      if (name.type == S_IFBLK) return gesher::usb_block::StatNode(
+          gesher::Narrow(windows.substr(windows.find_last_of(L'/') + 1).c_str()), buf);
       if (name.type == S_IFDIR && !follow && windows == L"proc/self") {
         // The link itself, as an fd opened on it O_PATH | O_NOFOLLOW is.
         ProcName("/proc/self", S_IFLNK, 0777, buf);
@@ -205,6 +236,13 @@ int fstat(int fd, struct stat* buf) {
   }
   auto snapshot = gesher::CaptureDescriptor(fd);
   if (!snapshot) return -1;
+  if (snapshot->description && !snapshot->description->virtual_directory.empty()) {
+    if (gesher::procfs::Type(snapshot->description->virtual_directory) != S_IFDIR) return errno = ENOENT, -1;
+    ProcName(gesher::procfs::LinuxName(snapshot->description->virtual_directory), S_IFDIR, 0555, buf);
+    return 0;
+  }
+  int block_result;
+  if (gesher::usb_block::StatFd(snapshot, buf, &block_result)) return block_result;
   gesher::FileOperationLease operation(snapshot);
   if (operation.Error()) return errno = operation.Error(), -1;
   const HANDLE h = snapshot->handle;
@@ -224,9 +262,12 @@ int fstat(int fd, struct stat* buf) {
     buf->st_ctim = ToTimespec(time);
     return 0;
   }
-  switch (GetFileType(h)) {
-    case FILE_TYPE_DISK:
-      return FromHandle(h, buf, snapshot->description.get());
+  switch (snapshot->kind == gesher::DescriptorKind::kUnshareable ? FILE_TYPE_CHAR : GetFileType(h)) {
+    case FILE_TYPE_DISK: {
+      const int result = FromHandle(h, buf, snapshot->description.get());
+      if (result == 0 && !gesher::DropDescriptorPath(snapshot).empty()) buf->st_mode &= ~0222;
+      return result;
+    }
     case FILE_TYPE_PIPE:
       Clear(buf);
       buf->st_mode = S_IFIFO | 0600;

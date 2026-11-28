@@ -27,18 +27,25 @@
 #include <vector>
 
 #include <linux/android/binder.h>
+#include <gesher/binder_endpoint.h>
 #include <gesher/file_description.h>
+#include <gesher/application_shared_memory.h>
 // The fork set (gesher/fork.h); absent where a host test compiles this file alone.
 #if __has_include(<gesher/fork.h>)
 #include <gesher/fork.h>
 #endif
+#include <gesher/rooted_storage_wire.h>
 
 #include "binder_internal.h"
+#include "socket_internal.h"
 #include "binder_file_descriptions.h"
 #include "binder_sg.h"
+#include "binder_transport.h"
 #include "binder_wire.h"
+#include "record_lock_operation.h"
 #include "internal.h"
 #include "native_fence_internal.h"
+#include "../../binder/loopback_relay.h"
 #include "record_lock_descriptors.h"
 
 namespace gesher {
@@ -114,16 +121,29 @@ struct Reader {
 };
 
 std::wstring PipeName() {
+  if (binder_endpoint::Current().IsStandalone()) return {};
   const char* device = getenv("GESHER_BINDER");
   if (device == nullptr || device[0] == '\0') return {};
   return std::wstring(wire::kPipePrefix) + Widen(device);
 }
 
+std::wstring RecordPipeName() {
+  if (!binder_endpoint::Current().IsStandalone()) return PipeName();
+  const DWORD pid = binder_endpoint::Current().StandaloneRecordBrokerPid();
+  return pid != 0 ? wire::kStandaloneRecordPipe + std::to_wstring(pid) : std::wstring{};
+}
+
 HANDLE ConnectPipe(const std::wstring& name) {
+  if (const auto* endpoint = ProtectedBinderEndpoint()) return OpenProtectedBinder(*endpoint);
   for (int attempt = 0; attempt < 50; ++attempt) {
     HANDLE h = CreateFileW(name.c_str(), wire::kPipeClientAccess, 0, nullptr, OPEN_EXISTING,
-                           0, nullptr);
-    if (h != INVALID_HANDLE_VALUE) return h;
+                           SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION, nullptr);
+    if (h != INVALID_HANDLE_VALUE) {
+      if (binder_endpoint::Current().VerifyPipe(h)) return h;
+      CloseHandle(h);
+      SetLastError(ERROR_ACCESS_DENIED);
+      return INVALID_HANDLE_VALUE;
+    }
     if (GetLastError() != ERROR_PIPE_BUSY) return INVALID_HANDLE_VALUE;
     WaitNamedPipeW(name.c_str(), 100);
   }
@@ -362,6 +382,25 @@ bool SendFds(uint8_t* data, size_t data_size, const void* offsets, size_t offset
     DescriptorSnapshotPtr snapshot;
     {
       record_locks::DescriptorGuard guard;
+      SocketFd socket_state;
+      if (LookupSocket(fd, &socket_state) && ws::HasLoopbackRelay(socket_state.description)) {
+        errno = EOPNOTSUPP; ok = false; obj.pad_binder = 0; return;
+      }
+      if (ProtectedBinderEndpoint()) {
+        // Offer only the exact file object. The authenticated broker admits it
+        // only from the registered system server and only when it matches the
+        // published ApplicationSharedMemory object. Never export caller-owned
+        // writable OFD metadata on this route.
+        snapshot = CaptureDescriptor(fd);
+        if (!snapshot || snapshot->kind != DescriptorKind::kFile) {
+          ok = false; obj.pad_binder = 0; return;
+        }
+        obj.pad_flags = 0;
+        obj.pad_binder = reinterpret_cast<uintptr_t>(snapshot->handle);
+        descriptions->push_back({offset, 0, wire::kApplicationSharedMemoryDescription, 0});
+        pins->push_back(std::move(snapshot));
+        return;
+      }
       uintptr_t fence_event = 0;
       uint64_t fence_metadata = 0;
       if (TransferNativeFence(fd, &fence_event, &fence_metadata)) {
@@ -424,6 +463,18 @@ bool ReceiveFds(uint8_t* data, size_t data_size, const void* offsets, size_t off
       } else if (description.kind == wire::kNativeFenceFileDescription) {
         // Consumes the handle; admits only an immutable signaled completion event.
         fd = AdoptNativeFence(owned, obj.pad_flags);
+      } else if (description.kind == wire::kApplicationSharedMemoryDescription) {
+        // A protected-only typed transfer. Derive a fresh local description
+        // from the reduced kernel handle; never adopt a producer's writable
+        // metadata or accept this type over ordinary discovery.
+        if (ProtectedBinderEndpoint() && GetFileType(owned) == FILE_TYPE_DISK) {
+          auto snapshot = CaptureFileHandle(owned);
+          const int flags = snapshot ? FileDescriptionIoFlags(snapshot) : -1;
+          if (flags >= 0 && (flags & (O_ACCMODE | O_PATH)) == O_RDONLY) {
+            fd = AttachFileDescription(snapshot, true);
+          }
+        }
+        CloseHandle(owned);
       } else {
         HANDLE shared_staging = reinterpret_cast<HANDLE>(static_cast<uintptr_t>(description.shared_handle));
         if (DuplicateHandle(GetCurrentProcess(), shared_staging, GetCurrentProcess(), &shared,
@@ -768,7 +819,430 @@ int Forward(const std::shared_ptr<BinderFile>& file, uint32_t request, void* arg
 
 }  // namespace
 
+bool UsesProtectedBinder() { return ProtectedBinderEndpoint() != nullptr; }
+
+int PublishApplicationSharedMemory(int fd, size_t size) {
+  const auto* endpoint = ProtectedBinderEndpoint();
+  if (!endpoint) return 0;
+  auto snapshot = CaptureDescriptor(fd);
+  if (!snapshot || snapshot->kind != DescriptorKind::kFile) return errno = EBADF, -1;
+  HANDLE pipe = OpenProtectedBinder(*endpoint);
+  if (pipe == INVALID_HANDLE_VALUE) return errno = EACCES, -1;
+  Message request;
+  request.Put<uint32_t>(wire::kPublishApplicationSharedMemory);
+  request.Put<uint32_t>(wire::kMagic);
+  request.Put<uint32_t>(wire::kVersion);
+  request.Put<uint64_t>(reinterpret_cast<uintptr_t>(snapshot->handle));
+  request.Put<uint64_t>(size);
+  std::vector<uint8_t> reply;
+  const bool received = Send(pipe, request) && Receive(pipe, &reply);
+  CloseHandle(pipe);
+  if (!received || reply.size() != sizeof(uint32_t)) return errno = EIO, -1;
+  uint32_t status = 0;
+  memcpy(&status, reply.data(), sizeof(status));
+  if (status != ERROR_SUCCESS) return errno = ErrnoFromWin32(status), -1;
+  return 0;
+}
+
+int DuplicateApplicationSharedMemoryReadOnly(int fd) {
+  auto source = CaptureDescriptor(fd);
+  if (!source || source->kind != DescriptorKind::kFile ||
+      GetFileType(source->handle) != FILE_TYPE_DISK) return errno = EBADF, -1;
+  HANDLE readonly = nullptr;
+  constexpr DWORD access = FILE_READ_DATA | FILE_READ_ATTRIBUTES | SYNCHRONIZE;
+  if (!DuplicateHandle(GetCurrentProcess(), source->handle, GetCurrentProcess(), &readonly,
+                       access, FALSE, 0)) return FailWithLastError();
+  // Do not CaptureFileHandle here: its exact-object match can reuse the
+  // producer's writable OFD. This is a new read-only descriptor description.
+  int result = _open_osfhandle(reinterpret_cast<intptr_t>(readonly),
+                             _O_RDONLY | _O_BINARY | _O_NOINHERIT);
+  if (result < 0) {
+    const int error = gesher_errno_from_crt(errno);
+    CloseHandle(readonly);
+    return errno = error, -1;
+  }
+  if (RegisterOfd(result, O_RDONLY) < 0) {
+    const int error = errno;
+    close(result);
+    return errno = error, -1;
+  }
+  return result;
+}
+
+bool binder_endpoint::EnrollChild(HANDLE process) {
+  const ULONGLONG deadline = GetTickCount64() + 5000;
+  const std::wstring name = RecordPipeName();
+  if (name.empty()) return false;
+  HANDLE pipe = ConnectPipe(name);
+  if (pipe == INVALID_HANDLE_VALUE) return false;
+  struct OwnedPipe {
+    HANDLE handle;
+    ~OwnedPipe() { CloseHandle(handle); }
+  } close_on_return{pipe};
+  DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
+  if (!SetNamedPipeHandleState(pipe, &mode, nullptr, nullptr)) return false;
+  struct Request {
+    uint32_t length, op, magic, version;
+    uint64_t child;
+  } request{20, wire::kEnrollChild, wire::kMagic, wire::kVersion,
+            binder_bootstrap::EncodeHandle(process)};
+  static_assert(sizeof(Request) == 24);
+  uint32_t reply[2] = {};
+  return binder_bootstrap::Transfer(pipe, &request, sizeof(request), true, deadline) &&
+         binder_bootstrap::Transfer(pipe, reply, sizeof(reply), false, deadline) &&
+         reply[0] == sizeof(reply[1]) && reply[1] == 0;
+}
+
+namespace {
+struct RecordPipe {
+  HANDLE handle = INVALID_HANDLE_VALUE;
+  ~RecordPipe() { if (handle != INVALID_HANDLE_VALUE) CloseHandle(handle); }
+};
+
+bool AudioPlaybackRequest(wire::Op op, uint32_t stream, uint32_t in_past_ms, uint64_t* result) {
+  if (!binder_endpoint::Current().UsesProtectedAudio()) return false;
+  const std::wstring name = RecordPipeName();
+  if (name.empty()) return false;
+  RecordPipe pipe{ConnectPipe(name)};
+  if (pipe.handle == INVALID_HANDLE_VALUE) return false;
+  DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
+  if (!SetNamedPipeHandleState(pipe.handle, &mode, nullptr, nullptr)) return false;
+  uint32_t request[] = {5 * sizeof(uint32_t), op, wire::kMagic, wire::kVersion, stream, in_past_ms};
+  uint32_t reply[4]{};
+  const ULONGLONG deadline = GetTickCount64() + 5000;
+  if (!binder_bootstrap::Transfer(pipe.handle, request, sizeof(request), true, deadline) ||
+      !binder_bootstrap::Transfer(pipe.handle, reply, sizeof(reply), false, deadline) ||
+      reply[0] != 3 * sizeof(uint32_t) || reply[1] != 0) return false;
+  *result = static_cast<uint64_t>(reply[2]) | static_cast<uint64_t>(reply[3]) << 32;
+  return true;
+}
+
+int ReceiveRecordStatus(HANDLE pipe, std::vector<uint8_t>* reply) {
+  if (!Receive(pipe, reply) || reply->size() < sizeof(int32_t)) return EIO;
+  int32_t status;
+  std::memcpy(&status, reply->data(), sizeof(status));
+  if (status > 0 || status < -4095 || (status != 0 && reply->size() != sizeof(status))) return EPROTO;
+  return -status;
+}
+}  // namespace
+
+audio_state::Activity* binder_endpoint::OpenAudioPlaybackActivity() {
+  uint64_t handle = 0;
+  if (!AudioPlaybackRequest(wire::kAudioPlaybackPublish, 0, 0, &handle) ||
+      !handle || handle > UINTPTR_MAX) return nullptr;
+  auto section = binder_bootstrap::DecodeHandle(handle);
+  auto* state = static_cast<audio_state::Activity*>(
+      MapViewOfFile(section, FILE_MAP_WRITE, 0, 0, sizeof(audio_state::Activity)));
+  CloseHandle(section);
+  return state;
+}
+
+bool binder_endpoint::IsAudioPlaybackActive(int stream, int in_past_ms) {
+  uint64_t active = 0;
+  return AudioPlaybackRequest(wire::kAudioPlaybackQuery, stream, std::max(0, in_past_ms), &active) &&
+      active == 1;
+}
+
+int binder_endpoint::NewProtectedAudioSession() {
+  uint64_t session = 0;
+  return AudioPlaybackRequest(wire::kAudioPlaybackSession, 0, 0, &session) && session <= INT_MAX
+      ? static_cast<int>(session) : 0;
+}
+
+audio_state::DeviceState* binder_endpoint::OpenAudioDeviceControls(bool writable) {
+  uint64_t handle = 0;
+  if (!AudioPlaybackRequest(wire::kAudioDeviceControls, writable ? 1 : 0, 0, &handle) ||
+      !handle || handle > UINTPTR_MAX) return nullptr;
+  auto section = binder_bootstrap::DecodeHandle(handle);
+  auto* state = static_cast<audio_state::DeviceState*>(MapViewOfFile(
+      section, writable ? FILE_MAP_WRITE : FILE_MAP_READ, 0, 0, sizeof(audio_state::DeviceState)));
+  CloseHandle(section);
+  return state;
+}
+
+HANDLE binder_endpoint::OpenAudioRender(const std::u16string& label) {
+  if (!binder_endpoint::Current().IsGuest()) return INVALID_HANDLE_VALUE;
+  const std::wstring name = RecordPipeName();
+  if (name.empty()) return INVALID_HANDLE_VALUE;
+  RecordPipe pipe{ConnectPipe(name)};
+  DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
+  if (pipe.handle == INVALID_HANDLE_VALUE ||
+      !SetNamedPipeHandleState(pipe.handle, &mode, nullptr, nullptr)) return INVALID_HANDLE_VALUE;
+  const auto size = static_cast<uint32_t>(std::min<size_t>(label.size(), 120));
+  Message request;
+  request.Put<uint32_t>(wire::kAudioRender);
+  request.Put<uint32_t>(wire::kMagic);
+  request.Put<uint32_t>(wire::kVersion);
+  request.Put<uint32_t>(size);
+  request.Write(label.data(), size * sizeof(char16_t));
+  if (!Send(pipe.handle, request)) return INVALID_HANDLE_VALUE;
+  const HANDLE connected = pipe.handle;
+  pipe.handle = INVALID_HANDLE_VALUE;
+  return connected;
+}
+
+static HANDLE OpenRecordDevice(uint32_t op, bool info_only) {
+  if (!binder_endpoint::Current().IsGuest()) return INVALID_HANDLE_VALUE;
+  const std::wstring name = RecordPipeName();
+  if (name.empty()) return INVALID_HANDLE_VALUE;
+  RecordPipe pipe{ConnectPipe(name)};
+  DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
+  if (pipe.handle == INVALID_HANDLE_VALUE ||
+      !SetNamedPipeHandleState(pipe.handle, &mode, nullptr, nullptr)) return INVALID_HANDLE_VALUE;
+  uint32_t request[] = {4 * sizeof(uint32_t), op, wire::kMagic, wire::kVersion,
+                        static_cast<uint32_t>(info_only)};
+  if (!binder_bootstrap::Transfer(pipe.handle, request, sizeof(request), true,
+                                  GetTickCount64() + 5000)) return INVALID_HANDLE_VALUE;
+  const HANDLE connected = pipe.handle;
+  pipe.handle = INVALID_HANDLE_VALUE;
+  return connected;
+}
+
+HANDLE binder_endpoint::OpenAudioCapture(bool info_only) {
+  return OpenRecordDevice(wire::kAudioCapture, info_only);
+}
+
+HANDLE binder_endpoint::OpenCamera(bool info_only) {
+  return OpenRecordDevice(wire::kCamera, info_only);
+}
+
+HANDLE binder_endpoint::OpenDropWorker() {
+  if (!binder_endpoint::Current().IsGuest()) return INVALID_HANDLE_VALUE;
+  const std::wstring name = RecordPipeName();
+  if (name.empty()) return INVALID_HANDLE_VALUE;
+  RecordPipe pipe{ConnectPipe(name)};
+  DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
+  if (pipe.handle == INVALID_HANDLE_VALUE ||
+      !SetNamedPipeHandleState(pipe.handle, &mode, nullptr, nullptr)) return INVALID_HANDLE_VALUE;
+  uint32_t request[] = {3 * sizeof(uint32_t), wire::kDropWorker, wire::kMagic, wire::kVersion};
+  if (!binder_bootstrap::Transfer(pipe.handle, request, sizeof(request), true, GetTickCount64() + 2500)) {
+    return INVALID_HANDLE_VALUE;
+  }
+  const HANDLE connected = pipe.handle;
+  pipe.handle = INVALID_HANDLE_VALUE;
+  return connected;
+}
+
+HANDLE binder_endpoint::OpenLoopbackRelay(const loopback_relay::Request& operation) {
+  if (!Current().IsGuest()) return INVALID_HANDLE_VALUE;
+  const std::wstring name = RecordPipeName();
+  if (name.empty()) return INVALID_HANDLE_VALUE;
+  RecordPipe pipe{ConnectPipe(name)};
+  DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
+  if (pipe.handle == INVALID_HANDLE_VALUE ||
+      !SetNamedPipeHandleState(pipe.handle, &mode, nullptr, nullptr)) return INVALID_HANDLE_VALUE;
+  Message request;
+  request.Put<uint32_t>(wire::kLoopbackConnect);
+  request.Put<uint32_t>(wire::kMagic);
+  request.Put<uint32_t>(wire::kVersion);
+  request.Put(operation);
+  const uint32_t bytes = static_cast<uint32_t>(request.bytes.size() - sizeof(uint32_t));
+  memcpy(request.bytes.data(), &bytes, sizeof(bytes));
+  if (!binder_bootstrap::Transfer(pipe.handle, request.bytes.data(), static_cast<DWORD>(request.bytes.size()), true,
+                                  GetTickCount64() + 5000)) return INVALID_HANDLE_VALUE;
+  const HANDLE connected = pipe.handle;
+  pipe.handle = INVALID_HANDLE_VALUE;
+  return connected;
+}
+
+bool binder_endpoint::LoopbackUsesNativeNamespace() {
+  if (!Current().IsGuest()) return true;
+  const std::wstring name = RecordPipeName();
+  if (name.empty()) return true;
+  RecordPipe pipe{ConnectPipe(name)};
+  DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
+  if (pipe.handle == INVALID_HANDLE_VALUE ||
+      !SetNamedPipeHandleState(pipe.handle, &mode, nullptr, nullptr)) return true;
+  uint32_t request[]{3 * sizeof(uint32_t), wire::kLoopbackNamespace, wire::kMagic, wire::kVersion};
+  uint32_t response[2]{};
+  const ULONGLONG deadline = GetTickCount64() + 5000;
+  if (!binder_bootstrap::Transfer(pipe.handle, request, sizeof(request), true, deadline) ||
+      !binder_bootstrap::Transfer(pipe.handle, response, sizeof(response), false, deadline) ||
+      response[0] != sizeof(uint32_t) || response[1] > 1 || !Current().VerifyPipe(pipe.handle)) return true;
+  uint32_t receipt[]{sizeof(uint32_t), 1};
+  if (!binder_bootstrap::Transfer(pipe.handle, receipt, sizeof(receipt), true, deadline)) return true;
+  return response[1] == 1;
+}
+
+int binder_endpoint::QueryAndroidDataCapacity(rooted_storage_wire::Filesystem* capacity) {
+  if (capacity == nullptr) return EFAULT;
+  auto& binding = binder_endpoint::Current();
+  if (!binding.IsGuest() || binding.IsStandalone()) return EACCES;
+  const std::wstring name = RecordPipeName();
+  if (name.empty()) return EACCES;
+  RecordPipe pipe{ConnectPipe(name)};
+  if (pipe.handle == INVALID_HANDLE_VALUE) return ErrnoFromWin32(GetLastError());
+  DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
+  if (!SetNamedPipeHandleState(pipe.handle, &mode, nullptr, nullptr)) return EIO;
+  uint32_t request[] = {3 * sizeof(uint32_t), wire::kAndroidDataCapacity, wire::kMagic, wire::kVersion};
+  struct {
+    uint32_t length;
+    int32_t status;
+  } header{};
+  const ULONGLONG deadline = GetTickCount64() + 5000;
+  if (!binder_bootstrap::Transfer(pipe.handle, request, sizeof(request), true, deadline) ||
+      !binder_bootstrap::Transfer(pipe.handle, &header, sizeof(header), false, deadline)) return EIO;
+  if (header.status != 0) {
+    return header.length == sizeof(header.status) && header.status < 0 && header.status >= -4095
+        ? -header.status : EPROTO;
+  }
+  rooted_storage_wire::Filesystem result{};
+  if (header.length != sizeof(header.status) + sizeof(result)) return EPROTO;
+  if (!binder_bootstrap::Transfer(pipe.handle, &result, sizeof(result), false, deadline)) return EIO;
+  if (!binding.VerifyPipe(pipe.handle)) return EACCES;
+  *capacity = result;
+  return 0;
+}
+
+int binder_endpoint::ReopenDirectory(HANDLE source, HANDLE* result) {
+  if (!result || !source || source == INVALID_HANDLE_VALUE) return EBADF;
+  *result = INVALID_HANDLE_VALUE;
+  if (!Current().IsGuest()) return EACCES;
+  const std::wstring name = RecordPipeName();
+  if (name.empty()) return EACCES;
+  RecordPipe pipe{ConnectPipe(name)};
+  if (pipe.handle == INVALID_HANDLE_VALUE) return EACCES;
+  DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
+  if (!SetNamedPipeHandleState(pipe.handle, &mode, nullptr, nullptr)) return EIO;
+  const ULONGLONG deadline = GetTickCount64() + 5000;
+  struct Request {
+    uint32_t length, op, magic, version;
+    uint64_t source;
+  } request{20, wire::kReopenDirectory, wire::kMagic, wire::kVersion,
+            binder_bootstrap::EncodeHandle(source)};
+  static_assert(sizeof(Request) == 24);
+  struct Header { uint32_t length; int32_t status; } offer{};
+  if (!binder_bootstrap::Transfer(pipe.handle, &request, sizeof(request), true, deadline) ||
+      !binder_bootstrap::Transfer(pipe.handle, &offer, sizeof(offer), false, deadline)) return EIO;
+  if (offer.status > 0 || offer.status < -4095) return EPROTO;
+  if (offer.status) return offer.length == sizeof(offer.status) ? -offer.status : EPROTO;
+  uint64_t offered = 0;
+  if (offer.length != sizeof(offer.status) + sizeof(offered) ||
+      !binder_bootstrap::Transfer(pipe.handle, &offered, sizeof(offered), false, deadline)) return EPROTO;
+  if (!offered || offered == UINT64_MAX || offered > UINTPTR_MAX || !Current().VerifyPipe(pipe.handle))
+    return EPROTO;
+  uint32_t acknowledge[] = {sizeof(uint32_t), 1};
+  Header commit{};
+  if (!binder_bootstrap::Transfer(pipe.handle, acknowledge, sizeof(acknowledge), true, deadline) ||
+      !binder_bootstrap::Transfer(pipe.handle, &commit, sizeof(commit), false, deadline)) return EIO;
+  if (commit.length != sizeof(commit.status) || commit.status != 0) return EPROTO;
+  HANDLE file = binder_bootstrap::DecodeHandle(offered);
+  if (!Current().VerifyPipe(pipe.handle)) {
+    CloseHandle(file);
+    return EACCES;
+  }
+  *result = file;
+  return 0;
+}
+
+int binder_endpoint::InstalledMedia(const rooted_storage_wire::Request& operation,
+                                    const std::wstring& path, const std::wstring& target,
+                                    rooted_storage_wire::Reply* result) {
+  namespace storage = rooted_storage_wire;
+  if (!result || !Current().IsGuest() || Current().IsStandalone()) return EACCES;
+  if (path.size() > 4096 || target.size() > 4096) return ENAMETOOLONG;
+  const std::wstring name = PipeName();
+  if (name.empty()) return EACCES;
+  RecordPipe pipe{ConnectPipe(name)};
+  if (pipe.handle == INVALID_HANDLE_VALUE) return ErrnoFromWin32(GetLastError());
+  DWORD mode = PIPE_READMODE_BYTE | PIPE_NOWAIT;
+  if (!SetNamedPipeHandleState(pipe.handle, &mode, nullptr, nullptr)) return EIO;
+  Message message;
+  message.Put<uint32_t>(wire::kInstalledMedia);
+  message.Put<uint32_t>(wire::kMagic);
+  message.Put<uint32_t>(wire::kVersion);
+  message.Put(operation);
+  message.Write(path.data(), path.size() * sizeof(wchar_t));
+  message.Write(target.data(), target.size() * sizeof(wchar_t));
+  const uint32_t length = static_cast<uint32_t>(message.bytes.size() - sizeof(uint32_t));
+  std::memcpy(message.bytes.data(), &length, sizeof(length));
+  const ULONGLONG deadline = GetTickCount64() + 5000;
+  struct Response { uint32_t size; int32_t status; } reply{};
+  if (!binder_bootstrap::Transfer(pipe.handle, message.bytes.data(), message.bytes.size(), true, deadline) ||
+      !binder_bootstrap::Transfer(pipe.handle, &reply, sizeof(reply), false, deadline)) return EIO;
+  if (reply.status != 0 || !storage::OpensHandle(operation.operation)) {
+    return reply.size == sizeof(reply.status) && reply.status <= 0 && reply.status >= -4095
+        ? -reply.status : EPROTO;
+  }
+  uint32_t flags = 0;
+  uint64_t offered = 0;
+  if (reply.size != sizeof(reply.status) + sizeof(flags) + sizeof(offered) ||
+      !binder_bootstrap::Transfer(pipe.handle, &flags, sizeof(flags), false, deadline) ||
+      !binder_bootstrap::Transfer(pipe.handle, &offered, sizeof(offered), false, deadline)) return EPROTO;
+  if (offered == 0 || offered == UINT64_MAX || offered > UINTPTR_MAX || (flags & ~storage::kCreated) ||
+      !Current().VerifyPipe(pipe.handle)) return EPROTO;
+  uint32_t acknowledge[] = {sizeof(uint32_t), 1};
+  if (!binder_bootstrap::Transfer(pipe.handle, acknowledge, sizeof(acknowledge), true, deadline) ||
+      !binder_bootstrap::Transfer(pipe.handle, &reply, sizeof(reply), false, deadline) ||
+      reply.size != sizeof(reply.status) || reply.status != 0) return EIO;
+  if (!Current().VerifyPipe(pipe.handle)) {
+    CloseHandle(binder_bootstrap::DecodeHandle(offered));
+    return EACCES;
+  }
+  result->flags = flags;
+  result->handle = offered;
+  return 0;
+}
+
+int binder_endpoint::FileRecordLock(HANDLE file, int command, record_locks::LinuxFlock* flock) {
+  if (!binder_endpoint::Current().IsGuest() || !flock) return EACCES;
+  const std::wstring name = RecordPipeName();
+  if (name.empty()) return EACCES;
+  RecordPipe pipe{ConnectPipe(name)};
+  if (pipe.handle == INVALID_HANDLE_VALUE) return gesher::ErrnoFromWin32(GetLastError());
+  Message request;
+  request.Put<uint32_t>(wire::kFileRecordLock);
+  request.Put<uint32_t>(wire::kMagic);
+  request.Put<uint32_t>(wire::kVersion);
+  request.Put<uint64_t>(binder_bootstrap::EncodeHandle(file));
+  request.Put<int32_t>(command);
+  request.Put<int16_t>(flock->type);
+  request.Put<int16_t>(flock->whence);
+  request.Put<int64_t>(flock->start);
+  request.Put<int64_t>(flock->length);
+  request.Put<int32_t>(flock->pid);
+  std::vector<uint8_t> reply;
+  if (!Send(pipe.handle, request)) return EIO;
+  int error = ReceiveRecordStatus(pipe.handle, &reply);
+  if (error) return error;
+  if (command != 5 && command != 36) return reply.size() == sizeof(int32_t) ? 0 : EPROTO;
+  Reader in{reply.data() + sizeof(int32_t), reply.data() + reply.size()};
+  return in.Get(&flock->type) && in.Get(&flock->whence) && in.Get(&flock->start) &&
+      in.Get(&flock->length) && in.Get(&flock->pid) && in.p == in.end ? 0 : EPROTO;
+}
+
+int binder_endpoint::FileRecordClosed(HANDLE* pin) {
+  if (!binder_endpoint::Current().IsGuest() || !pin || !*pin) return EACCES;
+  const std::wstring name = RecordPipeName();
+  if (name.empty()) return EACCES;
+  RecordPipe pipe{ConnectPipe(name)};
+  if (pipe.handle == INVALID_HANDLE_VALUE) return gesher::ErrnoFromWin32(GetLastError());
+  Message request;
+  request.Put<uint32_t>(wire::kFileRecordClose);
+  request.Put<uint32_t>(wire::kMagic);
+  request.Put<uint32_t>(wire::kVersion);
+  request.Put<uint64_t>(binder_bootstrap::EncodeHandle(*pin));
+  std::vector<uint8_t> reply;
+  if (!Send(pipe.handle, request)) return EIO;
+  int error = ReceiveRecordStatus(pipe.handle, &reply);
+  if (error) return error;
+  if (reply.size() != sizeof(int32_t)) return EPROTO;
+  if (!CloseHandle(*pin)) return gesher::ErrnoFromWin32(GetLastError());
+  *pin = nullptr;
+  Message acknowledge;
+  acknowledge.Put<uint32_t>(1);
+  if (!Send(pipe.handle, acknowledge)) return EIO;
+  error = ReceiveRecordStatus(pipe.handle, &reply);
+  return !error && reply.size() != sizeof(int32_t) ? EPROTO : error;
+}
+
 bool BinderDeviceExists() {
+  if (const auto* endpoint = ProtectedBinderEndpoint()) {
+    HANDLE pipe = OpenProtectedBinder(*endpoint);
+    if (pipe == INVALID_HANDLE_VALUE) return false;
+    CloseHandle(pipe);
+    return true;
+  }
   std::wstring name = PipeName();
   if (name.empty()) return false;
   // WaitNamedPipe fails at once with ERROR_FILE_NOT_FOUND when no server
@@ -778,8 +1252,9 @@ bool BinderDeviceExists() {
 }
 
 int OpenBinder(int flags) {
-  std::wstring name = PipeName();
-  if (name.empty()) return errno = ENOENT, -1;
+  const bool is_protected = ProtectedBinderEndpoint() != nullptr;
+  std::wstring name = is_protected ? std::wstring() : PipeName();
+  if (!is_protected && name.empty()) return errno = ENOENT, -1;
   HANDLE pipe = ConnectPipe(name);
   if (pipe == INVALID_HANDLE_VALUE) return errno = ENOENT, -1;
   auto file = std::make_shared<BinderFile>();
@@ -787,7 +1262,7 @@ int OpenBinder(int flags) {
   file->proc_pipe = pipe;
   file->non_block = (flags & O_NONBLOCK) != 0;
   Message hello;
-  hello.Put<uint32_t>(wire::kHelloProc);
+  hello.Put<uint32_t>(binder_endpoint::Current().IsOperator() ? wire::kHelloOperator : wire::kHelloProc);
   hello.Put<uint32_t>(wire::kMagic);
   hello.Put<uint32_t>(wire::kVersion);
   hello.Put<uint32_t>(GetCurrentProcessId());

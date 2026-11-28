@@ -1,23 +1,70 @@
 # App isolation (AppContainer)
 
-**Today Android apps in Gesher are not isolated from Windows.** Each app process
-runs with the Windows user's full token. Android's permissions govern what an
+**Ordinary Android app launches in Gesher are not isolated from Windows.** An
+app launched this way runs with the Windows user's full token. Android's permissions govern what an
 app does through Android's APIs; they do not stop its code, native code above
 all, from reading and changing the user's files, using the network or starting
 programs. Treat an `.apk` like a downloaded `.exe`: install only apps you trust.
-The README, the installed README and the installer say so.
+The optional [protected USB runtime](../tools/package/usb-broker-setup.md)
+uses a separate Windows service identity and AppContainers for its explicit
+`protected-launch` flow. It has a separate data tree and its own compatibility
+and validation requirements.
 
 This document is the implementation map for isolating every package in a
 Windows AppContainer of its own ([ADR 0090](decisions/0090-appcontainer-app-isolation.md),
 issue #314), and the record of what each milestone established.
 
-## Trying it
+## Qualifying the same-user AppContainer route
 
-M1 is a developer experiment for a test layout. The installed launcher
-starts the ordinary runtime, even if its parent process set `GESHER_SANDBOX`.
-The fixture scripts set `GESHER_SANDBOX=appcontainer` on their own test device
-so the system server starts its app processes in their packages' AppContainers.
-See the M1 results below for the launch dependencies the experiment exposes.
+The candidate route starts Android app processes in per-package AppContainers.
+Gesher's system server and Windows brokers use the Windows user account to
+provide authorized Android services and desktop operations. Use a disposable
+profile and an installed build that includes the candidate hosts.
+
+```powershell
+$env:GESHER_SANDBOX = 'appcontainer-trusted'
+gesher-app start
+gesher-app my-app.apk
+```
+
+The same protection applies to `gesher-app my-app.apk --single-process`,
+`gesher-app my-app.apk --system-server`, and `gesher my-program.dex my.Main`.
+For the standalone APK path, `--single-process --data-dir DIR` makes the
+selected data directory available through the protected storage broker.
+
+If a legacy device is still running, the launch command reports that it cannot
+attach. Finish work in its apps and let the device stop, or run
+`gesher-app shutdown` when you are ready to close its apps. Re-run the
+protected command after it stops. Gesher uses the same installed package
+registry and data directories. An already protected device continues using
+its protected policy for its lifetime.
+
+### App isolation settings
+
+The Control Center's **Isolation** menu and the desktop commands below apply to
+one installed app. Running without isolation asks for confirmation in a
+Windows dialog. The app and its child processes then have the full access of
+the Windows account. A change closes running instances so the next launch
+uses the selected mode. Apps start isolated unless the user authorizes an
+exception for the current installation. An updated or reinstalled app needs
+a new authorization.
+
+```powershell
+gesher-app app-isolation com.example.app
+gesher-app app-isolation com.example.app unisolated
+gesher-app app-isolation com.example.app isolated
+```
+
+The setting applies to installed desktop apps. Standalone APK and DEX
+launches and the USB companion use their own isolation paths.
+
+Headless launches can exercise ART and the storage broker. Testing desktop
+input or paste requires an interactive Windows session. Testing camera frames
+or microphone samples requires an available Windows capture device and the
+corresponding Android grant. In the absence of a capture device, applications
+see the runtime's unavailable-device path.
+
+### Historical M1 fixtures
 
 - `tests/windows/tracks/53-sandbox.ps1` (CI): binderd in sandbox mode and the
   production launch path with real AppContainer tokens
@@ -34,7 +81,7 @@ directories, Windows owner cleanup, and readability of successive atomically
 replaced policy files. This tests Windows ACLs and the native grant functions;
 it does not establish a complete Android app launch in M1.
 
-## Design
+## M1 design
 
 | Process | Token |
 |---|---|

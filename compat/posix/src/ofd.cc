@@ -2,6 +2,7 @@
 // owns one table for all modules; explicitly inherited descriptions share a
 // kernel section rather than copying their status into the child process.
 #include "ofd_internal.h"
+#include <gesher/binder_bootstrap.h>
 #include "internal.h"
 #include "record_lock_descriptors.h"
 #include "record_lock_liveness.h"
@@ -139,7 +140,77 @@ bool OpenFileDescription::Adopt(HANDLE inherited) {
   return true;
 }
 
+namespace {
+#ifdef GESHER_FORK_LOCK
+SRWLOCK capture_lock = SRWLOCK_INIT;
+DescriptorSnapshot* first_capture = nullptr;
+DWORD forking_thread = 0;
+
+struct CaptureLock {
+  CaptureLock() { AcquireSRWLockExclusive(&capture_lock); }
+  ~CaptureLock() { ReleaseSRWLockExclusive(&capture_lock); }
+};
+
+void LinkCapture(DescriptorSnapshot& snapshot) {
+  snapshot.capture_thread = GetCurrentThreadId();
+  snapshot.next_capture = first_capture;
+  if (first_capture) first_capture->previous_capture = &snapshot;
+  first_capture = &snapshot;
+}
+
+void UnlinkCapture(DescriptorSnapshot& snapshot) {
+  if (snapshot.previous_capture) {
+    snapshot.previous_capture->next_capture = snapshot.next_capture;
+  } else {
+    first_capture = snapshot.next_capture;
+  }
+  if (snapshot.next_capture) snapshot.next_capture->previous_capture = snapshot.previous_capture;
+  snapshot.previous_capture = nullptr;
+  snapshot.next_capture = nullptr;
+  snapshot.capture_thread = 0;
+}
+
+bool TryCaptureForkLock(void* lock) {
+  if (!TryAcquireSRWLockExclusive(static_cast<SRWLOCK*>(lock))) return false;
+  forking_thread = GetCurrentThreadId();
+  return true;
+}
+
+void CaptureForkChild(void* lock) {
+  const DWORD child_thread = GetCurrentThreadId();
+  for (auto* snapshot = first_capture; snapshot != nullptr;) {
+    auto* next = snapshot->next_capture;
+    if (snapshot->capture_thread == forking_thread) {
+      snapshot->capture_thread = child_thread;
+    } else {
+      // The operation owning this duplicate will never resume here. Other
+      // owners of the file (including the real descriptor) keep their handles.
+      if (InheritedAtFork(snapshot->handle)) CloseHandle(snapshot->handle);
+      snapshot->handle = nullptr;
+      UnlinkCapture(*snapshot);
+    }
+    snapshot = next;
+  }
+  InitializeSRWLock(static_cast<SRWLOCK*>(lock));
+}
+
+const ForkLockOps capture_fork_ops{
+    TryCaptureForkLock, ForkLockTraits<SRWLOCK>::Unlock, CaptureForkChild};
+const ForkLockRegistration capture_fork_lock(
+    kForkOrderLeaf, "descriptor captures", []() -> void* { return &capture_lock; },
+    &capture_fork_ops);
+#endif
+}  // namespace
+
 DescriptorSnapshot::~DescriptorSnapshot() {
+#ifdef GESHER_FORK_LOCK
+  if (capture_thread) {
+    CaptureLock lock;
+    UnlinkCapture(*this);
+    CloseHandle(handle);
+    return;
+  }
+#endif
   if (handle && handle != INVALID_HANDLE_VALUE) CloseHandle(handle);
 }
 
@@ -221,15 +292,20 @@ int InitializeSnapshotFlags(const DescriptorSnapshotPtr& snapshot) {
 int ImportStartup(Table* state) try {
   STARTUPINFOW startup{};
   GetStartupInfoW(&startup);
-  if (!startup.lpReserved2 || startup.cbReserved2 < sizeof(int) + sizeof(ofd_transfer::Startup)) return 0;
+  size_t descriptor_bytes = startup.cbReserved2;
+  binder_bootstrap::Startup admission;
+  if (binder_bootstrap::ReadStartupRecord(&admission)) {
+    descriptor_bytes -= sizeof(admission);
+  }
+  if (!startup.lpReserved2 || descriptor_bytes < sizeof(int) + sizeof(ofd_transfer::Startup)) return 0;
   ofd_transfer::Startup extension{};
-  std::memcpy(&extension, startup.lpReserved2 + startup.cbReserved2 - sizeof(extension), sizeof(extension));
+  std::memcpy(&extension, startup.lpReserved2 + descriptor_bytes - sizeof(extension), sizeof(extension));
   if (extension.magic != ofd_transfer::kMagic) return 0;
   int descriptor_count = 0;
   std::memcpy(&descriptor_count, startup.lpReserved2, sizeof(descriptor_count));
   if (descriptor_count < 0 || static_cast<unsigned>(descriptor_count) > ofd_transfer::kDescriptorLimit) return EINVAL;
   const size_t crt_size = sizeof(int) + static_cast<size_t>(descriptor_count) * (1 + sizeof(intptr_t));
-  if (crt_size > startup.cbReserved2 || startup.cbReserved2 - crt_size != sizeof(ofd_transfer::Startup)) return EINVAL;
+  if (crt_size > descriptor_bytes || descriptor_bytes - crt_size != sizeof(ofd_transfer::Startup)) return EINVAL;
   const size_t maximum = sizeof(ofd_transfer::Header) +
                          ofd_transfer::kDescriptorLimit * sizeof(ofd_transfer::Entry);
   if (extension.manifest_size < sizeof(ofd_transfer::Header) || extension.manifest_size > maximum ||
@@ -393,9 +469,15 @@ DescriptorSnapshotPtr Snapshot(HANDLE file, const std::shared_ptr<OpenFileDescri
   // allocation failure cannot leak a hidden handle or prolong peer lifetime.
   auto snapshot = std::make_shared<DescriptorSnapshot>();
   HANDLE duplicate = nullptr;
+#ifdef GESHER_FORK_LOCK
+  CaptureLock lock;
+#endif
   if (!DuplicateHandle(GetCurrentProcess(), file, GetCurrentProcess(), &duplicate,
                        0, FALSE, DUPLICATE_SAME_ACCESS)) { FailWithLastError(); return {}; }
   snapshot->handle = duplicate;
+#ifdef GESHER_FORK_LOCK
+  LinkCapture(*snapshot);
+#endif
   snapshot->descriptor_flags = (native_flags & HANDLE_FLAG_INHERIT) != 0 ? 0 : FD_CLOEXEC;
   snapshot->description = description;
   snapshot->kind = description->kind.load();
@@ -606,12 +688,18 @@ DescriptorSnapshotPtr CaptureFileHandle(HANDLE file) {
   const auto* owner = Owner();
   return owner ? owner->capture_handle(file) : DescriptorSnapshotPtr{};
 }
+std::wstring DropDescriptorPath(const DescriptorSnapshotPtr& descriptor) {
+  if (!descriptor || !descriptor->description) return {};
+  std::lock_guard<std::mutex> guard(descriptor->description->mutex);
+  return descriptor->description->drop_path;
+}
 int AttachFileDescription(const DescriptorSnapshotPtr& snapshot, bool close_on_exec) {
   const auto* owner = Owner();
   return owner ? owner->attach(snapshot, close_on_exec) : -1;
 }
 int FileDescriptionFlags(const DescriptorSnapshotPtr& snapshot) {
   if (InitializeSnapshotFlags(snapshot) < 0) return -1;
+  if (snapshot->kind == DescriptorKind::kUnshareable) return snapshot->description->Flags();
   // A FIFO's status is wholly its shared description's (fifo.cc); its
   // placeholder pipe has no native mode to agree with.
   if (snapshot->kind == DescriptorKind::kFifo) return snapshot->description->Flags();
@@ -674,7 +762,8 @@ int SetFileDescriptionFlags(const DescriptorSnapshotPtr& snapshot, int arg) {
   for (;;) {
     const int old_flags = description.Flags();
     if ((old_flags & O_PATH) != 0) return errno = EBADF, -1;
-    const DWORD type = GetFileType(file);
+    const DWORD type = snapshot->kind == DescriptorKind::kUnshareable
+        ? FILE_TYPE_CHAR : GetFileType(file);
     if (type == FILE_TYPE_PIPE && !description.KnownPipeStatus()) return errno = EOPNOTSUPP, -1;
     // A raw native handle can already be unbuffered. Preserve that real mode;
     // this backend cannot change buffering on an existing FILE_OBJECT.

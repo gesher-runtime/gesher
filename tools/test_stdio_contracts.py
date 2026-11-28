@@ -53,6 +53,15 @@ def adapter_source(read_source) -> str:
       fopen fdopen fopen64 fclose getdelim getline""".split()
     renames = "\n".join("#define " + name + " adapter_" + name for name in names)
     renames += "\n#define fseeko gesher_fseeko64\n#define ftello gesher_ftello64\n"
+    # Keep the real socket lookup used by final stdio flushing. Adjacent socket
+    # routing helpers need Winsock and are outside this host envelope.
+    lookup_marker = "bool LookupSocket("
+    if sockets.count(lookup_marker) != 1:
+        raise ValueError("ambiguous socket lookup boundary")
+    lookup_start = sockets.index(lookup_marker)
+    lookup_end = sockets.index("\n}\n", lookup_start) + len("\n}\n")
+    following = sockets[lookup_end:]
+    lookup_end += len(following) - len(following.lstrip())
     sections = {
         "@RENAME_PUBLIC_SYMBOLS@": renames,
         "@STDIO_ADAPTER@": adapter,
@@ -67,7 +76,7 @@ def adapter_source(read_source) -> str:
         "@STREAM_BUFFER_HEADER@": "@RESOLVED_STREAM_HEADER@",
         "@SOCKET_REGISTRY@": section(sockets, "struct SocketRegistry {", "// Takes the socket out"),
         "@SOCKET_INSERT@": section(sockets, "void Insert(", "// Publish a successful CRT replacement"),
-        "@SOCKET_LOOKUP@": section(sockets, "bool LookupSocket(", "void RegisterDevice("),
+        "@SOCKET_LOOKUP@": sockets[lookup_start:lookup_end],
         "@BIONIC_ORIENT@": section(guest, "int Orient(FILE* stream,", "using StreamLock"),
         "@BIONIC_READ_STREAM@": section(guest, "size_t ReadStream(", "// fopen through"),
         "@BIONIC_UNLOCKED@": section(guest, "size_t BIONIC_SYSV FreadUnlocked(", "int BIONIC_SYSV FputsUnlocked("),

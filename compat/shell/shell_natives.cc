@@ -46,6 +46,21 @@ static jint Shell_createShortcut(JNIEnv* env, jclass, jstring link, jstring targ
             ShellString(env, appId)));
 }
 
+static jstring Shell_createDesktopShortcut(JNIEnv* env, jclass, jstring link, jstring target,
+                                 jstring arguments, jstring workDir, jstring icon,
+                                 jstring description, jstring appId) {
+    return ShellJavaString(env, gesher::shell::CreateDesktopShortcut(
+            ShellString(env, link), ShellString(env, target), ShellString(env, arguments),
+            ShellString(env, workDir), ShellString(env, icon), ShellString(env, description),
+            ShellString(env, appId)));
+}
+
+static jboolean Shell_checkDesktopShortcut(JNIEnv* env, jclass, jstring path, jstring digest,
+                                           jboolean remove) {
+    return gesher::shell::CheckDesktopShortcut(ShellString(env, path), ShellString(env, digest),
+            remove == JNI_TRUE) ? JNI_TRUE : JNI_FALSE;
+}
+
 static jint Shell_setProcessAppId(JNIEnv* env, jclass, jstring appId) {
     return static_cast<jint>(gesher::shell::SetProcessAppId(ShellString(env, appId)));
 }
@@ -99,6 +114,11 @@ static const JNINativeMethod gShellMethods[] = {
      "(" SHELL_STRING SHELL_STRING SHELL_STRING SHELL_STRING SHELL_STRING SHELL_STRING
      SHELL_STRING ")I",
      GESHER_JNI(Shell_createShortcut)},
+    {"nativeCreateDesktopShortcut",
+     "(" SHELL_STRING SHELL_STRING SHELL_STRING SHELL_STRING SHELL_STRING SHELL_STRING
+     SHELL_STRING ")" SHELL_STRING, GESHER_JNI(Shell_createDesktopShortcut)},
+    {"nativeCheckDesktopShortcut", "(" SHELL_STRING SHELL_STRING "Z)Z",
+     GESHER_JNI(Shell_checkDesktopShortcut)},
     {"nativeSetProcessAppUserModelId", "(" SHELL_STRING ")I", GESHER_JNI(Shell_setProcessAppId)},
     {"nativeProcessAppUserModelId", "()" SHELL_STRING, GESHER_JNI(Shell_processAppId)},
     {"nativeMakeDirectories", "(" SHELL_STRING ")Z", GESHER_JNI(Shell_makeDirectories)},

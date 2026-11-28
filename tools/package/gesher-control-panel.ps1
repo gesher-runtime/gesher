@@ -2724,6 +2724,32 @@ $btnOpenLogs.Add_Click({
 })
 
 # Attach click events through visual tree dispatcher
+$window.Resources['AppIsolationVisibility'] = if ($env:GESHER_SANDBOX -ceq 'appcontainer-trusted') {
+    [System.Windows.Visibility]::Visible
+} else {
+    [System.Windows.Visibility]::Collapsed
+}
+function Show-AppIsolationMenu($button, [string] $pkg) {
+    if ($script:IsBusy) { return }
+    $menu = [System.Windows.Controls.ContextMenu]::new()
+    $menu.PlacementTarget = $button
+    $menu.FlowDirection = $window.FlowDirection
+    foreach ($option in @(
+        @{Text = 'cp_app_isolation_restore'; Mode = 'isolated'},
+        @{Text = 'cp_app_isolation_unisolated'; Mode = 'unisolated'}
+    )) {
+        $item = [System.Windows.Controls.MenuItem]::new()
+        $item.Header = Get-GesherText $option.Text
+        $item.Tag = @{ Package = $pkg; Mode = $option.Mode }
+        $item.Add_Click({
+            param($sender, $event)
+            [void](Start-PanelAction 'AppIsolation' $sender.Tag)
+        })
+        [void]$menu.Items.Add($item)
+    }
+    $menu.IsOpen = $true
+}
+
 $appsList.AddHandler([System.Windows.Controls.Button]::ClickEvent, [System.Windows.RoutedEventHandler]{
     param($sender, $e)
     $box = $e.OriginalSource -as [System.Windows.Controls.CheckBox]
@@ -2738,6 +2764,8 @@ $appsList.AddHandler([System.Windows.Controls.Button]::ClickEvent, [System.Windo
             & $script:OnAppLaunch $pkg
         } elseif ($btn.Content -eq (Get-GesherText 'cp_btn_app_info')) {
             & $script:OnAppDetails $pkg
+        } elseif ($btn.Content -eq (Get-GesherText 'cp_btn_app_isolation')) {
+            Show-AppIsolationMenu $btn $pkg
         } elseif ($btn.Content -eq (Get-GesherText 'cp_btn_uninstall')) {
             & $script:OnAppUninstall $pkg
         } elseif ($btn.Content -eq (Get-GesherText 'cp_btn_proxy')) {

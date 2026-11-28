@@ -6,8 +6,9 @@
 
 namespace gesher {
 
-// Whether fd is open on a /proc (or /sys) file or directory: its Linux path
-// ("/proc/1234/maps") and whether it is a directory.
+// Whether fd is open on a tagged virtual file or directory: its Linux path
+// ("/proc/1234/maps", a /sys name, or the admitted USB /dev/block directory)
+// and whether it is a directory. The tag does not select a filesystem type.
 bool ProcfsDescriptor(int fd, std::string* linux_path, bool* directory);
 
 // Whether path names an existing /proc (or /sys) file, directory or link,

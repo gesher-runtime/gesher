@@ -77,13 +77,14 @@ try {
 # Run those same native and Java operations from an installed APK attached to
 # the real system server. This does not substitute a host-only dalvikvm for an
 # app process: the APK's Activity launches binaries extracted in nativeLibraryDir.
-function InvokeExec3Timed([string[]] $Arguments, [int] $Seconds = 240, [switch] $Trace) {
+function InvokeExec3Timed([string[]] $Arguments, [int] $Seconds = 240, [switch] $Trace, [hashtable] $Environment = @{}) {
   $info = [Diagnostics.ProcessStartInfo]::new("$Dir/dalvikvm.exe")
   foreach ($argument in $Arguments) { $info.ArgumentList.Add($argument) }
   $info.UseShellExecute = $false
   $info.CreateNoWindow = $true
   $info.RedirectStandardOutput = $true
   $info.RedirectStandardError = $true
+  foreach ($entry in $Environment.GetEnumerator()) { $info.Environment[$entry.Key] = [string]$entry.Value }
   if ($Trace) {
     # Only this own test process and its children get the bounded pre-handler
     # sentinel record. Signal disposition, process exit and assertions are kept.
@@ -152,11 +153,62 @@ if (-not (Test-Path "$Dir/exec3.apk")) {
   New-Item -ItemType Directory -Force "$root/data-exec3" | Out-Null
   $exec3DeviceVm = @("-Xbootclasspath:$bcpApp", "-Ximage:$(NoDrive "$root/system")/framework/boot.art",
     '-Xint', '-Xusejit:false')
+  $exec3Operator = $null
   try {
     # Launcher installs and extracts the APK before starting its real app process.
     $exec3Target = InvokeExec3Timed ($exec3DeviceVm + 'com.gesher.app.Launcher', 'install', (NoDrive "$Dir/exec3target.apk"))
     if ($exec3Target.Code -ne 0) { throw "exec3 target install failed: $($exec3Target.Text)" }
-    $exec3App = InvokeExec3Timed -Arguments ($exec3DeviceVm + 'com.gesher.app.Launcher', 'launch', (NoDrive "$Dir/exec3.apk"), '--headless', '--ez', 'exec3.commands', 'true') -Trace
+    $exec3Mode = InvokeExec3Timed -Arguments ($exec3DeviceVm + @('-cp', (NoDrive "$Dir/exec-test.dex"),
+      'gesher.Exec3AppPropertiesTest', '--probe')) -Environment @{ GESHER_UID='2000'; GESHER_BINDER_UID='2000' }
+    if ($exec3Mode.Code -ne 0 -or $exec3Mode.Text -notmatch 'Exec3PropertyMode protected=(true|false)') {
+      throw "Live device property mode probe failed: $($exec3Mode.Text)"
+    }
+    $exec3Protected = $exec3Mode.Text.Contains('Exec3PropertyMode protected=true')
+    $exec3Operator = $null
+    $exec3OperatorOut = $null
+    $exec3OperatorErr = $null
+    $exec3Extra = @()
+    if ($exec3Protected) {
+      $exec3Run = [Guid]::NewGuid().ToString('N')
+      $exec3Phase = NoDrive "$root/data-exec3/data/com.gesher.exec3/files/exec3-operator"
+      $exec3Info = [Diagnostics.ProcessStartInfo]::new("$Dir/dalvikvm.exe")
+      foreach ($argument in ($exec3DeviceVm + @('-cp', (NoDrive "$Dir/exec-test.dex"),
+          'gesher.Exec3AppPropertiesTest', '--operator', $exec3Phase, $exec3Run, (NoDrive "$Dir/libexec2child.so")))) {
+        $exec3Info.ArgumentList.Add($argument)
+      }
+      $exec3Info.UseShellExecute = $false; $exec3Info.CreateNoWindow = $true
+      $exec3Info.RedirectStandardOutput = $true; $exec3Info.RedirectStandardError = $true
+      $exec3Info.Environment['GESHER_UID'] = '2000'; $exec3Info.Environment['GESHER_BINDER_UID'] = '2000'
+      $exec3Operator = [Diagnostics.Process]::Start($exec3Info)
+      $exec3OperatorOut = $exec3Operator.StandardOutput.ReadToEndAsync()
+      $exec3OperatorErr = $exec3Operator.StandardError.ReadToEndAsync()
+      $exec3OperatorDeadline = [DateTime]::UtcNow.AddSeconds(20)
+      while ([DateTime]::UtcNow -lt $exec3OperatorDeadline -and -not $exec3Operator.HasExited -and
+          (Get-Content -LiteralPath "$exec3Phase.run" -Raw -ErrorAction SilentlyContinue) -ne $exec3Run) { Start-Sleep -Milliseconds 50 }
+      if ($exec3Operator.HasExited -or (Get-Content -LiteralPath "$exec3Phase.run" -Raw -ErrorAction SilentlyContinue) -ne $exec3Run) {
+        throw 'Authenticated property operator did not become ready'
+      }
+      $exec3Extra = @('--ez', 'exec3.operator', 'true')
+    }
+    $exec3App = InvokeExec3Timed -Arguments ($exec3DeviceVm + @('com.gesher.app.Launcher', 'launch', (NoDrive "$Dir/exec3.apk"), '--headless', '--ez', 'exec3.commands', 'true') + $exec3Extra) -Trace
+    if ($exec3Operator) {
+      if ($exec3App.Code -ne 0 -or $exec3App.Text.Contains('Exec3DeviceTest FAIL')) {
+        throw "Installed app failed before completing operator phases: $($exec3App.Text)"
+      }
+      if (-not $exec3Operator.WaitForExit(10000)) { $exec3Operator.Kill($true); throw 'Property operator did not complete' }
+      $exec3OperatorText = $exec3OperatorOut.Result + $exec3OperatorErr.Result
+      if ($exec3Operator.ExitCode -ne 0 -or -not $exec3OperatorText.Contains('Exec3AppPropertiesTest operator completed actual phases')) {
+        throw "Actual property operator failed: $exec3OperatorText"
+      }
+      # The actual shell owns privileged pm/am lifecycle operations; the APK
+      # separately proves its own-package query and foreign-force-stop denial.
+      $exec3App.Text += "`n" + $exec3OperatorText
+      foreach ($marker in @('Java, tool and ELF read real admitted operator writes',
+          'Java, tool and ELF writes denied despite child UID overrides', 'real app ELF waiter observes external operator update',
+          'app commands query own package and deny foreign force-stop')) {
+        if (-not $exec3App.Text.Contains("Exec3AppPropertiesTest PASS $marker")) { throw "Missing app property assertion: $marker" }
+      }
+    }
     $exec3Wanted = @(
       'exec2: SUMMARY pass=18 fail=0',
       'exec2: PASS non-restarting signal interrupts a live child wait',
@@ -196,6 +248,8 @@ if (-not (Test-Path "$Dir/exec3.apk")) {
     Write-Host "FAIL  exec3: installed-device test could not complete: $_"
     $failed++
   } finally {
+    if ($exec3Operator -and -not $exec3Operator.HasExited) { $exec3Operator.Kill($true); $exec3Operator.WaitForExit() }
+    if ($exec3Operator) { $exec3Operator.Dispose() }
     $exec3Shutdown = InvokeExec3Timed ($exec3DeviceVm + 'com.gesher.app.Launcher', 'shutdown') 60
     if ($exec3Shutdown.Code -ne 0) { Write-Host "INFO  exec3: device shutdown: $($exec3Shutdown.Text)" }
     foreach ($exec3Name in $exec3SavedEnvironment.Keys) {

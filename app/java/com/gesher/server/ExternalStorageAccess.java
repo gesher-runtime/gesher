@@ -67,6 +67,17 @@ public final class ExternalStorageAccess {
         void write(ApkPackage pkg, Policy policy, File target) throws IOException;
     }
     private static volatile SnapshotWriter sWriter = ExternalStorageAccess::writeAtomically;
+    // Selected by authenticated system_server startup before package admission.
+    // Each protected package needs its own inheritable read-only policy directory
+    // so atomic replacement does not expose another package's metadata.
+    private static volatile boolean sProtectedPolicyDirectories;
+
+    static void configureProtectedRuntime() {
+        if (!ProtectedRuntime.enabled()) {
+            throw new SecurityException("Protected storage policy requires native protected startup");
+        }
+        sProtectedPolicyDirectories = true;
+    }
 
     private ExternalStorageAccess() { }
 
@@ -150,7 +161,8 @@ public final class ExternalStorageAccess {
     public static File policyFile(String packageName) {
         if (packageName == null || !packageName.matches("[A-Za-z0-9_]+(?:\\.[A-Za-z0-9_]+)*")
                 || !isDataDirAvailable()) return null;
-        return new File(new File(Device.dataDir(), "system/storage-policy"), packageName);
+        File path = new File(new File(Device.dataDir(), "system/storage-policy"), packageName);
+        return sProtectedPolicyDirectories ? new File(path, "policy") : path;
     }
 
     private static boolean isDataDirAvailable() {
@@ -177,11 +189,17 @@ public final class ExternalStorageAccess {
                 if (revision != current) { revision = current; continue; }
                 if (pm.get(pkg.packageName) != pkg || pm.isRemovalPending(pkg.packageName)) return;
                 try {
-                    // Revoke native access before touching ACLs. A failed downgrade must
-                    // not leave the old permissive policy active in running processes.
-                    sWriter.write(pkg, SCOPED, file);
-                    AppSandbox.syncStorageAccess(pkg.packageName, policy);
-                    if (!policy.equals(SCOPED)) sWriter.write(pkg, policy, file);
+                    if (SystemServer.isProtectedDevice()) {
+                        // The same-user broker reads this exact immutable snapshot
+                        // for each new operation. There is no shared ACL to update.
+                        sWriter.write(pkg, policy, file);
+                    } else {
+                        // The older sandbox layout revokes native access before
+                        // updating its Windows ACLs.
+                        sWriter.write(pkg, SCOPED, file);
+                        AppSandbox.syncStorageAccess(pkg.packageName, policy);
+                        if (!policy.equals(SCOPED)) sWriter.write(pkg, policy, file);
+                    }
                     FAILURES.remove(key);
                     return;
                 } catch (IOException error) {
@@ -257,6 +275,7 @@ public final class ExternalStorageAccess {
         String content = "v=1\n"
                 + "pkg=" + pkg.packageName + "\n"
                 + "uid=" + pkg.uid() + "\n"
+                + "installation=" + pkg.enabledStateOwner() + "\n"
                 + "declared=" + (declaresPermission(pkg) ? "1" : "0") + "\n"
                 + "mode=" + policy.mode().name() + "\n"
                 + "media_mask=" + policy.mediaMask() + "\n";
@@ -267,7 +286,7 @@ public final class ExternalStorageAccess {
             Files.createDirectories(dir);
             temp = Files.createTempFile(dir, targetFile.getName() + ".", ".tmp");
             Files.writeString(temp, content, StandardCharsets.UTF_8);
-            AppSandbox.prepareStoragePolicyFile(pkg.packageName, temp.toFile());
+            AppSandbox.prepareStoragePolicyFile(pkg, temp.toFile());
             try {
                 Files.move(temp, target,
                         StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);

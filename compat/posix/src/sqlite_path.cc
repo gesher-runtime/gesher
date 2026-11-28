@@ -11,7 +11,9 @@
 // no knowledge of the eventual read/write/create/delete request.
 extern "C" int gesher_sqlite_path_allowed(const char* path, int access) {
   std::wstring windows;
-  if (!gesher::DiskPath(path, &windows, EINVAL)) return 0;
+  // The Win32 VFS syscalls still authorize and perform operations on rooted
+  // paths through the broker. This policy preflight only classifies the name.
+  if (!gesher::DiskPath(path, &windows, EINVAL, true)) return 0;
   const auto kind = access == SQLITE_ACCESS_READWRITE ? gesher::AccessKind::kWrite
       : access == SQLITE_ACCESS_READ ? gesher::AccessKind::kRead : gesher::AccessKind::kStat;
   return gesher::CheckExternalStorageAccess(windows, kind) ? 1 : 0;
@@ -43,7 +45,9 @@ extern "C" int gesher_sqlite_full_pathname(
   // SQLite examines the output even when xFullPathname fails.
   full[0] = '\0';
   std::wstring windows;
-  if (!gesher::DiskPath(path, &windows, EINVAL)) return SQLITE_CANTOPEN;
+  // The Win32 SQL VFS handles actual selected-root access through its broker
+  // wrappers. This step only builds SQLite's owned canonical filename.
+  if (!gesher::DiskPath(path, &windows, EINVAL, true)) return SQLITE_CANTOPEN;
   if (!gesher::CheckExternalStorageAccess(windows, gesher::AccessKind::kStat)) return SQLITE_CANTOPEN;
   const std::string native = gesher::Narrow(windows.c_str());
   if (native.empty()) return SQLITE_CANTOPEN;

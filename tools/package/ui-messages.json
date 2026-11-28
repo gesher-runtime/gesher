@@ -112,9 +112,65 @@
       "en": "Allow",
       "he": "לאפשר"
     },
+    "sandbox_override_title": {
+      "en": "Disable isolation for this app?",
+      "he": "לבטל את הבידוד עבור היישום?"
+    },
+    "sandbox_override_warning": {
+      "en": "The next time you open this app, it and its child processes will have the full access of your Windows account. They can read or change your files and use credentials, devices, and other apps that you can access. Android permissions will not restrict this Windows access. Only continue if you trust this app. Any running instances will close.",
+      "he": "בפתיחה הבאה, ליישום ולתהליכי הבת שלו תהיה גישה מלאה כמו לחשבון Windows שלך. הם יוכלו לקרוא או לשנות את הקבצים שלך ולהשתמש בפרטי גישה, בהתקנים וביישומים אחרים הנגישים לך. הרשאות Android לא יגבילו את הגישה הזאת ב־Windows. יש להמשיך רק אם היישום מהימן. אם היישום פתוח, הוא ייסגר."
+    },
+    "sandbox_override_accept": {
+      "en": "Disable isolation",
+      "he": "לבטל את הבידוד"
+    },
+    "cp_btn_app_isolation": {
+      "en": "Isolation",
+      "he": "בידוד"
+    },
+    "cp_app_isolation_restore": {
+      "en": "Restore isolation and close app",
+      "he": "להחזיר את הבידוד ולסגור את היישום"
+    },
+    "cp_app_isolation_unisolated": {
+      "en": "Disable isolation…",
+      "he": "לבטל את הבידוד…"
+    },
     "permission_deny": {
       "en": "Don't allow",
       "he": "לא לאפשר"
+    },
+    "review_permission_title": {
+      "en": "Gesher permission review",
+      "he": "גשר — סקירת הרשאות"
+    },
+    "review_permission_heading": {
+      "en": "Review app permissions",
+      "he": "סקירת הרשאות היישום"
+    },
+    "review_permission_requested": {
+      "en": "This app was built for an older version of Android. Choose which permissions it may use:",
+      "he": "יישום זה נבנה עבור גרסה ישנה יותר של Android. בחר באילו הרשאות הוא יוכל להשתמש:"
+    },
+    "review_permission_adjustable": {
+      "en": "{0} (adjustable permissions)",
+      "he": "{0} (הרשאות הניתנות לשינוי)"
+    },
+    "review_permission_managed_allowed": {
+      "en": "Allowed by system policy",
+      "he": "מאושר לפי מדיניות המערכת"
+    },
+    "review_permission_managed_denied": {
+      "en": "Blocked by system policy",
+      "he": "חסום לפי מדיניות המערכת"
+    },
+    "review_permission_confirm": {
+      "en": "Continue",
+      "he": "המשך"
+    },
+    "review_permission_cancel": {
+      "en": "Cancel",
+      "he": "ביטול"
     },
     "background_permission_title": {
       "en": "Gesher background permission request",

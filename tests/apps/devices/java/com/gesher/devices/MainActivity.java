@@ -11,16 +11,29 @@ import java.io.PrintWriter;
 import java.io.StringWriter;
 
 /**
- * Runs each device step in onCreate (the single-process mode ends the run once the
- * launch's messages are done, so nothing is left for later), then finishes. Steps are
+ * Runs each device step after reporting the foreground lifecycle, then finishes. Steps are
  * chosen with GESHER_DEVICES_STEPS (a comma-separated list, from the environment the
  * process inherits) or the intent's boolean extras (gesher-app --ez); all run by default.
  */
 public class MainActivity extends Activity {
+    private boolean mScheduled;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         Report.line("MainActivity onCreate");
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (!mScheduled) {
+            mScheduled = true;
+            getMainExecutor().execute(this::runSteps);
+        }
+    }
+
+    private void runSteps() {
         if (wanted("location")) step("location", () -> new LocationSteps(this).run());
         if (wanted("sensors")) step("sensors", () -> new SensorSteps(this).run());
         if (wanted("camera")) step("camera", () -> new CameraSteps(this).run());

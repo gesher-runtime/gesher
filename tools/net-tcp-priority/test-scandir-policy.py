@@ -18,7 +18,14 @@ spec.loader.exec_module(policy)
 FOLDER = 'tools/net-tcp-priority/qualified/'
 MANIFEST = FOLDER + 'scandir-source.json'
 PATCH = FOLDER + 'scandir-source.patch'
-read_bytes = Path.read_bytes
+raw_read_bytes = Path.read_bytes
+projected, *_ = policy.native2_projection()
+projected.update(policy.preceding_appcontainer_integration_sources(policy.APPCONTAINER_INTEGRATION_QUALIFICATION_SHA256))
+
+def read_bytes(path):
+    name = path.relative_to(ROOT).as_posix() if path.is_relative_to(ROOT) else None
+    return projected[name] if name in projected else raw_read_bytes(path)
+
 manifest = json.loads((ROOT / MANIFEST).read_bytes())
 transition_patch = (ROOT / PATCH).read_bytes()
 checks = 0
@@ -58,10 +65,10 @@ def rejected(label, changes, expected, repinned=None):
 
 
 with contextlib.redirect_stdout(io.StringIO()):
-    policy.check()
+    policy.check(lambda path: read_bytes(ROOT / path))
 
 name = policy.SCANDIR_SOURCE
-original = (ROOT / name).read_bytes()
+original = read_bytes(ROOT / name)
 previous = policy.preceding_scandir_source(original)
 assert sha(previous) == manifest['before_sha256'][name]
 assert previous == subprocess.check_output(['git', '-C', str(ROOT), 'show', policy.SCANDIR_BASE + ':' + name])

@@ -41,6 +41,10 @@ add_library(gesher_exec_spawn STATIC
 target_include_directories(gesher_exec_spawn PUBLIC "${GESHER_ROOT}/compat/elf/exec")
 target_link_libraries(gesher_exec_spawn PUBLIC gesher_posix)
 target_compile_options(gesher_exec_spawn PRIVATE -Wall -Wextra -Werror)
+set_source_files_properties(
+  "${GESHER_ROOT}/compat/elf/exec/exec_spawn.cc"
+  "${GESHER_ROOT}/compat/elf/exec/gesher_tools.cc"
+  PROPERTIES COMPILE_OPTIONS "-fexceptions")
 foreach(target pipe_kernel_test pipe_native_process_test file_flags_ofd_test stdio_ofd_test)
   add_executable(${target} "${GESHER_ROOT}/tests/native/${target}.cc")
   target_compile_options(${target} PRIVATE -Wall -Wextra -Werror)

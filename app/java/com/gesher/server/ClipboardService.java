@@ -33,21 +33,22 @@ import java.util.Objects;
 public final class ClipboardService extends IClipboard.Default
         implements WindowsHost.Listener, AutoCloseable {
     private static final String WINDOWS_LABEL = "Windows";
-    private static final int MAX_IMAGE_BYTES = 64 * 1024 * 1024;
+    static final int MAX_IMAGE_BYTES = 64 * 1024 * 1024;
+
+    record Snapshot(int sequence, String text, String html, byte[] image) { }
+    record Sample(int sequence, Snapshot contents) { }
 
     /** Instance-owned native boundary. Only isolated fixtures inject an implementation. */
     interface Host {
         boolean available();
-        long[] foregroundProcess();
+        default long[] foregroundProcess() { return null; }
         int sessionLockState();
-        int sequence();
-        String text();
-        String html();
-        byte[] image();
+        Sample sample(int previousSequence);
         int write(String text, String html, byte[] image);
         int clear();
         void addListener(WindowsHost.Listener listener);
         void removeListener(WindowsHost.Listener listener);
+
     }
 
     private static final class WindowsClipboard implements Host {
@@ -55,10 +56,16 @@ public final class ClipboardService extends IClipboard.Default
         public boolean available() { return WindowsHost.available(); }
         public long[] foregroundProcess() { return WindowsHost.foregroundProcess(); }
         public int sessionLockState() { return WindowsHost.sessionLockState(); }
-        public int sequence() { return WindowsHost.clipboardSequence(); }
-        public String text() { return WindowsHost.clipboardText(); }
-        public String html() { return WindowsHost.clipboardHtml(); }
-        public byte[] image() { return WindowsHost.clipboardImage(); }
+        public Sample sample(int previousSequence) {
+            for (int attempt = 0; attempt < 2; ++attempt) {
+                int sequence = WindowsHost.clipboardSequence();
+                if (sequence == 0 || sequence == previousSequence) return null;
+                Snapshot clip = new Snapshot(sequence, WindowsHost.clipboardText(),
+                        WindowsHost.clipboardHtml(), WindowsHost.clipboardImage());
+                if (WindowsHost.clipboardSequence() == sequence) return new Sample(sequence, clip);
+            }
+            return null;
+        }
         public int write(String text, String html, byte[] image) {
             return WindowsHost.setClipboardSequence(text, html, image);
         }
@@ -93,6 +100,7 @@ public final class ClipboardService extends IClipboard.Default
     private final CallerIdentity mCallers;
     private final AppOpsService mAppOps;
     private final Host mHost;
+    private final CohostClipboard mCohost;
     private final AutoCloseable mPackageChanges;
     private final AutoCloseable mPackageRemovals;
     private final Object mLifecycleLock = new Object();
@@ -105,9 +113,10 @@ public final class ClipboardService extends IClipboard.Default
     private File mOwnedImage;
     private int mSequence;
     private boolean mHaveSequence;
+    private int mDeferredNotificationSequence;
 
     public ClipboardService(ActivityTaskManagerService atm, PackageManagerService pm) {
-        this(atm, pm, new WindowsClipboard());
+        this(atm, pm, null);
     }
 
     ClipboardService(ActivityTaskManagerService atm, PackageManagerService pm, Host host) {
@@ -115,7 +124,10 @@ public final class ClipboardService extends IClipboard.Default
         mPm = Objects.requireNonNull(pm);
         mCallers = new CallerIdentity(pm, atm);
         mAppOps = pm.appOps();
-        mHost = Objects.requireNonNull(host);
+        mHost = host != null ? host : pm.isCohost()
+                ? new CohostClipboard(() -> mListeners.getRegisteredCallbackCount() != 0)
+                : new WindowsClipboard();
+        mCohost = mHost instanceof CohostClipboard broker ? broker : null;
         mPackageChanges = pm.onPackageChange(ignored -> pruneListeners());
         mPackageRemovals = pm.onPackageRemoval(ignored -> pruneListeners());
     }
@@ -158,7 +170,7 @@ public final class ClipboardService extends IClipboard.Default
                 Manifest.permission.READ_CLIPBOARD_IN_BACKGROUND) == PackageManager.PERMISSION_GRANTED;
     }
 
-    private boolean defaultIme(String packageName) {
+    static boolean defaultIme(String packageName) {
         String configured = SettingsProvider.secureString(Settings.Secure.DEFAULT_INPUT_METHOD);
         ComponentName ime = configured == null ? null : ComponentName.unflattenFromString(configured);
         return ime != null && packageName.equals(ime.getPackageName());
@@ -167,6 +179,8 @@ public final class ClipboardService extends IClipboard.Default
     private boolean access(ListenerInfo identity, int op, boolean note) {
         checkPackage(identity.uid, identity.packageName);  // AOSP ownership check precedes privileges.
         if (!current(identity)) return false;
+        // The Windows host checks and notes AppOps for actual cohost transfers.
+        if (mCohost != null) return mCohost.authorized(op, identity.attributionTag);
         if (op == AppOpsManager.OP_READ_CLIPBOARD && !backgroundPermission(identity)
                 && !defaultIme(identity.packageName)
                 && !mAtm.ownsForegroundProcess(identity.uid, mHost.foregroundProcess())) return false;
@@ -192,10 +206,16 @@ public final class ClipboardService extends IClipboard.Default
         synchronized (mLifecycleLock) {
             if (mClosed) throw new IllegalStateException("Clipboard service is closed");
             if (mStarted) return;
+            if (mCohost != null) {
+                synchronized (mClipboardLock) {
+                    Sample initial = mCohost.sample(0);
+                    if (initial != null) mDeferredNotificationSequence = initial.sequence();
+                }
+            }
             if (mHost.available()) mHost.addListener(this);
             mStarted = true;
         }
-        syncFromWindows(false);
+        if (mCohost == null) syncFromWindows(false);
     }
 
     @Override public void onWindowsEvents(int events) {
@@ -207,40 +227,48 @@ public final class ClipboardService extends IClipboard.Default
         boolean changed = false;
         synchronized (mClipboardLock) {
             if (mClosed || !mHost.available()) return;
-            for (int attempt = 0; attempt < 2; attempt++) {
-                int sequence = mHost.sequence();
-                if (sequence == 0 || (mHaveSequence && sequence == mSequence)) return;
-                String text = mHost.text(), html = mHost.html();
-                byte[] image = mHost.image();
-                if (mHost.sequence() != sequence) continue;
-                ClipData clip = null;
-                File imageFile = null;
-                if (image != null && image.length > 0 && image.length <= MAX_IMAGE_BYTES) {
-                    try {
-                        File directory = new File(System.getProperty("java.io.tmpdir", "."), "gesher_clipboard");
-                        if (!directory.isDirectory() && !directory.mkdirs()) throw new IOException("No clipboard cache");
-                        imageFile = File.createTempFile("clip-", ".bmp", directory);
-                        java.nio.file.Files.write(imageFile.toPath(), image);
-                        ClipDescription description = new ClipDescription(WINDOWS_LABEL, new String[]{"image/bmp", "image/*"});
-                        clip = new ClipData(description, new ClipData.Item(text, html, null,
-                                android.net.Uri.fromFile(imageFile)));
-                    } catch (IOException failure) {
-                        deleteImage(imageFile); imageFile = null;
-                        SystemServer.log("clipboard: could not cache native image: " + failure);
-                    }
-                }
-                if (clip == null) {
-                    if (text != null && html != null) clip = ClipData.newHtmlText(WINDOWS_LABEL, text, html);
-                    else if (text != null) clip = ClipData.newPlainText(WINDOWS_LABEL, text);
-                    else if (html != null) clip = ClipData.newHtmlText(WINDOWS_LABEL,
-                            android.text.Html.fromHtml(html, android.text.Html.FROM_HTML_MODE_LEGACY).toString(), html);
-                }
-                mSequence = sequence; mHaveSequence = true;
-                changed = replaceLocked(clip, null, imageFile);
-                break;
+            Sample nativeSample = mHost.sample(mCohost != null ? mDeferredNotificationSequence
+                    : mHaveSequence ? mSequence : 0);
+            if (nativeSample == null) return;
+            Snapshot nativeClip = nativeSample.contents();
+            if (nativeClip != null) {
+                changed = importLocked(nativeClip) && nativeSample.sequence() != mDeferredNotificationSequence;
+                mDeferredNotificationSequence = 0;
+            } else if (notify && nativeSample.sequence() != mDeferredNotificationSequence) {
+                changed = true;
+                mDeferredNotificationSequence = nativeSample.sequence();
             }
         }
         if (changed && notify) notifyListeners();
+    }
+
+    private boolean importLocked(Snapshot nativeClip) {
+        String text = nativeClip.text(), html = nativeClip.html();
+        byte[] image = nativeClip.image();
+        ClipData clip = null;
+        File imageFile = null;
+        if (image != null && image.length > 0 && image.length <= MAX_IMAGE_BYTES) {
+            try {
+                File directory = new File(System.getProperty("java.io.tmpdir", "."), "gesher_clipboard");
+                if (!directory.isDirectory() && !directory.mkdirs()) throw new IOException("No clipboard cache");
+                imageFile = File.createTempFile("clip-", ".bmp", directory);
+                java.nio.file.Files.write(imageFile.toPath(), image);
+                ClipDescription description = new ClipDescription(WINDOWS_LABEL, new String[]{"image/bmp", "image/*"});
+                clip = new ClipData(description, new ClipData.Item(text, html, null,
+                        android.net.Uri.fromFile(imageFile)));
+            } catch (IOException failure) {
+                deleteImage(imageFile); imageFile = null;
+                SystemServer.log("clipboard: could not cache native image: " + failure);
+            }
+        }
+        if (clip == null) {
+            if (text != null && html != null) clip = ClipData.newHtmlText(WINDOWS_LABEL, text, html);
+            else if (text != null) clip = ClipData.newPlainText(WINDOWS_LABEL, text);
+            else if (html != null) clip = ClipData.newHtmlText(WINDOWS_LABEL,
+                    android.text.Html.fromHtml(html, android.text.Html.FROM_HTML_MODE_LEGACY).toString(), html);
+        }
+        mSequence = nativeClip.sequence(); mHaveSequence = true;
+        return replaceLocked(clip, null, imageFile);
     }
 
     private static void deleteImage(File file) {
@@ -292,8 +320,9 @@ public final class ClipboardService extends IClipboard.Default
                 try {
                     // AOSP rechecks the saved UID/package/tag and notes a read for callbacks.
                     // Device lock gates getters, not the clipboard-change notification.
-                    if (current(callback.identity) && access(callback.identity,
-                            AppOpsManager.OP_READ_CLIPBOARD, true)) {
+                    if (current(callback.identity) && (mCohost != null
+                            ? mCohost.noteCallback(callback.identity.attributionTag)
+                            : access(callback.identity, AppOpsManager.OP_READ_CLIPBOARD, true))) {
                         callback.listener.dispatchPrimaryClipChanged();
                     }
                 } catch (RemoteException | RuntimeException failure) {
@@ -334,19 +363,39 @@ public final class ClipboardService extends IClipboard.Default
         return new String[] {text.toString(), anyHtml ? html.toString() : null};
     }
 
-    private static byte[] extractImage(ClipData clip) {
+    private java.io.InputStream openImage(File file) throws IOException {
+        if (!SystemServer.isProtectedDevice() || mCallers.isSystem()) {
+            return file.isFile() && file.length() > 0 && file.length() <= MAX_IMAGE_BYTES
+                    ? new java.io.FileInputStream(file) : null;
+        }
+        int pid = mCallers.callerPid();
+        long birth = mAtm.authenticatedStartTime(pid, mCallers.callerUid());
+        if (birth <= 0) return null;
+        int fd = Zygote.nativeOpenProtectedChildFile(pid, birth, Zygote.windowsPath(file.getPath()));
+        if (fd < 0) return null;
+        android.os.ParcelFileDescriptor descriptor = android.os.ParcelFileDescriptor.adoptFd(fd);
+        long size = descriptor.getStatSize();
+        if (size <= 0 || size > MAX_IMAGE_BYTES) {
+            descriptor.close();
+            return null;
+        }
+        return new android.os.ParcelFileDescriptor.AutoCloseInputStream(descriptor);
+    }
+
+    private byte[] extractImage(ClipData clip) {
         for (int i = 0; i < clip.getItemCount(); i++) {
             android.net.Uri uri = clip.getItemAt(i).getUri();
             // A content URI is a provider capability, never a server-local filesystem path.
             if (uri == null || !"file".equals(uri.getScheme())
                     || (uri.getAuthority() != null && !uri.getAuthority().isEmpty()) || uri.getPath() == null) continue;
             File file = new File(uri.getPath());
-            if (!file.isAbsolute() || !file.isFile() || file.length() <= 0 || file.length() > MAX_IMAGE_BYTES) continue;
+            if (!file.isAbsolute()) continue;
             String name = file.getName().toLowerCase(java.util.Locale.ROOT);
             // The native bridge accepts BMP/DIB bytes; encoded PNG/JPEG/etc. are not DIB data.
             if (!name.endsWith(".bmp")) continue;
-            try (java.io.InputStream input = new java.io.FileInputStream(file);
+            try (java.io.InputStream input = openImage(file);
                     java.io.ByteArrayOutputStream output = new java.io.ByteArrayOutputStream()) {
+                if (input == null) continue;
                 byte[] buffer = new byte[8192];
                 int count;
                 while ((count = input.read(buffer)) != -1) {
@@ -381,9 +430,13 @@ public final class ClipboardService extends IClipboard.Default
         byte[] image = extractImage(saved);
         synchronized (mClipboardLock) {
             if (mClosed) return;
-            int writtenSequence = mHost.available() ? mHost.write(windows[0], windows[1], image) : 0;
+            int writtenSequence = mCohost != null ? mCohost.write(windows[0], windows[1], image, tag)
+                    : mHost.available() ? mHost.write(windows[0], windows[1], image) : 0;
             replaceLocked(saved, source, null);
-            if (writtenSequence != 0) { mSequence = writtenSequence; mHaveSequence = true; }
+            if (writtenSequence != 0) {
+                mSequence = writtenSequence; mHaveSequence = true;
+                mDeferredNotificationSequence = mCohost != null ? writtenSequence : 0;
+            }
             else if (mHost.available()) {
                 // No receipt can bind the saved typed clip to native data. The next
                 // read/event must import the actual native generation, even if an
@@ -406,9 +459,13 @@ public final class ClipboardService extends IClipboard.Default
         boolean changed;
         synchronized (mClipboardLock) {
             if (mClosed) return;
-            int writtenSequence = mHost.available() ? mHost.clear() : 0;
+            int writtenSequence = mCohost != null ? mCohost.clear(tag)
+                    : mHost.available() ? mHost.clear() : 0;
             changed = replaceLocked(null, null, null);
-            if (writtenSequence != 0) { mSequence = writtenSequence; mHaveSequence = true; }
+            if (writtenSequence != 0) {
+                mSequence = writtenSequence; mHaveSequence = true;
+                mDeferredNotificationSequence = mCohost != null ? writtenSequence : 0;
+            }
             else if (mHost.available()) {
                 // No receipt can bind the saved typed clip to native data. The next
                 // read/event must import the actual native generation, even if an
@@ -421,35 +478,87 @@ public final class ClipboardService extends IClipboard.Default
 
     @Override public ClipData getPrimaryClip(String packageName, String tag, int userId, int deviceId) {
         if (!readAllowed(packageName, tag, true)) return null;
-        start(); syncFromWindows(true);
+        start();
+        if (mCohost != null) {
+            synchronized (mClipboardLock) {
+                if (mClosed) return null;
+                Sample response = mCohost.read(mHaveSequence ? mSequence : 0, tag);
+                if (response == null) return null;
+                if (response.contents() != null) importLocked(response.contents());
+                return mClip == null ? null : new ClipData(mClip);
+            }
+        }
+        syncFromWindows(true);
         synchronized (mClipboardLock) { return mClip == null ? null : new ClipData(mClip); }
+    }
+
+    private record MetadataView(ClipDescription description, boolean hasText, String source) { }
+
+    private MetadataView cohostMetadata(String tag) {
+        start();
+        synchronized (mClipboardLock) {
+            if (mClosed) return null;
+            CohostClipboard.Metadata metadata = mCohost.metadata(mHaveSequence ? mSequence : 0, tag);
+            if (metadata == null) return null;
+            if (mHaveSequence && metadata.sequence() == mSequence) {
+                return mClip == null ? null : new MetadataView(new ClipDescription(mClip.getDescription()),
+                        hasClipTextLocked(), mSource);
+            }
+            if (!metadata.present()) return null;
+            ClipDescription description;
+            if ((metadata.formats() & CohostClipboard.IMAGE_PRESENT) != 0) {
+                description = new ClipDescription(WINDOWS_LABEL, new String[] {"image/bmp", "image/*"});
+            } else if ((metadata.formats() & CohostClipboard.HTML_PRESENT) != 0) {
+                description = ClipData.newHtmlText(WINDOWS_LABEL, "", "").getDescription();
+            } else {
+                description = new ClipDescription(WINDOWS_LABEL,
+                        new String[] {ClipDescription.MIMETYPE_TEXT_PLAIN});
+            }
+            description.setTimestamp(metadata.timestamp());
+            return new MetadataView(description, metadata.hasText(), null);
+        }
     }
 
     @Override public ClipDescription getPrimaryClipDescription(String packageName, String tag, int userId, int deviceId) {
         if (!readAllowed(packageName, tag, false)) return null;
+        if (mCohost != null) {
+            MetadataView metadata = cohostMetadata(tag);
+            return metadata == null ? null : metadata.description();
+        }
         start(); syncFromWindows(true);
         synchronized (mClipboardLock) { return mClip == null ? null : new ClipDescription(mClip.getDescription()); }
     }
 
     @Override public boolean hasPrimaryClip(String packageName, String tag, int userId, int deviceId) {
         if (!readAllowed(packageName, tag, false)) return false;
+        if (mCohost != null) return cohostMetadata(tag) != null;
         start(); syncFromWindows(true);
         synchronized (mClipboardLock) { return mClip != null; }
     }
 
     @Override public boolean hasClipboardText(String packageName, String tag, int userId, int deviceId) {
         if (!readAllowed(packageName, tag, false)) return false;
-        start(); syncFromWindows(true);
-        synchronized (mClipboardLock) {
-            if (mClip == null || mClip.getItemCount() == 0) return false;
-            CharSequence text = mClip.getItemAt(0).getText();
-            return text != null && text.length() > 0;
+        if (mCohost != null) {
+            MetadataView metadata = cohostMetadata(tag);
+            return metadata != null && metadata.hasText();
         }
+        start(); syncFromWindows(true);
+        synchronized (mClipboardLock) { return hasClipTextLocked(); }
+    }
+
+    private boolean hasClipTextLocked() {
+        if (mClip == null || mClip.getItemCount() == 0) return false;
+        CharSequence text = mClip.getItemAt(0).getText();
+        return text != null && text.length() > 0;
     }
 
     @Override public String getPrimaryClipSource(String packageName, String tag, int userId, int deviceId) {
         enforceClipSourcePermission();
         if (!readAllowed(packageName, tag, false)) return null;
+        if (mCohost != null) {
+            MetadataView metadata = cohostMetadata(tag);
+            return metadata == null ? null : metadata.source();
+        }
         start(); syncFromWindows(true);
         synchronized (mClipboardLock) { return mClip == null ? null : mSource; }
     }

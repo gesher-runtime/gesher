@@ -139,7 +139,12 @@ int Start(const Shell& sh, const std::vector<std::string>& args, const Io& io,
     ShErr(sh, io, args[0] + ": " + ErrorText(EILSEQ));
     return 126;
   }
-  DWORD failed = SpawnWithFds(launch, environment.c_str(), WindowsPath(sh.cwd),
+  // Reopening an inherited host cwd can fail under an AppContainer. Preserve
+  // inheritance until cd changes the shell's logical cwd. A fork broker needs
+  // an explicit path because its process directory belongs to the broker.
+  std::wstring directory = sh.cwd_inherited && !gesher::InForkedChild()
+                               ? std::wstring{} : WindowsPath(sh.cwd);
+  DWORD failed = SpawnWithFds(launch, environment.c_str(), directory,
                               fds, process);
   if (failed != 0) {
     ShErr(sh, io, args[0] + ": " + ErrorText(ErrnoFromWin32(failed)));
@@ -161,6 +166,14 @@ HandleP Temporary(const std::string& text);
 
 int StartSubshell(const Shell& sh, const std::string& src, const Io& io,
                   PROCESS_INFORMATION* process) {
+  if (gesher::usb_storage::ProtectedRuntimeEnabled()) {
+    // The protected launcher accepts only typed stdio resources. Preserve the
+    // actual shell state as bounded command text instead of transferring a
+    // general fd 63 capability. Oversized source gets the normal argument-size
+    // failure from the launch API; ordinary execution retains its fd path.
+    return Start(sh, {"sh", "--gesher-script-text", SubshellSource(sh, src),
+        std::to_string(sh.shell_pid), sh.pos.empty() ? "sh" : sh.pos[0]}, io, process);
+  }
   HandleP script = Temporary(SubshellSource(sh, src));
   if (!script) {
     ShErr(sh, io, "cannot create subshell input");
@@ -312,19 +325,18 @@ bool TestUnary(Shell* sh, const Io& io, const std::string& op,
     DWORD mode;
     return fd >= 0 && fd < 10 && GetConsoleMode(io.fd[fd], &mode);
   }
-  WIN32_FILE_ATTRIBUTE_DATA data;
-  if (!GetFileAttributesExW(WindowsPath(arg, sh->cwd).c_str(),
-                            GetFileExInfoStandard, &data))
-    return false;
-  if (op == "-e" || op == "-r" || op == "-x") return true;
-  if (op == "-d")
-    return (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
-  if (op == "-f")
-    return (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
+  const std::string path = ShellPath(*sh, arg);
+  struct stat info{};
   if (op == "-L" || op == "-h")
-    return (data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
-  if (op == "-w") return (data.dwFileAttributes & FILE_ATTRIBUTE_READONLY) == 0;
-  if (op == "-s") return data.nFileSizeHigh != 0 || data.nFileSizeLow != 0;
+    return lstat(path.c_str(), &info) == 0 && S_ISLNK(info.st_mode);
+  if (op == "-r") return access(path.c_str(), R_OK) == 0;
+  if (op == "-w") return access(path.c_str(), W_OK) == 0;
+  if (op == "-x") return access(path.c_str(), X_OK) == 0;
+  if (stat(path.c_str(), &info) != 0) return false;
+  if (op == "-e") return true;
+  if (op == "-d") return S_ISDIR(info.st_mode);
+  if (op == "-f") return S_ISREG(info.st_mode);
+  if (op == "-s") return info.st_size != 0;
   return false;
 }
 

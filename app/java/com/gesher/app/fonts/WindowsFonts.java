@@ -32,7 +32,7 @@ public final class WindowsFonts {
     }
 
     /**
-     * The Windows fonts folder, with a trailing '/', as a path on the current drive; null
+     * The Windows fonts folder, with a trailing '/', as an absolute Gesher path; null
      * when there is none to use ({@link #whyNot} says why).
      */
     public static synchronized String directory() {
@@ -55,8 +55,7 @@ public final class WindowsFonts {
         }
         dir = dir.replace('\\', '/');
         if (!dir.startsWith("/")) {
-            sWhyNot = dir + " is not on the current drive (set $" + ENV
-                    + " to a junction to it on this drive)";
+            sWhyNot = dir + " is not an absolute Gesher path (use /mnt/<drive>/... for another drive)";
             return null;
         }
         if (!new File(dir).isDirectory()) {
@@ -73,8 +72,7 @@ public final class WindowsFonts {
     }
 
     /**
-     * {@code %WINDIR%\Fonts} in Gesher's path form: '/' separators, the drive left out
-     * when it is the current one (as gesher-base's paths come out, ADR 0010).
+     * {@code %WINDIR%\Fonts} in Gesher's path form, using /mnt/&lt;drive&gt; for another drive.
      */
     private static native String nativeFontsDirectory();
 }

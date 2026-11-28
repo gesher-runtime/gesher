@@ -110,6 +110,16 @@ namespace gesher::ws {
 // Completion transport is unchanged and is tested by the full TCP contracts.
 struct ConnectOperation {};
 void RefreshConnect(const std::shared_ptr<SocketDescription>&) {}
+// The allocation fixture admits only native sockets. A relay-backed entry
+// would require a real broker session and is outside this fixture's contract.
+bool HasLoopbackRelay(const std::shared_ptr<SocketDescription>& description) {
+  if (description) {
+    std::lock_guard<std::mutex> lock(description->error_mutex);
+    if (description->relay) std::abort();
+  }
+  return false;
+}
+int PollLoopbackRelay(const std::shared_ptr<SocketDescription>&, int) { std::abort(); }
 struct FixtureApi {
   decltype(&::getsockopt) getsockopt = ::getsockopt;
   decltype(&::getpeername) getpeername = ::getpeername;

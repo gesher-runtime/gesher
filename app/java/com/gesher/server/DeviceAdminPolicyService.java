@@ -54,15 +54,23 @@ final class DeviceAdminPolicyService extends UnmanagedDevicePolicyService {
             }
         });
         pm.onPackageRemovalCheck(name -> {
-            for (ComponentName admin : activeAdmins()) if (name.equals(admin.getPackageName()))
-                throw new SecurityException("Deactivate the device administrator before uninstalling it");
+            synchronized (pm) {
+                for (String key : store.snapshot().keySet()) {
+                    ComponentName admin = ComponentName.unflattenFromString(key);
+                    if (admin != null && name.equals(admin.getPackageName()) && grant(admin, true) != null)
+                        throw new SecurityException("Deactivate the device administrator before uninstalling it");
+                }
+            }
         });
     }
     boolean available() { return hostAvailable.getAsBoolean(); }
     Request prepare(ComponentName admin) {
+        return prepare(admin, false);
+    }
+    private Request prepare(ComponentName admin, boolean removalCheck) {
         if (admin == null) return null;
         ApkPackage code = pm.get(admin.getPackageName());
-        if (code == null || pm.isRemovalPending(code.packageName)) return null;
+        if (code == null || !removalCheck && pm.isRemovalPending(code.packageName)) return null;
         ActivityInfo info = code.receiverInfo(admin.getClassName(), PackageManager.GET_META_DATA);
         if (info == null || !Manifest.permission.BIND_DEVICE_ADMIN.equals(info.permission)
                 || info.metaData == null || !info.enabled || !info.applicationInfo.enabled) return null;
@@ -120,14 +128,20 @@ final class DeviceAdminPolicyService extends UnmanagedDevicePolicyService {
     }
     private static void user(int id) { if (id != 0) throw new SecurityException("Unsupported Android user"); }
     private DeviceAdminStore.Grant grant(ComponentName admin) {
+        return grant(admin, false);
+    }
+    // Installer seals the current installation before its removal checks. Only
+    // this veto may inspect its enrollment while sealed; normal operations and
+    // new enrollment still reject it. Owner and current-manifest checks remain.
+    private DeviceAdminStore.Grant grant(ComponentName admin, boolean removalCheck) {
         if (admin == null) return null;
         ApkPackage code = pm.get(admin.getPackageName());
         DeviceAdminStore.Grant grant = store.get(admin.flattenToString());
-        if (code == null || pm.isRemovalPending(code.packageName) || grant == null
+        if (code == null || !removalCheck && pm.isRemovalPending(code.packageName) || grant == null
                 || !grant.owner().equals(code.enabledStateOwner())) return null;
         // Updating an app may remove/disable its receiver or remove a policy.
         // The old record must not keep authority the current manifest no longer declares.
-        Request current = prepare(admin);
+        Request current = prepare(admin, removalCheck);
         return current != null && current.supported && current.policies == grant.policies() ? grant : null;
     }
     private List<ComponentName> activeAdmins() {

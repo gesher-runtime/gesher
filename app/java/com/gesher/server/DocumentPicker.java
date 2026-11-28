@@ -361,9 +361,7 @@ final class DocumentPicker {
     }
 
     static boolean isBlockedTreeRoot(File file) {
-        String path = file.getPath();
-        return file.getParentFile() == null || path.matches("/mnt/[A-Za-z]")
-                || path.matches("/mnt/unc/[^/]+/[^/]+")
+        return DocumentsStorageProvider.isFilesystemRoot(file)
                 || sameFile(file, android.os.Environment.getExternalStorageDirectory())
                 || sameFile(file, android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS))
                 || sameFile(file, new File(android.os.Environment.getExternalStorageDirectory(), "Android"))
@@ -384,6 +382,13 @@ final class DocumentPicker {
             if (!blocked.exists()) continue;
             for (File ancestor = file; ancestor != null; ancestor = ancestor.getParentFile()) {
                 if (sameFile(ancestor, blocked)) return true;
+                // /mnt/<drive> and /mnt/unc/<server>/<share> are real volume
+                // roots. Their lexical parents are guest namespace prefixes,
+                // not filesystem ancestors: statting /mnt can fail although
+                // every directory in the selected volume is accessible.
+                // Check the real root above, preserving fail-closed identity
+                // errors, then stop before those synthetic parents.
+                if (DocumentsStorageProvider.isFilesystemRoot(ancestor)) break;
             }
         }
         return false;

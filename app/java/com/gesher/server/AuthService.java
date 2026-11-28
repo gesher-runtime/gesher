@@ -41,8 +41,13 @@ import java.util.List;
  * {@code BIOMETRIC_ERROR_NO_HARDWARE}; the device credential is available exactly when
  * {@code trust} says the device is secure ({@link Host#isDeviceSecure}, as PreAuthInfo's
  * {@code credentialAvailable}), and is then confirmed through {@link WindowsHelloBackend}.
- * With no backend (the natives are not there) a confirmation ends with
- * {@code BIOMETRIC_ERROR_HW_UNAVAILABLE}; nothing succeeds without a real verification.
+ * {@code trust} and this service read the same {@link DeviceCredential}. When it offers no
+ * credential a confirmation ends with an Android-defined error; nothing succeeds without a
+ * real verification.
+ *
+ * <p>{@link #confirmDeviceCredential} is the same confirmation for the system's
+ * confirm-credential activity ({@code ACTION_CONFIRM_DEVICE_CREDENTIAL}), which in AOSP is
+ * a BiometricPrompt client of this service too (Settings' ConfirmDeviceCredentialActivity).
  *
  * <p>Like BiometricService, one session at a time: a new prompt that can start cancels
  * the current one (BIOMETRIC_ERROR_CANCELED to its client), {@link #cancelAuthentication}
@@ -87,15 +92,60 @@ public final class AuthService extends IAuthService.Default {
     private static final int CREDENTIAL_NOT_ENROLLED = 9;
     private static final int MANDATORY_BIOMETRIC_UNAVAILABLE_ERROR = 13;
 
+    /** How a confirm-credential request ends: exactly one call, on the service's thread. */
+    public interface ConfirmationResult {
+        /** {@code confirmed} only after Windows reported the user as verified. */
+        void onResult(boolean confirmed);
+    }
+
+    /** A confirm-credential request in progress. */
+    public interface Confirmation {
+        /** Ends the request (its result is then "not confirmed") and closes Windows' prompt. */
+        void cancel();
+    }
+
     private final Host mHost;
-    private final WindowsHelloBackend mBackend;  // null: no Windows Hello natives
+    private final DeviceCredential mCredential;
     private final Object mLock = new Object();
     private long mNextRequestId = 1;  // guarded by mLock
     private Session mSession;         // guarded by mLock: the prompt being shown
 
-    public AuthService(Host host, WindowsHelloBackend backend) {
+    AuthService(Host host, DeviceCredential credential) {
         mHost = java.util.Objects.requireNonNull(host);
-        mBackend = backend;
+        mCredential = java.util.Objects.requireNonNull(credential);
+    }
+
+    // --- the confirm-credential activity ----------------------------------------------------
+
+    /**
+     * Confirms the device credential for the system's confirm-credential activity, started by
+     * the process {@code pid} of {@code packageName}. As Settings' activity, it asks for
+     * {@code DEVICE_CREDENTIAL | BIOMETRIC_WEAK}; with no biometric sensor that is the
+     * credential, when the device is secure. It is a session like any prompt: it replaces
+     * the current one, and a later prompt replaces it. Windows' prompt is owned by the
+     * foreground window of {@code pid}; a process that is not in the foreground gets
+     * "not confirmed".
+     */
+    Confirmation confirmDeviceCredential(int uid, int pid, String packageName, String message,
+            ConfirmationResult result) {
+        java.util.Objects.requireNonNull(result);
+        final long requestId;
+        synchronized (mLock) {
+            requestId = mNextRequestId++;
+        }
+        final Session session = new Session(requestId, null, null, result, 0 /* operationId */,
+                UserHandle.getCallingUserId(),
+                Authenticators.DEVICE_CREDENTIAL | Authenticators.BIOMETRIC_WEAK,
+                new WindowsHelloBackend.Request(uid, pid, packageName,
+                        message == null ? "" : message));
+        mHost.post(() -> start(session));
+        return () -> mHost.post(() -> {
+            synchronized (mLock) {
+                if (mSession != session) return;  // ended already, or never started
+                mSession = null;
+            }
+            end(session, BiometricConstants.BIOMETRIC_ERROR_CANCELED);
+        });
     }
 
     // --- binder calls ---------------------------------------------------------------------
@@ -166,7 +216,7 @@ public final class AuthService extends IAuthService.Default {
         synchronized (mLock) {
             requestId = mNextRequestId++;
         }
-        final Session session = new Session(requestId, token, receiver, operationId, userId,
+        final Session session = new Session(requestId, token, receiver, null, operationId, userId,
                 authenticators, new WindowsHelloBackend.Request(uid, pid, opPackageName,
                         message(promptInfo)));
         mHost.post(() -> start(session));
@@ -292,7 +342,8 @@ public final class AuthService extends IAuthService.Default {
     private final class Session implements IBinder.DeathRecipient {
         final long id;
         final IBinder token;
-        final IBiometricServiceReceiver receiver;
+        final IBiometricServiceReceiver receiver;  // null for the confirm-credential activity
+        final ConfirmationResult confirmation;     // its result instead
         final long operationId;
         final int userId;
         final int authenticators;
@@ -300,11 +351,13 @@ public final class AuthService extends IAuthService.Default {
         WindowsHelloBackend.Verification verification;  // guarded by mLock
         boolean linked;
 
-        Session(long id, IBinder token, IBiometricServiceReceiver receiver, long operationId,
-                int userId, int authenticators, WindowsHelloBackend.Request request) {
+        Session(long id, IBinder token, IBiometricServiceReceiver receiver,
+                ConfirmationResult confirmation, long operationId, int userId, int authenticators,
+                WindowsHelloBackend.Request request) {
             this.id = id;
             this.token = token;
             this.receiver = receiver;
+            this.confirmation = confirmation;
             this.operationId = operationId;
             this.userId = userId;
             this.authenticators = authenticators;
@@ -343,16 +396,19 @@ public final class AuthService extends IAuthService.Default {
             error(session, BiometricAuthenticator.TYPE_CREDENTIAL, unavailable);
             return;
         }
-        try {
-            session.receiver.asBinder().linkToDeath(session, 0);
-            session.linked = true;
-        } catch (RemoteException dead) {
-            return;  // the client is gone: nobody to answer
+        if (session.receiver != null) {
+            try {
+                session.receiver.asBinder().linkToDeath(session, 0);
+                session.linked = true;
+            } catch (RemoteException dead) {
+                return;  // the client is gone: nobody to answer
+            }
         }
+        WindowsHelloBackend backend = mCredential.backend();
         synchronized (mLock) {
             mSession = session;
             try {
-                session.verification = mBackend.verify(session.request,
+                session.verification = backend.verify(session.request,
                         result -> mHost.post(() -> verified(session, result)));
             } catch (RuntimeException e) {
                 SystemServer.log("auth: Windows Hello verification did not start: " + e);
@@ -367,10 +423,10 @@ public final class AuthService extends IAuthService.Default {
      * token AuthSession would add (ADR 0091), so it is never reported as confirmed.
      */
     private int unavailable(Session session) {
-        if (session.operationId != 0 || mBackend == null) {
+        if (session.operationId != 0 || mCredential.backend() == null) {
             return BiometricConstants.BIOMETRIC_ERROR_HW_UNAVAILABLE;
         }
-        switch (mBackend.availability()) {
+        switch (mCredential.state()) {
             case WindowsHelloBackend.AVAILABLE:
                 return BiometricConstants.BIOMETRIC_SUCCESS;
             case WindowsHelloBackend.NOT_CONFIGURED_FOR_USER:
@@ -387,6 +443,10 @@ public final class AuthService extends IAuthService.Default {
         }
         session.unlink();
         if (result == WindowsHelloBackend.VERIFIED) {
+            if (session.confirmation != null) {
+                session.confirmation.onResult(true);
+                return;
+            }
             try {
                 session.receiver.onAuthenticationSucceeded(
                         BiometricPrompt.AUTHENTICATION_RESULT_TYPE_DEVICE_CREDENTIAL);
@@ -432,6 +492,10 @@ public final class AuthService extends IAuthService.Default {
     }
 
     private static void error(Session session, int modality, int error) {
+        if (session.confirmation != null) {
+            session.confirmation.onResult(false);
+            return;
+        }
         try {
             session.receiver.onError(modality, error, 0 /* vendorCode */);
         } catch (RemoteException e) {

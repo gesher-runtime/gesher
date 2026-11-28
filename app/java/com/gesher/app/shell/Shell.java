@@ -39,6 +39,18 @@ public final class Shell {
                 appUserModelId);
     }
 
+    /** Makes a desktop shortcut without overwriting a file, returning its ownership receipt. */
+    public static String createDesktopShortcut(String link, String target, String arguments,
+            String workDir, String icon, String description, String appUserModelId) {
+        return nativeCreateDesktopShortcut(link, target, arguments, workDir, icon, description,
+                appUserModelId);
+    }
+
+    /** Checks or removes precisely the recorded desktop shortcut. */
+    public static boolean checkDesktopShortcut(String path, String digest, boolean remove) {
+        return digest != null && nativeCheckDesktopShortcut(path, digest, remove);
+    }
+
     /** SetCurrentProcessExplicitAppUserModelID; returns its HRESULT. */
     public static int setProcessAppUserModelId(String id) {
         return nativeSetProcessAppUserModelId(id);
@@ -103,6 +115,9 @@ public final class Shell {
     private static native String nativeDesktopFolder();
     private static native int nativeCreateShortcut(String link, String target, String arguments,
             String workDir, String icon, String description, String appUserModelId);
+    private static native String nativeCreateDesktopShortcut(String link, String target, String arguments,
+            String workDir, String icon, String description, String appUserModelId);
+    private static native boolean nativeCheckDesktopShortcut(String path, String digest, boolean remove);
     private static native int nativeSetProcessAppUserModelId(String id);
     private static native String nativeProcessAppUserModelId();
     private static native boolean nativeMakeDirectories(String dir);

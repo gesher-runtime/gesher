@@ -105,6 +105,9 @@ public final class GesherAppDriver {
         }
 
         // Process state ActivityManagerService would have sent in bindApplication.
+        // ART uses this boundary to distinguish the primary APK from secondary
+        // dex loaded from writable app data, before LoadedApk opens any code.
+        VMRuntime.setProcessDataDirectory(appInfo.dataDir);
         try {
             VMRuntime.getRuntime().setTargetSdkVersion(appInfo.targetSdkVersion);
         } catch (Throwable t) {

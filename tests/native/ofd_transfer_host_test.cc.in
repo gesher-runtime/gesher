@@ -83,7 +83,8 @@ constexpr DWORD GENERIC_READ = 0x80000000, GENERIC_WRITE = 0x40000000,
     FILE_SHARE_READ = 1, FILE_SHARE_WRITE = 2, OPEN_EXISTING = 3;
 constexpr DWORD PROC_THREAD_ATTRIBUTE_HANDLE_LIST = 0x20002, STARTF_USESTDHANDLES = 0x100;
 constexpr DWORD CREATE_UNICODE_ENVIRONMENT = 0x400, EXTENDED_STARTUPINFO_PRESENT = 0x80000,
-    CREATE_NO_WINDOW = 0x8000000, DETACHED_PROCESS = 0x8, CREATE_NEW_CONSOLE = 0x10;
+    CREATE_NO_WINDOW = 0x8000000, DETACHED_PROCESS = 0x8, CREATE_NEW_CONSOLE = 0x10,
+    CREATE_SUSPENDED = 0x4, CREATE_BREAKAWAY_FROM_JOB = 0x1000000;
 constexpr int _O_BINARY = 0x8000;
 constexpr int _O_NOINHERIT = 0x0080;
 struct SECURITY_ATTRIBUTES { DWORD length; void* security; BOOL inherit; };
@@ -442,7 +443,46 @@ static void DeleteProcThreadAttributeList(AttributeList*) {
 static BOOL CreateProcessW(const wchar_t*, wchar_t*, void*, void*, BOOL, DWORD, void*, const wchar_t*,
                            STARTUPINFOW*, PROCESS_INFORMATION*);
 
+@BINDER_STARTUP_RECORD@
+
+// The Linux fixture exercises ordinary OFD transport. A real AppContainer
+// child is covered by the Windows admission and descriptor fixtures.
+static BOOL TerminateProcess(HANDLE, DWORD) { std::abort(); }
+static DWORD ResumeThread(HANDLE) { std::abort(); }
+
+namespace gesher::binder_bootstrap {
+static uint32_t GuestUid() { std::abort(); }
+}
+namespace gesher::binder_endpoint {
+struct FixtureEndpoint {
+  bool IsGuest() const { return false; }
+  bool IsStandalone() const { std::abort(); }
+  bool DuplicateToGuestChild(HANDLE*) const { std::abort(); }
+};
+static const FixtureEndpoint& Current() {
+  static const FixtureEndpoint endpoint;
+  return endpoint;
+}
+static bool EnrollChild(HANDLE) { std::abort(); }
+}
+namespace gesher::cohost_bootstrap {
+struct FixtureScope {
+  explicit operator bool() const { std::abort(); }
+  bool DuplicateForChild(HANDLE*, HANDLE*) const { std::abort(); }
+};
+static const FixtureScope& Current() {
+  static const FixtureScope scope;
+  return scope;
+}
+}
+
 namespace gesher {
+static HANDLE OpenDescriptorPlaceholder(bool inherit) {
+  SECURITY_ATTRIBUTES attributes{sizeof(attributes), nullptr, inherit ? TRUE : FALSE};
+  return CreateFileW(L"NUL", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                    &attributes, OPEN_EXISTING, 0, nullptr);
+}
+static HANDLE OpenNullDevice(DWORD, bool) { std::abort(); }
 // This corpus uses ordinary files; the memfd-seal corpus exercises the EA
 // boundary separately. No ordinary descriptor may be registered as a memfd.
 static bool FileHasMemfdSeals(HANDLE) { return false; }
@@ -528,6 +568,12 @@ DWORD BrokeredCreateProcess(const wchar_t*, const wchar_t*, const wchar_t*, cons
   std::abort();  // only a forked child asks its root
 }
 }
+namespace gesher::usb_storage {
+// The ordinary OFD corpus has no protected authority. A single routing check
+// enables this explicit boundary and verifies the service refusal is final.
+static bool protected_runtime = false;
+static bool ProtectedRuntimeEnabled() { return protected_runtime; }
+}
 namespace gesher::exec {
 static wchar_t* GetEnvironmentStringsW() {
   // Only the native-only entries survive; the owner's live assignment wins.
@@ -552,6 +598,22 @@ static int CompareStringOrdinal(const wchar_t* left, int left_size, const wchar_
 @ENVIRONMENT_BLOCK@
 struct Launch { std::wstring application, command_line; };
 struct ChildFd { int fd; HANDLE handle; gesher::DescriptorSnapshotPtr snapshot{}; };
+static unsigned protected_calls;
+static const Launch* protected_launch;
+static const wchar_t* protected_environment;
+static const std::vector<ChildFd>* protected_fds;
+static PROCESS_INFORMATION* protected_info;
+static DWORD SpawnProtectedCommand(const Launch& launch, const wchar_t* environment,
+                                   const std::wstring& cwd, const std::vector<ChildFd>& fds,
+                                   PROCESS_INFORMATION* info, DWORD flags) {
+  ++protected_calls;
+  host::Require(gesher::usb_storage::protected_runtime && &launch == protected_launch &&
+      environment == protected_environment && &fds == protected_fds && info == protected_info &&
+      cwd == L"protected-fixture" && flags == DETACHED_PROCESS);
+  // No capability or child is invented by this fixture. Exact production
+  // authority identity/admission is covered by the separate Windows tests.
+  return ERROR_ACCESS_DENIED;
+}
 static DWORD DescriptorTransportSupport(const std::wstring& path, bool* supported, HANDLE* image) {
   int fd = host::Own(open(host::Narrow(path.c_str()).c_str(), O_RDONLY | O_CLOEXEC));
   if (fd < 0) return GetLastError();
@@ -695,9 +757,38 @@ static void PeCapabilities() {
   Check("PE with no exports has no importer", !gesher::exec::HasFileDescriptionImporter(image.data(), image.size()));
 }
 
+static void ProtectedRouting() {
+  gesher::exec::Launch launch{L"not-an-installed-image.exe", L"arbitrary guest command"};
+  // A high raw descriptor must never reach ordinary handle inheritance after
+  // a protected authority denial, even when the ordinary builder could reject
+  // it independently. The exact production SpawnWithFds chooses this route.
+  const std::vector<gesher::exec::ChildFd> fds{{7100, INVALID_HANDLE_VALUE, {}}};
+  static constexpr wchar_t environment[] = L"GESHER_OFD_TRANSFER_ENV=protected-route\0";
+  PROCESS_INFORMATION info{};
+  info.dwProcessId = 123;
+  gesher::exec::protected_launch = &launch;
+  gesher::exec::protected_environment = environment;
+  gesher::exec::protected_fds = &fds;
+  gesher::exec::protected_info = &info;
+  const auto processes = host::create_process_calls;
+  const auto handles = host::owned.size();
+  gesher::usb_storage::protected_runtime = true;
+  Check("protected launch routes once to authority and retains its refusal",
+      gesher::exec::SpawnWithFds(launch, environment, L"protected-fixture", fds, &info, DETACHED_PROCESS) ==
+          ERROR_ACCESS_DENIED && gesher::exec::protected_calls == 1);
+  Check("protected refusal never falls back to ordinary CreateProcess or exports handles",
+      host::create_process_calls == processes && host::owned.size() == handles && info.dwProcessId == 123);
+  gesher::usb_storage::protected_runtime = false;
+  gesher::exec::protected_launch = nullptr;
+  gesher::exec::protected_environment = nullptr;
+  gesher::exec::protected_fds = nullptr;
+  gesher::exec::protected_info = nullptr;
+}
+
 int main(int argc, char** argv) {
   if (argc == 3 && std::strcmp(argv[1], "--child") == 0) return Child(std::atoi(argv[2])) ? 0 : 29;
   PeCapabilities();
+  ProtectedRouting();
   Check("open source fixture", OpenFixture("source", 37) == 37);
   Check("ordinary source bytes and offset", write(NativeFd(37), "seed", 4) == 4 && lseek(NativeFd(37), 2, SEEK_SET) == 2);
   Check("open independent description", OpenFixture("source", 39, O_RDWR) == 39);

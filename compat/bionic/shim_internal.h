@@ -248,6 +248,9 @@ uint64_t PthreadSelfId();
 // Retains a known live kernel thread object for the signal queue. The caller
 // closes the returned handle; an arbitrary or retired pthread id is ESRCH.
 int PthreadSignalTarget(uint64_t thread, void** handle);
+// Resolve a registered local Windows TID through its exact retained object.
+// Returns an owned QUERY_LIMITED|SYNCHRONIZE duplicate; never opens by ID.
+int PthreadSignalTargetByTid(uint32_t tid, void** handle);
 int PthreadSetName(uint64_t thread, const char* name);
 int PthreadGetName(uint64_t thread, char* name, size_t size);
 int PthreadCpuClock(uint64_t thread, int* clock_id);

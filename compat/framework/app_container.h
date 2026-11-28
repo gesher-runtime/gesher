@@ -56,12 +56,23 @@ DWORD CapabilitySid(const std::wstring& capability, Sid* sid);
 // The container's own writable folder (%LOCALAPPDATA%\Packages\<name>\AC).
 DWORD FolderPath(PSID container, std::wstring* path);
 
+// The current user's actual Windows profile path, independent of its environment.
+DWORD LocalAppDataPath(std::wstring* path);
+
 // Adds an allow ACE for `trustee` to the DACL of `path` (merged with what is
 // there; inherited by children and propagated to existing ones when `inherit`).
 DWORD Grant(const std::wstring& path, PSID trustee, DWORD access, bool inherit);
 
 // Removes any explicit ACE for `trustee` from the DACL of `path`.
 DWORD Revoke(const std::wstring& path, PSID trustee);
+
+// Migration of one verified current tree only. Pin and visit exact objects;
+// reject links, unreadable nodes and bounded-walk exhaustion. No propagation.
+DWORD RevokeTree(const std::wstring& path, PSID trustee);
+// A new install may not acquire an old install's still-canonical private tree.
+DWORD RequireNoGrantTree(const std::wstring& path, PSID trustee);
+// First migration must not assign another package/signer's private contents.
+DWORD RequireAppTrusteesTree(const std::wstring& path, const std::vector<PSID>& allowed);
 
 // Replaces this trustee's explicit access exactly (zero revokes), propagating
 // inheritance even on a downgrade. Storage objects are pinned and reparse
@@ -80,6 +91,8 @@ DWORD ProtectPrivateStorage(const std::wstring& path);
 // processes run at Low integrity).
 // Free with LocalFree.
 DWORD BinderPipeSecurity(PSECURITY_DESCRIPTOR* descriptor);
+// The same pipe access for a single per-run standalone AppContainer SID.
+DWORD AppContainerPipeSecurity(PSECURITY_DESCRIPTOR* descriptor, PSID client);
 
 }  // namespace appcontainer
 }  // namespace gesher

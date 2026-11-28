@@ -87,7 +87,7 @@ def main():
                             stderr=subprocess.STDOUT, timeout=90)
     (work / 'runtime.log').write_bytes(result.stdout)
     print(result.stdout.decode('utf-8', errors='replace'))
-    if result.returncode or b'DeviceAdminPolicyRuntimeTest: 36 checks passed' not in result.stdout:
+    if result.returncode or b'DeviceAdminPolicyRuntimeTest: 48 checks passed' not in result.stdout:
         raise SystemExit(result.returncode or 1)
 
 

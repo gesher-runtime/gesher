@@ -95,7 +95,8 @@ std::string LinuxPath(const wchar_t* windows);
 // rename, ...): MapPath for kFile, with errno set otherwise: ENOENT for a
 // missing or empty name, `special` for a device or virtual file. Returns false
 // with errno set when there is no file.
-bool DiskPath(const char* path, std::wstring* windows, int special);
+// Only operations with a broker implementation may use allow_broker.
+bool DiskPath(const char* path, std::wstring* windows, int special, bool allow_broker = false);
 
 // unlink (directory false) and rmdir (true) of a mapped path (path.cc).
 int PosixDelete(const std::wstring& windows, bool directory);
@@ -104,6 +105,11 @@ int PosixDelete(const std::wstring& windows, bool directory);
 // path; absolute paths and AT_FDCWD unchanged. False (errno set) if dirfd is
 // not a directory.
 bool ResolveAt(int dirfd, const char* path, std::string* out);
+
+// Physical directory-relative operations use the captured directory object,
+// including after rename. False leaves virtual/absolute paths to ResolveAt.
+bool OpenAtObject(int dirfd, const char* path, int flags, int* result);
+bool DeleteAtObject(int dirfd, const char* path, bool directory, int* result);
 
 // Virtual files and directories (procfs.cc), named as MapPath's kVirtual.
 extern "C" const unsigned char* gesher_auxv_random(void);
@@ -179,6 +185,9 @@ std::string WindowsZoneId();
 
 // A new CRT fd open on NUL (fd.cc), which reserves a number for an fd that
 // gesher-base serves itself: a socket, eventfd or epoll.
+// A non-inheritable native file object for reserving a CRT descriptor slot.
+// A contained process can receive a private anonymous pipe's read end.
+HANDLE OpenFdPlaceholder(bool* pipe = nullptr);
 int ReserveFd();
 
 // Roll back a private, unpublished duplication while another guarded user

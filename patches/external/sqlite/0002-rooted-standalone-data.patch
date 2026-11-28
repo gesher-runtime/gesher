@@ -1,0 +1,82 @@
+diff --git a/dist/sqlite-autoconf-3500400/sqlite3.c b/dist/sqlite-autoconf-3500400/sqlite3.c
+--- a/dist/sqlite-autoconf-3500400/sqlite3.c
++++ b/dist/sqlite-autoconf-3500400/sqlite3.c
+@@ -47658,6 +47658,16 @@
+ ** testing and sandboxing.  The following array holds the names and pointers
+ ** to all overrideable system calls.
+ */
++#if defined(GESHER) && defined(SQLITE_WIN32_HAS_WIDE)
++extern HANDLE WINAPI gesher_sqlite_create_file_w(LPCWSTR, DWORD, DWORD,
++  LPSECURITY_ATTRIBUTES, DWORD, DWORD, HANDLE);
++extern BOOL WINAPI gesher_sqlite_delete_file_w(LPCWSTR);
++extern DWORD WINAPI gesher_sqlite_get_file_attributes_w(LPCWSTR);
++extern BOOL WINAPI gesher_sqlite_get_file_attributes_ex_w(LPCWSTR,
++  GET_FILEEX_INFO_LEVELS, LPVOID);
++extern int gesher_sqlite_rooted_access_w(LPCWSTR, int);
++#endif
++
+ static struct win_syscall {
+   const char *zName;            /* Name of the system call */
+   sqlite3_syscall_ptr pCurrent; /* Current value of the system call */
+@@ -47703,7 +47712,11 @@
+         LPSECURITY_ATTRIBUTES,DWORD,DWORD,HANDLE))aSyscall[4].pCurrent)
+
+ #if !SQLITE_OS_WINRT && defined(SQLITE_WIN32_HAS_WIDE)
++#ifdef GESHER
++  { "CreateFileW",             (SYSCALL)gesher_sqlite_create_file_w,             0 },
++#else
+   { "CreateFileW",             (SYSCALL)CreateFileW,             0 },
++#endif
+ #else
+   { "CreateFileW",             (SYSCALL)0,                       0 },
+ #endif
+@@ -47750,7 +47763,11 @@
+ #define osDeleteFileA ((BOOL(WINAPI*)(LPCSTR))aSyscall[9].pCurrent)
+
+ #if defined(SQLITE_WIN32_HAS_WIDE)
++#ifdef GESHER
++  { "DeleteFileW",             (SYSCALL)gesher_sqlite_delete_file_w,             0 },
++#else
+   { "DeleteFileW",             (SYSCALL)DeleteFileW,             0 },
++#endif
+ #else
+   { "DeleteFileW",             (SYSCALL)0,                       0 },
+ #endif
+@@ -47836,7 +47853,11 @@
+ #define osGetFileAttributesA ((DWORD(WINAPI*)(LPCSTR))aSyscall[20].pCurrent)
+
+ #if !SQLITE_OS_WINRT && defined(SQLITE_WIN32_HAS_WIDE)
++#ifdef GESHER
++  { "GetFileAttributesW",      (SYSCALL)gesher_sqlite_get_file_attributes_w,      0 },
++#else
+   { "GetFileAttributesW",      (SYSCALL)GetFileAttributesW,      0 },
++#endif
+ #else
+   { "GetFileAttributesW",      (SYSCALL)0,                       0 },
+ #endif
+@@ -47844,7 +47865,11 @@
+ #define osGetFileAttributesW ((DWORD(WINAPI*)(LPCWSTR))aSyscall[21].pCurrent)
+
+ #if defined(SQLITE_WIN32_HAS_WIDE)
++#ifdef GESHER
++  { "GetFileAttributesExW",    (SYSCALL)gesher_sqlite_get_file_attributes_ex_w,    0 },
++#else
+   { "GetFileAttributesExW",    (SYSCALL)GetFileAttributesExW,    0 },
++#endif
+ #else
+   { "GetFileAttributesExW",    (SYSCALL)0,                       0 },
+ #endif
+@@ -53055,6 +53081,13 @@
+   if( osIsNT() ){
+     int cnt = 0;
+     WIN32_FILE_ATTRIBUTE_DATA sAttrData;
++#if defined(GESHER) && defined(SQLITE_WIN32_HAS_WIDE)
++    if( !gesher_sqlite_rooted_access_w((LPCWSTR)zConverted, flags) ){
++      sqlite3_free(zConverted);
++      *pResOut = 0;
++      return SQLITE_OK;
++    }
++#endif
+     memset(&sAttrData, 0, sizeof(sAttrData));
+     while( !(rc = osGetFileAttributesExW((LPCWSTR)zConverted,
+                              GetFileExInfoStandard,

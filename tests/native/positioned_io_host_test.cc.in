@@ -16,6 +16,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <thread>
 
 #define WINAPI
@@ -70,6 +71,7 @@ static std::function<void()> before_file_io;
 static std::function<void()> before_status;
 static std::function<void()> after_descriptor_transaction;
 static ino_t revoked_inode;
+static ino_t virtual_directory_inode;
 
 [[maybe_unused]] static void SetLastError(DWORD error) { last_error = error; }
 static DWORD GetLastError() { return last_error; }
@@ -238,10 +240,14 @@ struct DescriptorGuard {
 };
 }
 enum class DescriptorKind { kFile, kZero, kRandom, kUnshareable };
+// Only the immutable virtual-directory marker is relevant to this adapter.
+// The production description registry/aliasing is exercised by the OFD corpus.
+struct OpenFileDescription { std::wstring virtual_directory; };
 struct DescriptorSnapshot {
   HANDLE handle = nullptr;
   DescriptorKind kind = DescriptorKind::kFile;
   int revocation_error = 0;
+  std::shared_ptr<OpenFileDescription> description;
   ~DescriptorSnapshot() { if (handle) CloseHandle(handle); }
 };
 using DescriptorSnapshotPtr = std::shared_ptr<DescriptorSnapshot>;
@@ -267,8 +273,14 @@ static DescriptorSnapshotPtr CaptureDescriptor(int fd) {
     return {};
   }
   struct stat info{};
-  if (fstat(value->handle->fd, &info) == 0 && info.st_ino == revoked_inode)
-    value->revocation_error = EPERM;
+  if (fstat(value->handle->fd, &info) == 0) {
+    if (info.st_ino == revoked_inode) value->revocation_error = EPERM;
+    if (info.st_ino == virtual_directory_inode) {
+      value->kind = DescriptorKind::kUnshareable;
+      value->description = std::make_shared<OpenFileDescription>();
+      value->description->virtual_directory = L"/sys/dev/block/8:16";
+    }
+  }
   return value;
 }
 static int FileDescriptionFlags(const DescriptorSnapshotPtr& value) {
@@ -305,6 +317,14 @@ static int HandleAccess(HANDLE handle, uint32_t* access) {
   return 0;
 }
 }
+}
+// This adapter fixture has ordinary files and no USB block capability. The
+// broker-backed branch has its own Windows guest block fixture.
+namespace gesher::usb_block {
+[[maybe_unused]] static bool Io(const DescriptorSnapshotPtr&, void*, unsigned, bool,
+                                int64_t, int*) { return false; }
+[[maybe_unused]] static bool Seek(const DescriptorSnapshotPtr&, int64_t, int,
+                                  int64_t*) { return false; }
 }
 static int gesher_is_socket(int fd) { struct stat info{}; return fstat(fd, &info) == 0 && S_ISSOCK(info.st_mode); }
 static int gesher_is_device_fd(int fd) {
@@ -427,12 +447,68 @@ static void null_faults() {
   close(fd); unlink(path);
 }
 
+static void virtual_directories() {
+  char path[] = "positioned-directory-XXXXXX";
+  const int fd = mkstemp(path);
+  check("virtual directory: isolated backing object", fd >= 0);
+  if (fd < 0) return;
+  check("virtual directory: initial backing bytes and cursor",
+        write(fd, "original", 8) == 8 && lseek(fd, 3, SEEK_SET) == 3);
+  struct stat info{};
+  check("virtual directory: exact backing identity", fstat(fd, &info) == 0);
+  virtual_directory_inode = info.st_ino;
+  const int alias = dup(fd);
+  check("virtual directory: actual duplicate", alias >= 0);
+  char byte = '!';
+  unsigned native_io = 0;
+  before_file_io = [&] { ++native_io; };
+  check("virtual directory: pread refuses backing bytes", pread(fd, &byte, 1, 0) == -1 && errno == EISDIR && byte == '!');
+  check("virtual directory: pwrite refuses backing mutation", pwrite(fd, "x", 1, 0) == -1 && errno == EISDIR);
+  check("virtual directory: pread64 alias refuses backing bytes", pread64(alias, &byte, 1, 0) == -1 && errno == EISDIR);
+  check("virtual directory: pwrite64 alias refuses backing mutation", pwrite64(alias, "y", 1, 0) == -1 && errno == EISDIR);
+  check("virtual directory: even zero-length read is EISDIR", pread(fd, &byte, 0, 0) == -1 && errno == EISDIR);
+  check("virtual directory: content denial preserves cursor and closes pins",
+        native_io == 0 && syscall(SYS_lseek, alias, 0, SEEK_CUR) == 3 && live_handles == 0);
+  // Tagged directories use the kernel file position as their getdents cursor.
+  // Rewinding/seeking that shared cursor must not expose the metadata bytes.
+  check("virtual directory: alias rewind updates the shared cursor",
+        lseek(alias, 0, SEEK_SET) == 0 && lseek(fd, 0, SEEK_CUR) == 0);
+  check("virtual directory: relative seek is shared across dup",
+        lseek(fd, 4, SEEK_CUR) == 4 && lseek(alias, 0, SEEK_CUR) == 4);
+  check("virtual directory: rewind remains available through either alias",
+        lseek(fd, 0, SEEK_SET) == 0 && lseek(alias, 0, SEEK_CUR) == 0 &&
+        syscall(SYS_lseek, alias, 0, SEEK_CUR) == 0);
+  check("virtual directory: cursor operations perform no content I/O or leaked pins",
+        native_io == 0 && live_handles == 0);
+  after_descriptor_transaction = [fd] {
+    close(fd);
+    const int replacement = open("positioned-directory-replacement", O_RDWR | O_CREAT | O_TRUNC, 0600);
+    if (replacement < 0) std::abort();
+    if (replacement != fd) { dup2(replacement, fd); close(replacement); }
+    if (write(fd, "replacement", 11) != 11) std::abort();
+  };
+  check("virtual directory: pinned marker survives descriptor reuse", pwrite(fd, "z", 1, 0) == -1 && errno == EISDIR);
+  check("virtual directory: replacement retains ordinary file behavior", pread(fd, &byte, 1, 0) == 1 && byte == 'r');
+  check("virtual directory: old alias remains a directory", pread(alias, &byte, 1, 0) == -1 && errno == EISDIR);
+  char original[8]{};
+  check("virtual directory: backing bytes never changed",
+        syscall(SYS_pread64, alias, original, sizeof(original), 0) == sizeof(original) &&
+        std::memcmp(original, "original", sizeof(original)) == 0);
+  before_file_io = {};
+  virtual_directory_inode = 0;
+  if (alias >= 0) close(alias);
+  close(fd);
+  unlink(path);
+  unlink("positioned-directory-replacement");
+}
+
 int main(int argc, char** argv) {
   if (argc != 2) return 2;
   if (std::strcmp(argv[1], "public") == 0) test_positioned_io_contracts();
   else if (std::strcmp(argv[1], "faults") == 0) faults();
   else if (std::strcmp(argv[1], "concurrent") == 0) concurrent();
   else if (std::strcmp(argv[1], "null-faults") == 0) null_faults();
+  else if (std::strcmp(argv[1], "virtual-directories") == 0) virtual_directories();
   else return 2;
   check("positioned I/O: no private handle leaks", live_handles == 0);
   return failures ? 1 : 0;

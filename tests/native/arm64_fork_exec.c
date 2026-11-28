@@ -1175,16 +1175,31 @@ static void test_heap_under_fork(void) {
     if (pid == 0) {
       pthread_t t[kChildThreads];
       for (int k = 0; k < kChildThreads; ++k) {
-        if (pthread_create(&t[k], NULL, child_heap_work, (void*)(uintptr_t)(k + 7)) != 0) _exit(11);
+        const int created = pthread_create(&t[k], NULL, child_heap_work, (void*)(uintptr_t)(k + 7));
+        if (created != 0) {
+          fprintf(stderr, "heap-fork round=%d child-thread=%d pthread_create=%d\n", i, k, created);
+          _exit(11);
+        }
       }
       void* r = child_heap_work((void*)(uintptr_t)3);
       for (int k = 0; k < kChildThreads; ++k) {
         void* tr = NULL;
-        if (pthread_join(t[k], &tr) != 0 || tr != NULL) _exit(12);
+        const int joined = pthread_join(t[k], &tr);
+        if (joined != 0 || tr != NULL) {
+          fprintf(stderr, "heap-fork round=%d child-thread=%d pthread_join=%d result=%p\n", i, k, joined, tr);
+          _exit(12);
+        }
       }
+      if (r != NULL) fprintf(stderr, "heap-fork round=%d child-main allocation failed\n", i);
       _exit(r == NULL ? 0 : 13);
     }
+    const int fork_errno = pid < 0 ? errno : 0;
     const int status = pid > 0 ? reap_within(pid, 15000) : -1;
+    if (status != 0) {
+      const int wait_errno = status == -1 && pid > 0 ? errno : 0;
+      fprintf(stderr, "heap-fork round=%d pid=%ld fork_errno=%d wait_status=%d wait_errno=%d\n",
+              i, (long)pid, fork_errno, status, wait_errno);
+    }
     if (status == 0) ++ok;
     else if (status == -2) ++hung;
   }

@@ -13,6 +13,7 @@
 
 #include <windows.h>
 #include <wchar.h>
+#include "nonclient_rtl.h"
 
 /* The project defines NOGDI for AOSP code. Includers must undefine it before
  * <windows.h> (as gesher_launch.cc and the -UNOGDI credential targets do). */
@@ -379,6 +380,7 @@ static inline INT_PTR CALLBACK GesherHostPromptProc(HWND dialog, UINT message,
     state = (GesherHostPromptState*)lparam;
     SetWindowLongPtrW(dialog, DWLP_USER, (LONG_PTR)state);
     GesherHostThemeInit(&state->theme, dialog);
+    if (state->rtl) GesherSetNonclientRtl(dialog, TRUE);
     DWORD reading = state->rtl ? WS_EX_RTLREADING : 0;
     DWORD align = state->rtl ? SS_RIGHT : SS_LEFT;
     WCHAR* copy = GesherHostEditCopy(state->message);
@@ -421,9 +423,10 @@ static inline INT_PTR CALLBACK GesherHostPromptProc(HWND dialog, UINT message,
     /* Create Deny first so Tab order follows the on-screen order. */
     HWND deny = state->negative != NULL
         ? GesherHostControl(dialog, 0, L"BUTTON", state->negative,
-            WS_TABSTOP | BS_OWNERDRAW, IDCANCEL, 134, 182, 86, 24) : NULL;
+            WS_TABSTOP | BS_OWNERDRAW, IDCANCEL, state->rtl ? 112 : 134, 182, 86, 24) : NULL;
     HWND accept = GesherHostControl(dialog, 0, L"BUTTON", state->positive,
-        WS_TABSTOP | BS_OWNERDRAW, state->negative ? IDYES : IDOK, 230, 182, 86, 24);
+        WS_TABSTOP | BS_OWNERDRAW, state->negative ? IDYES : IDOK,
+        state->rtl ? 16 : 230, 182, 86, 24);
     /* The icon is decorative: a notice is still shown if only it fails. */
     (void)icon;
     if (!heading || !details || !accept || (state->negative && !deny)) {

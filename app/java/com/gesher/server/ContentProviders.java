@@ -131,6 +131,7 @@ final class ContentProviders {
     private boolean current(ProviderInstall install) {
         return install != null && !install.retired && mPm.get(install.owner.packageName) == install.owner
                 && !mPm.isRemovalPending(install.owner.packageName)
+                && !mPm.permissions().isReviewRequired(install.owner)
                 && install.owner.componentEnabled(install.info.name, ApkPackage.ComponentKind.PROVIDER);
     }
     /** Keep acquisition ownership per authority, so removing one provider preserves peers. */
@@ -338,7 +339,7 @@ final class ContentProviders {
 
     List<ProviderInfo> providersFor(ActivityTaskManagerService.ProcessRecord app, ApplicationInfo ai) {
         ApkPackage p = mPm.get(ai.packageName);
-        if (p == null) return List.of();
+        if (p == null || mPm.permissions().isReviewRequired(p)) return List.of();
         List<ProviderInfo> result = new ArrayList<>();
         String processName = mAtm.componentProcess(ai.packageName, ai.processName);
         for (ProviderInfo info : declaredProviders(p, PackageManager.GET_META_DATA
@@ -356,7 +357,8 @@ final class ContentProviders {
         result.sort((a, b) -> Integer.compare(b.initOrder, a.initOrder));
         if (app != null) synchronized (this) {
             if (app.exiting || app.dead || app.packageCode != p
-                    || mPm.get(p.packageName) != p || mPm.isRemovalPending(p.packageName)) return List.of();
+                    || mPm.get(p.packageName) != p || mPm.isRemovalPending(p.packageName)
+                    || mPm.permissions().isReviewRequired(p)) return List.of();
             Map<String, ProviderInstall> installing = mInstalling.computeIfAbsent(app, ignored -> new HashMap<>());
             result.removeIf(info -> !p.componentEnabled(info.name, ApkPackage.ComponentKind.PROVIDER));
             for (ProviderInfo info : result) {
@@ -445,6 +447,24 @@ final class ContentProviders {
             declaredCode = mPm.get(declared.packageName);
         }
         if (declaredCode == null) return null;
+        enforceAccess(actualPackage, declared);
+        if (mPm.permissions().isReviewRequired(declaredCode)) {
+            // AOSP returns no provider while review is pending; a foreground
+            // acquisition may prompt, but never waits for a human to publish one.
+            ApkPackage callerCode = actualPackage == null ? null : mPm.get(actualPackage);
+            boolean system = actualPackage == null;
+            int callerUid = system ? android.os.Process.SYSTEM_UID : callerCode == null ? -1 : callerCode.uid();
+            mAtm.requestComponentPermissionReview(declaredCode,
+                    mAtm.componentReviewForeground(callerUid, system),
+                    () -> mPm.get(declared.packageName) == declaredCode
+                            && !mPm.isRemovalPending(declared.packageName)
+                            && declaredCode.componentEnabled(declared.name, ApkPackage.ComponentKind.PROVIDER)
+                            && (system || callerCode != null && mPm.get(actualPackage) == callerCode
+                                    && !mPm.isRemovalPending(actualPackage))
+                            && (caller == null || !caller.exiting && !caller.dead),
+                    () -> {}, () -> {});
+            return null;
+        }
         ProviderRequest request = new ProviderRequest(declaredCode, declared);
         long deadline = 0;
         boolean acquired = false;
@@ -452,7 +472,8 @@ final class ContentProviders {
         try {
         while (true) {
             if (request.canceled || mPm.get(declared.packageName) != declaredCode
-                    || mPm.isRemovalPending(declared.packageName)) return null;
+                    || mPm.isRemovalPending(declared.packageName)
+                    || mPm.permissions().isReviewRequired(declaredCode)) return null;
             ProviderInfo current = declaredProvider(mPm, name);
             if (current == null || !declared.packageName.equals(current.packageName)
                     || !declared.name.equals(current.name)) return null;
@@ -460,6 +481,7 @@ final class ContentProviders {
             Set<ActivityTaskManagerService.ProcessRecord> live = new HashSet<>(mAtm.processes());
             synchronized (this) {
                 if (request.canceled || mPm.get(declared.packageName) != declaredCode
+                        || mPm.permissions().isReviewRequired(declaredCode)
                         || !declaredCode.componentEnabled(declared.name, ApkPackage.ComponentKind.PROVIDER)) return null;
                 if (caller != null && (caller.exiting || caller.dead)) {
                     throw new SecurityException("Content provider caller retired before acquisition");
@@ -547,6 +569,7 @@ final class ContentProviders {
                 synchronized (this) {
                     if (request.canceled || caller.exiting || caller.dead
                             || mPm.get(declared.packageName) != declaredCode
+                            || mPm.permissions().isReviewRequired(declaredCode)
                             || !declaredCode.componentEnabled(declared.name, ApkPackage.ComponentKind.PROVIDER)) return null;
                     ProviderInstall pending = mInstalling.getOrDefault(caller, Map.of()).get(declared.name);
                     ProviderInfo localInfo = current(pending) && pending.owner == declaredCode
@@ -579,6 +602,7 @@ final class ContentProviders {
             if (request.canceled || app.exiting || app.dead || app.packageCode != request.owner
                     || mPm.get(request.owner.packageName) != request.owner
                     || mPm.isRemovalPending(request.owner.packageName)
+                    || mPm.permissions().isReviewRequired(request.owner)
                     || !request.owner.componentEnabled(request.info.name, ApkPackage.ComponentKind.PROVIDER)) {
                 request.canceled = true; notifyAll(); return;
             }

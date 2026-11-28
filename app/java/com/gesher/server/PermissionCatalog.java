@@ -92,12 +92,17 @@ final class PermissionCatalog {
     }
 
     PermissionInfo get(String name) {
+        return get(name, null);
+    }
+
+    PermissionInfo get(String name, ApkPackage scoped) {
         load();
         PermissionInfo framework = mFramework.get(name);
         if (framework != null) return new PermissionInfo(framework);
         // Framework permission names cannot be replaced by an APK declaration.
         if (name == null || name.startsWith("android.permission.")) return null;
-        PermissionInfo declared = declarations().permissions.get(name);
+        PermissionInfo declared = (scoped == null ? declarations() : declarations(scoped))
+                .permissions.get(name);
         return declared == null ? null : new PermissionInfo(declared);
     }
 
@@ -145,14 +150,36 @@ final class PermissionCatalog {
     // replacement, removal or rollback publishes another map. The entries are
     // private and only copies leave this class.
     private volatile Declarations mDeclarations;
+    private volatile ScopedDeclarations mScopedDeclarations;
+    private record ScopedDeclarations(Map<String, ApkPackage> packages, ApkPackage code,
+            Declarations declarations) { }
 
     /** Do not retain a removed generation's declarations until the next query. */
-    void invalidateDeclarations() { mDeclarations = null; }
+    void invalidateDeclarations() { mDeclarations = null; mScopedDeclarations = null; }
 
     private Declarations declarations() {
         Map<String, ApkPackage> packages = mPm.packageSnapshot();
         Declarations current = mDeclarations;
         if (current != null && current.packages == packages) return current;
+        current = buildDeclarations(packages);
+        mDeclarations = current;
+        return current;
+    }
+
+    private Declarations declarations(ApkPackage scoped) {
+        Map<String, ApkPackage> packages = mPm.packageSnapshot();
+        ScopedDeclarations current = mScopedDeclarations;
+        if (current != null && current.packages == packages && current.code == scoped) {
+            return current.declarations;
+        }
+        Map<String, ApkPackage> overlay = new LinkedHashMap<>(packages);
+        overlay.put(scoped.packageName, scoped);
+        Declarations result = buildDeclarations(java.util.Collections.unmodifiableMap(overlay));
+        mScopedDeclarations = new ScopedDeclarations(packages, scoped, result);
+        return result;
+    }
+
+    private Declarations buildDeclarations(Map<String, ApkPackage> packages) {
         Map<String, PermissionInfo> result = new LinkedHashMap<>();
         Map<String, ApkPackage> owners = new java.util.HashMap<>();
         java.util.Set<String> conflicts = new java.util.HashSet<>();
@@ -177,9 +204,7 @@ final class PermissionCatalog {
                 result.put(name, declaredPermission(pkg, permission));
             }
         }
-        current = new Declarations(packages, result);
-        mDeclarations = current;
-        return current;
+        return new Declarations(packages, result);
     }
 
     private static PermissionInfo declaredPermission(ApkPackage pkg, ParsedPermission parsed) {

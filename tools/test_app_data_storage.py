@@ -31,7 +31,9 @@ def main() -> None:
         clock.parent.mkdir(parents=True)
         device.write_text('package com.gesher.server; public final class Device { '
                           'public static String dataDir() { '
-                          'return System.getProperty("gesher.test.data"); } }\n')
+                          'return System.getProperty("gesher.test.data"); } '
+                          'public static java.io.File logsDir() { '
+                          'return new java.io.File(new java.io.File(dataDir()).getParentFile(), "logs"); } }\n')
         clock.write_text('package android.os; public final class SystemClock { '
                          'public static void sleep(long millis) { '
                          'try { Thread.sleep(millis); } catch (InterruptedException e) { '

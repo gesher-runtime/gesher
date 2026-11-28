@@ -1,0 +1,1855 @@
+diff --git a/compat/art/dalvikvm_main.cc b/compat/art/dalvikvm_main.cc
+index 831997deefe..3508bcc49bf 100644
+--- a/compat/art/dalvikvm_main.cc
++++ b/compat/art/dalvikvm_main.cc
+@@ -12,0 +13,3 @@
++#include "../binder/protected_client_startup.h"
++#include "../usb_storage/protected_runtime_client.h"
++#include <gesher/protected_startup.h>
+@@ -146,0 +150,33 @@ extern "C" int wmain(int argc, wchar_t** wide_argv) {
++  bool binder_configured = false;
++  bool runtime_configured = false;
++  while (argc > 1 && (values[1] == gesher::kProtectedBinderStartupOption ||
++                     values[1] == "--gesher-protected-runtime")) {
++    constexpr int kNativeArguments = 4;
++    const bool binder = values[1] == gesher::kProtectedBinderStartupOption;
++    if (argc <= kNativeArguments + 1 || (binder ? binder_configured : runtime_configured)) {
++      std::fprintf(stderr, "dalvikvm: malformed or repeated protected startup option\n");
++      return EXIT_FAILURE;
++    }
++    const bool configured = binder
++        ? gesher::ConfigureProtectedBinderStartup(values[2], values[3], values[4])
++        : gesher::usb_storage::ConfigureProtectedRuntimeStartup(values[2], values[3], values[4]);
++    if (!configured) {
++      std::fprintf(stderr, "dalvikvm: invalid protected startup endpoint\n");
++      return EXIT_FAILURE;
++    }
++    if (binder) binder_configured = true;
++    else runtime_configured = true;
++    values.erase(values.begin() + 1, values.begin() + 1 + kNativeArguments);
++    argc -= kNativeArguments;
++  }
++  if (runtime_configured && !binder_configured) {
++    std::fprintf(stderr, "dalvikvm: protected runtime requires the protected Binder route\n");
++    return EXIT_FAILURE;
++  }
++  if (runtime_configured) {
++    const uint32_t error = gesher::InitializeProtectedProcessResources();
++    if (error != 0) {
++      std::fprintf(stderr, "dalvikvm: protected resource initialization failed: %u\n", error);
++      return EXIT_FAILURE;
++    }
++  }
+diff --git a/compat/binder/binderd.cc b/compat/binder/binderd.cc
+index 889533e89..9516fa91c 100644
+--- a/compat/binder/binderd.cc
++++ b/compat/binder/binderd.cc
+@@ -40,0 +41 @@
++#include <chrono>
+@@ -48,0 +50 @@
++#include <string_view>
+@@ -58,0 +61,7 @@
++#ifdef GESHER_PROTECTED_BINDER
++#include "protected_bootstrap.h"
++#include "protected_shared_memory.h"
++#else
++namespace gesher::binder { class ProtectedPeer; }
++#endif
++
+@@ -61,0 +71,5 @@ namespace wire = gesher::binder_wire;
++using ProtectedIdentity = std::shared_ptr<const gesher::binder::ProtectedPeer>;
++
++#ifdef GESHER_PROTECTED_BINDER
++gesher::binder::ProtectedSharedMemory g_application_memory;
++#endif
+@@ -204,0 +219 @@ struct Proc {
++  ProtectedIdentity protected_peer;
+@@ -218,0 +234,8 @@ struct Proc {
++bool ProcLive(const Proc* proc) {
++  if (proc->is_dead) return false;
++#ifdef GESHER_PROTECTED_BINDER
++  if (proc->protected_peer) return proc->protected_peer->live();
++#endif
++  return true;
++}
++
+@@ -494 +517 @@ uint64_t DuplicateRemoteHandle(int from_pid, int to_pid, uint64_t handle) {
+-void CloseRemoteHandle(int pid, uint64_t handle) {
++void CloseRemoteHandle(Proc* proc, uint64_t handle) {
+@@ -496 +519,11 @@ void CloseRemoteHandle(int pid, uint64_t handle) {
+-  HANDLE p = OpenProcess(PROCESS_DUP_HANDLE, FALSE, static_cast<DWORD>(pid));
++#ifdef GESHER_PROTECTED_BINDER
++  if (proc->protected_peer) {
++    // A revoked peer still retains the original process object for cleanup;
++    // never reopen a possibly recycled PID when retiring staging handles.
++    DuplicateHandle(proc->protected_peer->process(),
++        reinterpret_cast<HANDLE>(static_cast<uintptr_t>(handle)), nullptr, nullptr,
++        0, FALSE, DUPLICATE_CLOSE_SOURCE);
++    return;
++  }
++#endif
++  HANDLE p = OpenProcess(PROCESS_DUP_HANDLE, FALSE, static_cast<DWORD>(proc->pid));
+@@ -512 +545 @@ void CloseStagingDescription(Buffer* buffer, uint64_t offset) {
+-    CloseRemoteHandle(buffer->proc->pid, description->shared_handle);
++    CloseRemoteHandle(buffer->proc, description->shared_handle);
+@@ -541 +574 @@ void ReleaseBufferObjects(Buffer* buffer) {
+-        CloseRemoteHandle(proc->pid, fp.binder);
++        CloseRemoteHandle(proc, fp.binder);
+@@ -702,0 +736,22 @@ uint32_t TranslateObjectsAll(Proc* proc, Thread* thread, Proc* target_proc, Buff
++      auto* description = DescriptionAt(buffer, off);
++      if (proc->protected_peer || target_proc->protected_peer) {
++#ifdef GESHER_PROTECTED_BINDER
++        if (!description || description->kind != wire::kApplicationSharedMemoryDescription ||
++            description->shared_handle != 0 || description->reserved != 0 || fp.flags != 0) {
++          return BR_FAILED_REPLY;
++        }
++        uint64_t duplicate = 0;
++        const DWORD status = g_application_memory.Duplicate(proc->protected_peer,
++            target_proc->protected_peer, fp.binder, &duplicate);
++        if (status != ERROR_SUCCESS) return BR_FAILED_REPLY;
++        fp.binder = duplicate;
++        memcpy(buffer->data.data() + off, &fp, sizeof(fp));
++        ++*translated;
++        continue;
++#else
++        return BR_FAILED_REPLY;
++#endif
++      }
++      if (description && description->kind == wire::kApplicationSharedMemoryDescription) {
++        return BR_FAILED_REPLY;
++      }
+@@ -711 +765,0 @@ uint32_t TranslateObjectsAll(Proc* proc, Thread* thread, Proc* target_proc, Buff
+-      auto* description = DescriptionAt(buffer, off);
+@@ -718 +772 @@ uint32_t TranslateObjectsAll(Proc* proc, Thread* thread, Proc* target_proc, Buff
+-        CloseRemoteHandle(target_proc->pid, dup);
++        CloseRemoteHandle(target_proc, dup);
+@@ -851,0 +906 @@ void DoTransaction(Proc* proc, Thread* thread, TransactionData& td, bool reply)
++  if (target_proc->protected_peer && !ProcLive(target_proc)) return fail(BR_DEAD_REPLY);
+@@ -968 +1023 @@ void CloseStagingFds(Buffer* buffer) {
+-    CloseRemoteHandle(buffer->proc->pid, staging);
++    CloseRemoteHandle(buffer->proc, staging);
+@@ -1368,0 +1424,4 @@ retry:
++      if (proc->protected_peer && (thread->is_dead || !ProcLive(proc))) {
++        ret = -EBADF;
++        break;
++      }
+@@ -1378 +1437,6 @@ retry:
+-      thread->cv.wait(lock);
++      if (proc->protected_peer) {
++        // Protected registration can be revoked without a Binder message.
++        thread->cv.wait_for(lock, std::chrono::milliseconds(200));
++      } else {
++        thread->cv.wait(lock);
++      }
+@@ -1560 +1624 @@ constexpr uint32_t kMaxMessage = 64u << 20;
+-bool ReadMessage(HANDLE pipe, std::vector<uint8_t>* msg) {
++bool ReadMessage(HANDLE pipe, std::vector<uint8_t>* msg, uint32_t limit = kMaxMessage) {
+@@ -1562 +1626 @@ bool ReadMessage(HANDLE pipe, std::vector<uint8_t>* msg) {
+-  if (!ReadExact(pipe, &len, sizeof(len)) || len > kMaxMessage) return false;
++  if (!ReadExact(pipe, &len, sizeof(len)) || len > limit) return false;
+@@ -1613 +1677 @@ bool ClientIsRestricted(HANDLE pipe) {
+-void ServeProc(HANDLE pipe, In in) {
++void ServeProc(HANDLE pipe, In in, const ProtectedIdentity& protected_peer) {
+@@ -1616 +1680,5 @@ void ServeProc(HANDLE pipe, In in) {
+-  if (g_sandbox && ClientIsRestricted(pipe)) {
++#ifdef GESHER_PROTECTED_BINDER
++  if (protected_peer && (!protected_peer->live() || pid != protected_peer->pid() ||
++      uid != protected_peer->uid() || in.p != in.end)) return;
++#endif
++  if (!protected_peer && g_sandbox && ClientIsRestricted(pipe)) {
+@@ -1639,0 +1708 @@ void ServeProc(HANDLE pipe, In in) {
++    proc->protected_peer = protected_peer;
+@@ -1651 +1720 @@ void ServeProc(HANDLE pipe, In in) {
+-    while (ReadMessage(pipe, &msg)) {
++    while (ReadMessage(pipe, &msg, protected_peer ? 0 : kMaxMessage)) {
+@@ -1900,0 +1970,4 @@ int DoIoctl(Proc* proc, Thread* thread, uint32_t request, In in, Out* out) {
++#ifdef GESHER_PROTECTED_BINDER
++      if (proc->protected_peer &&
++          proc->protected_peer->role() != gesher::binder::PeerRole::kContextManager) return -EPERM;
++#endif
+@@ -1936 +2009 @@ int DoIoctl(Proc* proc, Thread* thread, uint32_t request, In in, Out* out) {
+-void ServeThread(HANDLE pipe, In in) {
++void ServeThread(HANDLE pipe, In in, const ProtectedIdentity& protected_peer = {}) {
+@@ -1940 +2013 @@ void ServeThread(HANDLE pipe, In in) {
+-      !in.Get(&tid)) {
++      !in.Get(&tid) || (protected_peer && in.p != in.end)) {
+@@ -1950 +2023,2 @@ void ServeThread(HANDLE pipe, In in) {
+-    if (it != g_procs.end() && it->second->key == key && !it->second->is_dead) {
++    if (it != g_procs.end() && it->second->key == key &&
++        it->second->protected_peer == protected_peer && ProcLive(it->second.get())) {
+@@ -1977 +2051 @@ void ServeThread(HANDLE pipe, In in) {
+-    if (thread->is_dead || proc->is_dead) {
++    if (thread->is_dead || !ProcLive(proc)) {
+@@ -2033 +2107 @@ void ServeThread(HANDLE pipe, In in) {
+-void Serve(HANDLE pipe) {
++void ServeConnection(HANDLE pipe, ProtectedIdentity protected_peer = {}) {
+@@ -2035 +2109,4 @@ void Serve(HANDLE pipe) {
+-  if (ReadMessage(pipe, &msg)) {
++  // The largest protected hello is op, magic, version, proc id, key and tid.
++  constexpr uint32_t kProtectedHelloLimit = 7 * sizeof(uint32_t);
++  if (ReadMessage(pipe, &msg, protected_peer ? kProtectedHelloLimit : kMaxMessage) &&
++      !msg.empty()) {
+@@ -2040 +2117 @@ void Serve(HANDLE pipe) {
+-        ServeProc(pipe, in);
++        ServeProc(pipe, in, protected_peer);
+@@ -2042,2 +2119,2 @@ void Serve(HANDLE pipe) {
+-        ServeThread(pipe, in);
+-      } else if (op == wire::kHelloRights) {
++        ServeThread(pipe, in, protected_peer);
++      } else if (op == wire::kHelloRights && !protected_peer) {
+@@ -2044,0 +2122,13 @@ void Serve(HANDLE pipe) {
++#ifdef GESHER_PROTECTED_BINDER
++      } else if (op == wire::kPublishApplicationSharedMemory && protected_peer) {
++        uint32_t version = 0;
++        uint64_t handle = 0, size = 0;
++        DWORD status = ERROR_INVALID_DATA;
++        if (in.Get(&version) && version == wire::kVersion && in.Get(&handle) &&
++            in.Get(&size) && in.p == in.end) {
++          status = g_application_memory.Register(protected_peer, handle, size);
++        }
++        WireReply reply;
++        reply.Put<uint32_t>(status);
++        if (WriteMessage(pipe, reply)) FlushFileBuffers(pipe);
++#endif
+@@ -2051,0 +2142,60 @@ void Serve(HANDLE pipe) {
++void Serve(HANDLE pipe) { ServeConnection(pipe); }
++
++#ifdef GESHER_PROTECTED_BINDER
++ProtectedIdentity AdmitProtected(HANDLE pipe, const gesher::binder::ProtectedPeers& peers) {
++  ProtectedIdentity identity;
++  if (peers.FindClient(pipe, &identity) != ERROR_SUCCESS) {
++    DisconnectNamedPipe(pipe);
++    CloseHandle(pipe);
++  }
++  return identity;
++}
++
++std::wstring ProtectedLocator(std::string_view value) {
++  return std::wstring(value.begin(), value.end());
++}
++
++int RunProtected(int argc, char** argv) {
++  if (argc != 5) return 1;
++  using gesher::binder::ProtectedBootstrap;
++  std::unique_ptr<ProtectedBootstrap> registration, listeners;
++  DWORD status = ProtectedBootstrap::Connect(ProtectedLocator(argv[2]), &registration);
++  if (status == ERROR_SUCCESS) {
++    status = ProtectedBootstrap::ConnectListeners(ProtectedLocator(argv[3]),
++        ProtectedLocator(argv[4]), &listeners);
++  }
++  if (status != ERROR_SUCCESS) {
++    Log("protected authority connection failed: %lu", status);
++    return 1;
++  }
++  // The registration thread and accepted connections live until the protected
++  // broker exits. Losing either authenticated control closes the entire broker
++  // with no ordinary device discovery or UID/handle fallback.
++  static gesher::binder::ProtectedPeers peers;
++  std::thread([registration = std::move(registration)] {
++    const DWORD error = registration->Serve(peers);
++    Log("protected registration channel retired: %lu", error);
++    ExitProcess(1);
++  }).detach();
++  for (;;) {
++    HANDLE pipe = nullptr;
++    status = listeners->TakeListener(&pipe);
++    if (status != ERROR_SUCCESS) {
++      Log("protected listener channel retired: %lu", status);
++      ExitProcess(1);
++    }
++    if (!ConnectNamedPipe(pipe, nullptr)) {
++      const DWORD error = GetLastError();
++      if (error != ERROR_PIPE_CONNECTED) {
++        CloseHandle(pipe);
++        if (error == ERROR_NO_DATA) continue;
++        Log("protected listener failed: %lu", error);
++        ExitProcess(1);
++      }
++    }
++    auto identity = AdmitProtected(pipe, peers);
++    if (identity) std::thread(ServeConnection, pipe, std::move(identity)).detach();
++  }
++}
++#endif
++
+@@ -2056,0 +2207,7 @@ int main(int argc, char** argv) {
++  if (argc > 1 && std::string_view(argv[1]) == "--gesher-protected-binder") {
++#ifdef GESHER_PROTECTED_BINDER
++    return RunProtected(argc, argv);
++#else
++    return 1;
++#endif
++  }
+diff --git a/compat/bionic/process_bionic.cc b/compat/bionic/process_bionic.cc
+index fd8ce4168..33e275d38 100644
+--- a/compat/bionic/process_bionic.cc
++++ b/compat/bionic/process_bionic.cc
+@@ -21,0 +22 @@
++#include "program_break.h"
+@@ -274,0 +276,6 @@ int BIONIC_SYSV ForkUnsupported() { return errno = ENOSYS, -1; }
++int BIONIC_SYSV DaemonUnsupported(int, int) { return errno = ENOSYS, -1; }
++
++ProgramBreak& ProcessBreak() { static ProgramBreak value; return value; }
++void* BIONIC_SYSV Sbrk(intptr_t increment) { return ProcessBreak().Increment(increment); }
++int BIONIC_SYSV Brk(void* address) { return ProcessBreak().Set(address); }
++
+@@ -1150,0 +1158,3 @@ void RegisterProcess(SymbolTable& t) {
++  E("daemon", DaemonUnsupported);
++  E("sbrk", Sbrk);
++  E("brk", Brk);
+diff --git a/compat/elf/exec/exec_spawn.cc b/compat/elf/exec/exec_spawn.cc
+index e8c745d9136..a3851ce3956 100644
+--- a/compat/elf/exec/exec_spawn.cc
++++ b/compat/elf/exec/exec_spawn.cc
+@@ -12,0 +13,5 @@
++#include "../../usb_storage/protected_runtime_client.h"
++#include "../../usb_storage/protected_tool_paths.h"
++
++#include <shellapi.h>
++
+@@ -13,0 +19 @@
++#include <array>
+@@ -93,0 +100,5 @@ bool IsShName(const std::string& name) {
++bool IsSuName(const std::string& name) {
++  return name == "su" || name == "/system/bin/su" || name == "/system/xbin/su" ||
++         name == "/bin/su";
++}
++
+@@ -96,3 +107,4 @@ std::string ToolName(const std::string& name) {
+-  static const char* const kTools[] = {"getprop", "setprop", "logcat", "ls",    "cat",   "id",
+-                                       "ps",      "pm", "am", "kill",   "sleep", "toybox",
+-                                       "which",   "mount"};
++  static const char* const kTools[] = {"getprop", "setprop", "logcat", "ls", "cat", "id",
++                                       "dd", "basename", "tr", "ps", "pm", "am", "kill",
++                                       "sleep", "toybox", "blockdev", "grep", "awk", "sync",
++                                       "umount", "which", "mount"};
+@@ -116,0 +129,22 @@ std::string ToolName(const std::string& name) {
++std::wstring FilesystemTool(const std::string& name) {
++  if (!gesher::usb_storage::ProtectedRuntimeEnabled()) return {};
++  std::string base = name;
++  for (const char* prefix : {"/system/bin/", "/system/xbin/", "/bin/", "/sbin/"}) {
++    if (name.starts_with(prefix)) { base = name.substr(std::strlen(prefix)); break; }
++  }
++  if (base.find_first_of("/\\") != std::string::npos) return {};
++  const wchar_t* file = nullptr;
++  if (base == "mkfs.vfat" || base == "mkfs.fat") file = L"mkfs.fat";
++  else if (base == "fsck.vfat" || base == "fsck.fat" || base == "dosfsck") file = L"fsck.fat";
++  else if (base == "mkfs.exfat") file = L"mkfs.exfat";
++  else if (base == "fsck.exfat") file = L"fsck.exfat";
++  else if (base == "mkfs.ext4" || base == "mke2fs") file = L"mke2fs";
++  else if (base == "fsck.ext4" || base == "e2fsck") file = L"e2fsck";
++  if (!file) return {};
++  std::wstring directory = LauncherPath();
++  const size_t slash = directory.find_last_of(L"\\/");
++  if (slash == std::wstring::npos) return {};
++  directory.resize(slash + 1);
++  return directory + L"filesystem-tools\\bin\\" + file;
++}
++
+@@ -174,0 +209 @@ int LaunchFile(const std::wstring& path, const std::string& head, const std::vec
++    if (!CanLoadExecutableElf(path)) return kEACCES;
+@@ -379 +414,4 @@ std::wstring LauncherPath() {
+-  const char* env = gesher::GetWindowsEnvironment("GESHER_EXEC_LAUNCHER");
++  // The protected authority starts its own installed executable. A guest
++  // setting cannot redirect that route to a different native image.
++  const char* env = gesher::usb_storage::ProtectedRuntimeEnabled()
++                        ? nullptr : gesher::GetWindowsEnvironment("GESHER_EXEC_LAUNCHER");
+@@ -393,0 +432,14 @@ std::wstring LauncherPath() {
++bool CanLoadExecutableElf(const std::wstring& path) {
++  const bool protected_runtime = gesher::usb_storage::ProtectedRuntimeEnabled();
++  if (!protected_runtime) return true;
++  uint32_t uid = UINT32_MAX, gid = UINT32_MAX;
++  const bool credentials = gesher::usb_storage::ProtectedRuntimeCredentials(&uid, &gid);
++  // In protected mode LauncherPath is derived from the actual installed
++  // executable and ignores all guest environment overrides.
++  std::wstring runtime = LauncherPath();
++  const size_t slash = runtime.find_last_of(L"\\/");
++  if (slash == std::wstring::npos) return false;
++  runtime.resize(slash);
++  return gesher::usb_storage::ProtectedElfPolicy(path, runtime, protected_runtime, credentials, uid, gid);
++}
++
+@@ -398,0 +451,9 @@ int PrepareProgram(const std::string& prog, const std::vector<std::string>& argv
++  if (IsSuName(prog) && gesher::usb_storage::ProtectedRuntimeEnabled()) {
++    launch->kind = "su";
++    launch->application = LauncherPath();
++    launch->command_line.clear();
++    AppendQuoted(&launch->command_line, launch->application);
++    launch->command_line += L" --su";
++    AppendArgs(&launch->command_line, argv, 1);
++    return Finish(launch);
++  }
+@@ -407,0 +469,10 @@ int PrepareProgram(const std::string& prog, const std::vector<std::string>& argv
++  if (const std::wstring file = FilesystemTool(prog); !file.empty()) {
++    std::string head;
++    const int error = Probe(file, &head);
++    if (error) return error;
++    // These are separate original upstream Android PIE programs. The fixed
++    // installed image is loaded normally, keeps its argv/options and receives
++    // the same scoped block channel as any other admitted Android command.
++    // Missing tools remain ENOENT; no format/check success is synthesized.
++    return LaunchFile(file, head, argv, dir, depth, launch);
++  }
+@@ -488,0 +560,4 @@ std::wstring FindInPath(const std::string& name, const std::string& path) {
++  if (const std::wstring file = FilesystemTool(name); !file.empty()) {
++    std::string head;
++    return Probe(file, &head) == 0 ? file : std::wstring{};
++  }
+@@ -507,0 +583,30 @@ std::vector<std::string> FindAllInPath(const std::string& name, const std::strin
++  if (gesher::usb_storage::ProtectedRuntimeEnabled()) {
++    // These names bypass PATH in PrepareProgram. Discovery must use the same
++    // aliases and admission, and cannot substitute a PATH file when a sealed
++    // helper is missing, malformed or denied for the authenticated identity.
++    if (IsSuName(name)) {
++      uint32_t uid = UINT32_MAX, gid = UINT32_MAX;
++      if (gesher::usb_storage::ProtectedRuntimeCredentials(&uid, &gid) &&
++          !gesher::usb_storage::ProtectedRuntimeIsSystemServer()) {
++        found.push_back(name.find('/') == std::string::npos ? "/system/bin/" + name : name);
++      }
++      // This reports the protected route's existence only. The authority
++      // validates live media consent when it actually launches a su child.
++      return found;
++    }
++    if (!FilesystemTool(name).empty()) {
++      Launch launch;
++      if (PrepareProgram(name, {name}, "", 0, false, &launch, nullptr) == 0 && launch.kind == "elf") {
++        found.push_back(name.find('/') == std::string::npos ? "/system/bin/" + name : name);
++      }
++      return found;
++    }
++  }
++  // An explicit path is tested directly, as PrepareProgram does. In
++  // particular, do not append it to PATH after a failed direct lookup.
++  if (name.find_first_of("/\\") != std::string::npos) {
++    DWORD attributes = GetFileAttributesW(WindowsPath(name).c_str());
++    if (attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0)
++      found.push_back(name);
++    return found;
++  }
+@@ -539,0 +645,96 @@ bool IsToolName(const std::string& name) { return !ToolName(name).empty(); }
++namespace {
++
++DWORD DescriptorError() {
++  switch (errno) {
++    case ENOMEM: return ERROR_NOT_ENOUGH_MEMORY;
++    case EBADF: return ERROR_INVALID_HANDLE;
++    case EINVAL: return ERROR_INVALID_PARAMETER;
++    case EACCES: return ERROR_ACCESS_DENIED;
++    case EOPNOTSUPP: case ENOSYS: return ERROR_NOT_SUPPORTED;
++    default: return ERROR_GEN_FAILURE;
++  }
++}
++
++// These names describe the authority's sealed runtime, not mutable command
++// variables. The service independently derives and enforces them. Filtering
++// here also permits an ordinary inherited environment to use the narrow RPC.
++bool CommandEnvironment(std::wstring_view entry) {
++  const size_t equal = entry.find(L'=');
++  if (!equal || equal == std::wstring_view::npos) return false;
++  std::wstring key(entry.substr(0, equal));
++  for (wchar_t& c : key) if (c >= L'a' && c <= L'z') c -= L'a' - L'A';
++  for (const wchar_t* allowed : {L"LANG", L"LC_ALL", L"LC_CTYPE", L"TZ", L"HOME", L"PWD", L"TMPDIR",
++      L"GESHER_DISPLAY", L"GESHER_APP_WINDOW", L"GESHER_SEPARATE_WINDOWS", L"GESHER_INET",
++      L"GESHER_PROXY", L"HTTP_PROXY", L"HTTPS_PROXY", L"NO_PROXY", L"GESHER_APP_USER_MODEL_ID"}) {
++    if (key == allowed) return true;
++  }
++  return false;
++}
++
++DWORD SpawnProtectedCommand(const Launch& launch, const wchar_t* environment,
++                            const std::wstring& cwd, const std::vector<ChildFd>& fds,
++                            PROCESS_INFORMATION* info, DWORD extra_flags) {
++  if (!info || extra_flags) return ERROR_INVALID_PARAMETER;
++  *info = {};
++  // No PE/batch image supplied by a guest is run by the authority. Its fixed
++  // installed launcher implements shell/tools and the ordinary Android ELF
++  // loader inside this package's restricted Windows security context.
++  if (launch.application != LauncherPath() ||
++      (launch.kind != "sh" && launch.kind != "su" && launch.kind != "tool" &&
++       launch.kind != "elf" && launch.kind != "script" && launch.kind != "spawn")) {
++    return ERROR_NOT_SUPPORTED;
++  }
++  gesher::usb_storage::ProtectedCommandSpec request;
++  int count = 0;
++  wchar_t** raw = CommandLineToArgvW(launch.command_line.c_str(), &count);
++  std::unique_ptr<wchar_t*, decltype(&LocalFree)> arguments(raw, &LocalFree);
++  if (!raw || count < 2 || launch.application != raw[0]) return ERROR_INVALID_PARAMETER;
++  for (int i = 1; i < count; ++i) {
++    const std::wstring_view value(raw[i]);
++    request.arguments.emplace_back(value.begin(), value.end());
++  }
++  request.privileged_root = request.arguments.front() == u"--su";
++  for (const wchar_t* entry = environment; entry && *entry; entry += std::wcslen(entry) + 1) {
++    const std::wstring_view value(entry);
++    if (CommandEnvironment(value)) request.environment.emplace_back(value.begin(), value.end());
++  }
++  std::wstring directory = cwd;
++  if (directory.empty()) {
++    const DWORD needed = GetCurrentDirectoryW(0, nullptr);
++    if (!needed) return GetLastError();
++    directory.resize(needed);
++    const DWORD length = GetCurrentDirectoryW(needed, directory.data());
++    if (!length || length >= needed) return ERROR_INVALID_DATA;
++    directory.resize(length);
++  }
++  request.working_directory.assign(directory.begin(), directory.end());
++
++  std::array<gesher::DescriptorSnapshotPtr, 3> snapshots;
++  std::vector<std::unique_ptr<gesher::NativeFileDescriptionExport>> exports;
++  for (const ChildFd& file : fds) {
++    if (file.fd < 0 || file.fd > 2) return ERROR_NOT_SUPPORTED;
++    if (snapshots[file.fd]) return ERROR_INVALID_PARAMETER;
++    auto snapshot = file.snapshot ? file.snapshot : gesher::CaptureFileHandle(file.handle);
++    if (!snapshot) return DescriptorError();
++    if (snapshot->kind != gesher::DescriptorKind::kFile) return ERROR_NOT_SUPPORTED;
++    if (file.snapshot && file.handle != snapshot->handle) return ERROR_INVALID_PARAMETER;
++    auto reservation = std::make_unique<gesher::NativeFileDescriptionExport>();
++    if (reservation->Prepare(snapshot) < 0) return DescriptorError();
++    request.standard_handles[file.fd] = reinterpret_cast<uintptr_t>(snapshot->handle);
++    snapshots[file.fd] = std::move(snapshot);
++    exports.push_back(std::move(reservation));
++  }
++  gesher::usb_storage::ProtectedCommandChild child;
++  const DWORD result = gesher::usb_storage::ProtectedSpawnCommand(request, &child);
++  if (result != ERROR_SUCCESS) return result;
++  if (!child.pid || !child.start_time || !child.wait_handle) return ERROR_INVALID_DATA;
++  info->hProcess = reinterpret_cast<HANDLE>(child.wait_handle);
++  info->dwProcessId = child.pid;
++  // The launch thread stays authority-owned. The returned process handle is
++  // wait/query only; signal requests are authenticated by that same authority.
++  for (auto& reservation : exports) reservation->Commit();
++  return ERROR_SUCCESS;
++}
++
++}  // namespace
++
+@@ -562,0 +764,3 @@ DWORD SpawnWithFds(const Launch& launch, const wchar_t* environment, const std::
++  if (gesher::usb_storage::ProtectedRuntimeEnabled()) {
++    return SpawnProtectedCommand(launch, environment, cwd, fds, info, extra_flags);
++  }
+diff --git a/compat/elf/exec/exec_spawn.h b/compat/elf/exec/exec_spawn.h
+index 692d3b40163..ae23a7adb11 100644
+--- a/compat/elf/exec/exec_spawn.h
++++ b/compat/elf/exec/exec_spawn.h
+@@ -67,0 +68,5 @@ std::wstring LauncherPath();
++// Every ELF entry, including an in-process exec/spawn transition, checks the
++// authenticated protected UID/GID. Root commands may load only the six sealed
++// installed filesystem helpers. Ordinary Android process execution is unchanged.
++bool CanLoadExecutableElf(const std::wstring& path);
++
+@@ -91,0 +97,3 @@ std::wstring FindInPath(const std::string& name, const std::string& path);
++// Supported explicit paths are resolved directly. In an authenticated protected
++// process, reserved su/filesystem aliases use their actual protected route;
++// an unavailable sealed helper never falls back to a different PATH executable.
+diff --git a/compat/elf/exec/gesher_exec.cc b/compat/elf/exec/gesher_exec.cc
+index eded54300be..68bbc203a02 100644
+--- a/compat/elf/exec/gesher_exec.cc
++++ b/compat/elf/exec/gesher_exec.cc
+@@ -29,0 +30,4 @@
++#include <gesher/protected_startup.h>
++
++#include "../../binder/protected_client_startup.h"
++#include "../../usb_storage/protected_runtime_client.h"
+@@ -39,0 +44 @@
++#include <unistd.h>
+@@ -355,0 +361,7 @@ int RunElf(const std::wstring& path, const std::vector<std::string>& args) {
++  // This guard is deliberately at the final loader entry, not only in the
++  // authority's direct --elf parser. Encoded spawn and future exec transitions
++  // cannot carry UID 0 into a package-controlled ELF image.
++  if (!ex::CanLoadExecutableElf(path)) {
++    std::fprintf(stderr, "gesher-exec: ELF image is not authorized for this protected process\n");
++    return 126;
++  }
+@@ -388,0 +401,23 @@ int RunArguments(const std::vector<std::string>& args) {
++  if (!args.empty() && args[0] == "--su") {
++    uint32_t uid = UINT32_MAX, gid = UINT32_MAX;
++    if (!gesher::usb_storage::ProtectedRuntimeCredentials(&uid, &gid) || uid != 0 || gid != 0) {
++      std::fprintf(stderr, "su: no active authorized root process\n");
++      return 1;
++    }
++    // This is the real shell in an authority-admitted UID 0 process. Every
++    // media operation still goes through that process's revocable grant;
++    // UID 0 itself never grants access to a disk or another Windows object.
++    std::vector<std::string> shell(args.begin() + 1, args.end());
++    if (!shell.empty() && (shell.front() == "0" || shell.front() == "root")) {
++      shell.erase(shell.begin());
++    }
++    if (!shell.empty() && shell.front() != "-c") {
++      std::fprintf(stderr, "su: supported syntax is su [root|0] [-c COMMAND]\n");
++      return 2;
++    }
++    if (!shell.empty() && shell.size() != 2) {
++      std::fprintf(stderr, "su: -c requires one command\n");
++      return 2;
++    }
++    return ex::RunShell(shell);
++  }
+@@ -406,2 +441,3 @@ int RunArguments(const std::vector<std::string>& args) {
+-    if (launch.kind == "elf" || launch.kind == "sh" || launch.kind == "tool" ||
+-        (launch.kind == "script" && launch.application == ex::LauncherPath())) {
++    if (!gesher::usb_storage::ProtectedRuntimeEnabled() &&
++        (launch.kind == "elf" || launch.kind == "sh" || launch.kind == "tool" ||
++         (launch.kind == "script" && launch.application == ex::LauncherPath()))) {
+@@ -417 +453,4 @@ int RunArguments(const std::vector<std::string>& args) {
+-    // PE/batch programs keep the existing wait-and-propagate convention.
++    // A protected encoded spawn must expose its resolved target to the
++    // authority and receive a fresh exact-process grant. It never executes an
++    // arbitrary resolved image inline with the wrapper's credentials.
++    // Ordinary PE/batch programs keep the wait-and-propagate convention.
+@@ -444,0 +484,30 @@ int main() {
++  int argc = 0;
++  wchar_t** wargv = CommandLineToArgvW(GetCommandLineW(), &argc);
++  if (!wargv || argc < 1) return 1;
++  std::vector<std::string> args;
++  bool invalid = false;
++  for (int i = 1; i < argc; ++i) {
++    std::string value = ex::Narrow(wargv[i]);
++    if (ex::Widen(value) != wargv[i]) invalid = true;
++    args.push_back(std::move(value));
++  }
++  LocalFree(wargv);
++  if (invalid) return 1;
++  bool binder = false, runtime = false;
++  while (!args.empty() && (args.front() == gesher::kProtectedBinderStartupOption ||
++                           args.front() == "--gesher-protected-runtime")) {
++    const bool binder_option = args.front() == gesher::kProtectedBinderStartupOption;
++    if (args.size() < 5 || (binder_option ? binder : runtime)) return 1;
++    const bool configured = binder_option
++        ? gesher::ConfigureProtectedBinderStartup(args[1], args[2], args[3])
++        : gesher::usb_storage::ConfigureProtectedRuntimeStartup(args[1], args[2], args[3]);
++    if (!configured) return 1;
++    if (binder_option) binder = true;
++    else runtime = true;
++    args.erase(args.begin(), args.begin() + 4);
++  }
++  if (binder != runtime) return 1;
++  if (runtime) {
++    const DWORD status = gesher::InitializeProtectedProcessResources();
++    if (status != ERROR_SUCCESS) return 1;
++  }
+@@ -458,5 +526,0 @@ int main() {
+-  int argc = 0;
+-  wchar_t** wargv = CommandLineToArgvW(GetCommandLineW(), &argc);
+-  std::vector<std::string> args;
+-  for (int i = 1; i < argc; ++i) args.push_back(ex::Narrow(wargv[i]));
+-  LocalFree(wargv);
+diff --git a/compat/elf/exec/gesher_shell.cc b/compat/elf/exec/gesher_shell.cc
+index c685d5cddb3..f5bf8b07871 100644
+--- a/compat/elf/exec/gesher_shell.cc
++++ b/compat/elf/exec/gesher_shell.cc
+@@ -29,0 +30 @@
++#include "../../usb_storage/protected_runtime_client.h"
+@@ -32,0 +34 @@
++#include <dirent.h>
+@@ -34,0 +37 @@
++#include <sys/stat.h>
+@@ -1648,0 +1652,8 @@ void ExpandInto(Shell* sh, const std::string& raw, bool in_dquote, Buf* out) {
++std::string ShellPath(const Shell& shell, const std::string& path) {
++  if (path.empty() || path.front() == '/' || path.front() == '\\' ||
++      gesher::reserved_names::DriveRoot(path.c_str()) || shell.cwd.empty()) {
++    return path;
++  }
++  return shell.cwd + "/" + path;
++}
++
+@@ -1702,21 +1713,16 @@ void GlobExpand(Shell* sh, const std::string& text, const std::string& glob,
+-      std::wstring wdir = WindowsPath(dir, sh->cwd);
+-      WIN32_FIND_DATAW fd;
+-      HANDLE h = FindFirstFileW((wdir + L"\\*").c_str(), &fd);
+-      if (h != INVALID_HANDLE_VALUE) {
+-        do {
+-          std::string name = Narrow(gesher::reserved_names::Decoded(fd.cFileName));
+-          if (name == "." || name == "..") continue;
+-          if (!name.empty() && name[0] == '.' &&
+-              (comp.empty() || comp[0] != '.'))
+-            continue;
+-          if (GlobMatch(pat, name)) {
+-            if (!last && (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0)
+-              continue;
+-            std::string joined =
+-                base.empty()
+-                    ? name
+-                    : (base.back() == '/' ? base + name : base + "/" + name);
+-            next.push_back(joined);
+-          }
+-        } while (FindNextFileW(h, &fd));
+-        FindClose(h);
++      std::unique_ptr<DIR, decltype(&closedir)> directory(
++          opendir(ShellPath(*sh, dir).c_str()), closedir);
++      if (!directory) continue;
++      while (const dirent* entry = readdir(directory.get())) {
++        std::string name(entry->d_name);
++        if (name == "." || name == "..") continue;
++        if (!name.empty() && name[0] == '.' && comp[0] != '.') continue;
++        if (!GlobMatch(pat, name)) continue;
++        std::string joined = base.empty()
++            ? name : (base.back() == '/' ? base + name : base + "/" + name);
++        if (!last && entry->d_type != DT_DIR) {
++          if (entry->d_type != DT_LNK && entry->d_type != DT_UNKNOWN) continue;
++          struct stat info{};
++          if (stat(ShellPath(*sh, joined).c_str(), &info) != 0 || !S_ISDIR(info.st_mode)) continue;
++        }
++        next.push_back(std::move(joined));
+diff --git a/compat/elf/exec/shell_execute.inc b/compat/elf/exec/shell_execute.inc
+index e11b0310779..e44309e2310 100644
+--- a/compat/elf/exec/shell_execute.inc
++++ b/compat/elf/exec/shell_execute.inc
+@@ -163,0 +164,8 @@ int StartSubshell(const Shell& sh, const std::string& src, const Io& io,
++  if (gesher::usb_storage::ProtectedRuntimeEnabled()) {
++    // The protected launcher accepts only typed stdio resources. Preserve the
++    // actual shell state as bounded command text instead of transferring a
++    // general fd 63 capability. Oversized source gets the normal argument-size
++    // failure from the launch API; ordinary execution retains its fd path.
++    return Start(sh, {"sh", "--gesher-script-text", SubshellSource(sh, src),
++        std::to_string(sh.shell_pid), sh.pos.empty() ? "sh" : sh.pos[0]}, io, process);
++  }
+@@ -315,9 +323,2 @@ bool TestUnary(Shell* sh, const Io& io, const std::string& op,
+-  WIN32_FILE_ATTRIBUTE_DATA data;
+-  if (!GetFileAttributesExW(WindowsPath(arg, sh->cwd).c_str(),
+-                            GetFileExInfoStandard, &data))
+-    return false;
+-  if (op == "-e" || op == "-r" || op == "-x") return true;
+-  if (op == "-d")
+-    return (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+-  if (op == "-f")
+-    return (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0;
++  const std::string path = ShellPath(*sh, arg);
++  struct stat info{};
+@@ -325,3 +326,9 @@ bool TestUnary(Shell* sh, const Io& io, const std::string& op,
+-    return (data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
+-  if (op == "-w") return (data.dwFileAttributes & FILE_ATTRIBUTE_READONLY) == 0;
+-  if (op == "-s") return data.nFileSizeHigh != 0 || data.nFileSizeLow != 0;
++    return lstat(path.c_str(), &info) == 0 && S_ISLNK(info.st_mode);
++  if (op == "-r") return access(path.c_str(), R_OK) == 0;
++  if (op == "-w") return access(path.c_str(), W_OK) == 0;
++  if (op == "-x") return access(path.c_str(), X_OK) == 0;
++  if (stat(path.c_str(), &info) != 0) return false;
++  if (op == "-e") return true;
++  if (op == "-d") return S_ISDIR(info.st_mode);
++  if (op == "-f") return S_ISREG(info.st_mode);
++  if (op == "-s") return info.st_size != 0;
+diff --git a/compat/libcore/process.cc b/compat/libcore/process.cc
+index e2968332dbb..7155e09ae3f 100644
+--- a/compat/libcore/process.cc
++++ b/compat/libcore/process.cc
+@@ -46,0 +47,2 @@
++#include "../usb_storage/protected_runtime_client.h"
++
+@@ -331,0 +334 @@ void JNICALL DestroyProcess(JNIEnv*, jclass, jint pid) {
++  uint64_t creation = 0;
+@@ -334 +337,7 @@ void JNICALL DestroyProcess(JNIEnv*, jclass, jint pid) {
+-    if (g_children.find(pid) == g_children.end()) return;
++    const auto child = g_children.find(pid);
++    if (child == g_children.end()) return;
++    if (gesher::usb_storage::ProtectedRuntimeEnabled()) {
++      FILETIME created{}, exited{}, kernel{}, user{};
++      if (!GetProcessTimes(child->second, &created, &exited, &kernel, &user)) return;
++      creation = (static_cast<uint64_t>(created.dwHighDateTime) << 32) | created.dwLowDateTime;
++    }
+@@ -336 +345,2 @@ void JNICALL DestroyProcess(JNIEnv*, jclass, jint pid) {
+-  gesher_kill_other(pid, kSigterm);
++  if (creation) gesher::usb_storage::ProtectedSignal(static_cast<uint32_t>(pid), creation, kSigterm);
++  else gesher_kill_other(pid, kSigterm);
+@@ -342,3 +352,14 @@ void JNICALL DestroyProcessForcibly(JNIEnv*, jclass, jint pid) {
+-  std::lock_guard<std::mutex> lock(g_mutex);
+-  auto it = g_children.find(pid);
+-  if (it != g_children.end()) TerminateProcess(it->second, 0x80 + kSigkill);
++  uint64_t creation = 0;
++  {
++    std::lock_guard<std::mutex> lock(g_mutex);
++    auto it = g_children.find(pid);
++    if (it == g_children.end()) return;
++    if (!gesher::usb_storage::ProtectedRuntimeEnabled()) {
++      TerminateProcess(it->second, 0x80 + kSigkill);
++      return;
++    }
++    FILETIME created{}, exited{}, kernel{}, user{};
++    if (!GetProcessTimes(it->second, &created, &exited, &kernel, &user)) return;
++    creation = (static_cast<uint64_t>(created.dwHighDateTime) << 32) | created.dwLowDateTime;
++  }
++  if (creation) gesher::usb_storage::ProtectedSignal(static_cast<uint32_t>(pid), creation, kSigkill);
+diff --git a/compat/posix/include/gesher/file_description.h b/compat/posix/include/gesher/file_description.h
+index b2d4c09ab6b900e6a54f3231a303648396255882..b1428283797d7b51e028fb74f7cb35b8b6c6e059 100644
+--- a/compat/posix/include/gesher/file_description.h
++++ b/compat/posix/include/gesher/file_description.h
+@@ -27,0 +28,6 @@ struct DescriptorSnapshot {
++
++  // Only private duplicates made while capturing a descriptor are linked.
++  // Their owner is the thread running the operation that requested the pin.
++  DWORD capture_thread = 0;
++  DescriptorSnapshot* previous_capture = nullptr;
++  DescriptorSnapshot* next_capture = nullptr;
+diff --git a/compat/posix/posix.cmake b/compat/posix/posix.cmake
+index 0f910493e..ef1df5da9 100644
+--- a/compat/posix/posix.cmake
++++ b/compat/posix/posix.cmake
+@@ -3,0 +4,4 @@ add_library(gesher_posix STATIC
++  ${CMAKE_CURRENT_LIST_DIR}/../binder/protected_data_client.cc
++  ${CMAKE_CURRENT_LIST_DIR}/../usb_storage/block_broker_client.cc
++  ${CMAKE_CURRENT_LIST_DIR}/../usb_storage/protected_runtime_client.cc
++  ${CMAKE_CURRENT_LIST_DIR}/src/usb_block.cc
+@@ -4,0 +9 @@ add_library(gesher_posix STATIC
++  ${CMAKE_CURRENT_LIST_DIR}/src/binder_transport.cc
+@@ -44,0 +50 @@ add_library(gesher_posix STATIC
++  ${CMAKE_CURRENT_LIST_DIR}/src/protected_startup.cc
+@@ -103,0 +110,5 @@ target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_environment_anchor_v1)
++# Native bootstrap routes belong to the executable even when Binder and JNI
++# callers are linked into separate AOSP DLLs.
++target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_binder_transport_anchor_v1)
++target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_usb_block_owner_anchor_v1)
++target_link_options(gesher_posix INTERFACE -Wl,-u,gesher_protected_runtime_anchor)
+@@ -126,0 +138,6 @@ set_source_files_properties(${CMAKE_CURRENT_LIST_DIR}/src/binder.cc PROPERTIES
++set_source_files_properties(${CMAKE_CURRENT_LIST_DIR}/../binder/protected_data_client.cc PROPERTIES
++  COMPILE_OPTIONS "-fexceptions")
++set_source_files_properties(${CMAKE_CURRENT_LIST_DIR}/../usb_storage/protected_runtime_client.cc PROPERTIES
++  COMPILE_OPTIONS "-fexceptions")
++set_source_files_properties(${CMAKE_CURRENT_LIST_DIR}/src/protected_startup.cc PROPERTIES
++  COMPILE_OPTIONS "-fexceptions")
+diff --git a/compat/posix/src/binder.cc b/compat/posix/src/binder.cc
+index 57a022ef90b..7c19a817594 100644
+--- a/compat/posix/src/binder.cc
++++ b/compat/posix/src/binder.cc
+@@ -30,0 +31 @@
++#include <gesher/application_shared_memory.h>
+@@ -38,0 +40 @@
++#include "binder_transport.h"
+@@ -122,0 +125 @@ HANDLE ConnectPipe(const std::wstring& name) {
++  if (const auto* endpoint = ProtectedBinderEndpoint()) return OpenProtectedBinder(*endpoint);
+@@ -364,0 +368,15 @@ bool SendFds(uint8_t* data, size_t data_size, const void* offsets, size_t offset
++      if (ProtectedBinderEndpoint()) {
++        // Offer only the exact file object. The authenticated broker admits it
++        // only from the registered system server and only when it matches the
++        // published ApplicationSharedMemory object. Never export caller-owned
++        // writable OFD metadata on this route.
++        snapshot = CaptureDescriptor(fd);
++        if (!snapshot || snapshot->kind != DescriptorKind::kFile) {
++          ok = false; obj.pad_binder = 0; return;
++        }
++        obj.pad_flags = 0;
++        obj.pad_binder = reinterpret_cast<uintptr_t>(snapshot->handle);
++        descriptions->push_back({offset, 0, wire::kApplicationSharedMemoryDescription, 0});
++        pins->push_back(std::move(snapshot));
++        return;
++      }
+@@ -426,0 +445,12 @@ bool ReceiveFds(uint8_t* data, size_t data_size, const void* offsets, size_t off
++      } else if (description.kind == wire::kApplicationSharedMemoryDescription) {
++        // A protected-only typed transfer. Derive a fresh local description
++        // from the reduced kernel handle; never adopt a producer's writable
++        // metadata or accept this type over ordinary discovery.
++        if (ProtectedBinderEndpoint() && GetFileType(owned) == FILE_TYPE_DISK) {
++          auto snapshot = CaptureFileHandle(owned);
++          const int flags = snapshot ? FileDescriptionIoFlags(snapshot) : -1;
++          if (flags >= 0 && (flags & (O_ACCMODE | O_PATH)) == O_RDONLY) {
++            fd = AttachFileDescription(snapshot, true);
++          }
++        }
++        CloseHandle(owned);
+@@ -770,0 +801,50 @@ int Forward(const std::shared_ptr<BinderFile>& file, uint32_t request, void* arg
++bool UsesProtectedBinder() { return ProtectedBinderEndpoint() != nullptr; }
++
++int PublishApplicationSharedMemory(int fd, size_t size) {
++  const auto* endpoint = ProtectedBinderEndpoint();
++  if (!endpoint) return 0;
++  auto snapshot = CaptureDescriptor(fd);
++  if (!snapshot || snapshot->kind != DescriptorKind::kFile) return errno = EBADF, -1;
++  HANDLE pipe = OpenProtectedBinder(*endpoint);
++  if (pipe == INVALID_HANDLE_VALUE) return errno = EACCES, -1;
++  Message request;
++  request.Put<uint32_t>(wire::kPublishApplicationSharedMemory);
++  request.Put<uint32_t>(wire::kMagic);
++  request.Put<uint32_t>(wire::kVersion);
++  request.Put<uint64_t>(reinterpret_cast<uintptr_t>(snapshot->handle));
++  request.Put<uint64_t>(size);
++  std::vector<uint8_t> reply;
++  const bool received = Send(pipe, request) && Receive(pipe, &reply);
++  CloseHandle(pipe);
++  if (!received || reply.size() != sizeof(uint32_t)) return errno = EIO, -1;
++  uint32_t status = 0;
++  memcpy(&status, reply.data(), sizeof(status));
++  if (status != ERROR_SUCCESS) return errno = ErrnoFromWin32(status), -1;
++  return 0;
++}
++
++int DuplicateApplicationSharedMemoryReadOnly(int fd) {
++  auto source = CaptureDescriptor(fd);
++  if (!source || source->kind != DescriptorKind::kFile ||
++      GetFileType(source->handle) != FILE_TYPE_DISK) return errno = EBADF, -1;
++  HANDLE readonly = nullptr;
++  constexpr DWORD access = FILE_READ_DATA | FILE_READ_ATTRIBUTES | SYNCHRONIZE;
++  if (!DuplicateHandle(GetCurrentProcess(), source->handle, GetCurrentProcess(), &readonly,
++                       access, FALSE, 0)) return FailWithLastError();
++  // Do not CaptureFileHandle here: its exact-object match can reuse the
++  // producer's writable OFD. This is a new read-only descriptor description.
++  int result = _open_osfhandle(reinterpret_cast<intptr_t>(readonly),
++                             _O_RDONLY | _O_BINARY | _O_NOINHERIT);
++  if (result < 0) {
++    const int error = gesher_errno_from_crt(errno);
++    CloseHandle(readonly);
++    return errno = error, -1;
++  }
++  if (RegisterOfd(result, O_RDONLY) < 0) {
++    const int error = errno;
++    close(result);
++    return errno = error, -1;
++  }
++  return result;
++}
++
+@@ -771,0 +852,6 @@ bool BinderDeviceExists() {
++  if (const auto* endpoint = ProtectedBinderEndpoint()) {
++    HANDLE pipe = OpenProtectedBinder(*endpoint);
++    if (pipe == INVALID_HANDLE_VALUE) return false;
++    CloseHandle(pipe);
++    return true;
++  }
+@@ -781,2 +867,3 @@ int OpenBinder(int flags) {
+-  std::wstring name = PipeName();
+-  if (name.empty()) return errno = ENOENT, -1;
++  const bool is_protected = ProtectedBinderEndpoint() != nullptr;
++  std::wstring name = is_protected ? std::wstring() : PipeName();
++  if (!is_protected && name.empty()) return errno = ENOENT, -1;
+diff --git a/compat/posix/src/binder_file_descriptions.h b/compat/posix/src/binder_file_descriptions.h
+index 5c1adbf003b..6483aa56071 100644
+--- a/compat/posix/src/binder_file_descriptions.h
++++ b/compat/posix/src/binder_file_descriptions.h
+@@ -30,0 +31 @@ inline bool ValidFileDescriptions(const void* data, size_t data_size,
++    const bool application_memory = description.kind == kApplicationSharedMemoryDescription;
+@@ -34,0 +36 @@ inline bool ValidFileDescriptions(const void* data, size_t data_size,
++         : application_memory ? description.shared_handle != 0 || object.pad_flags != 0
+diff --git a/compat/posix/src/binder_wire.h b/compat/posix/src/binder_wire.h
+index 50a85fb801e..049f1e45577 100644
+--- a/compat/posix/src/binder_wire.h
++++ b/compat/posix/src/binder_wire.h
+@@ -44 +44 @@ constexpr uint32_t kMagic = 0x47424452;  // "GBDR"
+-constexpr uint32_t kVersion = 4;
++constexpr uint32_t kVersion = 5;
+@@ -64,0 +65,4 @@ constexpr uint32_t kNativeFenceFileDescription = 5;
++// The protected broker admits only the exact ApplicationSharedMemory object
++// published by its authority-registered system server. It supplies a kernel
++// read-only file handle, with zero pad_flags and no shared OFD/control mapping.
++constexpr uint32_t kApplicationSharedMemoryDescription = 6;
+@@ -111,0 +116,5 @@ enum Op : uint32_t {
++
++  // Protected endpoint only. The authenticated system server publishes its
++  // actual framework region. No caller-supplied PID/UID participates.
++  // -> {magic, version, source_handle (u64), exact_size (u64)}; <- {Win32 status}
++  kPublishApplicationSharedMemory = 12,
+diff --git a/compat/posix/src/fd.cc b/compat/posix/src/fd.cc
+index 050eb5646..04c8ed665 100644
+--- a/compat/posix/src/fd.cc
++++ b/compat/posix/src/fd.cc
+@@ -32,0 +33,2 @@
++#include "ofd_internal.h"
++#include "usb_block_internal.h"
+@@ -129 +131,2 @@ int ReadDevice(Device device, void* buf, unsigned int count) {
+-int ReserveFd() {
++HANDLE OpenFdPlaceholder(bool* pipe) {
++  if (pipe) *pipe = false;
+@@ -131,0 +135,21 @@ int ReserveFd() {
++  if (h != INVALID_HANDLE_VALUE) return h;
++  const DWORD nul_error = GetLastError();
++  DWORD in_container = 0, size = 0;
++  if (nul_error != ERROR_ACCESS_DENIED ||
++      !GetTokenInformation(GetCurrentProcessToken(), TokenIsAppContainer,
++                           &in_container, sizeof(in_container), &size) || !in_container) {
++    SetLastError(nul_error);
++    return INVALID_HANDLE_VALUE;
++  }
++  // An AppContainer can reserve a CRT slot with a private kernel file object.
++  // The unused writer closes immediately. Runtime I/O uses the logical fd.
++  HANDLE writer = nullptr;
++  if (!CreatePipe(&h, &writer, nullptr, 1)) return INVALID_HANDLE_VALUE;
++  CloseHandle(writer);
++  if (pipe) *pipe = true;
++  return h;
++}
++
++int ReserveFd() {
++  bool use_pipe = false;
++  HANDLE h = OpenFdPlaceholder(&use_pipe);
+@@ -136 +160,2 @@ int ReserveFd() {
+-  else if (SetDescriptorKind(fd, DescriptorKind::kUnshareable) < 0) {
++  else if ((use_pipe && RegisterOfd(fd, O_RDWR) < 0) ||
++           SetDescriptorKind(fd, DescriptorKind::kUnshareable) < 0) {
+@@ -138,0 +164 @@ int ReserveFd() {
++    if (use_pipe) ForgetOfd(fd);
+@@ -242,0 +269 @@ bool NativePipeIo(int fd, void* buffer, unsigned int count, bool writing, int* r
++  if (snapshot && snapshot->kind == gesher::DescriptorKind::kUnshareable) return false;
+@@ -426,0 +454,5 @@ int ReadFileDescription(const DescriptorSnapshotPtr& snapshot, void* bytes, unsi
++  if (snapshot && snapshot->description && !snapshot->description->virtual_directory.empty()) {
++    return errno = EISDIR, -1;
++  }
++  int block_result;
++  if (usb_block::Io(snapshot, bytes, count, false, -1, &block_result)) return block_result;
+@@ -442,0 +475,5 @@ int WriteFileDescription(const DescriptorSnapshotPtr& snapshot, const void* byte
++  if (snapshot && snapshot->description && !snapshot->description->virtual_directory.empty()) {
++    return errno = EISDIR, -1;
++  }
++  int block_result;
++  if (usb_block::Io(snapshot, const_cast<void*>(bytes), count, true, -1, &block_result)) return block_result;
+@@ -694 +731 @@ int PollFile(pollfd* p) {
+-  // The NUL fd reserves a number, but an epoll is readable only when its
++  // The underlying handle reserves a number, but an epoll is readable only when its
+@@ -711,0 +749,4 @@ int PollFile(pollfd* p) {
++  if (snapshot->kind == gesher::DescriptorKind::kUnshareable) {
++    p->revents = p->events & (kIn | kOut);
++    return true;
++  }
+diff --git a/compat/posix/src/fsops.cc b/compat/posix/src/fsops.cc
+index a1c1f62488f..4b6254d6bea 100644
+--- a/compat/posix/src/fsops.cc
++++ b/compat/posix/src/fsops.cc
+@@ -27,0 +28 @@
++#include "usb_block_internal.h"
+@@ -322,0 +324,4 @@ int Access(const char* path, int mode, bool follow) {
++      if (name.type == S_IFBLK) {
++        return (mode & X_OK) != 0 || ((mode & W_OK) != 0 && !gesher::usb_block::Writable())
++            ? (errno = EACCES, -1) : 0;
++      }
+diff --git a/compat/posix/src/internal.h b/compat/posix/src/internal.h
+index 92fc0c24d3b..b65ab5ac265 100644
+--- a/compat/posix/src/internal.h
++++ b/compat/posix/src/internal.h
+@@ -181,0 +182,3 @@ std::string WindowsZoneId();
++// A non-inheritable native file object for reserving a CRT descriptor slot.
++// A contained process can receive a private anonymous pipe's read end.
++HANDLE OpenFdPlaceholder(bool* pipe = nullptr);
+diff --git a/compat/posix/src/ofd.cc b/compat/posix/src/ofd.cc
+index c1495ced56217f9f42564fad8ef1e3823b89f04d..3e16f60fd53b77a1d6eba9289c711cdbf17ac85d 100644
+--- a/compat/posix/src/ofd.cc
++++ b/compat/posix/src/ofd.cc
+@@ -141,0 +142,62 @@ bool OpenFileDescription::Adopt(HANDLE inherited) {
++namespace {
++#ifdef GESHER_FORK_LOCK
++SRWLOCK capture_lock = SRWLOCK_INIT;
++DescriptorSnapshot* first_capture = nullptr;
++DWORD forking_thread = 0;
++
++struct CaptureLock {
++  CaptureLock() { AcquireSRWLockExclusive(&capture_lock); }
++  ~CaptureLock() { ReleaseSRWLockExclusive(&capture_lock); }
++};
++
++void LinkCapture(DescriptorSnapshot& snapshot) {
++  snapshot.capture_thread = GetCurrentThreadId();
++  snapshot.next_capture = first_capture;
++  if (first_capture) first_capture->previous_capture = &snapshot;
++  first_capture = &snapshot;
++}
++
++void UnlinkCapture(DescriptorSnapshot& snapshot) {
++  if (snapshot.previous_capture) {
++    snapshot.previous_capture->next_capture = snapshot.next_capture;
++  } else {
++    first_capture = snapshot.next_capture;
++  }
++  if (snapshot.next_capture) snapshot.next_capture->previous_capture = snapshot.previous_capture;
++  snapshot.previous_capture = nullptr;
++  snapshot.next_capture = nullptr;
++  snapshot.capture_thread = 0;
++}
++
++bool TryCaptureForkLock(void* lock) {
++  if (!TryAcquireSRWLockExclusive(static_cast<SRWLOCK*>(lock))) return false;
++  forking_thread = GetCurrentThreadId();
++  return true;
++}
++
++void CaptureForkChild(void* lock) {
++  const DWORD child_thread = GetCurrentThreadId();
++  for (auto* snapshot = first_capture; snapshot != nullptr;) {
++    auto* next = snapshot->next_capture;
++    if (snapshot->capture_thread == forking_thread) {
++      snapshot->capture_thread = child_thread;
++    } else {
++      // The operation owning this duplicate will never resume here. Other
++      // owners of the file (including the real descriptor) keep their handles.
++      if (InheritedAtFork(snapshot->handle)) CloseHandle(snapshot->handle);
++      snapshot->handle = nullptr;
++      UnlinkCapture(*snapshot);
++    }
++    snapshot = next;
++  }
++  InitializeSRWLock(static_cast<SRWLOCK*>(lock));
++}
++
++const ForkLockOps capture_fork_ops{
++    TryCaptureForkLock, ForkLockTraits<SRWLOCK>::Unlock, CaptureForkChild};
++const ForkLockRegistration capture_fork_lock(
++    kForkOrderLeaf, "descriptor captures", []() -> void* { return &capture_lock; },
++    &capture_fork_ops);
++#endif
++}  // namespace
++
+@@ -142,0 +205,8 @@ DescriptorSnapshot::~DescriptorSnapshot() {
++#ifdef GESHER_FORK_LOCK
++  if (capture_thread) {
++    CaptureLock lock;
++    UnlinkCapture(*this);
++    CloseHandle(handle);
++    return;
++  }
++#endif
+@@ -395,0 +466,3 @@ DescriptorSnapshotPtr Snapshot(HANDLE file, const std::shared_ptr<OpenFileDescri
++#ifdef GESHER_FORK_LOCK
++  CaptureLock lock;
++#endif
+@@ -398,0 +472,3 @@ DescriptorSnapshotPtr Snapshot(HANDLE file, const std::shared_ptr<OpenFileDescri
++#ifdef GESHER_FORK_LOCK
++  LinkCapture(*snapshot);
++#endif
+@@ -614,0 +691 @@ int FileDescriptionFlags(const DescriptorSnapshotPtr& snapshot) {
++  if (snapshot->kind == DescriptorKind::kUnshareable) return snapshot->description->Flags();
+@@ -677 +754,2 @@ int SetFileDescriptionFlags(const DescriptorSnapshotPtr& snapshot, int arg) {
+-    const DWORD type = GetFileType(file);
++    const DWORD type = snapshot->kind == DescriptorKind::kUnshareable
++        ? FILE_TYPE_CHAR : GetFileType(file);
+diff --git a/compat/posix/src/ofd_internal.h b/compat/posix/src/ofd_internal.h
+index 11cdeb5b6fc..f656ad2d29c 100644
+--- a/compat/posix/src/ofd_internal.h
++++ b/compat/posix/src/ofd_internal.h
+@@ -9,0 +10 @@
++#include <string>
+@@ -14,0 +16 @@ struct RevocableFileGroup;
++namespace usb_block { struct Description; }
+@@ -43,0 +46,4 @@ struct OpenFileDescription {
++  std::shared_ptr<usb_block::Description> usb_block;
++  // Immutable after publication. A USB virtual directory is a local capability,
++  // marked kUnshareable so its readonly metadata file cannot escape as a directory.
++  std::wstring virtual_directory;
+diff --git a/compat/posix/src/procfs.cc b/compat/posix/src/procfs.cc
+index 29f16f8e670..3071f5ff6ae 100644
+--- a/compat/posix/src/procfs.cc
++++ b/compat/posix/src/procfs.cc
+@@ -54,0 +55 @@
++#include "usb_block_internal.h"
+@@ -897,0 +899,2 @@ struct Node {
++  std::string usb_content;
++  bool usb_namespace = false;  // Lookup admitted this name through the live USB session.
+@@ -936,0 +940,102 @@ Node Lookup(const std::wstring& name, bool list) {
++  if (p.size() >= 3 && p[0] == "sys" && p[1] == "dev" && p[2] == "block") {
++    if (!usb_block::Attached()) return n;
++    n.usb_namespace = true;
++    if (p.size() == 3) {
++      n.type = kDir;
++      if (list) for (const auto& node : usb_block::Devices()) {
++        Add(&n.entries, usb_block::DeviceNumberName(node), DT_LNK);
++      }
++    } else if (p.size() == 4) {
++      const std::string node = usb_block::NodeFromDeviceNumber(p[3]);
++      if (!node.empty() && usb_block::DeviceExists(node)) {
++        n.type = kLink;
++        n.link = "usb-alias";
++        n.usb_content = "/sys/block/sdb" + (node == "sdb" ? std::string{} : "/" + node);
++      }
++    }
++    return n;
++  }
++  if (p.size() >= 5 && p[0] == "sys" && p[1] == "devices" && p[2] == "gesher" &&
++      p[3] == "usb" && p[4] == "sdb") {
++    if (!usb_block::Attached()) return n;
++    n.usb_namespace = true;
++    if (p.size() == 5) {
++      n.type = kDir;
++      if (list) for (const char* field : {"model", "serial"}) {
++        std::string value;
++        if (usb_block::SysContent(field, &value)) Add(&n.entries, field, DT_REG);
++      }
++    } else if (p.size() == 6 && (p[5] == "model" || p[5] == "serial") &&
++        usb_block::SysContent(p[5], &n.usb_content)) n.type = kFile;
++    return n;
++  }
++  if (p.size() >= 2 && (p[0] == "dev" || p[0] == "sys") && p[1] == "block") {
++    if (!usb_block::Attached()) return n;
++    n.usb_namespace = true;
++    if (p.size() == 2) {
++      n.type = kDir;
++      if (list) {
++        if (p[0] == "dev") {
++          for (const auto& node : usb_block::Devices()) Add(&n.entries, node, DT_BLK);
++        } else Add(&n.entries, usb_block::kBlockName, DT_DIR);
++      }
++      return n;
++    }
++    if (p[0] == "dev") {
++      if (p.size() == 3 && usb_block::DeviceExists(p[2])) n.type = S_IFBLK;
++      return n;
++    }
++    if (p[2] != usb_block::kBlockName) return n;
++    if (p.size() == 3) {
++      n.type = kDir;
++      if (list) {
++        for (const char* field : {"size", "removable", "ro"}) Add(&n.entries, field, DT_REG);
++        Add(&n.entries, "device", DT_LNK);
++        Add(&n.entries, "holders", DT_DIR);
++        Add(&n.entries, "slaves", DT_DIR);
++        for (const auto& node : usb_block::Devices()) {
++          if (node != usb_block::kBlockName) Add(&n.entries, node, DT_DIR);
++        }
++      }
++      return n;
++    }
++    if (p.size() >= 4 && p[3] != usb_block::kBlockName && usb_block::DeviceExists(p[3])) {
++      if (p.size() == 4) {
++        n.type = kDir;
++        if (list) {
++          for (const char* field : {"size", "start", "partition", "ro", "removable"}) Add(&n.entries, field, DT_REG);
++          Add(&n.entries, "holders", DT_DIR);
++          Add(&n.entries, "slaves", DT_DIR);
++        }
++      } else if (p.size() == 5 && (p[4] == "size" || p[4] == "start" ||
++                                  p[4] == "partition" || p[4] == "ro" || p[4] == "removable")) {
++        std::string content;
++        if (usb_block::NodeSysContent(p[3], p[4], &content)) {
++          n.type = kFile;
++          n.usb_content = std::move(content);
++        }
++      } else if (p.size() == 5 && (p[4] == "holders" || p[4] == "slaves")) {
++        n.type = kDir;
++      }
++      return n;
++    }
++    if (p.size() == 4 && p[3] == "device") {
++      n.type = kLink;
++      n.link = "usb-alias";
++      n.usb_content = "/sys/devices/gesher/usb/sdb";
++      return n;
++    }
++    if (p.size() == 4 && (p[3] == "holders" || p[3] == "slaves")) {
++      n.type = kDir;
++      return n;
++    }
++    if ((p.size() == 4 && (p[3] == "size" || p[3] == "removable" || p[3] == "ro")) ||
++        (p.size() == 5 && p[3] == "device" && (p[4] == "model" || p[4] == "serial"))) {
++      std::string content;
++      if (usb_block::SysContent(p.back(), &content)) {
++        n.type = kFile;
++        n.usb_content = std::move(content);
++      }
++    }
++    return n;
++  }
+@@ -1086,0 +1192 @@ std::string Content(const Node& n) {
++  if (!n.usb_content.empty()) return n.usb_content;
+@@ -1339,0 +1446 @@ bool ReadLink(const std::wstring& name, std::string* target) {
++  if (n.link == "usb-alias") { *target = n.usb_content; return true; }
+@@ -1378,0 +1486,2 @@ int Open(const std::wstring& name, int flags) {
++  if (n.type == S_IFBLK) return usb_block::OpenNode(
++      Narrow(name.substr(name.find_last_of(L'/') + 1).c_str()), flags);
+@@ -1406,0 +1516,2 @@ int Open(const std::wstring& name, int flags) {
++  const bool usb_directory = directory && n.usb_namespace;
++  if (usb_directory && (flags & (O_DIRECT | O_APPEND)) != 0) return errno = EOPNOTSUPP, -1;
+@@ -1431,2 +1542,4 @@ int Open(const std::wstring& name, int flags) {
+-  // What the fd is open on (DescribeHandle): /proc and /sys names; not
+-  // /etc/timezone, which is an ordinary file on Linux.
++  // What the fd is open on (DescribeHandle): /proc, /sys and the admitted
++  // USB /dev/block directory; not /etc/timezone, an ordinary file on Linux.
++  // The USB directory remains a process-local capability below. Its tagged
++  // readonly file supplies the shared getdents64/lseek position, never disk I/O.
+@@ -1439 +1552 @@ int Open(const std::wstring& name, int flags) {
+-  if ((linux_name.rfind("/proc", 0) == 0 || linux_name.rfind("/sys", 0) == 0) &&
++  if ((linux_name.rfind("/proc", 0) == 0 || linux_name.rfind("/sys", 0) == 0 || usb_directory) &&
+@@ -1483 +1596,2 @@ int Open(const std::wstring& name, int flags) {
+-  if (RegisterOfd(fd, flags | ((flags & O_PATH) == 0 ? O_LARGEFILE : 0)) < 0) {
++  if (RegisterOfd(fd, flags | ((flags & O_PATH) == 0 ? O_LARGEFILE : 0)) < 0 ||
++      (usb_directory && SetDescriptorKind(fd, DescriptorKind::kUnshareable) < 0)) {
+@@ -1487,0 +1602,5 @@ int Open(const std::wstring& name, int flags) {
++  if (usb_directory) {
++    auto snapshot = CaptureDescriptor(fd);
++    if (!snapshot) { const int error = errno; close(fd); return errno = error, -1; }
++    snapshot->description->virtual_directory = name;
++  }
+diff --git a/compat/posix/src/storage_policy.cc b/compat/posix/src/storage_policy.cc
+index bfa1fe81677..fca36f32665 100644
+--- a/compat/posix/src/storage_policy.cc
++++ b/compat/posix/src/storage_policy.cc
+@@ -18,0 +19 @@
++#include "../../usb_storage/protected_runtime_client.h"
+@@ -220,0 +222 @@ struct ProcessIdentity {
++  std::wstring policy_path;
+@@ -232,0 +235,2 @@ extern "C" __declspec(dllexport) ProcessIdentity* gesher_storage_policy_owner_v1
++    value->policy_path = value->data_root + L"\\system\\storage-policy\\" + Widen(value->package.c_str());
++    if (usb_storage::ProtectedRuntimeEnabled()) value->policy_path += L"\\policy";
+@@ -515 +518,0 @@ bool CheckCanonicalPath(const ProcessIdentity& identity, const std::wstring& can
+-  std::wstring policy_path = identity.data_root + L"\\system\\storage-policy\\" + pkg_w;
+@@ -518 +521 @@ bool CheckCanonicalPath(const ProcessIdentity& identity, const std::wstring& can
+-  LoadPolicy(policy_path, identity.package, identity.uid, &mode, &media_mask);
++  LoadPolicy(identity.policy_path, identity.package, identity.uid, &mode, &media_mask);
+diff --git a/compat/posix/src/system.cc b/compat/posix/src/system.cc
+index 98cee968a..3f9268368 100644
+--- a/compat/posix/src/system.cc
++++ b/compat/posix/src/system.cc
+@@ -40,0 +41 @@
++#include "usb_block_internal.h"
+@@ -377,0 +379,2 @@ int ioctl(int fd, unsigned long request, ...) {
++  int block_result;
++  if (gesher::usb_block::Ioctl(snapshot, request, argp, &block_result)) return block_result;
+@@ -379,0 +383,5 @@ int ioctl(int fd, unsigned long request, ...) {
++  if (snapshot->kind == gesher::DescriptorKind::kUnshareable) {
++    if (request != FIONREAD) return errno = ENOTTY, -1;
++    *argp = 0;
++    return 0;
++  }
+diff --git a/compat/posix/src/system_properties.cc b/compat/posix/src/system_properties.cc
+index 877217bc604..406ce51fd9f 100644
+--- a/compat/posix/src/system_properties.cc
++++ b/compat/posix/src/system_properties.cc
+@@ -28,0 +29,22 @@ namespace {
++bool ProtectedSystemServer() {
++  // The executable publishes this role only after the authority authenticates
++  // its exact suspended creation handle and native resource bootstrap finishes.
++  // The property directory also admits only that server's lowbox SID for writes.
++  using Query = bool (*)();
++  auto query = reinterpret_cast<Query>(GetProcAddress(GetModuleHandleW(nullptr),
++      "gesher_protected_runtime_system_server"));
++  return query && query();
++}
++
++HANDLE ProtectedWriterMutex() {
++  // Each DLL has its own copy of this POSIX implementation. The authenticated
++  // executable owns one unnamed mutex so the sealed token's default DACL never
++  // needs to be broadened to reopen a predictable name from another module.
++  using Acquire = uint32_t (*)(uint64_t*);
++  auto acquire = reinterpret_cast<Acquire>(GetProcAddress(GetModuleHandleW(nullptr),
++      "gesher_protected_property_mutex"));
++  uint64_t handle = 0;
++  if (!acquire || acquire(&handle) != ERROR_SUCCESS || !handle || handle > UINTPTR_MAX) return nullptr;
++  return reinterpret_cast<HANDLE>(static_cast<uintptr_t>(handle));
++}
++
+@@ -29,0 +52,2 @@ constexpr DWORD kCapacity = 4 * 1024 * 1024;
++// Match the previous format's maximum payload. Each area now has two banks.
++constexpr DWORD kPayloadCapacity = kCapacity - 4 * sizeof(uint32_t);
+@@ -31 +55 @@ constexpr uint32_t kMagic = 0x47535052; // GSPR
+-constexpr uint32_t kVersion = 2;
++constexpr uint32_t kVersion = 3;
+@@ -44 +68,5 @@ struct Header {
+-  uint32_t used;
++  uint32_t used[2];
++};
++struct AreaLayout {
++  Header header;
++  char banks[2][kPayloadCapacity];
+@@ -45,0 +74,2 @@ struct Header {
++static_assert(sizeof(AreaLayout) == sizeof(Header) + 2 * kPayloadCapacity);
++constexpr DWORD kAreaSize = sizeof(AreaLayout);
+@@ -64,0 +95 @@ struct Area {
++  bool read_only = false;
+@@ -71,0 +103,6 @@ bool Valid(const std::string& name, const std::string& value);
++bool InAppContainer() {
++  DWORD contained = 0, size = 0;
++  return GetTokenInformation(GetCurrentProcessToken(), TokenIsAppContainer,
++                             &contained, sizeof(contained), &size) && contained != 0;
++}
++
+@@ -97,0 +135,9 @@ std::wstring FullPath(std::wstring path) {
++  // Android/Java uses the canonical /mnt/<drive> form (ADR 0045). Passing
++  // that form directly to GetFullPathNameW would resolve it as a directory
++  // named "mnt" on the current drive, outside the intended Android root.
++  if (path.size() >= 6 && path.compare(0, 5, L"/mnt/") == 0 &&
++      ((path[5] >= L'a' && path[5] <= L'z') || (path[5] >= L'A' && path[5] <= L'Z')) &&
++      (path.size() == 6 || path[6] == L'/')) {
++    path = std::wstring(1, path[5]) + L":" +
++        (path.size() == 6 ? L"/" : path.substr(6));
++  }
+@@ -215 +261,4 @@ bool Persist(const std::wstring& path, const std::string* name, const Value* val
+-  mutex.value = CreateMutexW(nullptr, FALSE, (L"Local\\gesher-properties-persist-" + Key(path)).c_str());
++  // Protected system_server is the sole writer. The shared unnamed mutex is
++  // recursive for this thread when Current() calls persistence while locked.
++  mutex.value = ProtectedSystemServer() ? ProtectedWriterMutex() :
++      CreateMutexW(nullptr, FALSE, (L"Local\\gesher-properties-persist-" + Key(path)).c_str());
+@@ -287,8 +336,22 @@ bool Refresh(Area* area) {
+-  const auto* header = static_cast<Header*>(area->view);
+-  if (header->magic != kMagic || header->version != kVersion || header->used > kCapacity - sizeof(Header)) return false;
+-  uint32_t generation = __atomic_load_n(&header->generation, __ATOMIC_ACQUIRE);
+-  if (generation == area->cached_generation) return true;
+-  std::string data(static_cast<const char*>(area->view) + sizeof(Header), header->used);
+-  if (!Decode(data, &area->values)) return false;
+-  area->cached_generation = generation;
+-  return true;
++  const auto* layout = static_cast<const AreaLayout*>(area->view);
++  const Header* header = &layout->header;
++  // Writers serialize in the existing mutex. A read-only process reads the
++  // published bank without being able to block a writer. A second publication
++  // can reuse our bank, so verify the generation after copying it.
++  for (int attempt = 0; attempt < 16; ++attempt) {
++    const uint32_t generation = __atomic_load_n(&header->generation, __ATOMIC_ACQUIRE);
++    if (generation == 0 || header->magic != kMagic || header->version != kVersion) return false;
++    if (generation == area->cached_generation) return true;
++    const unsigned bank = generation & 1u;
++    const uint32_t used = __atomic_load_n(&header->used[bank], __ATOMIC_RELAXED);
++    if (used > kPayloadCapacity) return false;
++    std::string data(layout->banks[bank], used);
++    __atomic_thread_fence(__ATOMIC_ACQ_REL);
++    if (generation != __atomic_load_n(&header->generation, __ATOMIC_ACQUIRE)) continue;
++    if (!Decode(data, &area->values)) return false;
++    area->cached_generation = generation;
++    return true;
++  }
++  // A writer can publish repeatedly while the reader is copying a snapshot.
++  // Keep the last coherent values, and retry the new generation on next use.
++  return area->cached_generation != 0;
+@@ -298,10 +361,17 @@ bool Publish(Area* area, Snapshot values) {
+-  if (data.size() > kCapacity - sizeof(Header)) return false;
+-  auto* header = static_cast<Header*>(area->view);
+-  uint32_t generation = __atomic_load_n(&header->generation, __ATOMIC_RELAXED) + 1;
+-  if (!generation) generation = 1;
+-  std::memcpy(static_cast<char*>(area->view) + sizeof(Header), data.data(), data.size());
+-  header->magic = kMagic;
+-  header->version = kVersion;
+-  header->used = static_cast<uint32_t>(data.size());
+-  // The unlocked fast path reads this field atomically. Publish it last,
+-  // without a whole-header store overlapping the independently read word.
++  if (data.size() > kPayloadCapacity) return false;
++  auto* layout = static_cast<AreaLayout*>(area->view);
++  Header* header = &layout->header;
++  const uint32_t previous = __atomic_load_n(&header->generation, __ATOMIC_RELAXED);
++  uint32_t generation = previous + 1;
++  if (!generation) generation = 2;  // leave zero unused, and still switch banks
++  const unsigned bank = generation & 1u;
++  // Publish the previous generation before reusing its inactive bank.
++  __atomic_thread_fence(__ATOMIC_SEQ_CST);
++  std::memcpy(layout->banks[bank], data.data(), data.size());
++  __atomic_store_n(&header->used[bank], static_cast<uint32_t>(data.size()), __ATOMIC_RELAXED);
++  // The first publication also commits the initialized header. A terminated
++  // writer leaves the currently published bank intact.
++  if (previous == 0) {
++    header->magic = kMagic;
++    header->version = kVersion;
++  }
+@@ -376,2 +446,3 @@ Area* Current() { // LocalMutex is held by every caller.
+-  std::wstring path = dir + L"\\" + Key(session) + L".area";
+-  if (!Directories(dir) || !Directories(data + L"\\property")) return nullptr;
++  // The previous format has a single bank. Keep an older live process from
++  // attaching to the new layout during a runtime upgrade.
++  std::wstring path = dir + L"\\" + Key(session + L"/3") + L".area";
+@@ -379,0 +451 @@ Area* Current() { // LocalMutex is held by every caller.
++  area->read_only = InAppContainer() && !ProtectedSystemServer();
+@@ -381 +453,6 @@ Area* Current() { // LocalMutex is held by every caller.
+-  area->mutex.value = CreateMutexW(nullptr, FALSE, (L"Local\\gesher-properties-" + Key(path)).c_str());
++  if (!area->read_only) {
++    if (!Directories(dir) || !Directories(data + L"\\property")) return nullptr;
++    area->mutex.value = ProtectedSystemServer() ? ProtectedWriterMutex() :
++        CreateMutexW(nullptr, FALSE, (L"Local\\gesher-properties-" + Key(path)).c_str());
++    if (!area->mutex.value) return nullptr;
++  }
+@@ -383,3 +460,4 @@ Area* Current() { // LocalMutex is held by every caller.
+-  if (!lock.held) return nullptr;
+-  area->file.value = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE,
+-                                 FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS,
++  if (!area->read_only && !lock.held) return nullptr;
++  area->file.value = CreateFileW(path.c_str(), area->read_only ? GENERIC_READ : GENERIC_READ | GENERIC_WRITE,
++                                 FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
++                                 area->read_only ? OPEN_EXISTING : OPEN_ALWAYS,
+@@ -388 +466,2 @@ Area* Current() { // LocalMutex is held by every caller.
+-  area->mapping.value = CreateFileMappingW(area->file.value, nullptr, PAGE_READWRITE, 0, kCapacity, nullptr);
++  area->mapping.value = CreateFileMappingW(area->file.value, nullptr,
++      area->read_only ? PAGE_READONLY : PAGE_READWRITE, 0, area->read_only ? 0 : kAreaSize, nullptr);
+@@ -390 +469,2 @@ Area* Current() { // LocalMutex is held by every caller.
+-  area->view = MapViewOfFile(area->mapping.value, FILE_MAP_ALL_ACCESS, 0, 0, kCapacity);
++  area->view = MapViewOfFile(area->mapping.value, area->read_only ? FILE_MAP_READ : FILE_MAP_ALL_ACCESS,
++                            0, 0, kAreaSize);
+@@ -393 +473 @@ Area* Current() { // LocalMutex is held by every caller.
+-  if (!header->magic) {
++  if (!area->read_only && !__atomic_load_n(&header->generation, __ATOMIC_ACQUIRE)) {
+@@ -404 +484 @@ Area* Current() { // LocalMutex is held by every caller.
+-  RemoveOldAreas(dir, path);
++  if (!result->read_only) RemoveOldAreas(dir, path);
+@@ -445,6 +525,2 @@ namespace {
+-// few properties (log.tag.*). Without the cross-process mutex, this reads only
+-// the header's 32-bit generation (one aligned load) and never the shared
+-// values: when it equals the generation this process last decoded under the
+-// mutex, the process's own decoded copy (area->values) is returned, which is
+-// what a locked read would have seen before any Set still in progress. A
+-// different generation takes the mutex and decodes again.
++// few properties (log.tag.*). Refresh uses the unlocked generation fast path
++// and decodes a bank only when another process has published new values.
+@@ -455,3 +531,2 @@ Area* Refreshed() {
+-  if (__atomic_load_n(&header->generation, __ATOMIC_ACQUIRE) != area->cached_generation) {
+-    MutexLock lock(area->mutex.value);
+-    if (!lock.held || !Refresh(area)) return nullptr;
++  if (__atomic_load_n(&header->generation, __ATOMIC_ACQUIRE) == area->cached_generation) {
++    return area;
+@@ -459 +534,2 @@ Area* Refreshed() {
+-  return area;
++  MutexLock lock(area->mutex.value);
++  return (area->read_only || lock.held) && Refresh(area) ? area : nullptr;
+@@ -493 +569 @@ bool Set(const std::string& name, const std::string& value) {
+-  if (!area) return false;
++  if (!area || area->read_only) return false;
+@@ -502 +578 @@ bool Set(const std::string& name, const std::string& value) {
+-  if (Encode(values).size() > kCapacity - sizeof(Header)) return false;
++  if (Encode(values).size() > kPayloadCapacity) return false;
+@@ -508,4 +584,2 @@ Snapshot List() {
+-  Area* area = Current();
+-  if (!area) return {};
+-  MutexLock lock(area->mutex.value);
+-  return lock.held && Refresh(area) ? area->values : Snapshot{};
++  Area* area = Refreshed();
++  return area ? area->values : Snapshot{};
+@@ -515,4 +589,2 @@ uint32_t AreaSerial() {
+-  Area* area = Current();
+-  if (!area) return 0;
+-  MutexLock lock(area->mutex.value);
+-  return lock.held && Refresh(area) ? area->cached_generation : 0;
++  Area* area = Refreshed();
++  return area ? area->cached_generation : 0;
+@@ -546 +618 @@ bool Wait(const std::string* name, uint32_t old_serial, uint32_t* new_serial,
+-      if (!lock.held || !Refresh(area)) return false;
++      if ((!area->read_only && !lock.held) || !Refresh(area)) return false;
+diff --git a/compat/posix/src/unistd.cc b/compat/posix/src/unistd.cc
+index ec17691ccf6..2497370f388 100644
+--- a/compat/posix/src/unistd.cc
++++ b/compat/posix/src/unistd.cc
+@@ -26,0 +27,3 @@
++#include "ofd_internal.h"
++#include "usb_block_internal.h"
++#include "../../usb_storage/protected_runtime_client.h"
+@@ -52 +55,11 @@ uid_t AppUid() {
+-#define kAppUid AppUid()
++uid_t CurrentUid() {
++  uint32_t uid = 0, gid = 0;
++  return gesher::usb_storage::ProtectedRuntimeCredentials(&uid, &gid)
++      ? static_cast<uid_t>(uid) : AppUid();
++}
++gid_t CurrentGid() {
++  uint32_t uid = 0, gid = 0;
++  return gesher::usb_storage::ProtectedRuntimeCredentials(&uid, &gid)
++      ? static_cast<gid_t>(gid) : AppUid();
++}
++#define kAppUid CurrentUid()
+@@ -269 +282 @@ int CheckOwner(uid_t owner, gid_t group) {
+-  bool same_group = group == static_cast<gid_t>(-1) || group == kAppUid;
++  bool same_group = group == static_cast<gid_t>(-1) || group == CurrentGid();
+@@ -304 +317 @@ int seteuid(uid_t uid) { return setuid(uid); }
+-int setgid(gid_t gid) { return gid == kAppUid ? 0 : (errno = EPERM, -1); }
++int setgid(gid_t gid) { return gid == CurrentGid() ? 0 : (errno = EPERM, -1); }
+@@ -325,2 +338,2 @@ int setregid(gid_t rgid, gid_t egid) {
+-  bool ok = (rgid == static_cast<gid_t>(-1) || rgid == kAppUid) &&
+-            (egid == static_cast<gid_t>(-1) || egid == kAppUid);
++  bool ok = (rgid == static_cast<gid_t>(-1) || rgid == CurrentGid()) &&
++            (egid == static_cast<gid_t>(-1) || egid == CurrentGid());
+@@ -334,2 +347,2 @@ uid_t geteuid(void) { return kAppUid; }
+-gid_t getgid(void) { return kAppUid; }
+-gid_t getegid(void) { return kAppUid; }
++gid_t getgid(void) { return CurrentGid(); }
++gid_t getegid(void) { return CurrentGid(); }
+@@ -433,0 +447,2 @@ int fsync(int fd) {
++  int block_result;
++  if (gesher::usb_block::Sync(snapshot, &block_result)) return block_result;
+@@ -687,0 +703,3 @@ static ssize_t PositionedIo(int fd, void* buf, size_t count, off_t offset, bool
++  int block_result;
++  if (gesher::usb_block::Io(snapshot, buf, want, writing, offset, &block_result)) return block_result;
++  if (snapshot->description && !snapshot->description->virtual_directory.empty()) return errno = EISDIR, -1;
+@@ -772,0 +791,4 @@ off_t lseek(int fd, off_t offset, int whence) {
++  int64_t block_result;
++  if (gesher::usb_block::Seek(snapshot, offset, whence, &block_result)) return block_result;
++  // USB virtual directories use the tagged readonly file's shared cursor,
++  // just like procfs directories; aliases observe the same getdents position.
+@@ -926,0 +949,4 @@ int64_t WriteFileDescriptionAt(const DescriptorSnapshotPtr& snapshot, const void
++  int block_result;
++  if (usb_block::Io(snapshot, const_cast<void*>(bytes), count, true, offset, &block_result)) {
++    return block_result;
++  }
+diff --git a/compat/posix/src/unix_rights.cc b/compat/posix/src/unix_rights.cc
+index c26e8900efa..e5b6f589a32 100644
+--- a/compat/posix/src/unix_rights.cc
++++ b/compat/posix/src/unix_rights.cc
+@@ -26,0 +27 @@
++#include "binder_transport.h"
+@@ -128,0 +130 @@ bool Call(Request& request, Reply* reply) {
++  if (ProtectedBinderEndpoint()) return errno = EOPNOTSUPP, false;
+@@ -199,0 +202 @@ void* MapBrokerSection(const wchar_t* prefix, DWORD access, size_t size) {
++  if (ProtectedBinderEndpoint()) return nullptr;
+@@ -255,0 +259,2 @@ bool DepositRights(const std::vector<int>& fds, uint64_t queue, uint64_t positio
++  // The private data endpoint provisions no shared rights sections.
++  if (ProtectedBinderEndpoint()) return errno = EOPNOTSUPP, false;
+diff --git a/tests/art-temp/entry_test.cc b/tests/art-temp/entry_test.cc
+index 4a66630c799..d710cae5de1 100644
+--- a/tests/art-temp/entry_test.cc
++++ b/tests/art-temp/entry_test.cc
+@@ -9,0 +10 @@
++#include <string_view>
+@@ -33,0 +35,4 @@ std::vector<std::string> vm_arguments;
++std::vector<std::string> protected_routing;
++std::vector<std::string> runtime_routing;
++int resource_calls;
++uint32_t resource_error;
+@@ -50,0 +56,4 @@ void Reset() {
++  protected_routing.clear();
++  runtime_routing.clear();
++  resource_calls = 0;
++  resource_error = 0;
+@@ -133,0 +143,18 @@ int SetWideEnvironment(const wchar_t* name, const wchar_t* value) {
++bool ConfigureProtectedBinderStartup(std::string_view locator, std::string_view authority_pid,
++                                     std::string_view desktop_session) {
++  protected_routing = {std::string(locator), std::string(authority_pid),
++                       std::string(desktop_session)};
++  return locator == "private-name" && authority_pid == "17" && desktop_session == "4";
++}
++uint32_t InitializeProtectedProcessResources() {
++  ++resource_calls;
++  Require(vm_calls == 0 && temp_reads == 0, "trusted resources precede temporary state and ART");
++  return resource_error;
++}
++}
++namespace gesher::usb_storage {
++bool ConfigureProtectedRuntimeStartup(std::string_view locator, std::string_view authority_pid,
++                                     std::string_view desktop_session) {
++  runtime_routing = {std::string(locator), std::string(authority_pid), std::string(desktop_session)};
++  return locator == "runtime-name" && authority_pid == "17" && desktop_session == "4";
++}
+@@ -202,0 +230,53 @@ int main() {
++#ifdef GESHER_ART_TEST_PROTECTED_STARTUP
++    const wchar_t* flag = L"--gesher-protected-services";
++    Reset(); temp_failure = true;
++    Require(Run({L"dalvikvm.exe", flag, L"private-name", L"17", L"4",
++                 L"-Djava.io.tmpdir=/explicit", L"Main", flag}) == 77 && vm_calls == 1 &&
++                temp_reads == 0, "strip native routing before parsing ART options");
++    Require(protected_routing == std::vector<std::string>({"private-name", "17", "4"}) &&
++                vm_arguments == std::vector<std::string>({"dalvikvm.exe",
++                    "-Djava.io.tmpdir=/explicit", "Main", "--gesher-protected-services"}),
++            "pass only Android args to ART and preserve a later identical Java argument");
++    Reset();
++    Require(Run({L"dalvikvm.exe", L"Main", flag, L"private-name", L"17", L"4"}) == 77 &&
++                protected_routing.empty() && vm_arguments[2] == "--gesher-protected-services",
++            "Java arguments cannot configure or erase native routing");
++    Reset();
++    Require(Run({L"dalvikvm.exe", flag, L"private-name", L"17", L"4"}) == EXIT_FAILURE &&
++                protected_routing.empty() && vm_calls == 0 && temp_reads == 0,
++            "incomplete protected invocation fails before initialization");
++    Reset();
++    Require(Run({L"dalvikvm.exe", flag, L"private-name", L"bogus", L"4", L"Main"}) ==
++                EXIT_FAILURE && vm_calls == 0 && temp_reads == 0,
++            "failed protected routing must not invoke ART in the ordinary mode");
++    const wchar_t* runtime = L"--gesher-protected-runtime";
++    for (bool runtimeFirst : {false, true}) {
++      Reset();
++      std::vector<std::wstring> both = {L"dalvikvm.exe"};
++      const std::vector<std::wstring> binderArgs = {flag, L"private-name", L"17", L"4"};
++      const std::vector<std::wstring> runtimeArgs = {runtime, L"runtime-name", L"17", L"4"};
++      const auto& first = runtimeFirst ? runtimeArgs : binderArgs;
++      const auto& second = runtimeFirst ? binderArgs : runtimeArgs;
++      both.insert(both.end(), first.begin(), first.end());
++      both.insert(both.end(), second.begin(), second.end());
++      both.push_back(L"Main");
++      both.push_back(runtime);
++      Require(Run(both) == 77 && vm_calls == 1 && protected_routing.size() == 3 &&
++                  runtime_routing.size() == 3 && resource_calls == 1 && vm_arguments == std::vector<std::string>(
++                      {"dalvikvm.exe", "Main", "--gesher-protected-runtime"}),
++              "both protected native routes must reach their real owner before ART");
++    }
++    Reset();
++    resource_error = 5;
++    Require(Run({L"dalvikvm.exe", flag, L"private-name", L"17", L"4", runtime,
++                 L"runtime-name", L"17", L"4", L"Main"}) == EXIT_FAILURE &&
++                resource_calls == 1 && vm_calls == 0 && temp_reads == 0,
++            "failed authority initialization cannot enter ART or create ambient temporary state");
++    Reset();
++    Require(Run({L"dalvikvm.exe", runtime, L"runtime-name", L"17", L"4", L"Main"}) ==
++                EXIT_FAILURE && vm_calls == 0, "protected runtime cannot use ordinary Binder");
++    Reset();
++    Require(Run({L"dalvikvm.exe", flag, L"private-name", L"17", L"4",
++                 flag, L"private-name", L"17", L"4", L"Main"}) == EXIT_FAILURE && vm_calls == 0,
++            "duplicate routing must not silently replace a native security decision");
++#endif
+diff --git a/tests/native/ofd_transfer_host_test.cc.in b/tests/native/ofd_transfer_host_test.cc.in
+index 78327ea7c73..5b20c7cf9f0 100644
+--- a/tests/native/ofd_transfer_host_test.cc.in
++++ b/tests/native/ofd_transfer_host_test.cc.in
+@@ -530,0 +531,6 @@ DWORD BrokeredCreateProcess(const wchar_t*, const wchar_t*, const wchar_t*, cons
++namespace gesher::usb_storage {
++// The ordinary OFD corpus has no protected authority. A single routing check
++// enables this explicit boundary and verifies the service refusal is final.
++static bool protected_runtime = false;
++static bool ProtectedRuntimeEnabled() { return protected_runtime; }
++}
+@@ -554,0 +561,16 @@ struct ChildFd { int fd; HANDLE handle; gesher::DescriptorSnapshotPtr snapshot{}
++static unsigned protected_calls;
++static const Launch* protected_launch;
++static const wchar_t* protected_environment;
++static const std::vector<ChildFd>* protected_fds;
++static PROCESS_INFORMATION* protected_info;
++static DWORD SpawnProtectedCommand(const Launch& launch, const wchar_t* environment,
++                                   const std::wstring& cwd, const std::vector<ChildFd>& fds,
++                                   PROCESS_INFORMATION* info, DWORD flags) {
++  ++protected_calls;
++  host::Require(gesher::usb_storage::protected_runtime && &launch == protected_launch &&
++      environment == protected_environment && &fds == protected_fds && info == protected_info &&
++      cwd == L"protected-fixture" && flags == DETACHED_PROCESS);
++  // No capability or child is invented by this fixture. Exact production
++  // authority identity/admission is covered by the separate Windows tests.
++  return ERROR_ACCESS_DENIED;
++}
+@@ -697,0 +720,28 @@ static void PeCapabilities() {
++static void ProtectedRouting() {
++  gesher::exec::Launch launch{L"not-an-installed-image.exe", L"arbitrary guest command"};
++  // A high raw descriptor must never reach ordinary handle inheritance after
++  // a protected authority denial, even when the ordinary builder could reject
++  // it independently. The exact production SpawnWithFds chooses this route.
++  const std::vector<gesher::exec::ChildFd> fds{{7100, INVALID_HANDLE_VALUE, {}}};
++  static constexpr wchar_t environment[] = L"GESHER_OFD_TRANSFER_ENV=protected-route\0";
++  PROCESS_INFORMATION info{};
++  info.dwProcessId = 123;
++  gesher::exec::protected_launch = &launch;
++  gesher::exec::protected_environment = environment;
++  gesher::exec::protected_fds = &fds;
++  gesher::exec::protected_info = &info;
++  const auto processes = host::create_process_calls;
++  const auto handles = host::owned.size();
++  gesher::usb_storage::protected_runtime = true;
++  Check("protected launch routes once to authority and retains its refusal",
++      gesher::exec::SpawnWithFds(launch, environment, L"protected-fixture", fds, &info, DETACHED_PROCESS) ==
++          ERROR_ACCESS_DENIED && gesher::exec::protected_calls == 1);
++  Check("protected refusal never falls back to ordinary CreateProcess or exports handles",
++      host::create_process_calls == processes && host::owned.size() == handles && info.dwProcessId == 123);
++  gesher::usb_storage::protected_runtime = false;
++  gesher::exec::protected_launch = nullptr;
++  gesher::exec::protected_environment = nullptr;
++  gesher::exec::protected_fds = nullptr;
++  gesher::exec::protected_info = nullptr;
++}
++
+@@ -700,0 +751 @@ int main(int argc, char** argv) {
++  ProtectedRouting();
+diff --git a/tools/test_environment_lookup_contracts.py b/tools/test_environment_lookup_contracts.py
+index f2407351557..82fdde56995 100755
+--- a/tools/test_environment_lookup_contracts.py
++++ b/tools/test_environment_lookup_contracts.py
+@@ -4,3 +4,4 @@
+-This never starts a process. Probe/module-path/encoding/Win32 comparison calls
+-are deterministic host replacements. Environment decoding and selection bodies
+-are copied verbatim from the selected source snapshot.
++This never starts a process. Probe/module-path/encoding/Win32 comparison and
++authenticated-runtime query calls are deterministic host replacements.
++Environment decoding, selection and protected ELF policy bodies are copied
++verbatim from the selected source snapshot.
+@@ -23,0 +25 @@ def main():
++    parser.add_argument('--negative-role-control', action='store_true', help='Remove the protected system-server discovery guard; the same role checks must fail')
+@@ -38,0 +41,4 @@ def main():
++    if args.negative_role_control:
++        role_guard = '!gesher::usb_storage::ProtectedRuntimeIsSystemServer()'
++        assert source.count(role_guard) == 1
++        source = source.replace(role_guard, 'true')
+@@ -44,0 +51,2 @@ def main():
++    protected_policy = (args.source_root / 'compat/usb_storage/protected_tool_paths.h').read_text()
++    protected_policy = protected_policy[protected_policy.index('namespace gesher::usb_storage {'):]
+@@ -67 +75 @@ def main():
+-    constexpr int TRUE = 1, CSTR_LESS_THAN = 1;
++    constexpr int TRUE = 1, CSTR_LESS_THAN = 1, CSTR_EQUAL = 2;
+@@ -70,0 +79,2 @@ def main():
++    static bool protected_runtime = false, protected_credentials = false, protected_system_server = false;
++    static uint32_t protected_uid = UINT32_MAX, protected_gid = UINT32_MAX;
+@@ -95,0 +106,12 @@ def main():
++    @PROTECTED_POLICY@
++    namespace gesher::usb_storage {
++    bool ProtectedRuntimeEnabled() { return protected_runtime; }
++    bool ProtectedRuntimeIsSystemServer() {
++      return protected_runtime && protected_credentials && protected_system_server;
++    }
++    bool ProtectedRuntimeCredentials(uint32_t* uid, uint32_t* gid) {
++      if (!protected_credentials) return false;
++      *uid = protected_uid; *gid = protected_gid;
++      return true;
++    }
++    }
+@@ -116,0 +139 @@ def main():
++    bool CanLoadExecutableElf(const std::wstring& path);
+@@ -126 +149 @@ def main():
+-    '''.replace('@HEADER@', str(header)).replace('@RESERVED@', str(reserved))
++    '''.replace('@HEADER@', str(header)).replace('@RESERVED@', str(reserved)).replace('@PROTECTED_POLICY@', protected_policy)
+@@ -136,0 +160,2 @@ def main():
++      protected_runtime = false; protected_credentials = false; protected_system_server = false;
++      protected_uid = UINT32_MAX; protected_gid = UINT32_MAX;
+@@ -180,0 +206,53 @@ def main():
++      Reset(); protected_runtime = true; process_launcher = "C:\\untrusted\\replacement.exe";
++      Check("protected launcher ignores guest environment override", ex::LauncherPath() == L"C:\\fixture\\gesher-exec.exe");
++      Reset(); protected_runtime = true; process_launcher = malformed;
++      launch = {}; result = ex::PrepareLaunch({"sh"}, "", &launch);
++      Check("protected shell ignores malformed guest launcher override", result == 0 && launch.application == L"C:\\fixture\\gesher-exec.exe");
++      Check("protected ELF requires authenticated credentials", !ex::CanLoadExecutableElf(L"C:\\fixture\\filesystem-tools\\bin\\mkfs.fat"));
++      protected_credentials = true; protected_uid = 0; protected_gid = 0;
++      Check("protected root rejects app-controlled ELF", !ex::CanLoadExecutableElf(L"C:\\known\\app-elf"));
++      Check("protected root permits exact sealed filesystem tool", ex::CanLoadExecutableElf(L"C:\\fixture\\filesystem-tools\\bin\\mkfs.fat"));
++      Check("protected root rejects traversal spelling", !ex::CanLoadExecutableElf(L"C:\\fixture\\filesystem-tools\\bin\\..\\bin\\mkfs.fat"));
++      protected_uid = 10000; protected_gid = 10000;
++      Check("ordinary protected app retains its ELF selection", ex::CanLoadExecutableElf(L"C:\\known\\app-elf"));
++      Reset();
++      Check("ordinary Android keeps unrestricted ELF selection", ex::CanLoadExecutableElf(L"C:\\known\\app-elf"));
++      Check("ordinary Android supplies no su alias", ex::FindAllInPath("su", ".").empty());
++      Check("explicit discovery ignores unrelated PATH", ex::FindAllInPath("C:/known/good.exe", "C:/missing") ==
++          std::vector<std::string>{"C:/known/good.exe"});
++      // Declared host boundaries only: these headers exercise actual selection
++      // bodies; no helper, media operation, authority or Windows process runs.
++      std::string elf(20, '\0');
++      elf[0] = '\x7f'; elf[1] = 'E'; elf[2] = 'L'; elf[3] = 'F';
++      elf[4] = 2; elf[5] = 1; elf[18] = 62;
++      const std::wstring sealed_tool = L"C:\\fixture\\filesystem-tools\\bin\\mkfs.fat";
++      files[sealed_tool] = elf;
++      files[L".\\su"] = "MZ";
++      files[L".\\mkfs.vfat"] = "MZ";
++      protected_runtime = true;
++      Check("unauthenticated protected su discovery cannot use PATH substitute",
++          ex::FindAllInPath("su", ".").empty());
++      Check("unauthenticated protected helper discovery cannot use PATH substitute",
++          ex::FindAllInPath("mkfs.vfat", ".").empty());
++      protected_credentials = true; protected_uid = 10000; protected_gid = 10000;
++      Check("authenticated app discovers its protected su route",
++          ex::FindAllInPath("su", ".") == std::vector<std::string>{"/system/bin/su"});
++      Check("authenticated app retains explicit protected su spelling",
++          ex::FindAllInPath("/system/xbin/su", ".") == std::vector<std::string>{"/system/xbin/su"});
++      protected_system_server = true; protected_uid = 1000; protected_gid = 1000;
++      Check("system server cannot discover reserved su through PATH",
++          ex::FindAllInPath("su", ".").empty());
++      Check("system server cannot discover explicit protected su",
++          ex::FindAllInPath("/system/xbin/su", ".").empty());
++      protected_system_server = false; protected_uid = 0; protected_gid = 0;
++      Check("protected root discovers an admitted sealed helper alias",
++          ex::FindAllInPath("mkfs.vfat", ".") == std::vector<std::string>{"/system/bin/mkfs.vfat"});
++      files[sealed_tool] = "MZ";
++      Check("non-ELF sealed helper cannot fall back to PATH",
++          ex::FindAllInPath("mkfs.vfat", ".").empty());
++      files.erase(sealed_tool);
++      Check("missing sealed helper cannot fall back to PATH",
++          ex::FindAllInPath("mkfs.vfat", ".").empty());
++      files.erase(L".\\su"); files.erase(L".\\mkfs.vfat");
++      Reset();
++      Check("role reset restores ordinary discovery", ex::FindAllInPath("su", ".").empty());
+@@ -195,0 +274 @@ def main():
++    if args.negative_role_control: print('Focused system-server guard mutation; this is not Windows execution.')
+diff --git a/tools/test_temp_directory.py b/tools/test_temp_directory.py
+index 98d72be9ce2..d1476edecbc 100644
+--- a/tools/test_temp_directory.py
++++ b/tools/test_temp_directory.py
+@@ -23,0 +24,2 @@ def main():
++        (includes / 'protected_startup.h').write_bytes(
++            (root / 'compat/posix/include/gesher/protected_startup.h').read_bytes())
+@@ -28,7 +30,17 @@ def main():
+-            baseline = subprocess.check_output([
+-                'git', 'show', args.baseline_ref + ':compat/art/dalvikvm_main.cc'], cwd=root)
+-            old = work / 'dalvikvm_main.cc'
+-            old.write_bytes(baseline)
+-            source = work / 'entry_test.cc'
+-            source.write_text((tests / 'entry_test.cc').read_text().replace(
+-                '#include "../../compat/art/dalvikvm_main.cc"', '#include "dalvikvm_main.cc"'))
++            adapter = 'compat/art/dalvikvm_main.cc'
++            baseline = subprocess.check_output(['git', 'show', f'{args.baseline_ref}:{adapter}'], cwd=root)
++            (work / adapter).parent.mkdir(parents=True)
++            (work / adapter).write_bytes(baseline)
++            if b'"../binder/protected_client_startup.h"' in baseline:
++                header = 'compat/binder/protected_client_startup.h'
++                (work / header).parent.mkdir()
++                (work / header).write_bytes(subprocess.check_output(
++                    ['git', 'show', f'{args.baseline_ref}:{header}'], cwd=root))
++            if b'"../usb_storage/protected_runtime_client.h"' in baseline:
++                header = 'compat/usb_storage/protected_runtime_client.h'
++                (work / header).parent.mkdir(exist_ok=True)
++                (work / header).write_bytes(subprocess.check_output(
++                    ['git', 'show', f'{args.baseline_ref}:{header}'], cwd=root))
++            source = work / 'tests/art-temp/entry_test.cc'
++            source.parent.mkdir(parents=True)
++            source.write_bytes((tests / 'entry_test.cc').read_bytes())
+@@ -36 +48,2 @@ def main():
+-        subprocess.run([args.cxx, '-std=c++17', '-Wall', '-Wextra', '-Werror',
++        features = [] if args.baseline_ref else ['-DGESHER_ART_TEST_PROTECTED_STARTUP']
++        subprocess.run([args.cxx, '-std=c++17', '-Wall', '-Wextra', '-Werror', *features,

@@ -88,6 +88,10 @@ struct Verification {
   bool released = false;
 };
 
+HWND OwnerWindow(DWORD pid) {
+  return ForegroundWindowOf(pid);
+}
+
 int Availability(HRESULT* hr) {
   *hr = S_OK;
   IUserConsentVerifierStatics* statics = nullptr;

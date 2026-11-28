@@ -39,6 +39,8 @@ foreach ($fixture in @(
      Label = 'revocable descriptor aliases, in-flight I/O barrier and bounded native resources' },
   @{ Exe = 'ofd_spawn_test.exe'; Markers = @('OFD Windows spawn:', ' checks, 0 failures');
      Label = 'actual importer discovery, shared file descriptions and native PE interoperability' },
+  @{ Exe = 'gesher_usb_block_guest_test.exe'; Markers = @('USB guest block fixture passed');
+     Label = 'USB block POSIX paths and revocation with an isolated broker peer' },
   @{ Exe = 'media_input_surface_callback_test.exe'; Markers = @('input surface callback contracts:', ' checks, 0 failures');
      Label = 'actual QueueSurface callback admission and quiescent retirement' }
 )) {
