@@ -69,8 +69,16 @@ Registry<bt::Gatt>& Gatts() {
   static auto* r = new Registry<bt::Gatt>();
   return *r;
 }
-Registry<bt::Socket>& Sockets() {
-  static auto* r = new Registry<bt::Socket>();
+struct SocketHandle {
+  std::shared_ptr<bt::Socket> socket;
+  std::atomic<uint64_t> bytesRead{0};
+  std::atomic<uint64_t> bytesWritten{0};
+
+  explicit SocketHandle(std::shared_ptr<bt::Socket> s) : socket(std::move(s)) {}
+};
+
+Registry<SocketHandle>& Sockets() {
+  static auto* r = new Registry<SocketHandle>();
   return *r;
 }
 Registry<bt::Server>& Servers() {
@@ -375,28 +383,37 @@ void WindowsBluetooth_gattClose(JNIEnv*, jclass, jlong handle) {
 jlong WindowsBluetooth_rfcommOpen(JNIEnv* env, jclass, jlong address, jstring uuid, jint channel,
                                   jboolean secure, jintArray out) {
   GUID g = {};
+  std::string uuidText = "(none)";
   if (uuid != nullptr) {
     ScopedUtfChars chars(env, uuid);
     if (chars.c_str() == nullptr || !bt::ParseGuid(chars.c_str(), &g)) {
       SetInt(env, out, 0, E_INVALIDARG);
       return 0;
     }
+    uuidText = chars.c_str();
   }
   HRESULT hr = S_OK;
   std::shared_ptr<bt::Socket> socket = bt::Get().OpenRfcomm(
       static_cast<uint64_t>(address), g, channel, secure == JNI_TRUE, &hr);
   SetInt(env, out, 0, static_cast<jint>(hr));
-  return socket ? Sockets().Add(std::move(socket)) : 0;
+  jlong handle = socket ? Sockets().Add(std::make_shared<SocketHandle>(std::move(socket))) : 0;
+  ALOGI("bluetooth: RFCOMM open #%lld to %012llX (uuid %s, ch %d, %s): HRESULT 0x%08lX",
+        static_cast<long long>(handle), static_cast<unsigned long long>(address),
+        uuidText.c_str(), static_cast<int>(channel),
+        secure == JNI_TRUE ? "secure" : "insecure", static_cast<unsigned long>(hr));
+  return handle;
 }
 
 // Connects (blocks; nativeRfcommClose from another thread ends it). out: channel.
 jint WindowsBluetooth_rfcommConnect(JNIEnv* env, jclass, jlong handle, jintArray out) {
-  std::shared_ptr<bt::Socket> socket = Sockets().Get(handle);
-  if (!socket) return E_ABORT;
-  HRESULT hr = socket->Connect();
-  ALOGI("bluetooth: RFCOMM connect to %012llX: HRESULT 0x%08lX",
-        static_cast<unsigned long long>(socket->Remote()), static_cast<unsigned long>(hr));
-  if (SUCCEEDED(hr)) SetInt(env, out, 0, socket->Channel());
+  std::shared_ptr<SocketHandle> entry = Sockets().Get(handle);
+  if (!entry) return E_ABORT;
+  HRESULT hr = entry->socket->Connect();
+  ALOGI("bluetooth: RFCOMM connect #%lld to %012llX (ch %d): HRESULT 0x%08lX",
+        static_cast<long long>(handle),
+        static_cast<unsigned long long>(entry->socket->Remote()),
+        entry->socket->Channel(), static_cast<unsigned long>(hr));
+  if (SUCCEEDED(hr)) SetInt(env, out, 0, entry->socket->Channel());
   return static_cast<jint>(hr);
 }
 
@@ -404,41 +421,60 @@ constexpr jint kChunk = 64 * 1024;
 
 jint WindowsBluetooth_rfcommRead(JNIEnv* env, jclass, jlong handle, jbyteArray buffer,
                                  jint offset, jint length) {
-  std::shared_ptr<bt::Socket> socket = Sockets().Get(handle);
-  if (!socket) return 0;
+  std::shared_ptr<SocketHandle> entry = Sockets().Get(handle);
+  if (!entry) return 0;
   if (length > kChunk) length = kChunk;
   if (length <= 0) return 0;
   std::vector<uint8_t> chunk(length);
-  int n = socket->Read(chunk.data(), length);
-  if (n > 0) env->SetByteArrayRegion(buffer, offset, n, reinterpret_cast<const jbyte*>(chunk.data()));
+  int n = entry->socket->Read(chunk.data(), length);
+  if (n > 0) {
+    entry->bytesRead.fetch_add(static_cast<uint64_t>(n), std::memory_order_relaxed);
+    env->SetByteArrayRegion(buffer, offset, n, reinterpret_cast<const jbyte*>(chunk.data()));
+  } else {
+    ALOGI("bluetooth: RFCOMM read #%lld ended: %d", static_cast<long long>(handle), n);
+  }
   return n;
 }
 
 jint WindowsBluetooth_rfcommWrite(JNIEnv* env, jclass, jlong handle, jbyteArray buffer,
                                   jint offset, jint length) {
-  std::shared_ptr<bt::Socket> socket = Sockets().Get(handle);
-  if (!socket) return -10057;  // WSAENOTCONN
+  std::shared_ptr<SocketHandle> entry = Sockets().Get(handle);
+  if (!entry) return -10057;  // WSAENOTCONN
   jint done = 0;
   std::vector<uint8_t> chunk;
   while (done < length) {
     jint n = length - done > kChunk ? kChunk : length - done;
     chunk.resize(n);
     env->GetByteArrayRegion(buffer, offset + done, n, reinterpret_cast<jbyte*>(chunk.data()));
-    int written = socket->Write(chunk.data(), n);
-    if (written < 0) return written;
+    int written = entry->socket->Write(chunk.data(), n);
+    if (written < 0) {
+      ALOGI("bluetooth: RFCOMM write #%lld failed: %d (after tx %llu B)",
+            static_cast<long long>(handle), written,
+            static_cast<unsigned long long>(entry->bytesWritten.load(std::memory_order_relaxed)));
+      return written;
+    }
+    entry->bytesWritten.fetch_add(static_cast<uint64_t>(written), std::memory_order_relaxed);
     done += written;
   }
   return done;
 }
 
 jint WindowsBluetooth_rfcommAvailable(JNIEnv*, jclass, jlong handle) {
-  std::shared_ptr<bt::Socket> socket = Sockets().Get(handle);
-  return socket ? socket->Available() : 0;
+  std::shared_ptr<SocketHandle> entry = Sockets().Get(handle);
+  return entry ? entry->socket->Available() : 0;
 }
 
 void WindowsBluetooth_rfcommClose(JNIEnv*, jclass, jlong handle) {
-  std::shared_ptr<bt::Socket> socket = Sockets().Remove(handle);
-  if (socket) socket->Close();
+  std::shared_ptr<SocketHandle> entry = Sockets().Remove(handle);
+  if (entry) {
+    ALOGI("bluetooth: RFCOMM close #%lld to %012llX (ch %d, tx %llu B, rx %llu B)",
+          static_cast<long long>(handle),
+          static_cast<unsigned long long>(entry->socket->Remote()),
+          entry->socket->Channel(),
+          static_cast<unsigned long long>(entry->bytesWritten.load(std::memory_order_relaxed)),
+          static_cast<unsigned long long>(entry->bytesRead.load(std::memory_order_relaxed)));
+    entry->socket->Close();
+  }
 }
 
 // out: HRESULT, channel.
@@ -480,7 +516,7 @@ jlong WindowsBluetooth_rfcommAccept(JNIEnv* env, jclass, jlong handle, jint time
   if (!socket) return 0;
   SetLong(env, out, 1, static_cast<jlong>(socket->Remote()));
   SetLong(env, out, 2, socket->Channel());
-  return Sockets().Add(std::move(socket));
+  return Sockets().Add(std::make_shared<SocketHandle>(std::move(socket)));
 }
 
 void WindowsBluetooth_rfcommServerClose(JNIEnv*, jclass, jlong handle) {
