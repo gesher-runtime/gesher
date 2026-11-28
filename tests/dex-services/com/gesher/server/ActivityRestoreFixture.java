@@ -679,14 +679,14 @@ public final class ActivityRestoreFixture {
     @SuppressWarnings("unchecked")
     private static void testFailedRestoreDelivery(boolean deathDuringIpc) throws Exception {
         Harness h = new Harness();
-        Object record = h.record("MainAct", 10, "a", "STOPPING");
+        Object record = h.record("MainAct", 10, "a", "STOPPED");
+        Bundle saved = new Bundle(); saved.putString("retry", "snapshot");
+        h.activityStopped(record, saved, null);
+        h.processDied(h.process);
         // The fixture is loaded apart from the server classes on ART; reach the
         // record's queues reflectively instead of through its package-private type.
         List<ResultInfo> queuedResults = pendingResults(record);
         List<ReferrerIntent> queuedIntents = (List<ReferrerIntent>) get(record, "pendingNewIntents");
-        Bundle saved = new Bundle(); saved.putString("retry", "snapshot");
-        h.activityStopped(record, saved, null);
-        h.processDied(h.process);
         ResultInfo first = new ResultInfo("first", 60, Activity.RESULT_OK,
                 new Intent("fixture.restore.RESULT_1"), new Binder());
         ReferrerIntent firstIntent = new ReferrerIntent(new Intent("fixture.restore.INTENT_1"),
