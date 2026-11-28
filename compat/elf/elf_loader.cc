@@ -2294,6 +2294,19 @@ Library* Find(const char* name) {
 
 const char* Soname(Library* library) { return library ? library->soname.c_str() : ""; }
 
+Library* RetainForAddress(const void* address) {
+  if (address == nullptr) return nullptr;
+  auto a = reinterpret_cast<const uint8_t*>(address);
+  std::lock_guard<LoaderMutex> lock(g_mutex);
+  for (Library* lib : Loaded()) {
+    if (a >= lib->base && a < lib->base + lib->map_size) return lib;
+  }
+  return nullptr;
+}
+
+// Close never unmaps an object, so a lifetime pin needs no reference count.
+void ReleaseLifetimePin(Library*) {}
+
 void Close(Library* library) {
   std::lock_guard<LoaderMutex> operation(g_mutex);
   if (library == nullptr) return;

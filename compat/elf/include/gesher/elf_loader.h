@@ -114,6 +114,14 @@ const char* Soname(Library* library);
 // kept (handles may still be held); full unmap is not implemented.
 void Close(Library* library);
 
+// Pins the ELF object whose mapping contains `address`, for a runtime-owned
+// callback whose lifetime can outlast a public handle; null when no object
+// contains it. Release each pin with ReleaseLifetimePin (null is accepted).
+// Close keeps every mapping, so a pin currently only names its object; it
+// must still be released for a loader that retires unreachable objects.
+Library* RetainForAddress(const void* address);
+void ReleaseLifetimePin(Library* library);
+
 // The app unmaps or maps over [addr, addr + length) (munmap, MAP_FIXED), which
 // it may do with its reservation after dlclose (android_dlopen_ext): an object
 // loaded into a reservation there is gone, and is taken out of every list
