@@ -87,17 +87,24 @@ class QueueSurface : public android::Surface {
   void UpdateFrameGeometry();  // with mutex_ held; drops obsolete reusable pixels
   void EnsureBuffer();  // with mutex_ held
   int UnlockAndPost(std::optional<int64_t> timestamp_ns, int video_scaling_mode = 1);
-  // Copies buffer_ as the latest frame with mutex_ held. Invoke the returned
+  // Copies the returned producer's buffer with mutex_ held. Invoke the returned
   // listener after unlocking, so it can read back the published frame.
-  std::function<void()> PublishLocked(std::optional<int64_t> timestamp_ns,
+  std::function<void()> PublishLocked(const Buffer& buffer, std::optional<int64_t> timestamp_ns,
                                        int video_scaling_mode = 1);
+  // Removes and returns this queue's outstanding native buffer, or null.
+  android::sp<Buffer> TakeDequeued(ANativeWindowBuffer* buffer);  // with mutex_ held
 
   static int HookSetSwapInterval(ANativeWindow* window, int interval);
   static int HookQueueBuffer(ANativeWindow* window, ANativeWindowBuffer* buffer, int fence_fd);
   static int HookCancelBuffer(ANativeWindow* window, ANativeWindowBuffer* buffer, int fence_fd);
 
+  // Writable native slots before the first queued buffer; one afterwards.
+  static constexpr size_t kMaxDequeuedBuffers = 2;
   mutable std::mutex mutex_;
   android::sp<Buffer> buffer_;
+  // Outstanding native dequeues, each with its own storage. CPU drawing
+  // during a dequeue uses separate storage too, so no producer can overwrite
+  // another's data.
   std::vector<android::sp<Buffer>> dequeued_;
   int format_ = 1;  // PIXEL_FORMAT_RGBA_8888
   int requested_width_ = 0, requested_height_ = 0;

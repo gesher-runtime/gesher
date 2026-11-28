@@ -82,9 +82,13 @@ AHardwareBuffer, which is how Flutter's raster thread samples a platform view.
 `AHardwareBuffer_toHardwareBuffer` is not provided. Tested by
 `tests/dex-graphics/gesher/ImageReaderPrivateTest.java` with
 `tests/native/reader_buffer_test.c`.
-These buffers do not implement general HardwareBuffer allocation, Android GPU
-imports, parcel transport or protected content. Other ImageReader formats retain
-the existing direct CameraFrames delivery path (YUV_420_888 as I420, JPEG bytes). See the
+Java `HardwareBuffer.create()` and `isSupported()` use the NDK allocator and its
+format, size and usage checks. App-allocated buffers can be borrowed through
+`AHardwareBuffer_fromHardwareBuffer`, with an explicit NDK acquire when they
+must outlive Java close. Parcel transport, protected content and wrapping
+app-allocated buffers as hardware bitmaps are unsupported.
+Other ImageReader formats retain the direct CameraFrames delivery path
+(YUV_420_888 as I420, JPEG bytes). See the
 [Otzaria regression evidence](research/otzaria-imagereader-validation-2026-11-07.json).
 
 ## Pieces

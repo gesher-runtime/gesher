@@ -14,6 +14,7 @@ import android.hardware.camera2.ICameraDeviceUser;
 import android.hardware.camera2.impl.CameraMetadataNative;
 import android.hardware.camera2.impl.CaptureResultExtras;
 import android.hardware.camera2.impl.PhysicalCaptureResultInfo;
+import android.hardware.camera2.params.DynamicRangeProfiles;
 import android.hardware.camera2.params.OutputConfiguration;
 import android.hardware.camera2.params.SessionConfiguration;
 import android.hardware.camera2.utils.SubmitInfo;
@@ -43,9 +44,15 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
 
     /** One configured output. */
     private static final class Stream {
-        final List<Surface> surfaces = new ArrayList<>();
-        int format;  // the HAL format of its first surface
-        Size size;
+        final List<Surface> surfaces;
+        final int format;
+        final Size size;
+
+        Stream(List<Surface> surfaces, int format, Size size) {
+            this.surfaces = surfaces;
+            this.format = format;
+            this.size = size;
+        }
     }
 
     /** One frame to make: a request's copy, its id and its frame number. */
@@ -201,10 +208,7 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
     public int[] endConfigure(int operatingMode, CameraMetadataNative sessionParams,
             long startTimeMs) {
         checkConnected();
-        if (operatingMode != NORMAL_MODE) {
-            throw new ServiceSpecificException(ICameraService.ERROR_ILLEGAL_ARGUMENT,
-                    "operating mode " + operatingMode + " is not supported");
-        }
+        checkSessionMode(operatingMode);
         // cameraserver configures the device's streams here, before the session reports
         // onConfigured; requests then start at the stream rate. Open the Windows device at
         // the session's size now, on the capture thread that owns it, instead of on the
@@ -235,26 +239,76 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
 
     @Override
     public boolean isSessionConfigurationSupported(SessionConfiguration sessionConfiguration) {
+        checkConnected();
+        if (sessionConfiguration == null) {
+            throw new ServiceSpecificException(ICameraService.ERROR_ILLEGAL_ARGUMENT,
+                    "session configuration is required");
+        }
+        checkSessionMode(sessionConfiguration.getSessionType());
+        List<OutputConfiguration> outputs = sessionConfiguration.getOutputConfigurations();
+        if (sessionConfiguration.getInputConfiguration() != null || outputs.isEmpty()) return false;
+        for (OutputConfiguration output : outputs) {
+            if (configuredStream(output) == null) return false;
+        }
         return true;
+    }
+
+    private static void checkSessionMode(int operatingMode) {
+        if (operatingMode != NORMAL_MODE) {
+            throw new ServiceSpecificException(ICameraService.ERROR_ILLEGAL_ARGUMENT,
+                    "operating mode " + operatingMode + " is not supported");
+        }
+    }
+
+    /** Resolve only outputs the capture loop can deliver, without opening the source. */
+    private static Stream configuredStream(OutputConfiguration config) {
+        if (config == null || config.isForPhysicalCamera()
+                || config.getDynamicRangeProfile() != DynamicRangeProfiles.STANDARD
+                || config.getRotation() != OutputConfiguration.ROTATION_0) return null;
+        List<Surface> surfaces = List.copyOf(config.getSurfaces());
+        if (surfaces.isEmpty()) return null;
+        try {
+            Surface first = surfaces.get(0);
+            int format = SurfaceUtils.getSurfaceFormat(first);
+            Size size = SurfaceUtils.getSurfaceSize(first);
+            if (size.getWidth() <= 0 || size.getHeight() <= 0
+                    || !CameraService.supportsOutputFormat(format)) return null;
+            if (format == CameraService.HAL_BLOB
+                    && ((size.getWidth() & 1) != 0 || (size.getHeight() & 1) != 0)) return null;
+            for (int i = 1; i < surfaces.size(); ++i) {
+                Surface surface = surfaces.get(i);
+                Size target = SurfaceUtils.getSurfaceSize(surface);
+                if (target.getWidth() <= 0 || target.getHeight() <= 0
+                        || SurfaceUtils.getSurfaceFormat(surface) != format) return null;
+                // The capture loop encodes the JPEG once per stream at its configured size.
+                if (format == CameraService.HAL_BLOB && !target.equals(size)) return null;
+            }
+            return new Stream(surfaces, format, size);
+        } catch (IllegalArgumentException e) {
+            // SurfaceUtils reports an abandoned consumer this way.
+            return null;
+        }
+    }
+
+    private static Stream requireStream(OutputConfiguration config) {
+        Stream stream = configuredStream(config);
+        if (stream == null) {
+            throw new ServiceSpecificException(ICameraService.ERROR_ILLEGAL_ARGUMENT,
+                    "unsupported camera output configuration");
+        }
+        return stream;
     }
 
     @Override
     public int createStream(OutputConfiguration config) {
         checkConnected();
-        List<Surface> surfaces = config.getSurfaces();
-        if (surfaces.isEmpty()) {
-            throw new ServiceSpecificException(ICameraService.ERROR_ILLEGAL_ARGUMENT,
-                    "an output with no surface (deferred surfaces are not supported)");
-        }
-        Stream s = new Stream();
-        s.surfaces.addAll(surfaces);
-        s.format = SurfaceUtils.getSurfaceFormat(surfaces.get(0));
-        s.size = SurfaceUtils.getSurfaceSize(surfaces.get(0));
+        Stream s = requireStream(config);
         synchronized (mLock) {
+            checkConnected();
             int id = mNextStreamId++;
             mStreams.put(id, s);
             CameraService.log("createStream " + id + ": format 0x" + Integer.toHexString(s.format)
-                    + ", " + s.size + (CameraFrames.isReader(surfaces.get(0)) ? ", an ImageReader"
+                    + ", " + s.size + (CameraFrames.isReader(s.surfaces.get(0)) ? ", an ImageReader"
                     : ", a window surface"));
             return id;
         }
@@ -269,11 +323,17 @@ public final class CameraDeviceUser extends ICameraDeviceUser.Default {
 
     @Override
     public void updateOutputConfiguration(int streamId, OutputConfiguration config) {
+        checkConnected();
+        Stream updated = requireStream(config);
         synchronized (mLock) {
-            Stream s = mStreams.get(streamId);
-            if (s == null) return;
-            s.surfaces.clear();
-            s.surfaces.addAll(config.getSurfaces());
+            checkConnected();
+            Stream stream = mStreams.get(streamId);
+            if (stream == null) return;
+            if (updated.format != stream.format || !updated.size.equals(stream.size)) {
+                throw new ServiceSpecificException(ICameraService.ERROR_ILLEGAL_ARGUMENT,
+                        "cannot change the format or size of a configured camera output");
+            }
+            mStreams.put(streamId, updated);
         }
     }
 

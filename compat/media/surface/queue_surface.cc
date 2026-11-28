@@ -149,8 +149,8 @@ void QueueSurface::Abandon() {
   listener_ = nullptr;
   frame_pool_->Close();
   latest_.reset();
-  // Dequeued producers own their buffers through dequeued_. A CPU lock has
-  // only a raw pixels pointer, so keep its buffer until unlockAndPost returns.
+  // A live producer can still access the raw pixels. Retire its buffer when
+  // it returns the slot, even though no further frame can be published.
   if (!locked_) buffer_ = nullptr;
 }
 
@@ -264,31 +264,31 @@ int QueueSurface::UnlockAndPost(std::optional<int64_t> timestamp_ns, int video_s
       buffer_ = nullptr;
       return -ENODEV;
     }
-    listener = PublishLocked(timestamp_ns, video_scaling_mode);
+    listener = PublishLocked(*buffer_.get(), timestamp_ns, video_scaling_mode);
+    buffer_contents_valid_ = true;
   }
   if (listener) listener();
   return 0;
 }
 
-std::function<void()> QueueSurface::PublishLocked(std::optional<int64_t> timestamp_ns,
-                                                int video_scaling_mode) {
+std::function<void()> QueueSurface::PublishLocked(const Buffer& buffer,
+                                                 std::optional<int64_t> timestamp_ns,
+                                                 int video_scaling_mode) {
   static gesher::perf::Site copy_site("queue surface: publish a queued frame (copy)");
   const int64_t start = gesher::perf::Now();
-  if (buffer_ == nullptr) return {};
-  buffer_contents_valid_ = true;
-  auto f = std::make_shared<RecycledFrame>(frame_pool_, buffer_->width, buffer_->height);
-  f->width = buffer_->width;
-  f->height = buffer_->height;
+  auto f = std::make_shared<RecycledFrame>(frame_pool_, buffer.width, buffer.height);
+  f->width = buffer.width;
+  f->height = buffer.height;
   f->video_scaling_mode = video_scaling_mode;
-  const bool opaque = buffer_->format == HAL_PIXEL_FORMAT_RGBX_8888;
-  const bool bgra = buffer_->format == HAL_PIXEL_FORMAT_BGRA_8888;
+  const bool opaque = buffer.format == HAL_PIXEL_FORMAT_RGBX_8888;
+  const bool bgra = buffer.format == HAL_PIXEL_FORMAT_BGRA_8888;
   f->pixels.resize(static_cast<size_t>(f->width) * f->height);
-  if (!opaque && !bgra && buffer_->stride == f->width) {
+  if (!opaque && !bgra && buffer.stride == f->width) {
     // Ordinary RGBA producer storage is already packed. Let memcpy handle
     // the complete frame instead of restarting its copy loop on every row.
-    memcpy(f->pixels.data(), buffer_->pixels.data(), f->pixels.size() * sizeof(uint32_t));
+    memcpy(f->pixels.data(), buffer.pixels.data(), f->pixels.size() * sizeof(uint32_t));
   } else for (int y = 0; y < f->height; y++) {
-    const uint32_t* s = &buffer_->pixels[static_cast<size_t>(y) * buffer_->stride];
+    const uint32_t* s = &buffer.pixels[static_cast<size_t>(y) * buffer.stride];
     uint32_t* d = &f->pixels[static_cast<size_t>(y) * f->width];
     if (!opaque && !bgra) {
       memcpy(d, s, static_cast<size_t>(f->width) * 4);
@@ -314,21 +314,42 @@ std::function<void()> QueueSurface::PublishLocked(std::optional<int64_t> timesta
 int QueueSurface::dequeueBuffer(ANativeWindowBuffer** buffer, int* fence_fd) {
   std::lock_guard<std::mutex> lock(mutex_);
   if (abandoned_) return -ENODEV;
-  EnsureBuffer();
-  *buffer = buffer_.get();
-  dequeued_.push_back(buffer_);
+  // As BufferQueue does, the one-outstanding-buffer limit applies once a
+  // buffer has been queued; before that the producer may hold every writable
+  // slot, and a further dequeue would block (WOULD_BLOCK for this queue).
+  if (frames_ > 0 && !dequeued_.empty()) return -ENOSYS;  // Android INVALID_OPERATION.
+  if (dequeued_.size() >= kMaxDequeuedBuffers) return -EAGAIN;
+  android::sp<Buffer> slot;
+  if (locked_ || !dequeued_.empty()) {
+    int width, height;
+    Size(&width, &height);
+    slot = android::sp<Buffer>::make(width, height, format_);
+  } else {
+    EnsureBuffer();
+    slot = std::move(buffer_);
+    buffer_contents_valid_ = false;
+  }
+  *buffer = slot.get();
+  dequeued_.push_back(std::move(slot));
   if (fence_fd != nullptr) *fence_fd = -1;
   return 0;
 }
 
+android::sp<QueueSurface::Buffer> QueueSurface::TakeDequeued(ANativeWindowBuffer* buffer) {
+  for (auto it = dequeued_.begin(); it != dequeued_.end(); ++it) {
+    if (static_cast<ANativeWindowBuffer*>(it->get()) != buffer) continue;
+    auto owned = std::move(*it);
+    dequeued_.erase(it);
+    return owned;
+  }
+  return nullptr;
+}
+
 int QueueSurface::cancelBuffer(ANativeWindowBuffer* buffer, int) {
   std::lock_guard<std::mutex> lock(mutex_);
-  for (auto it = dequeued_.begin(); it != dequeued_.end(); ++it) {
-    if (static_cast<ANativeWindowBuffer*>(it->get()) == buffer) {
-      dequeued_.erase(it);
-      break;
-    }
-  }
+  // Discard writable storage containing unpublished pixels. Like Surface,
+  // returning an owned buffer succeeds even after the consumer is abandoned.
+  if (TakeDequeued(buffer) == nullptr) return abandoned_ ? -ENODEV : -EINVAL;
   return 0;
 }
 
@@ -336,15 +357,18 @@ int QueueSurface::queueBuffer(ANativeWindowBuffer* buffer, int) {
   std::function<void()> listener;
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    for (auto it = dequeued_.begin(); it != dequeued_.end(); ++it) {
-      if (static_cast<ANativeWindowBuffer*>(it->get()) == buffer) {
-        if (!abandoned_) buffer_ = *it;
-        dequeued_.erase(it);
-        break;
-      }
+    auto owned = TakeDequeued(buffer);
+    if (owned == nullptr) {
+      return abandoned_ ? -ENODEV : -EINVAL;
     }
-    if (abandoned_) return -ENODEV;
-    listener = PublishLocked(std::nullopt);
+    if (abandoned_) {
+      return -ENODEV;
+    }
+    listener = PublishLocked(*owned.get(), std::nullopt);
+    if (!locked_) {
+      buffer_ = std::move(owned);
+      buffer_contents_valid_ = true;
+    }
   }
   if (listener) listener();
   return 0;

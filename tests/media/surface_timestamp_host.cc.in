@@ -60,7 +60,7 @@ class QueueSurface {
   int unlockAndPost();
   int UnlockAndPostWithTimestamp(int64_t timestamp_ns, int video_scaling_mode = 1);
   int UnlockAndPost(std::optional<int64_t> timestamp_ns, int video_scaling_mode = 1);
-  std::function<void()> PublishLocked(std::optional<int64_t> timestamp_ns, int video_scaling_mode = 1);
+@PUBLISH_MEMBERS@
   int Post() { locked_ = true; return unlockAndPost(); }
   int Set(int operation, ...) {
     va_list args;

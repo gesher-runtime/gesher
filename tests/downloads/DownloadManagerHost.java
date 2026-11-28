@@ -463,6 +463,107 @@ public final class DownloadManagerHost {
         }
     }
 
+    static void partialResponseContracts() throws Exception {
+        File root = Files.createTempDirectory("gesher-download-ranges-").toFile();
+        Clock clock = new Clock();
+        DownloadRequests.Caller app = caller(APP_UID, APP, "android.permission.INTERNET");
+        byte[] body = payload(130_011, 31);
+        int firstCheckpoint = 19_031;
+        int secondCheckpoint = 78_111;
+        String framing = "Connection: close\r\n";
+        String validator = "ETag: \"v1\"\r\n";
+        byte[] prefix = Arrays.copyOf(body, firstCheckpoint);
+        try (Server server = new Server(); Fixture f = new Fixture(root, clock)) {
+            f.queue.start();
+            server.handlers.put("/limited", (r, out) -> {
+                if (r.header("Range") == null) {
+                    respond(out, "200 OK", validator + framing + "Transfer-Encoding: chunked\r\n",
+                            null);
+                    out.write((Integer.toHexString(prefix.length) + "\r\n")
+                            .getBytes(StandardCharsets.US_ASCII));
+                    out.write(prefix);
+                    out.write("\r\n".getBytes(StandardCharsets.US_ASCII));
+                    return; // Lost the connection before the terminating chunk and total.
+                }
+                int first = "bytes=".length();
+                int from = Integer.parseInt(r.header("Range").substring(first,
+                        r.header("Range").length() - 1));
+                int end = from == firstCheckpoint ? secondCheckpoint : body.length;
+                String total = from == firstCheckpoint ? Integer.toString(body.length) : "*";
+                respond(out, "206 Partial Content", validator + framing + "Content-Range: bytes "
+                        + from + "-" + (end - 1) + "/" + total + "\r\nContent-Length: "
+                        + (end - from) + "\r\n", Arrays.copyOfRange(body, from, end));
+            });
+            String limitFile = appFile(f, "limited.bin");
+            long limit = enqueue(f, app, request(server.url("/limited"), limitFile));
+            f.await(limit, Downloads.Impl.STATUS_WAITING_TO_RETRY);
+            DownloadRequests.Info cut = f.requests.info(limit);
+            check(cut.currentBytes == firstCheckpoint && cut.totalBytes == -1,
+                    "truncated chunked response records only the received prefix");
+            clock.offset.addAndGet(10 * 60_000L);
+            f.queue.schedule(limit);
+            f.await(limit, Downloads.Impl.STATUS_SUCCESS, Downloads.Impl.STATUS_WAITING_TO_RETRY);
+            List<Request> ranges = server.requests("/limited");
+            check(ranges.size() == 3
+                            && ("bytes=" + firstCheckpoint + "-").equals(ranges.get(1).header("Range"))
+                            && ("bytes=" + secondCheckpoint + "-").equals(ranges.get(2).header("Range"))
+                            && "\"v1\"".equals(ranges.get(2).header("If-Match"))
+                            && f.status(limit) == Downloads.Impl.STATUS_SUCCESS
+                            && f.requests.info(limit).totalBytes == body.length
+                            && Arrays.equals(body, Files.readAllBytes(new File(Uri.parse(limitFile).getPath()).toPath()))
+                            && f.broadcastsFor(limit).size() == 1,
+                    "server-limited ranges assemble exact bytes and deliver one completion");
+
+            String completeRange = "Content-Range: bytes " + firstCheckpoint + "-"
+                    + (body.length - 1) + "/" + body.length + "\r\n";
+            Map<String, String> invalid = Map.of(
+                    "missing", validator,
+                    "overlap", validator + "Content-Range: bytes " + (firstCheckpoint - 1) + "-"
+                            + (body.length - 2) + "/" + body.length + "\r\n",
+                    "validator", "ETag: \"v2\"\r\n" + completeRange,
+                    "encoding", validator + completeRange + "Content-Encoding: gzip\r\n",
+                    "size", validator + "Content-Range: bytes " + firstCheckpoint + "-"
+                            + (body.length - 1) + "/" + (body.length + 1) + "\r\n",
+                    "overflow", validator + "Content-Range: bytes " + firstCheckpoint
+                            + "-9223372036854775808/9223372036854775809\r\n",
+                    "overlong", validator + "Content-Range: bytes " + firstCheckpoint + "-"
+                            + (body.length - 2) + "/" + body.length + "\r\n");
+            byte[] suffix = Arrays.copyOfRange(body, firstCheckpoint, body.length);
+            for (Map.Entry<String, String> entry : invalid.entrySet()) {
+                String path = "/bad-" + entry.getKey();
+                server.handlers.put(path, (r, out) -> {
+                    if (r.header("Range") == null) {
+                        respond(out, "200 OK", validator + framing
+                                + "Content-Length: " + body.length + "\r\n", prefix);
+                    } else {
+                        respond(out, "206 Partial Content", framing + entry.getValue(), suffix);
+                    }
+                });
+                String file = appFile(f, entry.getKey() + ".bin");
+                long id = enqueue(f, app, request(server.url(path), file));
+                f.await(id, Downloads.Impl.STATUS_WAITING_TO_RETRY);
+                clock.offset.addAndGet(10 * 60_000L);
+                f.queue.schedule(id);
+                f.await(id, Downloads.Impl.STATUS_CANNOT_RESUME, Downloads.Impl.STATUS_SUCCESS,
+                        Downloads.Impl.STATUS_WAITING_TO_RETRY);
+                check(f.status(id) == Downloads.Impl.STATUS_CANNOT_RESUME
+                                && !new File(Uri.parse(file).getPath()).exists()
+                                && f.broadcastsFor(id).size() == 1,
+                        "invalid partial response is not published: " + entry.getKey());
+            }
+
+            server.handlers.put("/weak", (r, out) -> respond(out, "200 OK",
+                    "ETag: W/\"v1\"\r\n" + framing + "Content-Length: " + body.length + "\r\n", prefix));
+            long weak = enqueue(f, app, request(server.url("/weak"), appFile(f, "weak.bin")));
+            f.await(weak, Downloads.Impl.STATUS_CANNOT_RESUME, Downloads.Impl.STATUS_WAITING_TO_RETRY);
+            check(f.status(weak) == Downloads.Impl.STATUS_CANNOT_RESUME
+                            && server.requests("/weak").size() == 1,
+                    "weak ETag cannot authorize appending a range");
+        } finally {
+            deleteTree(root);
+        }
+    }
+
     public static void main(String[] args) throws Exception {
         File root = Files.createTempDirectory("gesher-downloads-").toFile();
         Clock clock = new Clock();
@@ -899,6 +1000,7 @@ public final class DownloadManagerHost {
             deleteTree(root);
         }
         networkPolicyChanges();
+        partialResponseContracts();
         if (failures != 0) {
             System.out.println(failures + " download contract(s) failed");
             System.exit(1);

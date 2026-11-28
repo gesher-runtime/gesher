@@ -174,6 +174,81 @@ void GeometryAndRetirement() {
   surface->Abandon();
 }
 
+void ProducerOwnership() {
+  auto surface = android::sp<QueueSurface>::make(64, 64);
+  auto other = android::sp<QueueSurface>::make(64, 64);
+  ANativeWindow* window = surface.get();
+  ANativeWindow* other_window = other.get();
+  ANativeWindowBuffer* native = nullptr;
+  ANativeWindowBuffer* foreign = nullptr;
+  int fence = -1;
+  size_t notifications = 0;
+  surface->SetListener([&] { ++notifications; });
+  Post(surface.get(), 1);
+  Check(window->dequeueBuffer(window, &native, &fence) == 0 && native && fence == -1,
+        "native window returns a writable slot");
+  Check(other_window->dequeueBuffer(other_window, &foreign, &fence) == 0 && foreign,
+        "second surface has its own slot");
+  if (!native || !foreign) return;
+
+  ANativeWindowBuffer* excess = nullptr;
+  int excess_fence = 77;
+  std::thread contender([&] {
+    Check(window->dequeueBuffer(window, &excess, &excess_fence) == -ENOSYS &&
+              excess == nullptr && excess_fence == 77,
+          "second native dequeue cannot take the outstanding slot");
+  });
+  contender.join();
+  Check(window->queueBuffer(window, foreign, -1) == -EINVAL &&
+            window->cancelBuffer(window, foreign, -1) == -EINVAL,
+        "foreign queue or cancel cannot retire the real slot");
+  Check(surface->frames() == 1 && notifications == 1, "invalid return publishes nothing");
+  auto* native_pixels = static_cast<uint32_t*>(native->reserved[0]);
+  for (size_t i = 0; i < 64u * 64u; ++i) native_pixels[i] = Pixel(2, i);
+  Post(surface.get(), 3);
+  auto cpu_frame = surface->Latest();
+  FramePixels(cpu_frame, 3, 1);
+  Check(window->queueBuffer(window, native, -1) == 0, "return outstanding native slot");
+  FramePixels(surface->Latest(), 2, 1);
+  FramePixels(cpu_frame, 3, 1);
+  Check(window->queueBuffer(window, native, -1) == -EINVAL &&
+            window->cancelBuffer(window, native, -1) == -EINVAL,
+        "duplicate return is rejected");
+  Check(surface->frames() == 3 && notifications == 3, "only three real frames published");
+
+  ANativeWindow_Buffer cpu{};
+  if (surface->lock(&cpu, nullptr) != 0) {
+    Check(false, "acquire CPU producer before native producer");
+    return;
+  }
+  Check(window->dequeueBuffer(window, &native, &fence) == 0 && native->reserved[0] != cpu.bits,
+        "native dequeue during a CPU lock uses different storage");
+  Check(window->cancelBuffer(window, native, -1) == 0, "cancel the native slot independently");
+  Check(surface->unlockAndPost() == 0 && surface->frames() == 4 && notifications == 4,
+        "native cancellation leaves CPU publication intact");
+
+  Check(window->dequeueBuffer(window, &native, &fence) == 0, "dequeue slot before cancellation");
+  static_cast<uint32_t*>(native->reserved[0])[0] = 0;
+  Check(window->cancelBuffer(window, native, -1) == 0, "cancel unpublished writes");
+  ARect dirty{1, 1, 3, 3};
+  Post(surface.get(), 4, true, &dirty);
+  Check(dirty.left == 0 && dirty.top == 0 && dirty.right == 64 && dirty.bottom == 64,
+        "next CPU lock requests a full repaint after cancellation");
+  FramePixels(surface->Latest(), 4, 1);
+
+  Check(window->dequeueBuffer(window, &native, &fence) == 0, "dequeue slot before abandon");
+  surface->Abandon();
+  Check(static_cast<uint32_t*>(native->reserved[0])[0] == Pixel(4, 0),
+        "abandon keeps outstanding producer pixels alive until return");
+  Check(window->queueBuffer(window, native, -1) == -ENODEV && surface->Latest() == nullptr &&
+            surface->frames() == 5 && notifications == 5,
+        "abandoned queue retires the slot without publishing");
+  Check(window->dequeueBuffer(window, &native, &fence) == -ENODEV,
+        "abandoned queue refuses new slots");
+  Check(other_window->cancelBuffer(other_window, foreign, -1) == 0,
+        "the foreign slot still belongs to its producer");
+}
+
 void OutstandingReaders() {
   constexpr size_t bytes = 64u * 64u * 4u;
   auto surface = android::sp<QueueSurface>::make(64, 64);
@@ -292,6 +367,7 @@ int main(int argc, char** argv) {
   const bool gate = argc < 2 || std::strcmp(argv[1], "measure") != 0;
   PixelsAndIdentity();
   GeometryAndRetirement();
+  ProducerOwnership();
   OutstandingReaders();
   ConcurrentPublication();
   DestructionAndCap();

@@ -4,12 +4,22 @@
  */
 package gesher.services;
 
+import android.graphics.ImageFormat;
+import android.graphics.SurfaceTexture;
 import android.hardware.ICameraService;
+import android.hardware.camera2.CameraCaptureSession;
 import android.hardware.camera2.CaptureRequest;
 import android.hardware.camera2.ICameraDeviceCallbacks;
+import android.hardware.camera2.ICameraDeviceUser;
 import android.hardware.camera2.impl.CameraMetadataNative;
 import android.hardware.camera2.impl.CaptureResultExtras;
+import android.hardware.camera2.params.DynamicRangeProfiles;
+import android.hardware.camera2.params.InputConfiguration;
+import android.hardware.camera2.params.OutputConfiguration;
+import android.hardware.camera2.params.SessionConfiguration;
+import android.media.ImageReader;
 import android.os.ServiceSpecificException;
+import android.util.Size;
 import java.lang.reflect.*;
 import java.util.*;
 import java.util.concurrent.*;
@@ -75,6 +85,82 @@ public final class CameraCallbackAdmissionTest {
         call(camera, "submitRequest", new Class<?>[] {CaptureRequest.class, boolean.class},
                 request, false);
     }
+    private static SessionConfiguration session(int mode, OutputConfiguration... outputs) {
+        return new SessionConfiguration(mode, List.of(outputs), Runnable::run,
+                new CameraCaptureSession.StateCallback() {
+                    @Override public void onConfigured(CameraCaptureSession session) {}
+                    @Override public void onConfigureFailed(CameraCaptureSession session) {}
+                });
+    }
+    private interface CameraOperation {
+        void run() throws Exception;
+    }
+    private static void rejects(int errorCode, CameraOperation operation, String message)
+            throws Exception {
+        try {
+            operation.run();
+        } catch (ServiceSpecificException e) {
+            require(e.errorCode == errorCode, message + " uses the camera service error");
+            return;
+        }
+        throw new AssertionError(message);
+    }
+    private static void checkSessionAdmission() throws Exception {
+        ICameraDeviceUser camera = (ICameraDeviceUser) camera(new ICameraDeviceCallbacks.Default());
+        try (ImageReader preview = ImageReader.newInstance(640, 480, ImageFormat.YUV_420_888, 2);
+                ImageReader still = ImageReader.newInstance(320, 240, ImageFormat.JPEG, 2)) {
+            int regular = SessionConfiguration.SESSION_REGULAR;
+            int highSpeed = SessionConfiguration.SESSION_HIGH_SPEED;
+            int invalid = ICameraService.ERROR_ILLEGAL_ARGUMENT;
+            OutputConfiguration yuv = new OutputConfiguration(preview.getSurface());
+            OutputConfiguration jpeg = new OutputConfiguration(still.getSurface());
+            require(camera.isSessionConfigurationSupported(session(regular, yuv, jpeg)),
+                    "the supported YUV plus JPEG combination passes the query");
+            int stream = camera.createStream(yuv);
+            require(stream >= 0 && camera.createStream(jpeg) >= 0,
+                    "the same two outputs pass actual stream admission");
+            require(!camera.isSessionConfigurationSupported(session(regular)),
+                    "no outputs cannot form a capture session");
+
+            SessionConfiguration input = session(regular, yuv);
+            input.setInputConfiguration(new InputConfiguration(640, 480, ImageFormat.YUV_420_888));
+            require(!camera.isSessionConfigurationSupported(input), "reprocessing is unavailable");
+            rejects(invalid, () -> camera.createInputStream(640, 480, ImageFormat.YUV_420_888, false),
+                    "the session cannot admit an input stream");
+            rejects(invalid, () -> camera.isSessionConfigurationSupported(session(highSpeed, yuv)),
+                    "high speed query on this device is invalid");
+            rejects(invalid, () -> camera.endConfigure(highSpeed, null, 0),
+                    "high speed configuration is invalid");
+
+            OutputConfiguration deferred = new OutputConfiguration(new Size(640, 480),
+                    SurfaceTexture.class);
+            require(!camera.isSessionConfigurationSupported(session(regular, deferred)),
+                    "deferred output is unavailable");
+            rejects(invalid, () -> camera.createStream(deferred),
+                    "an output without a Surface cannot be admitted");
+
+            OutputConfiguration physical = new OutputConfiguration(preview.getSurface());
+            physical.setPhysicalCameraId("unavailable-physical-camera");
+            require(!camera.isSessionConfigurationSupported(session(regular, physical)),
+                    "physical-camera routing is unavailable");
+            rejects(invalid, () -> camera.createStream(physical),
+                    "the stream cannot silently use another camera");
+
+            OutputConfiguration hdr = new OutputConfiguration(preview.getSurface());
+            hdr.setDynamicRangeProfile(DynamicRangeProfiles.HLG10);
+            require(!camera.isSessionConfigurationSupported(session(regular, hdr)),
+                    "HDR output is unavailable");
+            rejects(invalid, () -> camera.updateOutputConfiguration(stream, hdr),
+                    "the update cannot silently substitute SDR");
+            camera.updateOutputConfiguration(stream, yuv);
+        } finally {
+            camera.disconnect();
+        }
+        rejects(ICameraService.ERROR_DISCONNECTED,
+                () -> camera.isSessionConfigurationSupported(session(SessionConfiguration.SESSION_REGULAR)),
+                "closed devices cannot answer a session query");
+        retired();
+    }
     private static final class Blocked extends ICameraDeviceCallbacks.Default {
         final CountDownLatch entered = new CountDownLatch(1), release = new CountDownLatch(1);
         final AtomicInteger terminals = new AtomicInteger();
@@ -99,6 +185,7 @@ public final class CameraCallbackAdmissionTest {
         constructor = cameraType.getDeclaredConstructors()[0]; constructor.setAccessible(true);
         Class<?> serviceType = Class.forName("com.gesher.server.CameraService");
         service = serviceType.getMethod("get").invoke(null);
+        checkSessionAdmission();
         int maximum = field(queueType, "MAX_FRAMES").getInt(null);
         long budget = field(queueType, "MAX_BYTES").getLong(null);
         Blocked target = new Blocked(); Object camera = camera(target);

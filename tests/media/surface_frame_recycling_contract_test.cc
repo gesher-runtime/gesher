@@ -4,6 +4,7 @@
 #include "surface_frame_accounting.h"
 
 #include <algorithm>
+#include <cerrno>
 #include <cstdio>
 #include <memory>
 
@@ -22,9 +23,44 @@ void Post(QueueSurface* surface, uint32_t pixel) {
   std::fill_n(static_cast<uint32_t*>(buffer.bits), static_cast<size_t>(buffer.stride) * buffer.height, pixel);
   Check(surface->unlockAndPost() == 0, "publish actual producer");
 }
+
+void ProducerOwnership() {
+  auto surface = android::sp<QueueSurface>::make(64, 64);
+  ANativeWindow* window = surface.get();
+  ANativeWindowBuffer* native = nullptr;
+  int fence = -1;
+  Check(window->dequeueBuffer(window, &native, &fence) == 0 && native != nullptr,
+        "dequeue actual Android native-window slot");
+  if (!native) return;
+  auto* pixels = static_cast<uint32_t*>(native->reserved[0]);
+  pixels[0] = 0xff112233;
+  // Before the first queued buffer BufferQueue lets the producer hold every
+  // writable slot; each has its own storage and a further dequeue would block.
+  ANativeWindowBuffer* second = nullptr;
+  ANativeWindowBuffer* excess = nullptr;
+  Check(window->dequeueBuffer(window, &second, &fence) == 0 && second != nullptr &&
+            second != native && second->reserved[0] != native->reserved[0],
+        "a second slot before the first queue has separate storage");
+  Check(window->dequeueBuffer(window, &excess, &fence) == -EAGAIN && excess == nullptr,
+        "actual native-window slots are bounded");
+  if (second != nullptr) {
+    static_cast<uint32_t*>(second->reserved[0])[0] = 0xff778899;
+    Check(window->cancelBuffer(window, second, -1) == 0 && pixels[0] == 0xff112233,
+          "cancelling one slot leaves the other slot's pixels intact");
+  }
+  Post(surface.get(), 0xff445566);
+  Check(pixels[0] == 0xff112233, "Canvas/CPU writes leave the outstanding native slot intact");
+  Check(window->queueBuffer(window, native, -1) == 0, "publish the real native slot");
+  auto latest = surface->Latest();
+  Check(latest && latest->pixels.front() == 0xff112233 && surface->frames() == 2,
+        "each real frame has the corresponding producer's pixels");
+  Check(window->queueBuffer(window, native, -1) == -EINVAL && surface->Latest() == latest,
+        "duplicate return leaves the latest frame intact");
+}
 }
 
 int main() {
+  ProducerOwnership();
   constexpr size_t bytes = 1280u * 720u * 4u;
   const size_t initial = accounting::live;
   std::shared_ptr<const gesher::media::SurfaceFrame> held;

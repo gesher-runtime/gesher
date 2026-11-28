@@ -31,11 +31,19 @@ STUBS = {
  public boolean equals(Object o){return o instanceof Size&&((Size)o).w==w&&((Size)o).h==h;} public int hashCode(){return w*31+h;} }''',
 'android/view/Surface.java': 'package android.view; public class Surface {}',
 'android/hardware/common/fmq/MQDescriptor.java': 'package android.hardware.common.fmq; public class MQDescriptor {}',
-'android/hardware/camera2/params/SessionConfiguration.java': 'package android.hardware.camera2.params; public class SessionConfiguration {}',
+'android/hardware/camera2/params/SessionConfiguration.java': '''package android.hardware.camera2.params; public class SessionConfiguration {
+ public static final int SESSION_REGULAR=0; public int getSessionType(){return SESSION_REGULAR;}
+ public InputConfiguration getInputConfiguration(){return null;}
+ public java.util.List<OutputConfiguration> getOutputConfigurations(){return java.util.List.of(new OutputConfiguration());} }''',
+'android/hardware/camera2/params/InputConfiguration.java': 'package android.hardware.camera2.params; public class InputConfiguration {}',
+'android/hardware/camera2/params/DynamicRangeProfiles.java': 'package android.hardware.camera2.params; public final class DynamicRangeProfiles { public static final long STANDARD=1; }',
 'android/hardware/camera2/params/OutputConfiguration.java': '''package android.hardware.camera2.params; import android.view.Surface;
- public class OutputConfiguration { public java.util.List<Surface> getSurfaces(){return java.util.List.of(new Surface());} }''',
+ public class OutputConfiguration { public static final int ROTATION_0=0;
+ public java.util.List<Surface> getSurfaces(){return java.util.List.of(new Surface());}
+ public boolean isForPhysicalCamera(){return false;} public long getDynamicRangeProfile(){return DynamicRangeProfiles.STANDARD;}
+ public int getRotation(){return ROTATION_0;} }''',
 'android/hardware/camera2/utils/SurfaceUtils.java': '''package android.hardware.camera2.utils; import android.view.Surface; import android.util.Size;
- public class SurfaceUtils {public static int getSurfaceFormat(Surface s){return 1;} public static Size getSurfaceSize(Surface s){return new Size(16,16);} }''',
+ public class SurfaceUtils {public static int getSurfaceFormat(Surface s){return 0x23;} public static Size getSurfaceSize(Surface s){return new Size(16,16);} }''',
 'android/hardware/camera2/utils/SubmitInfo.java': '''package android.hardware.camera2.utils; public class SubmitInfo {
  final int id; final long last; public SubmitInfo(int id,long last){this.id=id;this.last=last;}
  public int getRequestId(){return id;} public long getLastFrameNumber(){return last;} }''',
@@ -92,7 +100,8 @@ STUBS = {
  public long cancelRequest(int id){return 0;} public long flush(){return 0;} public void waitUntilIdle(){} public void disconnect(){}
  } }''',
 'com/gesher/server/CameraService.java': '''package com.gesher.server; import android.hardware.camera2.impl.CameraMetadataNative;
- class CameraService {static final int HAL_BLOB=33;static final long FRAME_DURATION_NS=33333333;
+ class CameraService {static final int HAL_BLOB=0x21,HAL_PRIVATE=0x22,HAL_YCBCR_420_888=0x23;static final long FRAME_DURATION_NS=33333333;
+ static boolean supportsOutputFormat(int f){return f==HAL_YCBCR_420_888||f==HAL_PRIVATE||f==HAL_BLOB;}
  static void log(String s){} static CameraMetadataNative defaultRequest(WindowsCamera.Device d,int i){return new CameraMetadataNative();}
  static CameraMetadataNative characteristics(WindowsCamera.Device d){return new CameraMetadataNative();} void closed(String s,CameraDeviceUser u){} }''',
 'com/gesher/server/CameraAutoFocus.java': '''package com.gesher.server;
