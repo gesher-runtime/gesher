@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cfenv>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -604,24 +605,46 @@ void CaptureStream::Push(const float* src, size_t frames, uint32_t src_rate, uin
     auto& cur = current_frame_;
     auto& prev = previous_frame_;
     size_t n = 0;
-    while (true) {
-      const double pos = phase_;
-      const size_t i = static_cast<size_t>(pos);  // between frame i-1 (last_ when 0) and i
-      if (i >= frames) break;
-      const float t = static_cast<float>(pos - static_cast<double>(i));
-      source_frame(i, cur.data());
-      if (i == 0) {
-        std::copy(last_.begin(), last_.end(), prev.begin());
-      } else {
-        source_frame(i - 1, prev.data());
+    if (src_rate == params_.sample_rate && src_channels == ch &&
+        phase_ == 0.0 && !std::signbit(phase_) && frames <= (uint64_t{1} << 52) &&
+        std::fegetround() == FE_TONEAREST) {
+      // Integral unity-rate input visits each source frame once. Keep the
+      // original interpolation arithmetic even at t=0: copying prev alone
+      // would change infinities, NaNs and signed zero. The first prev is the
+      // prior block's history; later frames already have contiguous history.
+      // Other rounding modes can produce a negative-zero interpolation weight.
+      const float* previous = last_.data();
+      const size_t take = std::min(frames, room);
+      for (size_t i = 0; i < take; ++i) {
+        const float* current = src + i * ch;
+        for (uint32_t c = 0; c < ch; ++c)
+          out.push_back(previous[c] + (current[c] - previous[c]) * 0.0f);
+        previous = current;
       }
-      // Advance through discarded frames too: phase/history and lost-frame
-      // accounting must not depend on how much room the consumer left.
-      if (n < room) {
-        for (uint32_t c = 0; c < ch; c++) out.push_back(prev[c] + (cur[c] - prev[c]) * t);
+      // Repeated additions of one are exact in this bounded integral range.
+      // Keep the common final subtraction, including its signed-zero result.
+      n = frames;
+      phase_ += static_cast<double>(frames);
+    } else {
+      while (true) {
+        const double pos = phase_;
+        const size_t i = static_cast<size_t>(pos);  // between frame i-1 (last_ when 0) and i
+        if (i >= frames) break;
+        const float t = static_cast<float>(pos - static_cast<double>(i));
+        source_frame(i, cur.data());
+        if (i == 0) {
+          std::copy(last_.begin(), last_.end(), prev.begin());
+        } else {
+          source_frame(i - 1, prev.data());
+        }
+        // Advance through discarded frames too: phase/history and lost-frame
+        // accounting must not depend on how much room the consumer left.
+        if (n < room) {
+          for (uint32_t c = 0; c < ch; c++) out.push_back(prev[c] + (cur[c] - prev[c]) * t);
+        }
+        ++n;
+        phase_ += step;
       }
-      ++n;
-      phase_ += step;
     }
     phase_ -= static_cast<double>(frames);
     source_frame(frames - 1, last_.data());

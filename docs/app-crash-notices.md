@@ -21,6 +21,10 @@ lifetime; old records are retained until the user clears the logs. It accepts
 only known diagnosis kinds and never starts PowerShell or relaunches the app.
 Application/path arguments are quoted as Windows arguments and substituted once
 into localized templates, so braces and Unicode paths stay literal.
+The classic Win32 text controls receive LTR embeddings around the package,
+absolute Windows report path and event ID. Only the catalog's isolate markers
+are translated: this prevents visible missing-glyph boxes in both ordinary
+and scrolling messages without changing the report path or shared catalogs.
 
 ## Component audit and diagnosis limits
 
@@ -47,8 +51,10 @@ wrapped causes, cycles, unrelated nulls, missing natives, a failed reporter,
 background suppression and the explicit opt-out. The separate cache test compiles
 the production `WindowsBluetooth` and exercises freshness and invalidation.
 `--launcher PATH` additionally opens, inspects and closes all four actual Win32
-dialog variants in both languages, including Unicode paths/literal braces and
-rejected helper arguments.
+dialog variants in both languages, including Unicode paths/literal braces,
+long paths forcing the scrolling EDIT control, native direction markers and
+rejected helper arguments. These checks inspect live control text and class;
+they do not establish glyph placement on every Windows version or font.
 
 `python tools/test_app_crash_runtime.py --runtime RUNTIME --fixture crashnotice.apk
 --output OUTPUT` runs on Windows without a Bluetooth radio. The isolated fixture

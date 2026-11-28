@@ -38,8 +38,12 @@ Setup prevents switching between standard and portable modes in an existing
 runtime directory. Portable Setup creates no uninstaller or uninstall entry and
 does not delete or replace another installation's registration.
 
-Portable mode suppresses automatic Windows Start menu shortcuts, file
-associations and app URL-protocol registration. Android app labels, icons,
+Portable mode suppresses automatic Windows Start menu shortcuts, desktop
+shortcuts, file associations and app URL-protocol registration. An APK or bundle
+dropped on `Gesher.exe` asks before installing, as one opened from Explorer does
+([below](#opening-an-apk-from-explorer)), but its confirmation has no "Create a
+desktop shortcut" check box, and `gesher-app install --desktop-shortcut` says why
+it makes none. Android app labels, icons,
 dynamic-shortcut data and internal intents remain in the profile. External-browser
 sign-in callbacks that need a custom host URL protocol are not newly registered
 by portable mode. Notifications can still create per-user Windows AppUserModelID
@@ -49,8 +53,11 @@ retain the Windows user's access, as described in the bundled security notice.
 
 CI separately tests the actual packaged Windows/ART runtime: Hello, APK
 installation and launch, copying a populated profile while the original remains,
-flat and `App`-layout Setup updates, and preservation of an existing standard
-installation's uninstall entry, PATH, associations and shortcuts. Host fixtures
+an APK dropped on the copy's `Gesher.exe` (the confirmation without the desktop
+shortcut box, Cancel, Install and Done, then the installed version opened with no
+dialog), flat and `App`-layout Setup updates, and preservation of an existing
+standard installation's uninstall entry, PATH, associations, Start menu shortcuts
+and desktop `.lnk` files (`tests/windows/shell/PortableRuntimeChecks.ps1`). Host fixtures
 also cover profile selection, add-on routing and release payload rejection.
 The package check uses the same installer for update-layout validation; it does
 not exercise network update discovery or physical USB removal.
@@ -118,7 +125,7 @@ Windows would otherwise keep behind Explorer.
 With standard handles to pass on (a redirected output, as CI reads it) it
 passes them on and, as on a console, the launch lasts as long as the app's
 process: `com.gesher.app.Launcher` streams the app's log and returns its exit
-code. Without them (a Start menu shortcut, a double-clicked `.apk`: nobody
+code. Without them (a Start menu shortcut, an APK opened from Explorer: nobody
 reads the output) it sets `GESHER_LAUNCH_DETACH=1` (unless the caller set it):
 the launcher returns once the activity has started (`startActivityAndWait`:
 its first frame drawn, or idle), so gesher-launch, `powershell.exe` (and its
@@ -136,13 +143,16 @@ one starts the device, installs and compiles the APK; every one starts the
 app's process). So that something is on screen at once, gesher-launch shows a
 splash window (class `GesherSplash`) right after it starts `gesher-app.ps1`:
 
-- **When**: for `gesher-launch launch <package>`, `gesher-launch launch <file.apk>`
-  and `gesher-launch <file.apk>` (a double-click) whose app's window is shown;
-  not for `install`, `uninstall`, `view`, `list`, `status`, `start`,
-  `shutdown`, `toast-activated` or `apk-icon`, nor with `--hidden-window`,
+- **When**: for `gesher-launch launch <package>` (a Start menu shortcut, and an
+  APK opened from Explorer once it is installed: [Open](#opening-an-apk-from-explorer),
+  or the same version already installed), `gesher-launch launch <file.apk>` and
+  `gesher-launch <file.apk> <options>` (gesher-app's command line) whose app's
+  window is shown; not for `install`, `uninstall`, `view`, `list`, `status`,
+  `start`, `shutdown`, `toast-activated`, `apk-icon` or `apk-info`, nor with `--hidden-window`,
   `--headless`, `--single-process`, `--system-server` or
   `GESHER_APP_WINDOW=hidden|headless` (`--window` shows it again).
-  `GESHER_SPLASH=0` turns it off. When the app already has its window (it
+  `GESHER_SPLASH=0` turns it off, and also the reading and installing progress
+  windows of an opened APK (its confirmation dialogs still show). When the app already has its window (it
   runs), none is shown.
 - **What**: the size of the app's window (`GESHER_DISPLAY`'s, else 400x800
   pixels, within the work area), centered on the monitor of the pointer, with
@@ -168,11 +178,14 @@ splash window (class `GesherSplash`) right after it starts `gesher-app.ps1`:
 
 CI: `tests/windows/tracks/55-shell.ps1` runs a copy of gesher-launch with a
 stand-in `gesher-app.ps1` and a stand-in `%LOCALAPPDATA%` (a shortcut record
-with an escaped label, an icon, an `apk-icons.list` line): `launch <package>`
-and a double-clicked APK show the splash with the label, icon and
-AppUserModelID, it stays while no app window is up and goes once a window with
-the app's AppUserModelID is shown; closing it cancels the launch; `install` and
-`--headless` show none. The package job
+with an escaped label, an icon, an `apk-icons.list` line): `launch <package>`,
+an APK given with options and an APK opened from Explorer whose version is
+installed show the splash with the label, icon and AppUserModelID, it stays while
+no app window is up and goes once a window with the app's AppUserModelID is shown;
+closing it cancels the launch; `install` and `--headless` show none. The same
+stand-in answers `apk-info` and records each run's arguments, and
+`tests/windows/shell/InstallConfirmDialog.ps1` answers the confirmation and
+installed dialogs ([below](#opening-an-apk-from-explorer)). The package job
 runs the installed `gesher-launch install uiapp.apk` (no splash) and
 `gesher-launch launch com.gesher.uiapp` with its window shown: the splash,
 with `Gesher UI` and `Gesher.App.com.gesher.uiapp`, is gone within 5 s of the
@@ -193,13 +206,75 @@ the density-specific images. The cache key remains that of the original bundle.
 Temporary icon files have unique names, and complete icon lists are published by
 replacement so concurrent requests do not expose partially written cache data.
 
-Opening an APK this way runs it the way `gesher-app my.apk` does: it is
-installed (or updated) on the user's Gesher device and its launcher Activity
-started through the device's system server, in a window of the app's process
-(ADR 0029), with the app's output in a console window (see `app/README.md` and
+### Opening an APK from Explorer
+
+Opening an APK or split APK bundle (`.apk`, `.xapk`, `.apks`, `.apkm`, `.apk+`)
+from Explorer runs `gesher-launch.exe "<file>"`: the bare form, one argument
+naming an existing file (portable `Gesher.exe` given a dropped file runs the same).
+Nothing is installed without the user's consent (issue 519,
+[ADR 0028's amendment](decisions/0028-shell-start-menu-apps.md)):
+
+1. A small progress window (the splash's painting: the file's name, "Reading…")
+   while `gesher-app.ps1 apk-info "<file>" "<report>" "<snapshot directory>"`
+   copies the installation inputs to a private directory and reads the copy
+   without installing it or starting the device: its package, versionCode,
+   versionName, label and icon,
+   the installed versionCode and versionName when the package is installed, and
+   whether its recorded desktop shortcut is there. A file that cannot be read
+   (not an app, an encrypted `.apkm`) ends here with the error dialog.
+2. The same versionCode is installed: no dialog; gesher-launch runs
+   `launch <package>`, as the app's Start menu shortcut does, with its splash.
+3. Otherwise the confirmation dialog, "Install Android app": the app's icon,
+   label and version, "Do you want to install this app?" (or "update", when another version
+   is installed), the buttons **Install** (**Update** when the package is
+   installed) and **Cancel**, and the check box **Create a desktop shortcut**,
+   unchecked. Cancel is the default button and has the initial focus, so Enter
+   alone does not install. Cancel, Esc and the X install nothing; gesher-launch
+   exits with 1223 (`ERROR_CANCELLED`).
+4. Install: a progress window ("Installing <label>…") while `gesher-app.ps1
+   install "<snapshot>"` runs, with `--desktop-shortcut` when the box was checked.
+   A bundle is copied as one archive. For a loose APK the copy also includes
+   its adjacent split candidates and dex metadata, using the same discovery
+   rules as a command-line installation. The system server stages its own copy
+   and verifies the digest of the filenames and copied bytes, then checks the
+   package and version before committing the installation.
+   The APK is installed (or updated) on the user's Gesher device as `gesher-app
+   install` installs it; its Start menu shortcut is made as usual.
+5. After verifying the installation result's package and version against the
+   confirmation, Gesher shows a second dialog, "<label> was installed."
+   (or updated): **Open** runs `launch <package>` with the splash; **Done** (the
+   default), Esc and the X end it. The app is never started without Open. When
+   the box was checked but the record names no desktop shortcut that exists
+   (install printed why), the dialog adds "The desktop shortcut was not created."
+
+Gesher removes the snapshot when the flow ends. A failing step (an unreadable file, a failed install) shows Gesher's error
+dialog with its message and ends with that step's non-zero exit code; nothing
+claims success. The check box is not shown in portable Gesher, with
+`GESHER_SHORTCUTS=0`, and when the package's recorded desktop shortcut is still
+there. The dialogs are right-to-left for Hebrew, scale with the monitor's DPI and
+follow high contrast (`compat/windows/host_dialog_theme.h`). The command lines
+`gesher-app my.apk`, `gesher-app install my.apk`, `gesher-launch launch
+<file|package>`, `gesher-launch install my.apk` and an APK given to gesher-launch
+with options are unchanged: they install (and run) without asking, as before.
+
+For UI automation (CI, `tests/windows/shell/InstallConfirmDialog.ps1`), both
+dialogs are top-level `#32770` dialogs of the gesher-launch process with stable
+control IDs:
+
+| Dialog | Title (`tools/package/ui-messages.json`) | Controls |
+|---|---|---|
+| Confirmation | `install_confirm_title` | Install/Update `IDOK` (1), Cancel `IDCANCEL` (2), "Create a desktop shortcut" check box 1001 (absent when not offered) |
+| Installed | `install_done_title` | Open 1002, Done `IDCANCEL` (2) |
+
+The helper finds them by these IDs (and their titles), presses buttons with
+`BM_CLICK` and sets the check box as a click would.
+
+A launch (Open, or the same version opened) runs on the user's Gesher device:
+its launcher Activity is started through the device's system server, in a window
+of the app's process (ADR 0029; see `app/README.md` and
 [0026](decisions/0026-services-persistent-device.md)). The first launch starts
 the device (binderd, servicemanager, the system server) in the background; it
-outlives the console and serves later launches until `gesher-app shutdown` or
+outlives gesher-launch and serves later launches until `gesher-app shutdown` or
 10 minutes without an app. The APK must be on the same drive as Gesher.
 
 ## Installed apps in the Start menu
@@ -216,8 +291,9 @@ menu shortcut, as a launcher lists it
 | Icon | `%LOCALAPPDATA%\Gesher\data\data\<package>\gesher-shell\icon.ico` |
 | AppUserModelID | `Gesher.App.<package>` (`System.AppUserModel.ID` in the link) |
 
-- **When**: `gesher-app install APK` and every launch (`gesher-app my.apk`, a
-  double-clicked `.apk`) make it, or make it again when the package was
+- **When**: `gesher-app install APK` (also Install in the
+  [confirmation](#opening-an-apk-from-explorer) of an APK opened from Explorer)
+  and every launch (`gesher-app my.apk`, `launch <package>`) make it, or make it again when the package was
   updated (new label or icon) or the shortcut is missing; it says so in the
   console (`gesher-app: Start menu shortcut ...`). `gesher-app uninstall
   PACKAGE` removes it and its icon, and the `Gesher Apps` folder once it is
@@ -227,6 +303,17 @@ menu shortcut, as a launcher lists it
   through `PackageInstaller` removes them (ADR 0028's amendment). A failure never
   fails the install, the removal or the launch. `GESHER_SHORTCUTS=0` turns
   shortcuts off; runs from a build folder without `gesher-app.cmd` make none.
+- **Desktop shortcut**: only when the user asks for one, with the check box of
+  the [confirmation](#opening-an-apk-from-explorer) (`gesher-app install APK
+  --desktop-shortcut`): the same link (target, arguments, icon, description,
+  AppUserModelID) as `<Desktop>\<label>.lnk` (FOLDERID_Desktop; `<label>
+  (<package>).lnk` when another file has that name), recorded as `desktop_link`
+  in `shortcut.properties`. Later launches, `sync-shortcuts` and updates keep the
+  record but never make the link again: a desktop shortcut the user deleted stays
+  deleted. Uninstalling the package (`gesher-app uninstall`, a `PackageInstaller`
+  removal, the Control Center) removes the recorded link, and only that path.
+  Never in portable Gesher or with `GESHER_SHORTCUTS=0` (the output says why); a
+  failure to make it does not fail the install and is printed.
 - **Window icon without a shortcut**: the app's windows take the shortcut's
   `icon.ico`. A package with no launcher activity, and a staged microG addon
   (its verified `system\priv-app\<package>` slot, which `gesher-app-microg.ps1`
@@ -261,8 +348,9 @@ menu shortcut, as a launcher lists it
   `PKEY_AppUserModel_ID` on the window (`SHGetPropertyStoreForWindow`).
   `--single-process` and `--system-server` runs set none.
 - **Uninstalling Gesher** removes `{userprograms}\Gesher Apps` with every
-  app's shortcut (`[UninstallDelete]`); the icons go with `%LOCALAPPDATA%\Gesher`.
-  Nothing else of the Start menu is touched.
+  app's shortcut (`[UninstallDelete]`) and the desktop shortcuts the apps'
+  records name (`desktop_link`, `[Code]`); the icons go with `%LOCALAPPDATA%\Gesher`.
+  Nothing else of the Start menu or the desktop is touched.
 
 The natives (`com.gesher.app.shell.Shell`: `IShellLinkW`, `IPropertyStore`,
 `SHGetKnownFolderPath`, `SetCurrentProcessExplicitAppUserModelID`, the URL
@@ -482,18 +570,41 @@ APKs show their icons from Gesher's icon handler while `.apk` opens with Gesher.
 
 After installing, the `package` job checks that `.apk`'s default is
 `Gesher.Apk` and that `OpenWithProgids` lists it, reads the open command from
-the registry, replaces `%1` with the installed `lifecycle.apk`, runs the
-command line through `cmd.exe` as Explorer would, and expects
-`gesher-app: done`. After uninstalling, it checks that the `Gesher.Apk` key,
-`.apk`'s default and the `OpenWithProgids` entry are gone.
+the registry, replaces `%1` with the installed `lifecycle.apk` and runs that
+command line as Explorer would, answering gesher-launch's dialogs with
+`tests/windows/shell/InstallConfirmDialog.ps1`:
 
-Verified in ci run 39946705097 (package job on windows-2022).
+- with the same version installed: no dialog comes up, and the installed package
+  is launched (`launching the installed package com.gesher.lifecycle`,
+  `gesher-app: done`; the device started);
+- after `gesher-app uninstall`: the confirmation (its title `install_confirm_title`,
+  Install and Cancel, the desktop shortcut box shown and unchecked); Cancel exits
+  with 1223 and nothing is installed (`gesher-app list`, no shortcut);
+- Install with the box checked, then Done: installed (`installed
+  com.gesher.lifecycle`), not launched (no `gesher-app: done`, no
+  `LifecycleActivity`), the Start menu shortcut and `<Desktop>\Gesher
+  Lifecycle.lnk` (the same target, arguments, icon and AppUserModelID), recorded
+  as `desktop_link`; `gesher-app uninstall` removes it;
+- Install with the box unchecked, then Open: installed and launched
+  (`LifecycleActivity onResume`, `gesher-app: done`), no desktop shortcut;
+- an `.apkm` bundle of a package not installed asks (Install, Open); an `.apk+`
+  bundle of the installed version opens it directly.
+
+`tests/windows/tracks/55-shell.ps1` covers the rest with a stand-in
+`gesher-app.ps1`: an update whose recorded desktop shortcut is there and
+`GESHER_SHORTCUTS=0` hide the box, a `portable.marker` beside gesher-launch hides
+it, and a failing `apk-info` or install ends with its exit code and no installed
+dialog. The e2e job opens a real app's APK of its installed version through the
+association (no dialog). After uninstalling, the package job checks that the
+`Gesher.Apk` key, `.apk`'s default and the `OpenWithProgids` entry are gone,
+and that uninstalling Gesher removes the apps' recorded desktop shortcuts and
+keeps the user's own.
 
 With the Gesher device (ci run 40019524773), the package job also runs the
 installed `gesher-app lifecycle.apk` (the device starts, the APK is installed
 and run; `gesher-app list` shows it), `--single-process`, `gesher-app
-shutdown` (the device's three processes gone), the `.apk` open command (which
-starts the device again) and checks that the device still runs after that
+shutdown` (the device's three processes gone), the `.apk` open command (the
+same version installed: it launches the package and starts the device again) and checks that the device still runs after that
 command's console is gone; after uninstalling, that its processes are gone and
 `%LOCALAPPDATA%\Gesher` removed.
 

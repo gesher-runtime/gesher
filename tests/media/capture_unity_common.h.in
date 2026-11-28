@@ -1,0 +1,45 @@
+// Copyright (C) 2026 The Gesher Authors; SPDX-License-Identifier: Apache-2.0
+// Test-only attachment/clock boundaries around complete production stream code.
+#pragma once
+#include <sys/types.h>
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <bit>
+#include <cfenv>
+#include <chrono>
+#include <cmath>
+#include <condition_variable>
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <ctime>
+#include <functional>
+#include <limits>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <string>
+#include <thread>
+#include <utility>
+#include <vector>
+
+extern uint64_t capture_channel_frames;
+extern int64_t capture_source_clock_ns;
+namespace gesher::media {
+@TYPES@
+@STATUSES@
+}
+@HEADER@
+namespace gesher::media {
+class CaptureEngine {
+ public:
+  int StartStream(CaptureStream* stream, uint64_t generation);
+  void Wake() { ++wakes; }
+  std::atomic<size_t> wakes{0};
+};
+// Only explicitly selected, test-owned WAV input is exposed by this fixture.
+std::unique_ptr<CaptureSource> OpenFileCaptureFixture(const std::string&, std::string*);
+}

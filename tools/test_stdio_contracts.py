@@ -24,21 +24,10 @@ def section(source: str, first: str, after: str) -> str:
     return source[start:source.index(after, start)]
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--cxx", default=os.environ.get("CXX", "g++"))
-    parser.add_argument("--cc", default=os.environ.get("CC", "gcc"))
-    parser.add_argument("--sanitize", action="store_true")
-    parser.add_argument("--source-ref", help="Run the unchanged current fixture against exact historical adapter/fsops/header sources")
-    parser.add_argument("--adapter-case", choices=["bionic-unlocked"],
-                        help="Run the bounded guest-unlocked regression against the selected production sources")
-    args = parser.parse_args()
-    def read_source(path: str) -> bytes:
-        if args.source_ref:
-            return subprocess.check_output(["git", "show", args.source_ref + ":" + path], cwd=ROOT)
-        return (ROOT / path).read_bytes()
+def adapter_source(read_source) -> str:
     adapter = read_source("compat/posix/src/stdio_output.cc").decode()
     fsops = read_source("compat/posix/src/fsops.cc").decode()
+    misc = read_source("compat/posix/src/misc.cc").decode()
     sockets = read_source("compat/posix/src/fd.cc").decode()
     guest = read_source("compat/bionic/stdio_bionic.cc").decode()
     adapter = adapter[adapter.index('extern "C" int __mingw_pformat'):]
@@ -61,16 +50,21 @@ def main() -> int:
       fread_unlocked fwrite_unlocked fgetc_unlocked getc_unlocked getchar_unlocked
       fputc_unlocked putc_unlocked putchar_unlocked fgets_unlocked fputs_unlocked
       fflush_unlocked ferror_unlocked feof_unlocked clearerr_unlocked
-      fopen fdopen fopen64 fclose""".split()
+      fopen fdopen fopen64 fclose getdelim getline""".split()
     renames = "\n".join("#define " + name + " adapter_" + name for name in names)
     renames += "\n#define fseeko gesher_fseeko64\n#define ftello gesher_ftello64\n"
     sections = {
         "@RENAME_PUBLIC_SYMBOLS@": renames,
         "@STDIO_ADAPTER@": adapter,
+        "@HAS_DELIMITED_OWNER@": "1" if "gesher_stdio_delimited_v1" in adapter else "0",
+        "@NATIVE_DELIMITED@": section(misc, "ssize_t getdelim(", "// --- sendfile"),
+        "@GUEST_DELIMITED@": section(guest, "int64_t BIONIC_SYSV Getdelim(", "// Use the registered Bionic converters"),
+        "@GUEST_STREAM_LOCK@": section(guest, "using StreamLock =", "void BIONIC_SYSV Flockfile("),
+        "@GUEST_LINE@": section(guest, "char* BIONIC_SYSV FgetsUnlocked(", "size_t BIONIC_SYSV Fread("),
         "@PARSE_MODE@": section(fsops, "bool ParseMode(", "// Random characters"),
         "@OPEN_CLOSE@": section(fsops, "FILE* fopen(", "// The stream is reopened"),
-        "@STDIO_INTERNAL_HEADER@": str(ROOT / "compat/posix/src/stdio_internal.h"),
-        "@STREAM_BUFFER_HEADER@": str(ROOT / "compat/posix/src/stdio_stream_buffer.h"),
+        "@STDIO_INTERNAL_HEADER@": "@RESOLVED_INTERNAL_HEADER@",
+        "@STREAM_BUFFER_HEADER@": "@RESOLVED_STREAM_HEADER@",
         "@SOCKET_REGISTRY@": section(sockets, "struct SocketRegistry {", "// Takes the socket out"),
         "@SOCKET_INSERT@": section(sockets, "void Insert(", "// Publish a successful CRT replacement"),
         "@SOCKET_LOOKUP@": section(sockets, "bool LookupSocket(", "void RegisterDevice("),
@@ -83,31 +77,62 @@ def main() -> int:
         if template.count(marker) != 1:
             raise ValueError("missing template boundary: " + marker)
         template = template.replace(marker, source)
-        if marker in ("@STDIO_ADAPTER@", "@PARSE_MODE@", "@OPEN_CLOSE@"):
+        if marker in ("@STDIO_ADAPTER@", "@PARSE_MODE@", "@OPEN_CLOSE@", "@NATIVE_DELIMITED@", "@GUEST_DELIMITED@", "@GUEST_LINE@"):
             print(marker.strip("@") + " SHA256 " + hashlib.sha256(source.encode()).hexdigest(), flush=True)
+    return template
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--cxx", default=os.environ.get("CXX", "g++"))
+    parser.add_argument("--cc", default=os.environ.get("CC", "gcc"))
+    parser.add_argument("--sanitize", action="store_true")
+    parser.add_argument("--source-ref", help="Run the unchanged current fixture against exact historical adapter/fsops/header sources")
+    parser.add_argument("--line-only", action="store_true", help="Run the production native/guest line-input corpus only")
+    parser.add_argument("--line-benchmark", action="store_true", help="Measure production line input through the declared host envelope")
+    parser.add_argument("--adapter-case", choices=["bionic-unlocked"],
+                        help="Run the bounded guest-unlocked regression against the selected production sources")
+    args = parser.parse_args()
+    def read_source(path: str) -> bytes:
+        if args.source_ref:
+            return subprocess.check_output(["git", "show", args.source_ref + ":" + path], cwd=ROOT)
+        return (ROOT / path).read_bytes()
+    sockets = read_source("compat/posix/src/fd.cc").decode()
+    template = adapter_source(read_source)
     with tempfile.TemporaryDirectory(prefix="gesher-stdio-") as temporary:
         folder = Path(temporary)
         include = folder / "include/gesher"
         include.mkdir(parents=True)
         (include / "stdio.h").write_bytes(read_source("compat/posix/include/gesher/stdio.h"))
         (include / "cancellation.h").write_bytes(read_source("compat/posix/include/gesher/cancellation.h"))
+        private = folder / "private"
+        private.mkdir()
+        for name in ("stdio_internal.h", "stdio_stream_buffer.h", "stdio_output_buffer.h"):
+            data = read_source("compat/posix/src/" + name)
+            (private / name).write_bytes(data)
+            print(name + " SHA256 " + hashlib.sha256(data).hexdigest(), flush=True)
+        template = template.replace("@RESOLVED_INTERNAL_HEADER@", str(private / "stdio_internal.h"))
+        template = template.replace("@RESOLVED_STREAM_HEADER@", str(private / "stdio_stream_buffer.h"))
         generated = folder / "adapter.cc"
         generated.write_text(template)
-        cxx = shlex.split(args.cxx) + ["-std=c++17", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-fno-builtin", "-pthread"]
+        cxx = shlex.split(args.cxx) + ["-std=c++17", "-O2" if args.line_benchmark else "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-fno-builtin", "-pthread"]
         if args.sanitize:
             cxx += ["-fsanitize=address,undefined", "-fno-omit-frame-pointer"]
         cases = [
             ("core", ROOT / "tests/native/stdio_stream_buffer_test.cc", []),
-            ("adapter", generated, ["-I", str(folder / "include"), "-I", str(ROOT / "tests/native")]),
+            ("adapter", generated, ["-I", str(folder / "include"), "-I", str(ROOT / "tests/native"), "-Wl,--wrap=realloc"]),
         ]
+        if args.line_only or args.line_benchmark:
+            cases = cases[1:]
         for name, source, extra in cases:
             if args.adapter_case and name != "adapter":
                 continue
             executable = folder / name
             subprocess.run(cxx + extra + [str(source), "-o", str(executable)], check=True, timeout=120)
-            subprocess.run([str(executable)] + (["--" + args.adapter_case] if args.adapter_case else []),
-                           cwd=folder, check=True, timeout=45)
-            if args.adapter_case:
+            mode = (["--line-benchmark"] if args.line_benchmark else ["--line-only"] if args.line_only
+                    else ["--" + args.adapter_case] if args.adapter_case else [])
+            subprocess.run([str(executable)] + mode, cwd=folder, check=True, timeout=90)
+            if mode:
                 return 0
             if name == "adapter":
                 destination = folder / "exit-output.txt"

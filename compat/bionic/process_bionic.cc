@@ -69,6 +69,7 @@ struct Child {
   bool notified = false;  // its exit signal was sent (or it has none)
   int status = 0;  // Linux waitpid status word, once it exited
   HANDLE wait = nullptr;
+  bool watched = false;
   // The signal its exit sends the parent: SIGCHLD for spawned and forked
   // children; clone(2)'s CSIGNAL for a raw clone (0: none). A child whose
   // exit signal is not SIGCHLD is a "clone" child for wait's __WCLONE/__WALL.
@@ -78,6 +79,7 @@ struct Child {
 
 std::mutex g_children_mutex;
 std::map<int, Child> g_children;  // pid -> child
+std::atomic<uint64_t> g_child_wait_generation{0};
 
 // Under g_children_mutex: records the exit of a child whose process ended.
 // Returns the signal to send for it (0 if none or already sent).
@@ -118,7 +120,8 @@ void ChildExited(int pid) {
   {
     std::lock_guard<std::mutex> lock(g_children_mutex);
     auto it = g_children.find(pid);
-    if (it == g_children.end()) return;
+    if (it == g_children.end() || it->second.exited ||
+        WaitForSingleObject(it->second.process, 0) != WAIT_OBJECT_0) return;
     sig = RecordExitLocked(it->second);
     status = it->second.status;
     // SIGCHLD ignored or SA_NOCLDWAIT: Linux reaps the child at once (no
@@ -129,6 +132,7 @@ void ChildExited(int pid) {
     }
   }
   SendExitSignal(pid, sig, status);
+  ChildWaitStateChanged();
 }
 
 void CALLBACK OnChildExit(void* param, BOOLEAN) {
@@ -151,28 +155,34 @@ DWORD WINAPI WatchChild(void* raw) {
   return 0;
 }
 
-void Track(int pid, HANDLE process, int exit_signal = kSigchld, bool forked = false) {
-  std::lock_guard<std::mutex> lock(g_children_mutex);
-  Child& c = g_children[pid];
-  c = Child{};
-  c.process = process;
-  c.exit_signal = exit_signal;
-  c.forked = forked;
+bool StartChildWatcher(int pid, Child& child) {
   if (!gesher::InForkedChild()) {
-    RegisterWaitForSingleObject(&c.wait, process, OnChildExit,
-                                reinterpret_cast<void*>(static_cast<intptr_t>(pid)), INFINITE,
-                                WT_EXECUTEONLYONCE);
-    return;
+    return RegisterWaitForSingleObject(&child.wait, child.process, OnChildExit,
+                                       reinterpret_cast<void*>(static_cast<intptr_t>(pid)), INFINITE,
+                                       WT_EXECUTEONLYONCE) != FALSE;
   }
   HANDLE own = nullptr;
-  if (!DuplicateHandle(GetCurrentProcess(), process, GetCurrentProcess(), &own, SYNCHRONIZE, FALSE, 0)) {
-    return;  // wait still sees its exit; only its exit signal is not sent
+  if (!DuplicateHandle(GetCurrentProcess(), child.process, GetCurrentProcess(), &own, SYNCHRONIZE, FALSE, 0)) {
+    return false;
   }
   auto* watch = new (std::nothrow) Watch{pid, own};
-  if (watch == nullptr || !gesher::StartHelperThread(WatchChild, watch, 64 * 1024)) {
-    delete watch;
-    CloseHandle(own);
+  if (watch != nullptr && gesher::StartHelperThread(WatchChild, watch, 64 * 1024)) return true;
+  delete watch;
+  CloseHandle(own);
+  return false;
+}
+
+void Track(int pid, HANDLE process, int exit_signal = kSigchld, bool forked = false) {
+  {
+    std::lock_guard<std::mutex> lock(g_children_mutex);
+    Child& c = g_children[pid];
+    c = Child{};
+    c.process = process;
+    c.exit_signal = exit_signal;
+    c.forked = forked;
+    c.watched = StartChildWatcher(pid, c);
   }
+  ChildWaitStateChanged();
 }
 
 // --- the environment and working directory as UTF-8 ----------------------------
@@ -444,6 +454,8 @@ bool IsChild(int pid) {
   return g_children.count(pid) != 0;
 }
 
+struct ChildExitSignal { int pid, signal, status; };
+
 // The children of this process are its spawned and forked ones; process
 // groups are not modelled (0 and < -1 take any child, as -1).
 int CollectOne(int pid, int* status, int options, BionicRusage* usage = nullptr) {
@@ -451,15 +463,20 @@ int CollectOne(int pid, int* status, int options, BionicRusage* usage = nullptr)
   unsigned waited_slices = 0;
   bool interrupted = false;  // a handler without SA_RESTART ran during the wait
   for (;;) {
+    // Capture before scanning either registry: a publisher can change state
+    // after its scan and before this thread arms its wait.
+    const uint64_t observed = g_child_wait_generation.load(std::memory_order_acquire);
     // A tracer's tracees report their stops and exits too (ADR 0093); a
     // tracee that is also a child reports its exit as a child, below.
     bool traced = false;
     if (int got = PtraceWaitPoll(pid, options, status, &traced, &IsChild); got != 0) return got;
     int sig = 0, got = 0, word = 0;
-    std::vector<HANDLE> running;  // duplicates: another thread may reap meanwhile
+    bool found = false;
+    bool needs_poll = traced;
+    bool removed = false;
+    std::vector<ChildExitSignal> auto_reaped_signals;
     {
       std::lock_guard<std::mutex> lock(g_children_mutex);
-      bool found = false;
       for (auto it = g_children.begin(); it != g_children.end();) {
         if ((pid > 0 && it->first != pid) || !Eligible(it->second, options)) {
           ++it;
@@ -468,12 +485,7 @@ int CollectOne(int pid, int* status, int options, BionicRusage* usage = nullptr)
         Child& child = it->second;
         if (!child.exited && WaitForSingleObject(child.process, 0) != WAIT_OBJECT_0) {
           found = true;
-          HANDLE own = nullptr;
-          if (running.size() < MAXIMUM_WAIT_OBJECTS &&
-              DuplicateHandle(GetCurrentProcess(), child.process, GetCurrentProcess(), &own,
-                              SYNCHRONIZE, FALSE, 0)) {
-            running.push_back(own);
-          }
+          needs_poll |= !child.watched;
           ++it;
           continue;
         }
@@ -482,10 +494,11 @@ int CollectOne(int pid, int* status, int options, BionicRusage* usage = nullptr)
         sig = RecordExitLocked(child);
         if (ChildrenAutoReaped()) {
           // Reaped at its exit (SIGCHLD ignored, SA_NOCLDWAIT): never reported.
-          SendExitSignal(it->first, sig, child.status);
+          if (sig != 0) auto_reaped_signals.push_back({it->first, sig, child.status});
           sig = 0;
           ReleaseChildLocked(it->first, child);
           it = g_children.erase(it);
+          removed = true;
           continue;
         }
         found = true;
@@ -494,15 +507,14 @@ int CollectOne(int pid, int* status, int options, BionicRusage* usage = nullptr)
         if (usage != nullptr) FillRusage(child.process, usage);
         ReleaseChildLocked(it->first, child);
         g_children.erase(it);
+        removed = true;
         break;
       }
-      if (got == 0 && !found && !traced) {
-        for (HANDLE h : running) CloseHandle(h);
-        return errno = 10 /*ECHILD*/, -1;
-      }
     }
+    for (const auto& exited : auto_reaped_signals) SendExitSignal(exited.pid, exited.signal, exited.status);
+    if (removed) ChildWaitStateChanged();
+    if (!found && !traced) return errno = 10 /*ECHILD*/, -1;
     if (got != 0) {
-      for (HANDLE h : running) CloseHandle(h);
       if (status != nullptr) *status = word;
       SendExitSignal(got, sig, word);
       // A child's exit signal its watcher had not sent yet is handled here,
@@ -511,33 +523,20 @@ int CollectOne(int pid, int* status, int options, BionicRusage* usage = nullptr)
       DeliverPendingSignals();
       return got;
     }
-    if ((options & kWNOHANG) != 0) {
-      for (HANDLE h : running) CloseHandle(h);
-      return 0;
-    }
+    if ((options & kWNOHANG) != 0) return 0;
     if (interrupted) {
       // A handler interrupted the wait, and the rescan found no child that
       // ended (Linux's do_wait finds an exited child before it returns EINTR).
-      for (HANDLE h : running) CloseHandle(h);
       return errno = kEINTR, -1;
     }
-    // Wait for one of them to end. The thread waits as a signal waiter
-    // (signals sent to the process are delivered to it, and a handler that
-    // runs ends the wait with EINTR, or with SA_RESTART lets it go on), in
-    // short slices between which the children's handles are looked at.
-    bool ended = false;
-    if (!running.empty()) {
-      ended = WaitForMultipleObjects(static_cast<DWORD>(running.size()), running.data(), FALSE, 0) <
-              WAIT_OBJECT_0 + running.size();
-      for (HANDLE h : running) CloseHandle(h);
-    }
-    if (!ended) {
-      const int error = InterruptibleWaitPoint(waited_slices++ < 50 ? 2 : 20);
-      if (error == kEINTR) {
-        interrupted = true;  // look at the children once more first
-      } else if (error != 0) {
-        return errno = error, -1;
-      }
+    // Remote ptrace stops and children without a watcher have no local exit
+    // callback to wake us. Retain the current polling cadence for them only.
+    const uint32_t timeout = needs_poll ? (waited_slices++ < 50 ? 2 : 20) : 0;
+    const int error = InterruptibleWaitPoint(timeout, g_child_wait_generation, observed);
+    if (error == kEINTR) {
+      interrupted = true;  // look at the children once more first
+    } else if (error != 0) {
+      return errno = error, -1;
     }
   }
 }
@@ -1115,6 +1114,11 @@ unsigned BIONIC_SYSV SignalExitCodeForTranslator(int sig) { return gesher::Signa
 }
 
 }  // namespace
+
+void ChildWaitStateChanged() {
+  g_child_wait_generation.fetch_add(1, std::memory_order_release);
+  NotifyInterruptibleWaiters();
+}
 
 int KillOtherProcess(int pid, int sig) {
   // A child that already exited is a zombie: it exists (for any signal, a no-op)

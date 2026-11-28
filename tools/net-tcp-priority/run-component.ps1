@@ -18,9 +18,10 @@ if ($ForkDiagnostic) {
 }
 if ($env:GITHUB_ACTIONS -cne 'true') { throw 'Native fixture is CI-only' }
 $trusted = @{
-  'tools/windows4/TsfJobSupervisor.cs'='625be4d5906bb48dd02d6103382fd2e85ac88738'
+  'tools/windows4/TsfJobSupervisor.cs'='6e1d2673011603de136abbd1a9e7e773b3708bea'
   'tools/windows4/TsfJobWorker.cs'='e4392ea9ee4e8faf6d2f4b28424f8e05fe692ce1'
-  'tools/windows4/test-tsf-job-supervisor.ps1'='3b0f7ebb636b91859b86797f94136c0b6dccd5fd'
+  'tools/windows4/test-tsf-job-supervisor.ps1'='6e97087bfa9473d3d28727c1447a5434f545aec4'
+  'tools/windows4/TsfOutputMetadataChecks.cs'='5797032560aa535f84de5c35852b5defd4cf84a5'
   'tools/net-tcp-priority/qualified/TsfJobSupervisor.cs'='625be4d5906bb48dd02d6103382fd2e85ac88738'
   'tools/native3-locks/artifact/download-verified-artifact.py'='cd5cc415e53102c664edac22b1604df639c8804b'
   'tools/ci/receipt-diagnostics.ps1'='b89f2f3f8a54a8b23937bae48ad900c85d4d49e9'
@@ -247,7 +248,7 @@ foreach ($name in $referenceNames) {
 Write-Host "TCP_PRIORITY_RECEIPT source=$env:GITHUB_SHA run=$env:GITHUB_RUN_ID attempt=$producerAttempt consumer_attempt=$env:GITHUB_RUN_ATTEMPT producer=$($jobs[0].id) artifact=$($a.id) digest=$($a.digest) scope=noninline-only"
 Write-Host ($m.compilers | ConvertTo-Json -Depth 8 -Compress)
 & ./tools/windows4/test-tsf-job-supervisor.ps1
-if (-not ('TsfJobSupervisor' -as [type])) { Add-Type -Path tools/windows4/TsfJobSupervisor.cs }
+if (-not ('TsfJobSupervisor' -as [type])) { Add-Type -Path @('tools/windows4/TsfJobSupervisor.cs','tools/windows4/TsfOutputMetadataChecks.cs') }
 # Exact c228 controller bytes, wrapped only in a fixed namespace to coexist
 # with the unchanged original product controller. No diagnostic fault mode.
 if (-not ('TcpPriorityDiagnostics.TsfJobSupervisor' -as [type])) {

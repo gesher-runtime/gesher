@@ -1,0 +1,92 @@
+diff --git a/tools/windows4/TsfJobSupervisor.cs b/tools/windows4/TsfJobSupervisor.cs
+index 625be4d5906bb48dd02d6103382fd2e85ac88738..6e1d2673011603de136abbd1a9e7e773b3708bea 100644
+--- a/tools/windows4/TsfJobSupervisor.cs
++++ b/tools/windows4/TsfJobSupervisor.cs
+@@ -63,6 +63,7 @@ public static class TsfJobSupervisor {
+   [DllImport("kernel32.dll",SetLastError=true,CharSet=CharSet.Unicode)] static extern bool Process32First(IntPtr snapshot,ref ProcessEntry entry);
+   [DllImport("kernel32.dll",SetLastError=true,CharSet=CharSet.Unicode)] static extern bool Process32Next(IntPtr snapshot,ref ProcessEntry entry);
+   [DllImport("kernel32.dll",SetLastError=true,CharSet=CharSet.Unicode)] static extern IntPtr CreateFile(string path,uint access,uint share,ref SA sa,uint creation,uint flags,IntPtr template);
++  [DllImport("kernel32.dll",SetLastError=true)] static extern IntPtr ReOpenFile(IntPtr file,uint access,uint share,uint flags);
+   [DllImport("kernel32.dll",SetLastError=true)] static extern bool GetFileSizeEx(IntPtr handle,out long length);
+   [DllImport("kernel32.dll",SetLastError=true)] static extern bool InitializeProcThreadAttributeList(IntPtr list,int count,uint flags,ref UIntPtr bytes);
+   [DllImport("kernel32.dll",SetLastError=true)] static extern bool UpdateProcThreadAttribute(IntPtr list,uint flags,IntPtr attr,IntPtr value,UIntPtr size,IntPtr previous,IntPtr returned);
+@@ -109,6 +110,15 @@ public static class TsfJobSupervisor {
+     owned[index]=IntPtr.Zero; r.ClosedHandles++; return true;
+   }
+   static Accounting Count(IntPtr h) { Accounting a; Check(QueryInformationJobObject(h,1,out a,(uint)Marshal.SizeOf(typeof(Accounting)),IntPtr.Zero),"QueryInformationJobObject"); return a; }
++  static IntPtr OpenSizeObserver(IntPtr writer) {
++    // Inheritance/duplication shares the synchronous file object's I/O lock.
++    // A pending child write must not serialize our deadline/output-cap polling
++    // behind that lock. Reopen the same file with metadata-only access and its
++    // own file object; do not inherit it or reopen by a replaceable path.
++    IntPtr observer=ReOpenFile(writer,0x80,3,0); // FILE_READ_ATTRIBUTES, SHARE_READ|WRITE.
++    if(!Valid(observer)) throw Native("Reopen output size observer");
++    return observer;
++  }
+   static string Snapshot(string path,Result r) {
+     // Called only after every owned process is gone; at most cap bytes allocated/read.
+     using(var file=new FileStream(path,FileMode.Open,FileAccess.Read,FileShare.None)) {
+@@ -256,7 +266,7 @@ public static class TsfJobSupervisor {
+     if(mainMs<1 || mainMs>45000 || (fault!="" && fault!="terminate-denied" && fault!="query-denied" && fault!="console-invalid" && fault!="console-missing" && fault!="console-changed" && fault!="diag-detached-unlimited" && fault!="diag-console-limited" && fault!="diag-console-unlimited" && fault!="diag-inherit-limited" && fault!="diag-inherit-unlimited")) throw new ArgumentException();
+     Result r=new Result(); var owned=new List<IntPtr>();
+     IntPtr job=IntPtr.Zero,query=IntPtr.Zero,denied=IntPtr.Zero,root=IntPtr.Zero,thread=IntPtr.Zero;
+-    IntPtr output=IntPtr.Zero,error=IntPtr.Zero,attrs=IntPtr.Zero,handles=IntPtr.Zero,changedProcess=IntPtr.Zero,changedThread=IntPtr.Zero;
++    IntPtr output=IntPtr.Zero,error=IntPtr.Zero,outputSize=IntPtr.Zero,errorSize=IntPtr.Zero,attrs=IntPtr.Zero,handles=IntPtr.Zero,changedProcess=IntPtr.Zero,changedThread=IntPtr.Zero;
+     bool attrsReady=false; string dir=null,stdout=null,stderr=null,protocol=null; bool created=false;
+     bool race=arguments=="race";
+     bool limited=arguments=="limit";
+@@ -272,6 +282,7 @@ public static class TsfJobSupervisor {
+       SA sa=new SA {size=Marshal.SizeOf(typeof(SA)),inherit=1};
+       output=own(CreateFile(stdout,0x40000000,3,ref sa,1,0x100,IntPtr.Zero));
+       error=own(CreateFile(stderr,0x40000000,3,ref sa,1,0x100,IntPtr.Zero));
++      outputSize=own(OpenSizeObserver(output)); errorSize=own(OpenSizeObserver(error));
+       IntPtr input=own(CreateFile("NUL",0x80000000,3,ref sa,3,0,IntPtr.Zero));
+       job=own(CreateJobObject(IntPtr.Zero,null)); query=job; r.JobHandleValue=job.ToInt64();
+       Extended limits=new Extended(); limits.basic.flags=0x2000; // KILL_ON_JOB_CLOSE; neither breakaway flag allowed.
+@@ -383,7 +394,7 @@ public static class TsfJobSupervisor {
+         uint wait=WaitForSingleObject(root,(uint)Math.Min(25,remaining));
+         if(wait==WAIT_OBJECT_0) { r.Reason="exit"; break; }
+         if(wait!=WAIT_TIMEOUT) throw Native("Root wait");
+-        Check(GetFileSizeEx(output,out r.StdoutBytes),"Stdout size"); Check(GetFileSizeEx(error,out r.StderrBytes),"Stderr size");
++        Check(GetFileSizeEx(outputSize,out r.StdoutBytes),"Stdout size"); Check(GetFileSizeEx(errorSize,out r.StderrBytes),"Stderr size");
+         if(r.StdoutBytes>OutputCap || r.StderrBytes>OutputCap) { r.Reason="output-limit"; break; }
+       }
+     } catch(Exception ex) { r.Errors.Add(ex.Message); r.Reason="controller-error"; }
+@@ -444,8 +455,8 @@ public static class TsfJobSupervisor {
+         if(r.JobEmpty && r.TotalProcesses!=r.Processes.Count) r.Errors.Add("Cumulative associations do not match captured unique identities: total="+r.TotalProcesses+" identities="+r.Processes.Count);
+         if(limited && r.JobEmpty && r.TotalProcesses!=1) r.Errors.Add("Single-process job accumulated unexpected associations: "+r.TotalProcesses);
+       }
+-      if(Valid(output) && Valid(error)) {
+-        try { Check(GetFileSizeEx(output,out r.StdoutBytes),"Final stdout size"); Check(GetFileSizeEx(error,out r.StderrBytes),"Final stderr size");
++      if(Valid(outputSize) && Valid(errorSize)) {
++        try { Check(GetFileSizeEx(outputSize,out r.StdoutBytes),"Final stdout size"); Check(GetFileSizeEx(errorSize,out r.StderrBytes),"Final stderr size");
+           if(r.Reason=="exit" && (r.StdoutBytes>OutputCap || r.StderrBytes>OutputCap)) r.Reason="output-limit";
+         } catch(Exception ex) { r.Errors.Add(ex.Message); }
+       }
+diff --git a/tools/windows4/test-tsf-job-supervisor.ps1 b/tools/windows4/test-tsf-job-supervisor.ps1
+index 3b0f7ebb636b91859b86797f94136c0b6dccd5fd..6e97087bfa9473d3d28727c1447a5434f545aec4 100644
+--- a/tools/windows4/test-tsf-job-supervisor.ps1
++++ b/tools/windows4/test-tsf-job-supervisor.ps1
+@@ -1,12 +1,12 @@
+ $ErrorActionPreference = 'Stop'
+ if ($env:GITHUB_ACTIONS -cne 'true') { throw 'Qualification is CI only' }
+ if ((git rev-parse HEAD) -cne $env:GITHUB_SHA -or $LASTEXITCODE -ne 0) { throw 'Controller checkout identity mismatch' }
+-foreach ($source in @('tools/windows4/TsfJobSupervisor.cs','tools/windows4/TsfJobWorker.cs','tools/windows4/test-tsf-job-supervisor.ps1','tools/windows4/run-tsf-component.ps1','tools/ci/receipt-diagnostics.ps1','.github/workflows/tsf-format-component.yml')) {
++foreach ($source in @('tools/windows4/TsfJobSupervisor.cs','tools/windows4/TsfJobWorker.cs','tools/windows4/TsfOutputMetadataChecks.cs','tools/windows4/test-tsf-job-supervisor.ps1','tools/windows4/run-tsf-component.ps1','tools/ci/receipt-diagnostics.ps1','.github/workflows/tsf-format-component.yml')) {
+   $blob = git hash-object $source
+   if ($LASTEXITCODE -ne 0) { throw "Cannot hash $source" }
+   Write-Host "TSF_CONTROLLER_SOURCE source=$env:GITHUB_SHA path=$source blob=$blob sha256=$((Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash.ToLowerInvariant())"
+ }
+-Add-Type -Path tools/windows4/TsfJobSupervisor.cs
++Add-Type -Path @('tools/windows4/TsfJobSupervisor.cs','tools/windows4/TsfOutputMetadataChecks.cs')
+ # The PID is absent from a subsequent process census, but the retained
+ # handle still refers to the exact exited child and must expose its parent.
+ $start = [Diagnostics.ProcessStartInfo]::new($env:ComSpec, '/d /c pause >nul')
+@@ -35,6 +35,7 @@ $directory = Join-Path $env:RUNNER_TEMP ('tsf-worker-' + [guid]::NewGuid().ToStr
+ [void][IO.Directory]::CreateDirectory($directory)
+ $worker = Join-Path $directory 'TsfJobWorker.exe'
+ try {
++  [TsfOutputMetadataChecks]::Run($directory)
+   # Framework csc emits a real console executable; no fixture or compilation occurs locally.
+   $compiler = Join-Path $env:WINDIR 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
+   $workerSource = Join-Path $PWD 'tools\windows4\TsfJobWorker.cs'

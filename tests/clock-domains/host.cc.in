@@ -11,6 +11,7 @@
 #include <limits>
 #include <vector>
 #include <map>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <condition_variable>
@@ -150,6 +151,9 @@ class Probe final : public PacedSource {
 }
 
 namespace media {
+#if SHARED_CODEC_ENGINE
+namespace android { constexpr int OK = 0; }
+#endif
 using jobject = void*;
 static std::map<std::string, int64_t> posted;
 static int events;
@@ -176,7 +180,12 @@ static void RgbaToI420(const uint32_t*, int, int, VideoFrame*) {}
 class CodecProbe {
  public:
   JavaSelf object;
+#if SHARED_CODEC_ENGINE
+  using WeakRef = JavaSelf;
+  std::shared_ptr<WeakRef> self_ = std::make_shared<WeakRef>();
+#else
   JavaSelf* self_ = &object;
+#endif
   struct { int width = 1, height = 1; } enc_params_;
   std::mutex mu_;
   std::condition_variable cv_;
@@ -187,6 +196,22 @@ class CodecProbe {
   bool released_ = false, fatal_ = false, flushed_ = false, flush_requested_ = false;
   uint64_t execution_generation_ = 0, wait_generation_ = 0;
   std::deque<std::shared_ptr<VideoFrame>> surface_frames_;
+#if SHARED_CODEC_ENGINE
+  bool frame_rendered_ = true;
+  std::function<void(int64_t, int64_t)> frame_rendered_cb_;
+  // The engine listener setter is a host boundary. Execute the production JNI
+  // listener body so the actual clock value must survive JavaMap propagation.
+  struct ListenerAdapter {
+    CodecProbe* owner;
+    void EnableFrameRendered(bool enabled, std::function<void(int64_t, int64_t)> callback) {
+      owner->frame_rendered_ = enabled;
+      owner->frame_rendered_cb_ = std::move(callback);
+    }
+  } listener_{this};
+  ListenerAdapter* engine_ = &listener_;
+  CodecProbe() { EnableFrameRendered(true); }
+#endif
+@CODEC_FRAME_LISTENER@
 @CODEC_RENDER@
 @CODEC_INPUT@
 };

@@ -11,6 +11,7 @@ static void check(const char* name, int ok) {
   if (!ok) { ++failures; fprintf(stderr, "FAIL stdio: %s\n", name); }
 }
 #include "stdio_ofd_contract.inc"
+#include "stdio_scan_contract.inc"
 #include "stdio_virtual_contract.inc"
 #include "stdio_cancel_contract.inc"
 #include "stdio_tls_exit_contract.inc"
@@ -83,6 +84,8 @@ int main(int argc, char** argv) {
     return 0;
   }
   test_stdio_ofd_contracts();
+  test_stdio_scan_contracts();
+  test_stdio_scan_wide_contracts();
   WideScanner();
   test_stdio_virtual_contracts();
   test_stdio_cancel_contracts();
