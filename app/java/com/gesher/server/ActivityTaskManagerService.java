@@ -3183,7 +3183,9 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                     }
                     SystemServer.log("startActivity: " + action + ": no role is available"
                             + (answered ? "; RESULT_CANCELED to the requesting activity"
-                                    : "; no result requested"));
+                                    : resultToToken == null || requestCode < 0
+                                            ? "; no result requested"
+                                            : "; no result: the requester is not the caller's live activity"));
                     return ActivityManager.START_SUCCESS;
                 }
                 // Apps such as Gmail open a channel's settings without first resolving
