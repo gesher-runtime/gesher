@@ -37,7 +37,7 @@ public sealed class GesherRuntimeShortReadStream : MemoryStream {
 # makes the no-rewrite contract visible on hosts that do not enforce NT sharing.
 function Copy-Item {
     [CmdletBinding()]
-    param([string] $LiteralPath, [string] $Destination)
+    param([string] $LiteralPath, [string] $Destination, [switch] $Force)
     $script:CopyCalls++
     Microsoft.PowerShell.Management\Copy-Item @PSBoundParameters
 }
@@ -102,6 +102,14 @@ try {
     Complete-GesherRuntimeSync $updated
     Assert-RuntimeFile ([IO.File]::ReadAllText($destination) -ceq 'new data') 'Equal-size, equal-time resource stayed stale after upgrade'
     Assert-RuntimeFile ([IO.File]::ReadAllText($userData) -ceq 'keep user data') 'Runtime upgrade changed app data'
+    $readOnlyDestination = Join-Path $profile 'system/readonly-code.apk'
+    [IO.File]::WriteAllText($readOnlyDestination, 'stale'); (Get-Item -LiteralPath $readOnlyDestination).IsReadOnly = $true
+    $readOnlyState = New-GesherRuntimeSync $install $profile app
+    Sync-GesherRuntimeFile $source $readOnlyDestination $readOnlyState -ReadOnly
+    Complete-GesherRuntimeSync $readOnlyState
+    Assert-RuntimeFile ([IO.File]::ReadAllText($readOnlyDestination) -ceq 'new data') 'Read-only runtime code was not replaced'
+    Assert-RuntimeFile (Get-Item -LiteralPath $readOnlyDestination).IsReadOnly 'Read-only runtime code lost its read-only attribute'
+    (Get-Item -LiteralPath $readOnlyDestination).IsReadOnly = $false
 
     $dex = New-GesherRuntimeSync $install $profile dex
     Assert-RuntimeFile $dex.ForceRefresh 'App completion incorrectly acknowledged the dex component'
