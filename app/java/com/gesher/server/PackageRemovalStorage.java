@@ -100,7 +100,10 @@ final class PackageRemovalStorage {
                 catch (IOException busy) {
                     // Never block on System.runFinalization(): a stalled
                     // FinalizerDaemon/ReferenceQueueDaemon would deadlock uninstall.
-                    last = busy; System.gc();
+                    // Runtime.gc() still collects (System.gc() is a no-op on ART
+                    // without runFinalization) so leaked handles can finalize
+                    // asynchronously during the back-off.
+                    last = busy; Runtime.getRuntime().gc();
                     android.os.SystemClock.sleep(100);
                 }
             }

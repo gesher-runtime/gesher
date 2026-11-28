@@ -2,6 +2,8 @@
 package com.gesher.server;
 
 import java.io.IOException;
+import java.lang.ref.ReferenceQueue;
+import java.lang.ref.WeakReference;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.file.Files;
@@ -426,6 +428,21 @@ public final class AppDataStorageHostTest {
             finalizerEntered.await(50, TimeUnit.MILLISECONDS);
         }
         check(finalizerEntered.getCount() == 0, "finalizer did not stall as expected for test setup");
+        // Leave another finalizer pending behind the stalled one. A blocking
+        // runFinalization() would wait for it on every JVM (HotSpot runs pending
+        // finalizers on a secondary thread, so one stalled daemon is not enough).
+        ReferenceQueue<Object> collected = new ReferenceQueue<>();
+        WeakReference<Object> pendingFinalizer = new WeakReference<>(new Object() {
+            @SuppressWarnings("removal")
+            @Override protected void finalize() throws Throwable {
+                releaseFinalizer.await();
+            }
+        }, collected);
+        for (int i = 0; i < 20 && collected.poll() == null; i++) {
+            System.gc();
+            Thread.sleep(50);
+        }
+        check(pendingFinalizer.get() == null, "second finalizer was not queued for test setup");
 
         PackageRemovalStorage pending = new PackageRemovalStorage(PACKAGE, code.toString());
         Path appDir = code.getParent();
