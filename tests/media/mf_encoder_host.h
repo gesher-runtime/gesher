@@ -21,6 +21,7 @@ constexpr HRESULT E_NOINTERFACE = -2;
 constexpr HRESULT MF_E_NOTACCEPTING = -3;
 constexpr HRESULT MF_E_TRANSFORM_NEED_MORE_INPUT = -4;
 constexpr HRESULT MF_E_TRANSFORM_STREAM_CHANGE = -5;
+constexpr HRESULT RPC_E_CHANGED_MODE = -6;
 inline bool SUCCEEDED(HRESULT hr) { return hr >= 0; }
 inline bool FAILED(HRESULT hr) { return hr < 0; }
 struct GUID { uint32_t Data1; uint16_t Data2, Data3; uint8_t Data4[8]; };
@@ -85,4 +86,5 @@ struct IMFActivate : IUnknown {
 HMODULE LoadLibraryW(const wchar_t*);
 FARPROC GetProcAddress(HMODULE, const char*);
 HRESULT CoInitializeEx(void*, DWORD);
+void CoUninitialize();
 void CoTaskMemFree(void*);
