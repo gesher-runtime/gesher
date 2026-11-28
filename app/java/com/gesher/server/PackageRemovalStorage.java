@@ -98,7 +98,9 @@ final class PackageRemovalStorage {
             for (int attempt = 0; attempt < 5; attempt++) {
                 try { Files.move(path.getKey(), path.getValue()); last = null; break; }
                 catch (IOException busy) {
-                    last = busy; System.gc(); System.runFinalization();
+                    // Never block on System.runFinalization(): a stalled
+                    // FinalizerDaemon/ReferenceQueueDaemon would deadlock uninstall.
+                    last = busy; System.gc();
                     android.os.SystemClock.sleep(100);
                 }
             }
