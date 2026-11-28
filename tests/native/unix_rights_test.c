@@ -279,6 +279,54 @@ static void test_stream_order(void) {
   close(sv[0]);
 }
 
+// A peek installs fresh descriptors but the next read still owns the message.
+static void test_peek_rights(int type, const char* name) {
+  int sv[2], pipefd[2];
+  const int paired = socketpair(AF_UNIX, type, 0, sv) == 0;
+  check(name, paired);
+  if (!paired) return;
+  const int piped = pipe2(pipefd, O_NONBLOCK | O_CLOEXEC) == 0;
+  check("peek: nonblocking pipe", piped);
+  if (!piped) { close(sv[0]); close(sv[1]); return; }
+  const int sent = send_fds(sv[0], "f", 1, &pipefd[1], 1) == 1;
+  check("peek: send one descriptor", sent);
+  close(pipefd[1]);
+  if (sent) {
+    char byte;
+    int got[8], first = -1, second = -1;
+    size_t count = 0;
+    int flags = 0;
+    check("peek: no control buffer sets MSG_CTRUNC without consuming",
+          recv_fds_how(sv[1], &byte, 1, got, 0, &count, &flags, MSG_PEEK | MSG_DONTWAIT) == 1 &&
+          byte == 'f' && count == 0 && (flags & MSG_CTRUNC) != 0);
+    check("peek: installs the first descriptor with CLOEXEC",
+          recv_fds_how(sv[1], &byte, 1, got, 1, &count, &flags,
+                       MSG_PEEK | MSG_DONTWAIT | MSG_CMSG_CLOEXEC) == 1 &&
+          byte == 'f' && count == 1 && (flags & MSG_CTRUNC) == 0 && fcntl(got[0], F_GETFD) == FD_CLOEXEC);
+    if (count == 1) first = got[0];
+    check("peek: installs a separate descriptor without CLOEXEC",
+          recv_fds_how(sv[1], &byte, 1, got, 1, &count, &flags, MSG_PEEK | MSG_DONTWAIT) == 1 &&
+          byte == 'f' && count == 1 && got[0] != first && (flags & MSG_CTRUNC) == 0 &&
+          fcntl(got[0], F_GETFD) == 0);
+    if (count == 1) second = got[0];
+    check("receive after peeking: same bytes and a fresh descriptor",
+          recv_fds_how(sv[1], &byte, 1, got, 1, &count, &flags, MSG_DONTWAIT) == 1 &&
+          byte == 'f' && count == 1 && got[0] != first && got[0] != second && (flags & MSG_CTRUNC) == 0);
+    if (count == 1) close(got[0]);
+    check("peek copies own the same pipe after the initial message is consumed",
+          first >= 0 && second >= 0 && write(first, "1", 1) == 1 && write(second, "2", 1) == 1 &&
+          read(pipefd[0], &byte, 1) == 1 && byte == '1' && read(pipefd[0], &byte, 1) == 1 && byte == '2');
+    if (first >= 0) close(first);
+    if (second >= 0) close(second);
+    check("closing all received copies releases the pipe writer", read(pipefd[0], &byte, 1) == 0);
+    check("receive consumes the message exactly once", recv(sv[1], &byte, 1, MSG_DONTWAIT) == -1 &&
+          (errno == EAGAIN || errno == EWOULDBLOCK));
+  }
+  close(pipefd[0]);
+  close(sv[0]);
+  close(sv[1]);
+}
+
 int gesher_selftest(void) {
   printf("unix_rights: SCM_RIGHTS through the descriptor broker\n");
   const char* device = getenv("GESHER_BINDER");
@@ -301,6 +349,8 @@ int gesher_selftest(void) {
   test_pair(SOCK_SEQPACKET, "SOCK_SEQPACKET");
   test_pair(SOCK_STREAM, "SOCK_STREAM");
   test_discard();
+  test_peek_rights(SOCK_DGRAM, "peek: SOCK_DGRAM socketpair");
+  test_peek_rights(SOCK_SEQPACKET, "peek: SOCK_SEQPACKET socketpair");
   test_stream_order();
   if (failures == 0) printf("unix_rights: all passed\n");
   else printf("unix_rights: %d check(s) failed\n", failures);

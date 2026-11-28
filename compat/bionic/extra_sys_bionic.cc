@@ -1,6 +1,6 @@
 // gesher bionic shim: system-level functions beyond the core files
 // (docs/native-libs.md, ADR 0057): POSIX semaphores, scheduling parameters,
-// pthread spinlocks/barriers and the timed and attribute forms the core lacks,
+// pthread spinlocks and the timed and attribute forms the core lacks,
 // resource usage, utime/utimes, clock_nanosleep, sysinfo, prctl, getrandom,
 // memfd_create, madvise, dup3, flock and lockf, statfs, the xattr
 // family, the mount table and mount. Registered (from
@@ -25,12 +25,14 @@
 #include <fcntl.h>
 #include <fnmatch.h>
 #include <io.h>
+#include <linux/futex.h>
 #include <mntent.h>
 #include <sys/file.h>
 #include <sys/inotify.h>
 #include <sys/mman.h>
 #include <sys/resource.h>
 #include <sys/statvfs.h>
+#include <sys/syscall.h>
 #include <sys/xattr.h>
 #include <unistd.h>
 
@@ -76,48 +78,107 @@ int64_t MsUntil(const LinuxTimespec* abs, int clock) {
   return static_cast<int64_t>(ms > 0x7ffffffe ? 0x7ffffffe : ms);
 }
 
-// --- POSIX semaphores on bionic's sem_t (16 bytes; word 0 is the count) ---------
+// --- POSIX semaphores on bionic's sem_t ------------------------------------
 
-int BIONIC_SYSV SemInit(void* s, int, unsigned v) {
+// The low bits of word 0 carry the count. Private semaphores keep their
+// original layout. A shared waiter sets kSemWaiting while the count is zero
+// so an uncontended shared post needs no futex operation.
+constexpr uint32_t kSemShared = 1u << 31;
+constexpr uint32_t kSemWaiting = 1u << 30;
+constexpr uint32_t kSemCountMask = kSemWaiting - 1;
+static_assert(kSemValueMax <= kSemCountMask);
+
+int BIONIC_SYSV SemInit(void* s, int pshared, unsigned v) {
   if (v > kSemValueMax) return errno = kEINVAL, -1;
-  Word(s)->store(v);
+  Word(s)->store(v | (pshared != 0 ? kSemShared : 0));
   return 0;
 }
 int BIONIC_SYSV SemDestroy(void*) { return 0; }
 int BIONIC_SYSV SemPost(void* s) {
-  uint32_t value = Word(s)->load();
+  uint32_t state = Word(s)->load();
+  uint32_t count;
   do {
-    if (value == kSemValueMax) return errno = EOVERFLOW, -1;
-  } while (!Word(s)->compare_exchange_weak(value, value + 1));
-  WakeByAddressSingle(Word(s));
+    count = state & kSemCountMask;
+    if (count == kSemValueMax) return errno = EOVERFLOW, -1;
+  } while (!Word(s)->compare_exchange_weak(state, (count + 1) | (state & kSemShared)));
+  if ((state & kSemShared) == 0) {
+    WakeByAddressSingle(Word(s));
+  } else if (state & kSemWaiting) {
+    // Posting clears the contention bit. Wake every contender so that
+    // those that find the count back at zero can mark contention again.
+    const int saved_errno = errno;
+    ::syscall(SYS_futex, reinterpret_cast<volatile int*>(s), FUTEX_WAKE, INT_MAX,
+              nullptr, nullptr, 0);
+    errno = saved_errno;
+  }
   return 0;
 }
-bool SemTake(void* s) {
-  uint32_t v = Word(s)->load();
-  while (v > 0) {
-    if (Word(s)->compare_exchange_weak(v, v - 1)) return true;
+bool SemTake(void* s, uint32_t& state) {
+  state = Word(s)->load();
+  while (state & kSemCountMask) {
+    if (Word(s)->compare_exchange_weak(state, state - 1)) return true;
   }
   return false;
 }
 int BIONIC_SYSV SemTrywait(void* s) {
-  if (SemTake(s)) return 0;
+  uint32_t state;
+  if (SemTake(s, state)) return 0;
   errno = kEAGAIN;
   return -1;
 }
+
+int WaitSharedSemaphore(void* s, const LinuxTimespec* abs, int clock) {
+  timespec deadline{};
+  if (abs != nullptr) {
+    if (abs->tv_sec < 0) return kETIMEDOUT;
+    deadline.tv_sec = abs->tv_sec;
+    deadline.tv_nsec = static_cast<long>(abs->tv_nsec);
+  }
+  const int operation = FUTEX_WAIT_BITSET | (clock == 0 ? FUTEX_CLOCK_REALTIME : 0);
+  auto* interrupt = AttachSignalInterrupt();
+  const int saved_errno = errno;
+  const long result = ::syscall(SYS_futex, reinterpret_cast<volatile int*>(s), operation,
+                                static_cast<int>(kSemShared | kSemWaiting),
+                                abs == nullptr ? nullptr : &deadline, nullptr,
+                                static_cast<int>(FUTEX_BITSET_MATCH_ANY));
+  const int error = result < 0 ? errno : 0;
+  errno = saved_errno;
+  if (interrupt != nullptr) {
+    DetachSignalInterrupt();
+    const int handlers = DeliverAfterInterrupt();
+    if (error == kEINTR) {
+      if (handlers == kNoHandler) return 0;
+      if (abs == nullptr) {
+        const auto target_sdk = Shim<int (BIONIC_SYSV*)()>("android_get_application_target_sdk_version");
+        if (handlers == kHandlersRestart || (target_sdk != nullptr && target_sdk() < 24)) return 0;
+      }
+    }
+  }
+  return error == kEAGAIN ? 0 : error;
+}
+
 // Waits until the count is positive or `abs` passes on `clock` (no `abs`: forever).
 int SemWaitUntil(void* s, const LinuxTimespec* abs, int clock) {
   for (;;) {
-    if (SemTake(s)) return 0;
-    DeliverPendingSignals();
-    DWORD ms = INFINITE;
-    if (abs != nullptr) {
-      if (abs->tv_nsec < 0 || abs->tv_nsec >= 1000000000) return errno = kEINVAL, -1;
-      int64_t left = MsUntil(abs, clock);
-      if (left < 0) return errno = kETIMEDOUT, -1;
-      ms = static_cast<DWORD>(left > 0x7ffffffe ? 0x7ffffffe : left);
+    uint32_t state;
+    if (SemTake(s, state)) return 0;
+    if (abs != nullptr && (abs->tv_nsec < 0 || abs->tv_nsec >= 1000000000))
+      return errno = kEINVAL, -1;
+    if (state & kSemShared) {
+      const uint32_t waiting = kSemShared | kSemWaiting;
+      if (state != waiting && !Word(s)->compare_exchange_strong(state, waiting)) continue;
+      if (const int error = WaitSharedSemaphore(s, abs, clock)) return errno = error, -1;
+    } else {
+      DeliverPendingSignals();
+      DWORD ms = INFINITE;
+      if (abs != nullptr) {
+        int64_t left = MsUntil(abs, clock);
+        if (left < 0) return errno = kETIMEDOUT, -1;
+        ms = static_cast<DWORD>(left);
+      }
+      uint32_t zero = 0;
+      WaitOnAddress(Word(s), &zero, 4, ms);
     }
-    uint32_t zero = 0;
-    WaitOnAddress(Word(s), &zero, 4, ms);
   }
 }
 int BIONIC_SYSV SemWait(void* s) { return SemWaitUntil(s, nullptr, 0); }
@@ -130,7 +191,7 @@ int BIONIC_SYSV SemClockwait(void* s, int clock, const LinuxTimespec* abs) {
   return SemWaitUntil(s, abs, clock);
 }
 int BIONIC_SYSV SemGetvalue(void* s, int* v) {
-  *v = static_cast<int>(Word(s)->load());
+  *v = static_cast<int>(Word(s)->load() & kSemCountMask);
   return 0;
 }
 // Named semaphores: bionic has none either.
@@ -233,29 +294,12 @@ int BIONIC_SYSV PthreadGetnameNp(uint64_t thread, char* buf, size_t size) {
 int BIONIC_SYSV PthreadGetcpuclockid(uint64_t thread, int* clock) {
   return PthreadCpuClock(thread, clock);
 }
-int BIONIC_SYSV PthreadMutexattrGetpshared(const int64_t*, int* v) {
-  *v = 0;
-  return 0;
-}
 int BIONIC_SYSV PthreadMutexattrSetprotocol(int64_t*, int) { return 0; }
 int BIONIC_SYSV PthreadMutexattrGetprotocol(const int64_t*, int* v) {
   *v = 0;
   return 0;
 }
-int BIONIC_SYSV PthreadCondattrGetclock(const int64_t* a, int* clock) {
-  *clock = static_cast<int>(*a);  // pthread_bionic.cc keeps the clock id in it
-  return 0;
-}
-int BIONIC_SYSV PthreadAttrPsharedGet(const void*, int* v) {
-  *v = 0;
-  return 0;
-}
-int BIONIC_SYSV PthreadAttrPsharedSet(void*, int) { return 0; }
-int BIONIC_SYSV PthreadRwlockattrInit(int64_t* a) {
-  *a = 0;
-  return 0;
-}
-int BIONIC_SYSV PthreadRwlockattrDestroy(int64_t*) { return 0; }
+int BIONIC_SYSV PthreadRwlockattrSetkind(void*, int) { return 0; }
 int BIONIC_SYSV PthreadRwlockattrGetkind(const int64_t*, int* v) {
   *v = 0;
   return 0;
@@ -286,32 +330,6 @@ int BIONIC_SYSV SpinUnlock(void* l) {
   Word(l)->store(0, std::memory_order_release);
   return 0;
 }
-
-// Barriers (32 bytes): word 0 the count, 1 the waiters so far, 2 the generation.
-int BIONIC_SYSV BarrierInit(void* b, const void*, unsigned count) {
-  if (count == 0) return kEINVAL;
-  Word(b, 0)->store(count);
-  Word(b, 1)->store(0);
-  Word(b, 2)->store(0);
-  return 0;
-}
-int BIONIC_SYSV BarrierDestroy(void*) { return 0; }
-int BIONIC_SYSV BarrierWait(void* b) {
-  uint32_t gen = Word(b, 2)->load();
-  if (Word(b, 1)->fetch_add(1) + 1 == Word(b, 0)->load()) {
-    Word(b, 1)->store(0);
-    Word(b, 2)->fetch_add(1);
-    WakeByAddressAll(Word(b, 2));
-    return -1;  // PTHREAD_BARRIER_SERIAL_THREAD
-  }
-  while (Word(b, 2)->load() == gen) WaitOnAddress(Word(b, 2), &gen, 4, INFINITE);
-  return 0;
-}
-int BIONIC_SYSV BarrierattrInit(int* a) {
-  *a = 0;
-  return 0;
-}
-int BIONIC_SYSV BarrierattrDestroy(int*) { return 0; }
 
 // --- resource usage and time --------------------------------------------------------
 
@@ -1140,30 +1158,15 @@ void RegisterExtraSys(SymbolTable& t) {
   E("pthread_attr_setstack", PthreadAttrSetstack);
   E("pthread_getname_np", PthreadGetnameNp);
   E("pthread_getcpuclockid", PthreadGetcpuclockid);
-  E("pthread_mutexattr_getpshared", PthreadMutexattrGetpshared);
   E("pthread_mutexattr_setprotocol", PthreadMutexattrSetprotocol);
   E("pthread_mutexattr_getprotocol", PthreadMutexattrGetprotocol);
-  E("pthread_condattr_getclock", PthreadCondattrGetclock);
-  E("pthread_condattr_getpshared", PthreadAttrPsharedGet);
-  E("pthread_condattr_setpshared", PthreadAttrPsharedSet);
-  E("pthread_rwlockattr_init", PthreadRwlockattrInit);
-  E("pthread_rwlockattr_destroy", PthreadRwlockattrDestroy);
-  E("pthread_rwlockattr_getpshared", PthreadAttrPsharedGet);
-  E("pthread_rwlockattr_setpshared", PthreadAttrPsharedSet);
   E("pthread_rwlockattr_getkind_np", PthreadRwlockattrGetkind);
-  E("pthread_rwlockattr_setkind_np", PthreadAttrPsharedSet);
+  E("pthread_rwlockattr_setkind_np", PthreadRwlockattrSetkind);
   E("pthread_spin_init", SpinInit);
   E("pthread_spin_destroy", SpinDestroy);
   E("pthread_spin_lock", SpinLock);
   E("pthread_spin_trylock", SpinTrylock);
   E("pthread_spin_unlock", SpinUnlock);
-  E("pthread_barrier_init", BarrierInit);
-  E("pthread_barrier_destroy", BarrierDestroy);
-  E("pthread_barrier_wait", BarrierWait);
-  E("pthread_barrierattr_init", BarrierattrInit);
-  E("pthread_barrierattr_destroy", BarrierattrDestroy);
-  E("pthread_barrierattr_getpshared", PthreadAttrPsharedGet);
-  E("pthread_barrierattr_setpshared", PthreadAttrPsharedSet);
   E("getrusage", Getrusage);
   E("times", Times);
   E("utime", Utime);

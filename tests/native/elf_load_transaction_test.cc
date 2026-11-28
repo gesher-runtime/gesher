@@ -1,7 +1,8 @@
 // Copyright (C) 2026 The Gesher Authors
 // SPDX-License-Identifier: Apache-2.0
 // Execute real, original ELF dependency graphs through the public loader API.
-// Usage: elf_load_transaction_test <fixture-root> [--arm64]
+// Usage: elf_load_transaction_test <fixture-root> [--arm64] [--runpath-only | --runpath-environment |
+//                                                       --reentry-only | --identity-only]
 // The Linux host runner substitutes Win32 primitives explicitly. Windows CI
 // uses the production mapping/rewrite/TLS implementations and optional ARM64
 // translator. No application-specific behavior or production failure switch.
@@ -12,6 +13,7 @@
 #endif
 #include <elf.h>
 #include <sys/mman.h>
+#include <unistd.h>
 
 #include <algorithm>
 #include <array>
@@ -42,12 +44,14 @@ using namespace std::chrono_literals;
 namespace {
 int checks, failures;
 std::string complete_dir, incomplete_dir;
-std::array<std::atomic<int>, 32> initialized{};
+std::array<std::atomic<int>, 36> initialized{};
 std::mutex events_lock;
 std::vector<int> events;
 std::atomic<bool> supply_missing{false}, inject_protection{false}, fail_protection_once{false};
 std::atomic<int> protection_failures{0};
 bool reentry_parent_visible, reentry_child_worked;
+bool sibling_find_is_passive;
+int reentrant_file_count, reentrant_memory_count;
 std::mutex barrier_lock;
 std::condition_variable barrier_cv;
 bool barrier_enabled, barrier_entered, barrier_release;
@@ -152,6 +156,25 @@ void TX_SYSV Reenter() {
   reentry_child_worked = child != nullptr && Call(child, "tx_reentrant_child") == 13;
 }
 
+void TX_SYSV ReenterSiblings() {
+  constexpr char file_name[] = "tx_reentry_file.so";
+  constexpr char memory_name[] = "tx_reentry_memory.so";
+  auto* sibling = elf::Find(file_name);
+  sibling_find_is_passive = sibling != nullptr && Call(sibling, "tx_sibling_init_count") == 0;
+
+  std::string error;
+  auto* file = Load(complete_dir, file_name, Options(complete_dir), &error);
+  reentrant_file_count = Call(file, "tx_sibling_init_count");
+
+  std::ifstream input(complete_dir + "/" + memory_name, std::ios::binary);
+  std::vector<char> bytes((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+  if (!bytes.empty()) {
+    auto* memory = elf::LoadFromMemory(memory_name, bytes.data(), bytes.size(), &error,
+                                      Options(complete_dir));
+    reentrant_memory_count = Call(memory, "tx_sibling_init_count");
+  }
+}
+
 void Barrier() {
   std::unique_lock<std::mutex> guard(barrier_lock);
   if (!barrier_enabled) return;
@@ -166,6 +189,7 @@ void* Resolve(const char* name) {
   if (std::strcmp(name, "tx_missing") == 0)
     return supply_missing ? reinterpret_cast<void*>(&Missing) : nullptr;
   if (std::strcmp(name, "tx_reenter") == 0) return reinterpret_cast<void*>(&Reenter);
+  if (std::strcmp(name, "tx_reenter_siblings") == 0) return reinterpret_cast<void*>(&ReenterSiblings);
   if (std::strcmp(name, "tx_barrier") == 0) {
     Barrier(); return reinterpret_cast<void*>(&BarrierValue);
   }
@@ -302,6 +326,20 @@ void ConstructorReentry() {
   Check(initialized[13] == 1 && initialized[14] == 1, "nested constructor load initializes both libraries once");
 }
 
+void ConstructorReentryIntoLinkedSiblings() {
+  const size_t initial_count = Count();
+  std::string error;
+  auto* root = Load(complete_dir, "tx_reentry_graph.so", Options(complete_dir), &error);
+  Check(root != nullptr && Call(root, "tx_reentry_graph") == 28,
+        "linked sibling graph loads and its export executes");
+  Check(sibling_find_is_passive, "passive Find does not start a sibling constructor");
+  Check(reentrant_file_count == 1, "reentrant file open initializes its linked sibling");
+  Check(reentrant_memory_count == 1, "reentrant memory open initializes its linked sibling");
+  Check(initialized[25] == 1 && initialized[26] == 1 && initialized[27] == 1 &&
+            initialized[28] == 1 && Count() == initial_count + 4,
+        "outer load neither maps nor initializes any sibling twice");
+}
+
 void IfuncFileAndMemory() {
   const size_t initial_count = Count();
   std::string error;
@@ -319,6 +357,95 @@ void IfuncFileAndMemory() {
         "copied code is executable for a real IFUNC before final protection");
   Check(initialized[22] == 1 && Count() == initial_count + 2,
         "both IFUNC objects publish and construct exactly once");
+}
+
+void FileIdentity(const std::string& root) {
+  const size_t initial_count = Count();
+  const std::string first = root + "/identity-a/tx_identity.so";
+  const std::string second = root + "/identity-b/tx_identity.so";
+  const std::string alias = root + "/identity-a/tx_identity_alias-" +
+                            std::to_string(getpid()) + ".so";
+  const std::string missing = root + "/incomplete/tx_identity.so";
+  std::string error;
+  elf::LoadOptions no_load;
+  no_load.no_load = true;
+  Check(elf::Load(first.c_str(), &error, no_load) == nullptr &&
+            error.find("RTLD_NOLOAD") != std::string::npos,
+        "an existing file cannot be mapped under RTLD_NOLOAD");
+  Check(initialized[29] == 0 && Count() == initial_count,
+        "a failed RTLD_NOLOAD adds no constructor calls or program-header entries");
+  auto* a = elf::Load(first.c_str(), &error);
+  Check(elf::Load(second.c_str(), &error, no_load) == nullptr && initialized[30] == 0,
+        "an unrelated file with the same SONAME cannot satisfy RTLD_NOLOAD");
+  auto* b = elf::Load(second.c_str(), &error);
+  Check(a != nullptr && b != nullptr && a != b, "same basename and SONAME can load from distinct files");
+  Check(Call(a, "tx_identity") == 29 && Call(b, "tx_identity") == 30,
+        "each explicit handle calls its own file's export");
+  Check(Call(b, "tx_first_only") == 290, "bare dependency uses the earlier loaded SONAME");
+  Check(elf::OpenLoaded("tx_identity.so") == a, "bare SONAME retains first loaded match");
+  Check(elf::Load(missing.c_str(), &error) == nullptr, "missing explicit path never resolves by basename");
+  Check(elf::Load(first.c_str(), &error) == a, "repeated path reuses its loaded object");
+  Check(elf::Load(first.c_str(), &error, no_load) == a, "RTLD_NOLOAD returns the loaded file");
+  no_load.reject_loaded_file = true;
+  Check(elf::Load(first.c_str(), &error, no_load) == nullptr &&
+            error.find("RTLD_NOLOAD") != std::string::npos,
+        "FORCE_LOAD with RTLD_NOLOAD skips the loaded file without mapping a copy");
+  no_load.reject_loaded_file = false;
+  const bool linked = link(first.c_str(), alias.c_str()) == 0;
+  Check(linked, "hard-link alias fixture is a link to the first file");
+  if (linked) {
+    Check(elf::Load(alias.c_str(), &error) == a, "hard-link alias reuses its original file identity");
+    Check(elf::Load(alias.c_str(), &error, no_load) == a,
+          "RTLD_NOLOAD recognizes an alias of the loaded file");
+    Check(unlink(alias.c_str()) == 0, "remove hard-link alias fixture");
+  }
+  Check(initialized[29] == 1 && initialized[30] == 1 && Count() == initial_count + 2,
+        "constructors and program-header entries are unique per file");
+}
+
+template <typename OptionsType>
+void SetEnvironmentSearchPath(OptionsType& options, const std::string& directory) {
+  // The historical loader snapshot used by test_elf_atomic_load.py may
+  // predate the option. Its ordinary graph negative control still compiles.
+  if constexpr (requires { options.environment_search_paths; }) {
+    options.environment_search_paths.push_back(directory);
+  } else {
+    Check(false, "loader supports environment search-path ordering");
+  }
+}
+
+void Runpath(const std::string& base, bool environment) {
+  const size_t initial_count = Count();
+  std::string error;
+  if (!environment) {
+    elf::LoadOptions isolated;
+    isolated.allow_shimmed_needed = false;
+    isolated.stub_unresolved_functions = false;
+    auto* legacy = Load(base + "/runpath/root", "tx_runpath_legacy.so", isolated, &error);
+    Check(legacy == nullptr && error.find("tx_runpath_mid.so") != std::string::npos,
+          "DT_RPATH alone does not supply the dependency");
+    error.clear();
+    auto* bad = Load(base + "/noinherit/root", "tx_runpath_root.so", isolated, &error);
+    Check(bad == nullptr && error.find("tx_runpath_leaf.so") != std::string::npos,
+          "RUNPATH is not inherited by a dependency's dependency");
+    Check(Count() == initial_count && initialized[31] == 0 &&
+              initialized[32] == 0 && initialized[33] == 0,
+          "missing RUNPATH dependencies leave no published objects or constructors");
+  }
+  auto options = Options(base + "/runpath/default");
+  if (environment) SetEnvironmentSearchPath(options, base + "/runpath/environment");
+  error.clear();
+  auto* root = Load(base + "/runpath/root", "tx_runpath_root.so", options, &error);
+  if (!root) std::printf("RUNPATH load error: %s\n", error.c_str());
+  Check(root != nullptr && Call(root, "tx_runpath_root") == (environment ? 36 : 33),
+        "RUNPATH search executes the selected graph's real exports");
+  Check(initialized[33] == 1 && initialized[34] == 0 &&
+            initialized[35] == (environment ? 1 : 0) &&
+            initialized[31] == (environment ? 0 : 1) &&
+            initialized[32] == (environment ? 0 : 1),
+        "environment precedes RUNPATH and RUNPATH precedes default paths");
+  Check(Count() == initial_count + (environment ? 2 : 3),
+        "publication includes only the selected dependency graph");
 }
 
 void IfuncDependencyTls() {
@@ -425,14 +552,32 @@ extern "C" int gesher_elf_test_mprotect(void* address, size_t length, int protec
 
 int main(int argc, char** argv) {
   std::setvbuf(stdout, nullptr, _IONBF, 0);
-  if (argc < 2 || argc > 3 || (argc == 3 && std::strcmp(argv[2], "--arm64") != 0)) {
-    std::fprintf(stderr, "usage: %s <fixture-root> [--arm64]\n", argv[0]);
+  bool arm64 = false;
+  bool reentry_only = false;
+  bool identity_only = false;
+  bool runpath_only = false;
+  bool runpath_environment = false;
+  for (int i = 2; i < argc; ++i) {
+    if (std::strcmp(argv[i], "--arm64") == 0) arm64 = true;
+    else if (std::strcmp(argv[i], "--reentry-only") == 0) reentry_only = true;
+    else if (std::strcmp(argv[i], "--identity-only") == 0) identity_only = true;
+    else if (std::strcmp(argv[i], "--runpath-only") == 0) runpath_only = true;
+    else if (std::strcmp(argv[i], "--runpath-environment") == 0) runpath_environment = true;
+    else {
+      std::fprintf(stderr, "unknown option: %s\n", argv[i]);
+      return 2;
+    }
+  }
+  if (argc < 2 || reentry_only + identity_only + runpath_only + runpath_environment > 1) {
+    std::fprintf(stderr, "usage: %s <fixture-root> [--arm64] "
+                         "[--reentry-only | --identity-only | --runpath-only | --runpath-environment]\n",
+                 argv[0]);
     return 2;
   }
   Watchdog watchdog;
   complete_dir = std::string(argv[1]) + "/complete";
   incomplete_dir = std::string(argv[1]) + "/incomplete";
-  if (argc == 3) {
+  if (arm64) {
 #ifdef _WIN32
     Check(gesher::arm64::EnsureLoaded(), "production ARM64 translator is available");
     if (failures) return 1;
@@ -442,17 +587,29 @@ int main(int argc, char** argv) {
 #endif
   }
   elf::SetBionicResolver(Resolve);
-  MissingDependencyAndRetry();
-  RelocationFailureAndRetry();
-  DiamondAndCycle();
-  ConstructorReentry();
-  IfuncFileAndMemory();
-  IfuncDependencyTls();
-  Concurrent(false);
-  Concurrent(true);
+  if (identity_only) {
+    FileIdentity(argv[1]);
+  } else if (runpath_only || runpath_environment) {
+    Runpath(argv[1], runpath_environment);
+  } else if (reentry_only) {
+    ConstructorReentry();
+    ConstructorReentryIntoLinkedSiblings();
+    FileIdentity(argv[1]);
+  } else {
+    MissingDependencyAndRetry();
+    RelocationFailureAndRetry();
+    DiamondAndCycle();
+    Runpath(argv[1], false);
+    ConstructorReentry();
+    ConstructorReentryIntoLinkedSiblings();
+    IfuncFileAndMemory();
+    IfuncDependencyTls();
+    Concurrent(false);
+    Concurrent(true);
 #ifdef GESHER_ELF_TRANSACTION_FAILURE
-  ProtectionFailureAndRetry();
+    ProtectionFailureAndRetry();
 #endif
+  }
   std::printf("ELF transaction: %d checks, %d failures\n", checks, failures);
   if (failures == 0) std::puts("elf_load_transaction_test all passed");
   return failures == 0 ? 0 : 1;

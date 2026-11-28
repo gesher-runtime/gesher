@@ -1,6 +1,7 @@
 // Public Android semaphore contracts, shared with the ELF libc suite.
 #include <dlfcn.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <limits.h>
 #include <pthread.h>
 #include <semaphore.h>
@@ -164,7 +165,28 @@ static void test_semaphore_waits(void) {
   }
 }
 
+static void test_semaphore_named_unavailable(void) {
+  typedef sem_t* (*sem_open_fn)(const char*, int, ...);
+  typedef int (*sem_unlink_fn)(const char*);
+  sem_open_fn open_named = (sem_open_fn)dlsym(RTLD_DEFAULT, "sem_open");
+  sem_action_fn close_named = (sem_action_fn)dlsym(RTLD_DEFAULT, "sem_close");
+  sem_unlink_fn unlink_named = (sem_unlink_fn)dlsym(RTLD_DEFAULT, "sem_unlink");
+  check("semaphore: named exports", open_named && close_named && unlink_named);
+  if (!open_named || !close_named || !unlink_named) return;
+
+  const char* name = "/gesher-bionic-sem-contract";
+  errno = 0;
+  check("semaphore: named open is unavailable",
+        open_named(name, O_CREAT | O_EXCL, 0600, 1u) == NULL && errno == ENOSYS);
+  sem_t unopened = {0};
+  errno = 0;
+  check("semaphore: named close is unavailable", close_named(&unopened) == -1 && errno == ENOSYS);
+  errno = 0;
+  check("semaphore: named unlink is unavailable", unlink_named(name) == -1 && errno == ENOSYS);
+}
+
 static void test_semaphore_contracts(void) {
   test_semaphore_limits();
   test_semaphore_waits();
+  test_semaphore_named_unavailable();
 }

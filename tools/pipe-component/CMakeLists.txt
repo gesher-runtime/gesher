@@ -41,6 +41,9 @@ add_library(gesher_exec_spawn STATIC
 target_include_directories(gesher_exec_spawn PUBLIC "${GESHER_ROOT}/compat/elf/exec")
 target_link_libraries(gesher_exec_spawn PUBLIC gesher_posix)
 target_compile_options(gesher_exec_spawn PRIVATE -Wall -Wextra -Werror)
+# Match the production launch target's source-local exception boundary.
+set_source_files_properties("${GESHER_ROOT}/compat/elf/exec/exec_spawn.cc"
+  PROPERTIES COMPILE_OPTIONS "-fexceptions")
 foreach(target pipe_kernel_test pipe_native_process_test file_flags_ofd_test stdio_ofd_test)
   add_executable(${target} "${GESHER_ROOT}/tests/native/${target}.cc")
   target_compile_options(${target} PRIVATE -Wall -Wextra -Werror)
@@ -48,3 +51,17 @@ endforeach()
 target_compile_options(stdio_ofd_test PRIVATE -fno-builtin)
 target_link_libraries(pipe_native_process_test PRIVATE gesher_exec_spawn)
 add_dependencies(pipe_native_process_test ofd_native_child)
+
+# A standalone diagnostic for the remaining N31 last-reader behavior.
+add_executable(pipe_write_readiness_probe EXCLUDE_FROM_ALL
+  "${GESHER_ROOT}/tests/native/pipe_write_readiness_probe.cc")
+target_compile_options(pipe_write_readiness_probe PRIVATE -Wall -Wextra -Werror)
+
+add_executable(pipe_epoll_alias_probe EXCLUDE_FROM_ALL
+  "${GESHER_ROOT}/tests/native/pipe_epoll_alias_probe.cc")
+target_compile_options(pipe_epoll_alias_probe PRIVATE -Wall -Wextra -Werror)
+
+add_executable(pipe_capacity_reference EXCLUDE_FROM_ALL
+  "${GESHER_ROOT}/tests/native/pipe_capacity_reference.c")
+target_compile_options(pipe_capacity_reference PRIVATE -Wall -Wextra -Werror)
+set_target_properties(pipe_capacity_reference PROPERTIES LINKER_LANGUAGE CXX)

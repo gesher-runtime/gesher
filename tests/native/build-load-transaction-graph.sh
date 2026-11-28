@@ -8,11 +8,12 @@ here=$(cd "$(dirname "$0")" && pwd)
 mkdir -p "$output/complete" "$output/incomplete"
 complete="$output/complete"
 common=(-shared -fPIC -O2 -fno-stack-protector -nostdlib -Wall -Wextra -Werror
-        -Wl,--hash-style=both '-Wl,-rpath,$ORIGIN')
+        -Wl,--hash-style=both)
+origin_rpath='-Wl,-rpath,$ORIGIN'
 build() {
   local name=$1 role=$2
   shift 2
-  "$compiler" "${common[@]}" -DTX_ROLE="$role" \
+  "$compiler" "${common[@]}" "$origin_rpath" -DTX_ROLE="$role" \
     "-Wl,-soname,tx_${name}.so" -o "$complete/tx_${name}.so" \
     "$here/elf_load_transaction_graph.c" -L"$complete" -Wl,--no-as-needed "$@"
 }
@@ -43,8 +44,39 @@ build ifunc_memory 22
 # Resolver TLS accesses must not depend on a still-unresolved external PLT.
 build ifunc_tls_child 23 -fno-plt -ftls-model=global-dynamic
 build ifunc_tls_root 24 -fno-plt -ftls-model=global-dynamic -l:tx_ifunc_tls_child.so
+build reentry_trigger 25
+build reentry_file 26
+build reentry_memory 27
+build reentry_graph 28 -l:tx_reentry_trigger.so -l:tx_reentry_file.so -l:tx_reentry_memory.so
+mkdir -p "$output/identity-a" "$output/identity-b"
+"$compiler" "${common[@]}" "$origin_rpath" -DTX_ROLE=29 -Wl,-soname,tx_identity.so \
+  -o "$output/identity-a/tx_identity.so" "$here/elf_load_transaction_graph.c"
+"$compiler" "${common[@]}" "$origin_rpath" -DTX_ROLE=30 -Wl,-soname,tx_identity.so \
+  -o "$output/identity-b/tx_identity.so" "$here/elf_load_transaction_graph.c" \
+  -L"$output/identity-a" -Wl,--no-as-needed -l:tx_identity.so
 for name in newchild middle root; do
   cp "$complete/tx_${name}.so" "$output/incomplete/tx_${name}.so"
 done
 # A reused build directory must not accidentally repair the intended failure.
 test ! -e "$output/incomplete/tx_late.so"
+
+runpath="$output/runpath"
+mkdir -p "$runpath"/{root,deps,lib64,default,environment} "$output"/noinherit/{root,deps,lib64}
+build_runpath() {
+  local directory=$1 name=$2 role=$3
+  shift 3
+  "$compiler" "${common[@]}" -DTX_ROLE="$role" "-Wl,-soname,tx_runpath_${name}.so" \
+    -o "$directory/tx_runpath_${name}.so" "$here/elf_load_transaction_graph.c" "$@"
+}
+build_runpath "$runpath/lib64" leaf 31
+build_runpath "$runpath/deps" mid 32 '-Wl,-rpath,$ORIGIN/../${LIB}' \
+  -L"$runpath/lib64" -l:tx_runpath_leaf.so
+build_runpath "$runpath/default" mid 34
+build_runpath "$runpath/environment" mid 35
+build_runpath "$runpath/root" root 33 '-Wl,-rpath,:${ORIGIN}/../absent:${ORIGIN}/../deps:$ORIGIN/../lib64' \
+  -L"$runpath/deps" -l:tx_runpath_mid.so
+build_runpath "$runpath/root" legacy 33 -Wl,--disable-new-dtags '-Wl,-rpath,$ORIGIN/../deps' \
+  -L"$runpath/deps" -l:tx_runpath_mid.so
+cp "$runpath/root/tx_runpath_root.so" "$output/noinherit/root/"
+cp "$runpath/lib64/tx_runpath_leaf.so" "$output/noinherit/lib64/"
+build_runpath "$output/noinherit/deps" mid 32 -L"$runpath/lib64" -l:tx_runpath_leaf.so

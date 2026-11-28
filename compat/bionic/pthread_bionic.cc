@@ -13,7 +13,9 @@
 #include "shim_internal.h"
 #include "pthread_cleanup.h"
 
+#include <linux/futex.h>
 #include <pthread.h>
+#include <sys/syscall.h>
 #include <windows.h>
 
 #include <atomic>
@@ -31,6 +33,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include <gesher/clocks.h>
 #include <gesher/elf_loader.h>
 #include <gesher/fork.h>
 
@@ -59,6 +62,19 @@ void FutexWake(Word* w, bool all) {
   }
 }
 
+int WakePthreadWord(Word* w, bool all, bool shared) {
+  if (!shared) {
+    FutexWake(w, all);
+    return 0;
+  }
+  const int saved_errno = errno;
+  const long result = ::syscall(SYS_futex, reinterpret_cast<volatile int*>(w),
+                                FUTEX_WAKE, all ? INT_MAX : 1, nullptr, nullptr, 0);
+  const int error = result < 0 ? errno : 0;
+  errno = saved_errno;
+  return error;
+}
+
 int32_t SelfTid() { return static_cast<int32_t>(GetCurrentThreadId()); }
 
 // --- thread-exit work: key destructors and C++ thread_local destructors ----
@@ -82,6 +98,7 @@ thread_local uint64_t t_key_generations[kKeysMax] = {};
 struct ThreadAtExit {
   void (BIONIC_SYSV* dtor)(void*);
   void* obj;
+  elf::Library* owner;
 };
 thread_local std::vector<ThreadAtExit>* t_thread_atexit = nullptr;
 thread_local CleanupStack t_cleanups;
@@ -93,6 +110,7 @@ void RunThreadAtExit() {
     ThreadAtExit e = t_thread_atexit->back();
     t_thread_atexit->pop_back();
     e.dtor(e.obj);
+    elf::ReleaseLifetimePin(e.owner);
   }
   delete t_thread_atexit;
   t_thread_atexit = nullptr;
@@ -403,22 +421,24 @@ int ThreadAttributes(bionic_pthread_t thread, bionic_pthread_attr_t* attr, bool 
 }
 
 // --- mutex -----------------------------------------------------------------
-// Word 0: bionic's type bits (14-15); word 1: the lock (0 free, 1 locked,
-// 2 locked with waiters); word 2: the owner's tid; word 3: recursion count.
+// Word 0 contains bionic's type and shared bits. Word 1 is the lock
+// (0 free, 1 locked, 2 locked with waiters), word 2 the owner's tid, and word 3
+// the recursion count.
 
 // Types: 0 normal, 1 recursive, 2 error-check (bionic's PTHREAD_MUTEX_*).
 constexpr int kMutexNormal = 0, kMutexRecursive = 1;
+constexpr int kMutexShared = 1 << 13;
+constexpr int64_t kMutexAttrShared = 1 << 4;
 
 int MutexType(bionic_pthread_mutex_t* m) { return (W(m, 0)->load() >> 14) & 3; }
+bool MutexShared(bionic_pthread_mutex_t* m) {
+  return (W(m, 0)->load(std::memory_order_relaxed) & kMutexShared) != 0;
+}
 
-void LockWord(Word* s) {
-  int32_t c = 0;
-  if (s->compare_exchange_strong(c, 1, std::memory_order_acquire)) return;
-  if (c != 2) c = s->exchange(2, std::memory_order_acquire);
-  while (c != 0) {
-    FutexWait(s, 2);
-    c = s->exchange(2, std::memory_order_acquire);
-  }
+int SetSharedAttr(int64_t* attr, int value, int64_t mask) {
+  if (value != 0 && value != 1) return kEINVAL;
+  *attr = (*attr & ~mask) | (value == 1 ? mask : 0);
+  return 0;
 }
 
 // Android permits a null pthread deadline (an unbounded wait). Mutexes and
@@ -444,25 +464,80 @@ bool WaitWordUntil(Word* s, int32_t expected, const LinuxTimespec* abstime, bool
   }
 }
 
-// Like LockWord, with Android's immediate-acquisition/validation order.
-int LockWordTimed(Word* s, const LinuxTimespec* abstime, bool monotonic) {
+int WaitPthreadWord(Word* word, int32_t expected, const LinuxTimespec* abstime,
+                    bool monotonic, bool shared) {
+  if (!shared) return WaitWordUntil(word, expected, abstime, monotonic) ? 0 : kETIMEDOUT;
+
+  timespec deadline{};
+  if (abstime != nullptr) {
+    deadline.tv_sec = abstime->tv_sec;
+    deadline.tv_nsec = static_cast<long>(abstime->tv_nsec);
+  }
+  int operation = FUTEX_WAIT_BITSET;
+  if (!monotonic) operation |= FUTEX_CLOCK_REALTIME;
+  const int saved_errno = errno;
+  auto* interrupt = AttachSignalInterrupt();
+  const long result = ::syscall(SYS_futex, reinterpret_cast<volatile int*>(word), operation,
+                                expected, abstime == nullptr ? nullptr : &deadline, nullptr,
+                                static_cast<int>(FUTEX_BITSET_MATCH_ANY));
+  const int error = result < 0 ? errno : 0;
+  if (interrupt != nullptr) {
+    DetachSignalInterrupt();
+    DeliverAfterInterrupt();
+  }
+  errno = saved_errno;
+  // The pthread callers recheck their state after a changed word or signal.
+  // A condition variable may return successfully after a spurious wake.
+  return error == kEAGAIN || error == kEINTR ? 0 : error;
+}
+
+// Nonnegative progress counts arrivals. Negative progress counts the members
+// leaving a completed round. One word prevents an arrival from joining a
+// round that advanced from collecting to releasing while that caller waited.
+struct Barrier {
+  uint32_t count;
+  bool shared;
+  Word progress;
+};
+static_assert(sizeof(Barrier) <= sizeof(bionic_pthread_barrier_t));
+static_assert(alignof(Barrier) <= alignof(bionic_pthread_barrier_t));
+static_assert(Word::is_always_lock_free);
+
+Barrier& AsBarrier(bionic_pthread_barrier_t* barrier) {
+  return *reinterpret_cast<Barrier*>(barrier);
+}
+
+void WaitBarrierProgress(Word* progress, int32_t observed, bool shared) {
+  if (!shared) {
+    FutexWait(progress, observed);
+    return;
+  }
+  // A bounded wait also lets us observe progress if opening the Windows
+  // wake queue fails. The barrier state itself is in the shared memory.
+  const int64_t now = gesher::MonotonicNanos();
+  constexpr int64_t kSecond = 1000000000;
+  const LinuxTimespec deadline{now / kSecond + 1, now % kSecond};
+  const int error = WaitPthreadWord(progress, observed, &deadline, true, true);
+  if (error != 0 && error != kETIMEDOUT) Sleep(1);
+}
+
+// Check the deadline after the uncontended acquisition attempt, as Android does.
+int LockWordTimed(Word* s, const LinuxTimespec* abstime, bool monotonic, bool shared) {
   int32_t c = 0;
   if (s->compare_exchange_strong(c, 1, std::memory_order_acquire)) return 0;
   int result = CheckPthreadDeadline(abstime);
   if (result != 0) return result;
   if (c != 2) c = s->exchange(2, std::memory_order_acquire);
   while (c != 0) {
-    if (!WaitWordUntil(s, 2, abstime, monotonic)) return kETIMEDOUT;
+    if (int error = WaitPthreadWord(s, 2, abstime, monotonic, shared)) return error;
     c = s->exchange(2, std::memory_order_acquire);
   }
   return 0;
 }
 
-void UnlockWord(Word* s) {
-  if (s->fetch_sub(1, std::memory_order_release) != 1) {
-    s->store(0, std::memory_order_release);
-    FutexWake(s, false);
-  }
+int UnlockWord(Word* s, bool shared) {
+  if (s->exchange(0, std::memory_order_release) == 1) return 0;
+  return WakePthreadWord(s, false, shared);
 }
 
 // The part of lock/trylock/timedlock before taking the word: recursion and
@@ -488,7 +563,7 @@ void MutexTaken(bionic_pthread_mutex_t* m) {
 int MutexTimedLock(bionic_pthread_mutex_t* m, const LinuxTimespec* abstime, bool monotonic) {
   int result = MutexPreLock(m);
   if (result >= 0) return result;
-  result = LockWordTimed(W(m, 1), abstime, monotonic);
+  result = LockWordTimed(W(m, 1), abstime, monotonic, MutexShared(m));
   if (result != 0) return result;
   MutexTaken(m);
   return 0;
@@ -728,7 +803,13 @@ int BIONIC_SYSV gesher_bionic_pthread_mutexattr_gettype(const bionic_pthread_mut
   *t = static_cast<int>(*a & 0xf);
   return 0;
 }
-int BIONIC_SYSV gesher_bionic_pthread_mutexattr_setpshared(bionic_pthread_mutexattr_t*, int) {
+int BIONIC_SYSV gesher_bionic_pthread_mutexattr_setpshared(bionic_pthread_mutexattr_t* a,
+                                                            int value) {
+  return SetSharedAttr(a, value, kMutexAttrShared);
+}
+int BIONIC_SYSV gesher_bionic_pthread_mutexattr_getpshared(const bionic_pthread_mutexattr_t* a,
+                                                            int* value) {
+  *value = (*a & kMutexAttrShared) != 0;
   return 0;
 }
 
@@ -738,17 +819,14 @@ int BIONIC_SYSV gesher_bionic_pthread_mutex_init(bionic_pthread_mutex_t* m,
                                                 const bionic_pthread_mutexattr_t* attr) {
   std::memset(m, 0, sizeof(*m));
   int type = attr != nullptr ? static_cast<int>(*attr & 3) : 0;
-  W(m, 0)->store(type << 14);
+  const bool shared = attr != nullptr && (*attr & kMutexAttrShared) != 0;
+  W(m, 0)->store((type << 14) | (shared ? kMutexShared : 0));
   return 0;
 }
 int BIONIC_SYSV gesher_bionic_pthread_mutex_destroy(bionic_pthread_mutex_t*) { return 0; }
 
 int BIONIC_SYSV gesher_bionic_pthread_mutex_lock(bionic_pthread_mutex_t* m) {
-  int r = MutexPreLock(m);
-  if (r >= 0) return r;
-  LockWord(W(m, 1));
-  MutexTaken(m);
-  return 0;
+  return MutexTimedLock(m, nullptr, false);
 }
 
 int BIONIC_SYSV gesher_bionic_pthread_mutex_trylock(bionic_pthread_mutex_t* m) {
@@ -785,13 +863,12 @@ int BIONIC_SYSV gesher_bionic_pthread_mutex_unlock(bionic_pthread_mutex_t* m) {
     W(m, 2)->store(0, std::memory_order_relaxed);
     W(m, 3)->store(0, std::memory_order_relaxed);
   }
-  UnlockWord(W(m, 1));
-  return 0;
+  return UnlockWord(W(m, 1), MutexShared(m));
 }
 
-// Condition variables: word 0 is a sequence number bumped by every signal.
-// Waiting on a recursive mutex held more than once is not supported (as in
-// POSIX, it is undefined).
+// Condition variables: word 0 is a sequence number bumped by each signal;
+// word 1 keeps the Android clock and shared attribute bits.
+constexpr int kCondShared = 1, kCondMonotonic = 2;
 
 int BIONIC_SYSV gesher_bionic_pthread_condattr_init(bionic_pthread_condattr_t* a) {
   *a = 0;
@@ -800,15 +877,27 @@ int BIONIC_SYSV gesher_bionic_pthread_condattr_init(bionic_pthread_condattr_t* a
 int BIONIC_SYSV gesher_bionic_pthread_condattr_destroy(bionic_pthread_condattr_t*) { return 0; }
 int BIONIC_SYSV gesher_bionic_pthread_condattr_setclock(bionic_pthread_condattr_t* a, int clock) {
   if (clock != 0 && clock != 1) return kEINVAL;
-  *a = clock;
+  *a = (*a & ~int64_t{kCondMonotonic}) | (clock == 1 ? kCondMonotonic : 0);
+  return 0;
+}
+int BIONIC_SYSV gesher_bionic_pthread_condattr_getclock(const bionic_pthread_condattr_t* a,
+                                                        int* clock) {
+  *clock = (*a & kCondMonotonic) != 0;
+  return 0;
+}
+int BIONIC_SYSV gesher_bionic_pthread_condattr_setpshared(bionic_pthread_condattr_t* a, int value) {
+  return SetSharedAttr(a, value, kCondShared);
+}
+int BIONIC_SYSV gesher_bionic_pthread_condattr_getpshared(const bionic_pthread_condattr_t* a,
+                                                           int* value) {
+  *value = (*a & kCondShared) != 0;
   return 0;
 }
 
 int BIONIC_SYSV gesher_bionic_pthread_cond_init(bionic_pthread_cond_t* c,
                                                const bionic_pthread_condattr_t* attr) {
   std::memset(c, 0, sizeof(*c));
-  // Word 1 remembers a CLOCK_MONOTONIC condattr (clock id 1) for timedwait.
-  W(c, 1)->store(attr != nullptr && *attr == 1 ? 1 : 0);
+  if (attr != nullptr) W(c, 1)->store(static_cast<int>(*attr & (kCondShared | kCondMonotonic)));
   return 0;
 }
 int BIONIC_SYSV gesher_bionic_pthread_cond_destroy(bionic_pthread_cond_t*) { return 0; }
@@ -820,10 +909,11 @@ int CondWait(bionic_pthread_cond_t* c, bionic_pthread_mutex_t* m, const LinuxTim
   if (result != 0) return result;
   Word* seq = W(c, 0);
   int32_t observed = seq->load(std::memory_order_relaxed);
-  gesher_bionic_pthread_mutex_unlock(m);
-  bool timed_out = !WaitWordUntil(seq, observed, abstime, monotonic);
-  gesher_bionic_pthread_mutex_lock(m);
-  return timed_out ? kETIMEDOUT : 0;
+  if (int error = gesher_bionic_pthread_mutex_unlock(m)) return error;
+  const bool shared = (W(c, 1)->load() & kCondShared) != 0;
+  const int error = WaitPthreadWord(seq, observed, abstime, monotonic, shared);
+  const int reacquire = gesher_bionic_pthread_mutex_lock(m);
+  return reacquire != 0 ? reacquire : error;
 }
 }  // namespace
 
@@ -834,7 +924,7 @@ int BIONIC_SYSV gesher_bionic_pthread_cond_wait(bionic_pthread_cond_t* c,
 int BIONIC_SYSV gesher_bionic_pthread_cond_timedwait(bionic_pthread_cond_t* c,
                                                     bionic_pthread_mutex_t* m,
                                                     const LinuxTimespec* abstime) {
-  return CondWait(c, m, abstime, W(c, 1)->load() == 1);
+  return CondWait(c, m, abstime, (W(c, 1)->load() & kCondMonotonic) != 0);
 }
 int BIONIC_SYSV gesher_bionic_pthread_cond_timedwait_monotonic_np(bionic_pthread_cond_t* c,
                                                                  bionic_pthread_mutex_t* m,
@@ -850,13 +940,11 @@ int BIONIC_SYSV gesher_bionic_pthread_cond_clockwait(
 }
 int BIONIC_SYSV gesher_bionic_pthread_cond_signal(bionic_pthread_cond_t* c) {
   W(c, 0)->fetch_add(1, std::memory_order_release);
-  FutexWake(W(c, 0), false);
-  return 0;
+  return WakePthreadWord(W(c, 0), false, (W(c, 1)->load() & kCondShared) != 0);
 }
 int BIONIC_SYSV gesher_bionic_pthread_cond_broadcast(bionic_pthread_cond_t* c) {
   W(c, 0)->fetch_add(1, std::memory_order_release);
-  FutexWake(W(c, 0), true);
-  return 0;
+  return WakePthreadWord(W(c, 0), true, (W(c, 1)->load() & kCondShared) != 0);
 }
 
 // Read-write locks: word 0 is -1 (a writer), 0 (free) or the reader count;
@@ -864,9 +952,25 @@ int BIONIC_SYSV gesher_bionic_pthread_cond_broadcast(bionic_pthread_cond_t* c) {
 // Android reserves 29 bits for readers; reject exhaustion before addition.
 constexpr int32_t kRwlockMaxReaders = (1 << 29) - 1;
 
+int BIONIC_SYSV gesher_bionic_pthread_rwlockattr_init(bionic_pthread_rwlockattr_t* a) {
+  *a = 0;
+  return 0;
+}
+int BIONIC_SYSV gesher_bionic_pthread_rwlockattr_destroy(bionic_pthread_rwlockattr_t*) { return 0; }
+int BIONIC_SYSV gesher_bionic_pthread_rwlockattr_setpshared(bionic_pthread_rwlockattr_t* a,
+                                                             int value) {
+  return SetSharedAttr(a, value, 1);
+}
+int BIONIC_SYSV gesher_bionic_pthread_rwlockattr_getpshared(const bionic_pthread_rwlockattr_t* a,
+                                                             int* value) {
+  *value = (*a & 1) != 0;
+  return 0;
+}
+
 int BIONIC_SYSV gesher_bionic_pthread_rwlock_init(bionic_pthread_rwlock_t* rw,
-                                                 const bionic_pthread_rwlockattr_t*) {
+                                                 const bionic_pthread_rwlockattr_t* attr) {
   std::memset(rw, 0, sizeof(*rw));
+  if (attr != nullptr) W(rw, 2)->store(static_cast<int>(*attr & 1));
   return 0;
 }
 int BIONIC_SYSV gesher_bionic_pthread_rwlock_destroy(bionic_pthread_rwlock_t* rw) {
@@ -893,6 +997,7 @@ int RwlockTimedLock(bionic_pthread_rwlock_t* rw, const LinuxTimespec* abstime,
                     bool monotonic, bool writer) {
   if (W(rw, 1)->load(std::memory_order_relaxed) == SelfTid()) return kEDEADLK;
   Word* s = W(rw, 0);
+  const bool shared = W(rw, 2)->load(std::memory_order_relaxed) != 0;
   for (;;) {
     int result = writer ? gesher_bionic_pthread_rwlock_trywrlock(rw)
                         : gesher_bionic_pthread_rwlock_tryrdlock(rw);
@@ -903,7 +1008,7 @@ int RwlockTimedLock(bionic_pthread_rwlock_t* rw, const LinuxTimespec* abstime,
     // An unlock can have raced the try call. Do not wait on a free/readable
     // state and lose the wake that happened before this snapshot.
     if (writer ? observed == 0 : observed >= 0) continue;
-    if (!WaitWordUntil(s, observed, abstime, monotonic)) return kETIMEDOUT;
+    if (int error = WaitPthreadWord(s, observed, abstime, monotonic, shared)) return error;
   }
 }
 }  // namespace
@@ -947,13 +1052,89 @@ int BIONIC_SYSV gesher_bionic_pthread_rwlock_unlock(bionic_pthread_rwlock_t* rw)
     if (W(rw, 1)->load(std::memory_order_relaxed) != SelfTid()) return kEPERM;
     W(rw, 1)->store(0, std::memory_order_relaxed);
     s->store(0, std::memory_order_release);
-    FutexWake(s, true);
-  } else if (v > 0) {
-    if (s->fetch_sub(1, std::memory_order_release) == 1) FutexWake(s, true);
-  } else {
-    return kEPERM;
+    return WakePthreadWord(s, true, W(rw, 2)->load() != 0);
   }
+  if (v <= 0) return kEPERM;
+  if (s->fetch_sub(1, std::memory_order_release) == 1)
+    return WakePthreadWord(s, true, W(rw, 2)->load() != 0);
   return 0;
+}
+
+int BIONIC_SYSV gesher_bionic_pthread_barrierattr_init(bionic_pthread_barrierattr_t* a) {
+  *a = 0;
+  return 0;
+}
+int BIONIC_SYSV gesher_bionic_pthread_barrierattr_destroy(bionic_pthread_barrierattr_t* a) {
+  *a = 0;
+  return 0;
+}
+int BIONIC_SYSV gesher_bionic_pthread_barrierattr_getpshared(
+    const bionic_pthread_barrierattr_t* a, int* value) {
+  *value = *a & 1;
+  return 0;
+}
+int BIONIC_SYSV gesher_bionic_pthread_barrierattr_setpshared(
+    bionic_pthread_barrierattr_t* a, int value) {
+  // Android treats values other than PTHREAD_PROCESS_SHARED as private.
+  *a = (*a & ~1) | (value == 1 ? 1 : 0);
+  return 0;
+}
+
+int BIONIC_SYSV gesher_bionic_pthread_barrier_init(
+    bionic_pthread_barrier_t* storage, const bionic_pthread_barrierattr_t* a, unsigned count) {
+  if (count == 0) return kEINVAL;
+  new (storage) Barrier{count, a != nullptr && (*a & 1) != 0, 0};
+  return 0;
+}
+int BIONIC_SYSV gesher_bionic_pthread_barrier_destroy(bionic_pthread_barrier_t* storage) {
+  auto& barrier = AsBarrier(storage);
+  if (barrier.count == 0) return kEINVAL;
+  int32_t progress;
+  while ((progress = barrier.progress.load(std::memory_order_acquire)) < 0) {
+    WaitBarrierProgress(&barrier.progress, progress, barrier.shared);
+  }
+  if (progress != 0) return kEBUSY;
+  barrier.count = 0;
+  return 0;
+}
+int BIONIC_SYSV gesher_bionic_pthread_barrier_wait(bionic_pthread_barrier_t* storage) {
+  auto& barrier = AsBarrier(storage);
+  const uint32_t count = barrier.count;
+  if (count == 0) return kEINVAL;
+  if (count == 1) {
+    // A single participant has no peers to synchronize with.
+    return -1;  // PTHREAD_BARRIER_SERIAL_THREAD
+  }
+  const bool shared = barrier.shared;
+  auto* progress = &barrier.progress;
+  bool serial;
+  int32_t current = progress->load(std::memory_order_acquire);
+  for (;;) {
+    if (current < 0) {
+      WaitBarrierProgress(progress, current, shared);
+      current = progress->load(std::memory_order_acquire);
+      continue;
+    }
+    if (current == INT_MAX) return kEAGAIN;
+    const int32_t arrived = current + 1;
+    serial = static_cast<uint32_t>(arrived) == count;
+    if (progress->compare_exchange_weak(current, serial ? -arrived : arrived,
+          std::memory_order_acq_rel, std::memory_order_acquire)) break;
+  }
+
+  if (serial) {
+    // The acquire/release arrival chain publishes each participant's writes
+    // when the last arrival switches the counter to the departing phase.
+    WakePthreadWord(progress, true, shared);
+  } else {
+    while ((current = progress->load(std::memory_order_acquire)) >= 0) {
+      WaitBarrierProgress(progress, current, shared);
+    }
+  }
+  if (progress->fetch_add(1, std::memory_order_acq_rel) == -1) {
+    WakePthreadWord(progress, true, shared);
+  }
+  return serial ? -1 : 0;
 }
 
 // Once.
@@ -1026,9 +1207,11 @@ int BIONIC_SYSV gesher_bionic_pthread_setspecific(bionic_pthread_key_t key, cons
 // C++ thread_local destructors (libc++abi calls this for every thread_local
 // object with a destructor). Run when the thread ends, before its keys.
 int BIONIC_SYSV gesher_bionic_cxa_thread_atexit_impl(void (BIONIC_SYSV* dtor)(void*), void* obj,
-                                                    void* /*dso*/) {
+                                                    void* dso) {
   if (t_thread_atexit == nullptr) t_thread_atexit = new std::vector<ThreadAtExit>();
-  t_thread_atexit->push_back({dtor, obj});
+  auto* owner = elf::RetainForAddress(dso);
+  if (owner == nullptr) owner = elf::RetainForAddress(reinterpret_cast<void*>(dtor));
+  t_thread_atexit->push_back({dtor, obj, owner});
   ArmHostExit();
   return 0;
 }
@@ -1036,7 +1219,12 @@ int BIONIC_SYSV gesher_bionic_cxa_thread_atexit_impl(void (BIONIC_SYSV* dtor)(vo
 // pthread_atfork/__register_atfork: run by fork in translated arm64 code
 // (process_bionic.cc, ADR 0092), as bionic runs them: prepare handlers last
 // registered first, parent and child handlers in registration order.
-int BIONIC_SYSV gesher_bionic_register_atfork(void* prepare, void* parent, void* child, void*) {
+int BIONIC_SYSV gesher_bionic_register_atfork(void* prepare, void* parent, void* child, void* dso) {
+  // The fork hook table retains callbacks for the process lifetime.
+  elf::KeepResidentForAddress(dso);
+  elf::KeepResidentForAddress(prepare);
+  elf::KeepResidentForAddress(parent);
+  elf::KeepResidentForAddress(child);
   return gesher::bionic::RegisterAtfork(prepare, parent, child);
 }
 
@@ -1304,6 +1492,7 @@ void RegisterPthread(SymbolTable& t) {
   P(pthread_mutexattr_settype);
   P(pthread_mutexattr_gettype);
   P(pthread_mutexattr_setpshared);
+  P(pthread_mutexattr_getpshared);
   P(pthread_mutex_init);
   P(pthread_mutex_destroy);
   P(pthread_mutex_lock);
@@ -1315,6 +1504,9 @@ void RegisterPthread(SymbolTable& t) {
   P(pthread_condattr_init);
   P(pthread_condattr_destroy);
   P(pthread_condattr_setclock);
+  P(pthread_condattr_getclock);
+  P(pthread_condattr_setpshared);
+  P(pthread_condattr_getpshared);
   P(pthread_cond_init);
   P(pthread_cond_destroy);
   P(pthread_cond_wait);
@@ -1323,6 +1515,10 @@ void RegisterPthread(SymbolTable& t) {
   P(pthread_cond_clockwait);
   P(pthread_cond_signal);
   P(pthread_cond_broadcast);
+  P(pthread_rwlockattr_init);
+  P(pthread_rwlockattr_destroy);
+  P(pthread_rwlockattr_setpshared);
+  P(pthread_rwlockattr_getpshared);
   P(pthread_rwlock_init);
   P(pthread_rwlock_destroy);
   P(pthread_rwlock_rdlock);
@@ -1336,6 +1532,13 @@ void RegisterPthread(SymbolTable& t) {
   P(pthread_rwlock_clockrdlock);
   P(pthread_rwlock_clockwrlock);
   P(pthread_rwlock_unlock);
+  P(pthread_barrierattr_init);
+  P(pthread_barrierattr_destroy);
+  P(pthread_barrierattr_getpshared);
+  P(pthread_barrierattr_setpshared);
+  P(pthread_barrier_init);
+  P(pthread_barrier_destroy);
+  P(pthread_barrier_wait);
   P(pthread_once);
   P(pthread_key_create);
   P(pthread_key_delete);

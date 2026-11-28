@@ -54,6 +54,7 @@ add_library(gesher_posix STATIC
   ${CMAKE_CURRENT_LIST_DIR}/src/stat.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/stdio_output.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/storage_policy.cc
+  ${CMAKE_CURRENT_LIST_DIR}/src/shared_futex.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/syscall.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/sysv_shims.cc
   ${CMAKE_CURRENT_LIST_DIR}/src/system.cc

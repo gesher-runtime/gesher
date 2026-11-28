@@ -54,7 +54,14 @@ int64_t MonotonicNanos() {
       std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 void DeliverPendingSignals() {}
+::gesher_futex_interrupt* AttachSignalInterrupt() { return nullptr; }
+void DetachSignalInterrupt() { std::abort(); }
+int DeliverAfterInterrupt() { std::abort(); }
+
 namespace {
+template <class Fn>
+Fn Shim(const char*) { std::abort(); }
+
 int64_t NowRealtimeNs() {
   auto now = RealtimeNow();
   return now.tv_sec * 1000000000 + now.tv_nsec;
@@ -129,8 +136,10 @@ static void test_deadlines() {
 int main(int argc, char** argv) {
   if (argc != 2) return 2;
   if (std::strcmp(argv[1], "limits") == 0) test_semaphore_limits();
-  else if (std::strcmp(argv[1], "waits") == 0) test_semaphore_waits();
-  else if (std::strcmp(argv[1], "deadlines") == 0) test_deadlines();
+  else if (std::strcmp(argv[1], "waits") == 0) {
+    test_semaphore_waits();
+    test_semaphore_named_unavailable();
+  } else if (std::strcmp(argv[1], "deadlines") == 0) test_deadlines();
   else return 2;
   return failures == 0 ? 0 : 1;
 }

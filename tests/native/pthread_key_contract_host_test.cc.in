@@ -25,6 +25,13 @@ bool LockUnlessForkHolds(Lock& lock) {
   lock.lock();
   return true;
 }
+// The ELF loader's lifetime pins (gesher/elf_loader.h). This fixture loads no
+// library: no address has an owning library, so a destructor holds no pin.
+namespace elf {
+struct Library;
+inline Library* RetainForAddress(const void*) { return nullptr; }
+inline void ReleaseLifetimePin(Library*) {}
+}  // namespace elf
 }  // namespace gesher
 
 namespace gesher::bionic {

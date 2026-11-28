@@ -9,6 +9,7 @@
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
 #include <sys/inotify.h>
+#include <sys/mman.h>
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/uio.h>
@@ -285,6 +286,146 @@ static void test_writev_event_contract(void) {
   }
 }
 
+static void test_zero_count_readv_contract(void) {
+  struct iovec unused = {NULL, 0};
+  errno = 0;
+  check("zero-count readv rejects an invalid descriptor", readv(-1, &unused, 0) == -1 && errno == EBADF);
+  char path[] = "gesher-readv-access-XXXXXX";
+  int file = mkstemp(path);
+  check("zero-count readv file setup", file >= 0);
+  if (file >= 0) {
+    int writer = open(path, O_WRONLY | O_CLOEXEC);
+    int path_only = open(path, O_PATH | O_CLOEXEC);
+    check("zero-count readv opens write and path descriptions", writer >= 0 && path_only >= 0);
+    check("zero-count readv leaves file position unchanged", readv(file, &unused, 0) == 0 && lseek(file, 0, SEEK_CUR) == 0);
+    errno = 0;
+    if (writer >= 0) {
+      check("zero-count readv validates regular file direction", readv(writer, &unused, 0) == -1 && errno == EBADF);
+      close(writer);
+    }
+    errno = 0;
+    if (path_only >= 0) {
+      check("zero-count readv rejects a path-only description", readv(path_only, &unused, 0) == -1 && errno == EBADF);
+      close(path_only);
+    }
+    close(file);
+    unlink(path);
+  }
+  int pipe_fds[2];
+  const int pipe_opened = pipe2(pipe_fds, O_NONBLOCK | O_CLOEXEC) == 0;
+  check("zero-count readv pipe setup", pipe_opened);
+  if (pipe_opened) {
+    check("zero-count readv succeeds on an empty readable pipe", readv(pipe_fds[0], &unused, 0) == 0);
+    errno = 0;
+    check("zero-count readv validates pipe direction", readv(pipe_fds[1], &unused, 0) == -1 && errno == EBADF);
+    close(pipe_fds[0]);
+    close(pipe_fds[1]);
+  }
+  int event = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+  check("zero-count readv eventfd setup", event >= 0);
+  if (event >= 0) {
+    check("zero-count readv leaves an empty eventfd alone", readv(event, &unused, 0) == 0);
+    close(event);
+  }
+  int pair[2];
+  const int pair_opened = socketpair(AF_UNIX, SOCK_DGRAM | SOCK_NONBLOCK, 0, pair) == 0;
+  check("zero-count readv datagram setup", pair_opened);
+  if (pair_opened) {
+    check("zero-count readv succeeds on an empty datagram socket", readv(pair[0], &unused, 0) == 0);
+    check("zero-count readv seeds a datagram", send(pair[1], "x", 1, 0) == 1);
+    check("zero-count readv succeeds with a datagram queued", readv(pair[0], &unused, 0) == 0);
+    char byte = 0;
+    check("zero-count readv does not receive a datagram", recv(pair[0], &byte, 1, 0) == 1 && byte == 'x');
+    close(pair[0]);
+    close(pair[1]);
+  }
+}
+
+static void check_empty_positioned_error(const char* label, int fd, off_t offset,
+                                         int expected, int writing) {
+  struct iovec empty = {NULL, 0};
+  errno = 0;
+  ssize_t result = writing ? pwritev(fd, &empty, 0, offset) : preadv(fd, &empty, 0, offset);
+  check(label, result == -1 && errno == expected);
+}
+
+static void test_empty_positioned_vector_contract(void) {
+  const off_t far_offset = INT64_C(1) << 33;
+  struct iovec empty = {NULL, 0};
+  check_empty_positioned_error("empty preadv rejects negative offset before fd", -1, -1, EINVAL, 0);
+  check_empty_positioned_error("empty pwritev rejects negative offset before fd", -1, -1, EINVAL, 1);
+  check_empty_positioned_error("empty preadv rejects invalid fd", -1, far_offset, EBADF, 0);
+  check_empty_positioned_error("empty pwritev rejects invalid fd", -1, far_offset, EBADF, 1);
+  char path[] = "gesher-positioned-vector-XXXXXX";
+  int file = mkstemp(path);
+  check("empty positioned vector file setup", file >= 0);
+  if (file >= 0) {
+    check("empty positioned vectors preserve file data and cursor at a 64-bit offset",
+          pwritev(file, &empty, 0, far_offset) == 0 && preadv(file, &empty, 0, far_offset) == 0 &&
+          lseek(file, 0, SEEK_END) == 0 && lseek(file, 0, SEEK_CUR) == 0);
+    int writer = open(path, O_WRONLY), reader = open(path, O_RDONLY), path_only = open(path, O_PATH);
+    check("empty positioned vector access fixtures", writer >= 0 && reader >= 0 && path_only >= 0);
+    if (writer >= 0) {
+      check_empty_positioned_error("empty preadv checks write-only access", writer, far_offset, EBADF, 0);
+      close(writer);
+    }
+    if (reader >= 0) {
+      check_empty_positioned_error("empty pwritev checks read-only access", reader, far_offset, EBADF, 1);
+      close(reader);
+    }
+    if (path_only >= 0) {
+      check_empty_positioned_error("empty preadv rejects O_PATH", path_only, far_offset, EBADF, 0);
+      check_empty_positioned_error("empty pwritev rejects O_PATH", path_only, far_offset, EBADF, 1);
+      check_empty_positioned_error("empty preadv negative offset precedes O_PATH", path_only, -1, EINVAL, 0);
+      check_empty_positioned_error("empty pwritev negative offset precedes O_PATH", path_only, -1, EINVAL, 1);
+      close(path_only);
+    }
+    close(file);
+    unlink(path);
+  }
+#if (!defined(__ANDROID__) || __ANDROID_API__ >= 30) && defined(MFD_ALLOW_SEALING)
+  int sealed = memfd_create("gesher-positioned-vector", MFD_ALLOW_SEALING);
+  check("empty positioned vector sealed file setup", sealed >= 0 && fcntl(sealed, F_ADD_SEALS, F_SEAL_WRITE) == 0);
+  if (sealed >= 0) {
+    check("empty pwritev bypasses write seals without touching the file",
+          pwritev(sealed, &empty, 0, far_offset) == 0 && lseek(sealed, 0, SEEK_END) == 0);
+    close(sealed);
+  }
+#endif
+  int dir = open(".", O_RDONLY | O_DIRECTORY);
+  check("empty preadv on a directory performs no scalar read", dir >= 0 && preadv(dir, &empty, 0, far_offset) == 0);
+  if (dir >= 0) close(dir);
+  int pipe_fds[2];
+  int pipe_opened = pipe(pipe_fds) == 0;
+  check("empty positioned vector pipe setup", pipe_opened);
+  if (pipe_opened) {
+    check_empty_positioned_error("empty preadv rejects the pipe read end", pipe_fds[0], far_offset, ESPIPE, 0);
+    check_empty_positioned_error("empty preadv detects nonseekable before write-only access", pipe_fds[1], far_offset, ESPIPE, 0);
+    check_empty_positioned_error("empty pwritev rejects the pipe write end", pipe_fds[1], far_offset, ESPIPE, 1);
+    check_empty_positioned_error("empty pwritev detects nonseekable before read-only access", pipe_fds[0], far_offset, ESPIPE, 1);
+    close(pipe_fds[0]);
+    close(pipe_fds[1]);
+  }
+  int pair[2];
+  int pair_opened = socketpair(AF_UNIX, SOCK_DGRAM | SOCK_NONBLOCK, 0, pair) == 0;
+  check("empty positioned vector datagram setup", pair_opened);
+  if (pair_opened) {
+    check_empty_positioned_error("empty preadv rejects a datagram socket", pair[0], far_offset, ESPIPE, 0);
+    check_empty_positioned_error("empty pwritev rejects a datagram socket", pair[0], far_offset, ESPIPE, 1);
+    struct pollfd available = {pair[1], POLLIN, 0};
+    check("empty pwritev did not enqueue a datagram", poll(&available, 1, 0) == 0);
+    close(pair[0]);
+    close(pair[1]);
+  }
+  int event = eventfd(0, EFD_NONBLOCK);
+  check("empty positioned vector event setup", event >= 0);
+  if (event >= 0) {
+    check_empty_positioned_error("empty preadv rejects an eventfd", event, far_offset, ESPIPE, 0);
+    check_empty_positioned_error("empty pwritev rejects an eventfd", event, far_offset, ESPIPE, 1);
+    close(event);
+  }
+}
+
 static void test_host_select_contract(void) {
   int pair[2];
   int opened = pipe(pair) == 0;
@@ -313,5 +454,7 @@ static void test_event_loop_contracts(void) {
   test_epoll_fairness_contract();
   test_epoll_eventfd_edges();
   test_writev_event_contract();
+  test_zero_count_readv_contract();
+  test_empty_positioned_vector_contract();
   test_host_select_contract();
 }

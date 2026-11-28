@@ -23,6 +23,7 @@
 #include <sys/ptrace.h>
 #include <sys/syscall.h>
 #include <sys/utsname.h>
+#include <sys/uio.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -73,6 +74,8 @@ static int raw_keeps_registers(void) {
                      : "rcx", "r11", "memory");
     return r > 0 && rbx == 0x1111 && r12 == 0x2222 && r13 == 0x3333;
 }
+
+#include "positioned_vector_syscall_test.inc"
 
 // Two pages of the library's own code, written at run time.
 __asm__(".section .text.gesher_patch,\"ax\",@progbits\n"
@@ -176,6 +179,8 @@ int gesher_selftest(void) {
     } else {
         check("pipe", 0);
     }
+
+    test_positioned_vectors();
 
     long p = raw6(SYS_mmap, 0, 8192, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     check("raw mmap", p > 0);

@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <io.h>
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -665,7 +666,8 @@ static ssize_t PositionedNativeIo(HANDLE anchor, DWORD type, DWORD access, bool 
   return static_cast<ssize_t>(transferred);
 }
 
-static ssize_t PositionedIo(int fd, void* buf, size_t count, off_t offset, bool writing) {
+static ssize_t PositionedIo(int fd, void* buf, size_t count, off_t offset, bool writing,
+                            bool empty_vector = false) {
   if (offset < 0) return errno = EINVAL, -1;
   gesher::DescriptorSnapshotPtr snapshot;
   gesher::Device device{};
@@ -701,7 +703,7 @@ static ssize_t PositionedIo(int fd, void* buf, size_t count, off_t offset, bool 
   // Android uses Linux's pwrite behavior: O_APPEND overrides the explicit
   // offset, but the caller's shared ordinary file position stays unchanged.
   const bool append = writing && type == FILE_TYPE_DISK && (status_flags & O_APPEND) != 0;
-  if (writing && gesher::FileDescriptionIsMemfd(snapshot)) {
+  if (!empty_vector && writing && gesher::FileDescriptionIsMemfd(snapshot)) {
     if (int error = gesher::MemfdWriteHandleError(file, false, static_cast<uint64_t>(offset), count, append))
       return errno = error, -1;
   }
@@ -712,6 +714,9 @@ static ssize_t PositionedIo(int fd, void* buf, size_t count, off_t offset, bool 
   // ReOpenFile can request more access than the original. Never use that to
   // turn O_RDONLY/O_WRONLY/O_PATH descriptors into writable/readable ones.
   if ((granted & access) == 0) return errno = EBADF, -1;
+  // The empty vector stops after descriptor admission, even for a directory
+  // or a character device whose scalar zero-byte I/O has different effects.
+  if (empty_vector) return 0;
   if (count != 0 && buf == nullptr) {
     // Linux access_ok checks the user address range before dispatch, even
     // when a backend will not actually dereference the buffer.
@@ -921,6 +926,11 @@ int unsetenv(const char* name) {
 }  // extern "C"
 
 namespace gesher {
+int CheckEmptyPositionedVector(int fd, int64_t offset, bool writing) {
+  pthread_testcancel();
+  return static_cast<int>(PositionedIo(fd, nullptr, 0, offset, writing, true));
+}
+
 int64_t WriteFileDescriptionAt(const DescriptorSnapshotPtr& snapshot, const void* bytes,
                               unsigned count, int64_t offset) {
   if (offset < 0) return errno = EINVAL, -1;

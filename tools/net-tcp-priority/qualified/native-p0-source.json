@@ -1,0 +1,43 @@
+{
+  "baseline": "50628cec039e5f7b87fe4c41f0599037240f8ece",
+  "before_sha256": {
+    "compat/binder/binderd.cc": "1adfde0ff9fa29299333bc674d2b002f6b2f19d9da450daeb659ae5b391d6f5c",
+    "compat/bionic/extra_bionic.cc": "aa49741ffb99f4759fc70eecf9557e7c11352e107be330d9d4891aa32ed0d896",
+    "compat/bionic/shim.cc": "55e4150155e48338b479d673e1656d66a516eb72022bfda3efc34ac3ead261ae",
+    "compat/elf/exec/gesher_exec.cc": "5d3dc551f5e1fabafcf6ba4eda3a2cf4a86a6c9268ebdf11fb7aa5979a82dd6e",
+    "compat/posix/include/gesher/file_description.h": "3d5b11cf3e48c49944cea84cb1f2b94473fa5912bf806f38b4fffb8cda7b6be8",
+    "compat/posix/posix.cmake": "12ea664b5f8603e3eb250171b727dffbc8bc0dc351126e7ba73beac225897854",
+    "compat/posix/src/binder_wire.h": "2ebecdafba377c08f6ca2c71604bdfd5ee7fd794169ba1da61e782342a22dae6",
+    "compat/posix/src/mman.cc": "6a3b28d8a3e8a35dccf77e9c07e34390d3a0c35cd6fa4a8dd66a76d8228dc559",
+    "compat/posix/src/ofd.cc": "d2073d20f63fa22d1fc249cd9aa064df5a2aebafdd02aa34d7b6e3c99f631a6f",
+    "compat/posix/src/pipe_io.cc": "bfec6d5952ff21ebc8a29641338b0a6b5c021436bdf048001eab6eae457758a8",
+    "compat/posix/src/pipe_io.h": "60cc9802b04fc60c80a90ffcc3628b3ba510404df8b2fe4ce222c95915d426d3",
+    "compat/posix/src/socket.cc": "da35ed62c3daeb9172c9e3c213946a9f36fa87b0edc4adc373bc5c290856073e",
+    "compat/posix/src/socket_internal.h": "c700107e5b0db67da879ce51d43514de79f9bc73950cd82e581bf178210a74bf",
+    "compat/posix/src/system.cc": "1e5d11307de07c4bd12cb796cfc90c2aadac0ad723209d96c66272b885b6aae6",
+    "compat/posix/src/unistd.cc": "e9b18ef29b462cb62435c59300e37bc8c099ea4f4e726ef0da741a5f6139d5b1",
+    "compat/posix/src/unix_rights.cc": "c958136f7daa28fec51bc338014eaf1bae8df050b6594fa759aa12acc9334a4e",
+    "compat/posix/src/winsock.cc": "0af582cd4c7970f9fccdbfba5081d7f94a632dae68554c82e5e13886fbe73efa"
+  },
+  "after_sha256": {
+    "compat/binder/binderd.cc": "906ccb1b60c2722987b259dd7cfe214b4efdd1a3b655203013a59f54d870175c",
+    "compat/bionic/extra_bionic.cc": "7851ddccd635e906e3194756e7d821d912d23c7807ca98d71ebfb8be95ae9ee9",
+    "compat/bionic/shim.cc": "2571c76de793ae414184c085844ba19786c05bda6d0af98e04047e41e911b695",
+    "compat/elf/exec/gesher_exec.cc": "6934ec2d9f3769184f9c8995db59e78cd63975083f41095b30a821bf8c1dfd99",
+    "compat/posix/include/gesher/file_description.h": "44e29663453d56d22ad0d865f3038bbde59cf8f38a9a79149ff060399efaf545",
+    "compat/posix/posix.cmake": "bdd4bb578d23cfe803d32ff7e87d4bdf7956fc90d10b9e886b988f0ca770abb0",
+    "compat/posix/src/binder_wire.h": "3e9485c21d8a09d91b74183eef4ba37a76e1dc70ca8edc809afa5f1023001a89",
+    "compat/posix/src/mman.cc": "a99c80af94017afa9db5e70a6b31b981df0f7a4579349040b60808a068bf43a3",
+    "compat/posix/src/ofd.cc": "e75f583604aa9c11d17f0222502abf1b01fb260e72f5611abe22ce1b67d8504e",
+    "compat/posix/src/pipe_io.cc": "764c002b42dc3adc64f09bf4f197298c138b3901095398c796734533e87b2a15",
+    "compat/posix/src/pipe_io.h": "66ccd3f8977cba0fbfbafc2a47c4720e4fc768a8ab1455a255b320213a632098",
+    "compat/posix/src/socket.cc": "87a88ea1aa178020727e2fe0a147d639af86acd912db70e134ab10ca590da156",
+    "compat/posix/src/socket_internal.h": "65d6f19ff2f3d8437f7d0d10f8294ab75dfd6a93e13064f9ab8a034330496165",
+    "compat/posix/src/system.cc": "f693c66ec4743c60bc0eb5af26340b99ede490bacb3ee5f63ca61abc14e76124",
+    "compat/posix/src/unistd.cc": "27ffe1ed98403f8a3f58dbf66bbaff9e650207ee8e60a82ef55a883ba6626c30",
+    "compat/posix/src/unix_rights.cc": "db7d590067ac922863a4dca773653002516444ff3f4b8f4d4e7961451baf6501",
+    "compat/posix/src/winsock.cc": "fd64b87e6f05d9ed6df31f0bc6e06777b384a1950ff133e15666fb544adc9f04"
+  },
+  "patch_sha256": "66ac7bfafe1a80d80fd84d796dd3bed02cd5a6b7fbe1e00891aabf332645592f",
+  "native_runtime_approval": false
+}

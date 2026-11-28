@@ -306,14 +306,23 @@ bool DepositRights(const std::vector<int>& fds, uint64_t queue, uint64_t positio
   return true;
 }
 
-bool ClaimRights(const ws::RightsToken& token, std::vector<int>* fds, bool close_on_exec) {
+static bool ReceiveDatagramRights(const ws::RightsToken& token, uint32_t op, std::vector<int>* fds,
+                                  bool close_on_exec) {
   Request request;
-  request.Put<uint32_t>(wire::kRightsClaim);
+  request.Put<uint32_t>(op);
   request.Put<uint64_t>(token.value[0]);
   request.Put<uint64_t>(token.value[1]);
   std::lock_guard<std::mutex> lock(g_mutex);
   Reply reply;
   return Call(request, &reply) && ReadDelivered(reply, fds, fds != nullptr, close_on_exec);
+}
+
+bool ClaimRights(const ws::RightsToken& token, std::vector<int>* fds, bool close_on_exec) {
+  return ReceiveDatagramRights(token, wire::kRightsClaim, fds, close_on_exec);
+}
+
+bool PeekRights(const ws::RightsToken& token, std::vector<int>* fds, bool close_on_exec) {
+  return ReceiveDatagramRights(token, wire::kRightsPeek, fds, close_on_exec);
 }
 
 bool TakeRights(uint64_t queue, uint64_t limit, std::vector<int>* fds, bool close_on_exec) {

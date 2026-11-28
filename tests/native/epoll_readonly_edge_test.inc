@@ -3,6 +3,7 @@
 // Shared public epoll corpus: real Linux syscalls and real gesher-base Windows
 // timer/inotify producers. The host fixture declares its controlled clocks,
 // threadpool and raw inotify record boundary before including this corpus.
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -103,9 +104,9 @@ static bool readonly_ctl(int ep, int op, int fd, uint32_t events, uint64_t data)
   event.events = events; event.data.u64 = data;
   return epoll_ctl(ep, op, fd, &event) == 0;
 }
-static bool readonly_event(int ep, uint64_t data, uint32_t events = EPOLLIN) {
+static bool readonly_event(int ep, uint64_t data, uint32_t events = EPOLLIN, int timeout = 1000) {
   epoll_event event{};
-  return epoll_wait(ep, &event, 1, 1000) == 1 &&
+  return epoll_wait(ep, &event, 1, timeout) == 1 &&
          event.data.u64 == data && event.events == events;
 }
 static bool readonly_empty(int ep, int timeout = 0) {
@@ -120,6 +121,94 @@ static int readonly_drain(int fd, bool timer) {
     if (got > 0) total += got;
   } while (got > 0);
   return errno == EAGAIN ? total : -1;
+}
+
+static void readonly_exclusive_contract(bool timer, uint32_t flags) {
+  ReadonlyInotify inotify;
+  int fd = timer ? readonly_timer() : inotify.fd;
+  struct Waiter {
+    int ep;
+    uint32_t interest;
+    uint64_t cookie;
+    epoll_event event{};
+    int result = -1;
+  };
+  Waiter waiters[] = {
+      {epoll_create1(EPOLL_CLOEXEC), EPOLLIN | EPOLLEXCLUSIVE | flags, 81},
+      {epoll_create1(EPOLL_CLOEXEC), EPOLLIN | EPOLLEXCLUSIVE | flags, 82},
+      {epoll_create1(EPOLL_CLOEXEC), EPOLLIN | flags, 83},
+  };
+  bool registered = fd >= 0;
+  for (const auto& waiter : waiters) {
+    if (fd < 0 || waiter.ep < 0 ||
+        !readonly_ctl(waiter.ep, EPOLL_CTL_ADD, fd, waiter.interest, waiter.cookie)) {
+      registered = false;
+    }
+  }
+  check("readonly exclusive registrations", registered);
+  if (registered) {
+    unsigned serial = 0;
+    auto publish = [&] {
+      if (!timer) return inotify.Emit(++serial);
+      if (!readonly_arm(fd, 1)) return false;
+      readonly_advance(5);
+      return true;
+    };
+    std::atomic<unsigned> entered{0};
+    std::vector<std::thread> threads;
+    for (auto& waiter : waiters) {
+      threads.emplace_back([&entered, &waiter] {
+        ++entered;
+        waiter.result = epoll_wait(waiter.ep, &waiter.event, 1, 400);
+      });
+    }
+    const auto start_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(150);
+    while (entered != 3 && std::chrono::steady_clock::now() < start_deadline) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    check("readonly exclusive waiters started", entered == 3);
+    // Allow the waiters to block, then leave the record/timer unread until
+    // every wait finishes so a competing reader cannot hide duplicate wakes.
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    check("readonly exclusive single publication", publish());
+    for (auto& thread : threads) thread.join();
+
+    auto delivered = [](const Waiter& waiter) {
+      return waiter.result == 1 && waiter.event.events == EPOLLIN &&
+             waiter.event.data.u64 == waiter.cookie;
+    };
+    const bool first_won = delivered(waiters[0]);
+    const bool second_won = delivered(waiters[1]);
+    check("readonly single publication wakes one blocked exclusive epoll",
+          (first_won && waiters[1].result == 0) || (second_won && waiters[0].result == 0));
+    check("readonly regular epoll receives the same publication", delivered(waiters[2]));
+    const auto& winner = first_won ? waiters[0] : waiters[1];
+    check("readonly exclusive delivers unread level or consumes edge",
+          flags == 0 ? readonly_event(winner.ep, winner.cookie) : readonly_empty(winner.ep));
+    check("readonly exclusive source drains", readonly_drain(fd, timer) > 0);
+    check("readonly exclusive clears drained readiness",
+          readonly_empty(waiters[0].ep) && readonly_empty(waiters[1].ep));
+    // A timer callback can run after publish() returns. Observe readiness
+    // independently before inspecting either exclusive registration, so
+    // both epolls really are idle when the producer publishes.
+    check("readonly publication observed while both exclusive epolls are idle",
+          publish() && readonly_event(waiters[2].ep, waiters[2].cookie));
+    check("readonly exclusive publication reaches both idle epolls",
+          readonly_event(waiters[0].ep, waiters[0].cookie, EPOLLIN, 0) &&
+              readonly_event(waiters[1].ep, waiters[1].cookie, EPOLLIN, 0));
+  }
+  for (const auto& waiter : waiters) {
+    if (waiter.ep >= 0) close(waiter.ep);
+  }
+  if (timer && fd >= 0) close(fd);
+}
+
+static void test_epoll_readonly_exclusive() {
+  readonly_exclusive_contract(true, 0);
+  readonly_exclusive_contract(true, EPOLLET);
+  readonly_exclusive_contract(false, 0);
+  readonly_exclusive_contract(false, EPOLLET);
+  std::puts("readonly exclusive contracts: complete");
 }
 
 static void readonly_source_contracts(bool timer) {
@@ -309,6 +398,7 @@ static void readonly_linux_overflow() {
 #endif
 
 static void test_epoll_readonly_edges() {
+  test_epoll_readonly_exclusive();
   readonly_source_contracts(true);
   readonly_source_contracts(false);
   readonly_periodic_contracts();

@@ -32,9 +32,10 @@ struct FILETIME { uint32_t dwLowDateTime, dwHighDateTime; };
 static std::mutex host_events_mutex;
 static std::condition_variable host_events_changed;
 static uint64_t host_epoch;
+static uint64_t host_poller_epoch;
 static DWORD host_handles;
 static std::recursive_mutex host_descriptors;
-static std::atomic<unsigned> host_poll_calls{0};
+static std::atomic<unsigned> host_poll_calls{0}, host_blocked_polls{0};
 static HANDLE CreateEventW(void*, bool manual, bool signaled, void*) {
   std::lock_guard<std::mutex> lock(host_events_mutex);
   ++host_handles; return new HostEvent{manual, signaled};
@@ -86,6 +87,11 @@ static std::shared_ptr<NativeFence> LookupNativeFence(int) { return nullptr; }
 // registry itself is covered by the Windows fence fixture.
 static std::atomic<int> native_fence_forgets{0}, last_native_fence_forget{-1};
 static void ForgetNativeFence(int fd) { ++native_fence_forgets; last_native_fence_forget = fd; }
+// This corpus covers virtual sources. Local kernel pipe alias readiness has
+// its own component fixture using the real Windows descriptor registry.
+struct OpenFileDescription;
+static std::shared_ptr<OpenFileDescription> LookupPipeDescription(int) { return nullptr; }
+static int FindPipeAlias(int) { return -1; }
 struct SocketFd {};
 static bool LookupSocket(int, SocketFd*) { return false; }
 static HANDLE HandleFromFd(int fd) { return HostValid(fd) ? reinterpret_cast<HANDLE>(intptr_t(fd + 1)) : INVALID_HANDLE_VALUE; }
@@ -98,14 +104,17 @@ static ULONGLONG MonotonicMicros() {
 static ULONGLONG DeadlineAfter(int timeout) { return timeout < 0 ? ~0ULL : MonotonicMicros() + ULONGLONG(timeout) * 1000; }
 static int MillisUntil(ULONGLONG deadline) { auto now = MonotonicMicros(); return now >= deadline ? 0 : int((deadline - now + 999) / 1000); }
 static void WakePollers() {
-  std::lock_guard<std::mutex> lock(host_events_mutex); ++host_epoch; host_events_changed.notify_all();
+  std::lock_guard<std::mutex> lock(host_events_mutex);
+  ++host_poller_epoch;
+  ++host_epoch;
+  host_events_changed.notify_all();
 }
 #ifdef GESHER_READONLY_EDGES
-void RefreshTimerFd(TimerFd&);
+bool RefreshTimerFd(TimerFd&);
 int ReadTimerFd(TimerFd&, void*, unsigned);
 int ReadInotify(Inotify&, void*, unsigned);
 #else
-static void RefreshTimerFd(TimerFd&) {}
+static bool RefreshTimerFd(TimerFd&) { return false; }
 static int ReadTimerFd(TimerFd&, void*, unsigned) { return errno = EINVAL, -1; }
 static int ReadInotify(Inotify&, void*, unsigned) { return errno = EINVAL, -1; }
 #endif
@@ -140,8 +149,12 @@ static int PollFds(pollfd* fds, nfds_t count, int timeout, HANDLE interrupt, boo
   if (interrupted) *interrupted = false;
   ULONGLONG deadline = DeadlineAfter(timeout);
   for (;;) {
-    uint64_t before;
-    { std::lock_guard<std::mutex> lock(host_events_mutex); before = host_epoch; }
+    uint64_t before, pollers_before;
+    {
+      std::lock_guard<std::mutex> lock(host_events_mutex);
+      before = host_epoch;
+      pollers_before = host_poller_epoch;
+    }
     int ready = 0;
     for (nfds_t i = 0; i < count; ++i) {
       auto& item = fds[i]; item.revents = 0;
@@ -157,9 +170,13 @@ static int PollFds(pollfd* fds, nfds_t count, int timeout, HANDLE interrupt, boo
     }
     if (ready || timeout == 0 || (timeout > 0 && MillisUntil(deadline) == 0)) return ready;
     std::unique_lock<std::mutex> lock(host_events_mutex);
+    ++host_blocked_polls;
     if (timeout < 0) host_events_changed.wait(lock, [&] { return before != host_epoch; });
     else host_events_changed.wait_for(lock, std::chrono::milliseconds(MillisUntil(deadline)), [&] { return before != host_epoch; });
-    if (interrupt && before != host_epoch) {
+    --host_blocked_polls;
+    // A direct event can trigger resampling of fd readiness, but only our
+    // interrupt handle or WakePollers can report an epoll interruption.
+    if (interrupt && pollers_before != host_poller_epoch) {
       if (interrupted) *interrupted = true;
       return 0;
     }
@@ -190,7 +207,25 @@ static void check(const char* label, int passed) {
 #ifdef GESHER_READONLY_EDGES
 #include "epoll_readonly_edges_host.cc"
 #else
+static void test_host_event_interrupt() {
+  HANDLE interrupt = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+  HANDLE unrelated = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  bool interrupted = false;
+  std::thread waiter([&] {
+    gesher::PollFds(nullptr, 0, 300, interrupt, &interrupted);
+  });
+  const int64_t deadline = edge_millis() + 300;
+  while (host_blocked_polls.load() == 0 && edge_millis() < deadline) usleep(1000);
+  const bool waiting = host_blocked_polls.load() != 0;
+  SetEvent(unrelated);
+  waiter.join();
+  check("unrelated direct event does not interrupt host epoll wait", waiting && !interrupted);
+  CloseHandle(unrelated);
+  CloseHandle(interrupt);
+}
+
 int main() {
+  test_host_event_interrupt();
   {
     // Every close path retires a possible native fence identity of that slot
     // through the same production ForgetEventObject body.

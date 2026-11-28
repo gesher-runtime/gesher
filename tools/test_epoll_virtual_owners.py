@@ -46,7 +46,7 @@ def main():
     source = source.replace('#include <windows.h>\n', '')
     template = (ROOT / 'tests/native/epoll_eventfd_edges_host.cc.in').read_text()
     template = replace_once(template, 'int main() {', 'static int existing_edge_main() {')
-    template = replace_once(template, 'static std::atomic<unsigned> host_poll_calls{0};',
+    template = replace_once(template, 'static std::atomic<unsigned> host_poll_calls{0}, host_blocked_polls{0};',
                             'static std::atomic<unsigned> host_poll_calls{0}, host_blocked_polls{0};\n'
                             'static std::atomic<bool> owner_pause_poll_return{false}, owner_poll_return_reached{false}, '
                             'owner_allow_poll_return{false}, owner_poll_return_resumed{false};')
@@ -69,9 +69,7 @@ def main():
         '      else if (auto source = LookupEventFd(item.fd)) item.revents = PollEventFd(*source, item.events, nullptr);',
         '      if (retained[i]) item.revents = PollEventFd(*retained[i], item.events, nullptr);\n'
         '      else if (!HostValid(item.fd)) item.revents = POLLNVAL;')
-    template = replace_once(template, '    std::unique_lock<std::mutex> lock(host_events_mutex);\n    if (timeout < 0)',
-                            '    std::unique_lock<std::mutex> lock(host_events_mutex);\n    ++host_blocked_polls;\n    if (timeout < 0)')
-    template = replace_once(template, '    if (interrupt && before != host_epoch) {',
+    template = replace_once(template, '    --host_blocked_polls;\n',
         '    --host_blocked_polls;\n'
         '    if (owner_pause_poll_return.exchange(false)) {\n'
         '      lock.unlock();\n'
@@ -80,8 +78,7 @@ def main():
         '      while (!owner_allow_poll_return && std::chrono::steady_clock::now() < end) std::this_thread::yield();\n'
         '      owner_poll_return_resumed = owner_allow_poll_return.load();\n'
         '      lock.lock();\n'
-        '    }\n'
-        '    if (interrupt && before != host_epoch) {')
+        '    }\n')
     template = replace_once(template, 'static int HostDup(int fd) { return ::dup(fd); }',
                             'static int HostDup(int fd) { return ::dup(fd); }\n'
                             'static int HostDup2(int from, int to) { return ::dup2(from, to); }\n'

@@ -23,6 +23,13 @@ ARM registrations, relocates dependencies before dependents, and completes
 protections and deferred-code registration. Only then does it publish the graph
 and run dependency constructors. A constructor can reenter on the same thread;
 foreign observers wait for the complete operation, including constructors.
+If a constructor opens an already-linked sibling, the open finishes the
+sibling's constructors before returning its handle. The constructor guard
+prevents reentry from rerunning a constructor that has already started. This
+matches Bionic's
+[`do_dlopen`](https://android.googlesource.com/platform/bionic/+/f22516cbc67e81c13cf943ce02f01b8929a98726/linker/linker.cpp#2245)
+and
+[`soinfo::call_constructors`](https://android.googlesource.com/platform/bionic/+/f22516cbc67e81c13cf943ce02f01b8929a98726/linker/linker_soinfo.cpp#463).
 After each node's relocation, its TLS image is prepared privately for the
 loading thread. A parent's IFUNC can read a linked child's initialized TLS and
 retain its writes through final publication. Other existing threads receive
@@ -65,6 +72,20 @@ unload implementation must supply cache invalidation before retiring storage.
 The pinned Bionic `__tls_get_addr` similarly keeps a validated cached path
 outside its registry lock; its broader DTV generation/unload machinery is not
 claimed here.
+
+### Resident library lookup
+
+Android ELF `RTLD_NOLOAD` opens use the same loaded SONAME and file-identity
+checks as ordinary opens. A miss never maps the requested file or runs its
+constructors. An explicit path or hard link identifies the already-linked file
+even when two images share a SONAME. Both guest `dlopen` and
+`android_dlopen_ext` reject unknown flag bits before lookup. The Windows
+POSIX adapter also passes `RTLD_NOLOAD` to its ELF provider.
+See Bionic's
+[`load_library`](https://android.googlesource.com/platform/bionic/+/f22516cbc67e81c13cf943ce02f01b8929a98726/linker/linker.cpp#1191)
+and
+[`do_dlopen`](https://android.googlesource.com/platform/bionic/+/f22516cbc67e81c13cf943ce02f01b8929a98726/linker/linker.cpp#2149).
+Reference counting for guest closes remains tracked in N06.
 
 ### IFUNC reentry into a pending object
 
@@ -138,9 +159,25 @@ The expected rejection is the old failed graph remaining visible through
 `native-libs.yml` and `arm64.yml` build the graph with API 29 or later NDK
 compilers for native TLS. Windows tracks 40 and 47 run both
 `elf_load_transaction_test` and `elf_load_transaction_failure_test`; track 47
-uses the production ARM translator. The driver accepts the graph directory and
-optional `--arm64`. CMake builds the failure variant from the real loader and
+uses the production ARM translator. The driver accepts the graph directory,
+`--arm64` for AArch64 graphs, and `--reentry-only` to run the constructor
+reentry checks independently. CMake builds the failure variant from the real loader and
 keeps the ordinary production target separate.
+
+The reentrant sibling graph also runs independently through Android libdl.
+Use the Android NDK C compiler for the device ABI, API 29 or newer:
+
+```sh
+bash tests/native/build-load-transaction-graph.sh "$NDK_CC" out/elf-transactions
+"$NDK_CC" -O2 -Wl,--export-dynamic tests/native/elf_constructor_reentry_oracle.c \
+  -ldl -o out/elf-transactions/elf-constructor-reentry
+```
+
+Copy the oracle and the four `tx_reentry_*.so` files from `complete` into
+one executable directory on the device. Run `./elf-constructor-reentry .`
+from that directory. Both the explicit-path and SONAME requests must return a
+sibling whose constructor count is already one. After the outer call, each
+of the four objects must have initialized exactly once.
 
 The host and ARM translator must be built together with API version 4, which
 adds rollback and private TLS preparation. Mixed version-3/version-4 binaries

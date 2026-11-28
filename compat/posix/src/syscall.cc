@@ -19,6 +19,10 @@
 #include <gesher/fork.h>
 #endif
 #include <atomic>
+#ifdef _WIN32
+#include <optional>
+#include "shared_futex.h"
+#endif
 
 namespace {
 struct Bucket;
@@ -34,6 +38,9 @@ struct Waiter {
   // Requeue can move a sleeping stack node more than once. Its owner must
   // acquire the current bucket before removing it on timeout or returning.
   std::atomic<Bucket*> bucket{nullptr};
+#ifdef _WIN32
+  HANDLE event = nullptr;  // the interrupt target for a shared file wait
+#endif
 };
 static_assert(sizeof(std::atomic<int>) == sizeof(int) && std::atomic<int>::is_always_lock_free);
 static_assert(std::atomic<Bucket*>::is_always_lock_free);
@@ -190,11 +197,56 @@ long Wait(volatile int* address, int value, uint32_t mask, bool private_key,
   if (result != 0) errno = error;
   return result;
 }
-long WakeOrRequeue(volatile int* address, int command, int count, uint32_t mask,
-                   bool private_key, volatile int* target, int requeue_count, int compare) {
+#ifdef _WIN32
+long SharedWait(const gesher::SharedFutexMapping& mapping, volatile int* address,
+                int expected, uint32_t mask, const Deadline& deadline) {
+  gesher_futex_interrupt* cell = t_interrupt;
+  if (TakeInterrupt(cell)) return errno = EINTR, -1;
+
+  gesher::SharedFutexQueue queue(mapping);
+  const int opened = queue.Open(true);
+  if (opened < 0) return errno = -opened, -1;
+  gesher::SharedFutexWaiter shared;
+  if (int error = queue.Enqueue(address, expected, mask, &shared)) return errno = error, -1;
+
+  Waiter interrupt{address, mask, false};
+  interrupt.event = shared.event;
+  if (cell != nullptr) {
+    AcquireSRWLockExclusive(&cell->lock);
+    cell->waiter = &interrupt;
+    ReleaseSRWLockExclusive(&cell->lock);
+  }
+  int error = 0;
+  for (;;) {
+    if (TakeInterrupt(cell)) error = EINTR;
+    if (error == 0) {
+      const DWORD millis = Remaining(deadline);
+      if (millis == 0) error = ETIMEDOUT;
+      else {
+        const DWORD status = WaitForSingleObject(shared.event, millis);
+        if (status != WAIT_OBJECT_0 && status != WAIT_TIMEOUT) error = EIO;
+        if (TakeInterrupt(cell)) error = EINTR;
+      }
+    }
+    const int status = queue.Complete(shared, error != 0);
+    if (status > 0) { error = 0; break; }
+    if (status < 0) error = -status;
+    if (error != 0) break;
+  }
+  if (cell != nullptr) {
+    AcquireSRWLockExclusive(&cell->lock);
+    cell->waiter = nullptr;
+    ReleaseSRWLockExclusive(&cell->lock);
+  }
+  if (error != 0) return errno = error, -1;
+  return 0;
+}
+#endif
+
+long WakeOrRequeueLocked(volatile int* address, int command, int count, uint32_t mask,
+                         bool private_key, volatile int* target, int requeue_count, int compare) {
   bool requeue = command == FUTEX_REQUEUE || command == FUTEX_CMP_REQUEUE;
   Bucket& source = BucketFor(address);
-  BucketLocks locks(source, requeue ? BucketFor(target) : source);
   if (command == FUTEX_CMP_REQUEUE && __atomic_load_n(address, __ATOMIC_SEQ_CST) != compare) {
     return errno = EAGAIN, -1;
   }
@@ -218,6 +270,86 @@ long WakeOrRequeue(volatile int* address, int command, int count, uint32_t mask,
   }
   return static_cast<long>(woken) + moved;
 }
+
+long WakeOrRequeue(volatile int* address, int command, int count, uint32_t mask,
+                   bool private_key, volatile int* target, int requeue_count, int compare) {
+  const bool requeue = command == FUTEX_REQUEUE || command == FUTEX_CMP_REQUEUE;
+  Bucket& source = BucketFor(address);
+  BucketLocks locks(source, requeue ? BucketFor(target) : source);
+  return WakeOrRequeueLocked(address, command, count, mask, private_key, target, requeue_count,
+                             compare);
+}
+
+#ifdef _WIN32
+int SignedFutexOperand(uint32_t value) {
+  return static_cast<int>((value & 0xfff) ^ 0x800) - 0x800;
+}
+
+int CompareFutexOperand(int original, unsigned comparison, int operand) {
+  switch (comparison) {
+    case FUTEX_OP_CMP_EQ: return original == operand;
+    case FUTEX_OP_CMP_NE: return original != operand;
+    case FUTEX_OP_CMP_LT: return original < operand;
+    case FUTEX_OP_CMP_LE: return original <= operand;
+    case FUTEX_OP_CMP_GT: return original > operand;
+    case FUTEX_OP_CMP_GE: return original >= operand;
+    default: return -ENOSYS;
+  }
+}
+
+long WakeOp(volatile int* address, volatile int* target, int count, int count2, bool private_key,
+            uint32_t encoded) {
+  if (!Aligned(target)) return errno = EINVAL, -1;
+  gesher::SharedFutexMapping source, destination;
+  std::optional<gesher::SharedFutexQueue> first, second;
+  if (!private_key) {
+    const int shared = gesher::GetSharedFutexMapping(address, &source);
+    if (shared < 0) return errno = -shared, -1;
+    const int target_shared = gesher::GetSharedFutexMapping(target, &destination);
+    if (target_shared < 0) return errno = -target_shared, -1;
+    // Create both queues before locking. A late waiter must either enroll
+    // before the operation or see the new word when it compares after it.
+    if (shared) {
+      first.emplace(source);
+      if (const int error = first->Open(true); error < 0) return errno = -error, -1;
+    }
+    if (target_shared) {
+      second.emplace(destination);
+      if (const int error = second->Open(true); error < 0) return errno = -error, -1;
+    }
+  }
+  const unsigned operation = (encoded >> 28) & 7;
+  const unsigned comparison = (encoded >> 24) & 15;
+  int operand = SignedFutexOperand(encoded >> 12);
+  if (encoded & (static_cast<uint32_t>(FUTEX_OP_OPARG_SHIFT) << 28)) {
+    // Linux masks even out-of-range shift counts to five bits.
+    operand = static_cast<int>(uint32_t{1} << (operand & 31));
+  }
+
+  BucketLocks buckets(BucketFor(address), BucketFor(target));
+  gesher::SharedFutexPairLock queues(first ? &*first : nullptr, second ? &*second : nullptr);
+  if (queues.Error() != 0) return errno = queues.Error(), -1;
+  int previous;
+  if (int error = gesher::UpdateFutexWord(target, second ? &destination.key : nullptr,
+                                         private_key, operation, operand, &previous)) {
+    return errno = error, -1;
+  }
+  const int selected = CompareFutexOperand(previous, comparison, SignedFutexOperand(encoded));
+  if (selected < 0) return errno = -selected, -1;
+
+  const auto wake = [private_key](volatile int* address, int count,
+                                  std::optional<gesher::SharedFutexQueue>& queue) {
+    return queue ? queue->WakeLocked(count, UINT32_MAX) :
+        WakeOrRequeueLocked(address, FUTEX_WAKE, count, UINT32_MAX, private_key, nullptr, 0, 0);
+  };
+  const long woken = wake(address, count, first);
+  if (woken < 0) return errno = static_cast<int>(-woken), -1;
+  if (!selected) return woken;
+  const long other = wake(target, count2, second);
+  if (other < 0) return errno = static_cast<int>(-other), -1;
+  return woken + other;
+}
+#endif
 long FutexOwned(volatile int* address, int op, int value, const timespec* time,
                 volatile int* target, int value3) {
   int command = op & FUTEX_CMD_MASK;
@@ -227,6 +359,13 @@ long FutexOwned(volatile int* address, int op, int value, const timespec* time,
   Deadline deadline;
   if (wait && !SetDeadline(time, command, realtime, &deadline)) return -1;
   if (realtime && command != FUTEX_WAIT_BITSET) return errno = ENOSYS, -1;
+#ifdef _WIN32
+  if (command == FUTEX_WAKE_OP) {
+    if (!Aligned(address)) return errno = EINVAL, -1;
+    return WakeOp(address, target, value, static_cast<int>(reinterpret_cast<intptr_t>(time)),
+                  private_key, static_cast<uint32_t>(value3));
+  }
+#endif
   if (command != FUTEX_WAIT && command != FUTEX_WAIT_BITSET && command != FUTEX_WAKE &&
       command != FUTEX_WAKE_BITSET && command != FUTEX_REQUEUE && command != FUTEX_CMP_REQUEUE)
     return errno = ENOSYS, -1;
@@ -234,13 +373,40 @@ long FutexOwned(volatile int* address, int op, int value, const timespec* time,
                       ? static_cast<uint32_t>(value3) : UINT32_MAX;
   if (mask == 0 || !Aligned(address)) return errno = EINVAL, -1;
   if (!address && (wait || !private_key || command == FUTEX_CMP_REQUEUE)) return errno = EFAULT, -1;
-  if (wait) return Wait(address, value, mask, private_key, deadline);
   int requeue_count = 0;
-  if (command == FUTEX_REQUEUE || command == FUTEX_CMP_REQUEUE) {
+  const bool requeue = command == FUTEX_REQUEUE || command == FUTEX_CMP_REQUEUE;
+  if (requeue) {
     requeue_count = static_cast<int>(reinterpret_cast<intptr_t>(time));
     if (value < 0 || requeue_count < 0 || !Aligned(target)) return errno = EINVAL, -1;
     if (!target && !private_key) return errno = EFAULT, -1;
   }
+#ifdef _WIN32
+  if (!private_key) {
+    gesher::SharedFutexMapping mapping;
+    const int shared = gesher::GetSharedFutexMapping(address, &mapping);
+    if (shared < 0) return errno = -shared, -1;
+    if (requeue) {
+      gesher::SharedFutexMapping destination;
+      const int to_shared = gesher::GetSharedFutexMapping(target, &destination);
+      if (to_shared < 0) return errno = -to_shared, -1;
+      if (shared || to_shared) return errno = ENOSYS, -1;
+    }
+    if (shared) {
+      if (wait) return SharedWait(mapping, address, value, mask, deadline);
+      // Order the caller's stores before checking whether a wait queue
+      // exists, even on the wake path that has no queue mutex to acquire.
+      std::atomic_thread_fence(std::memory_order_seq_cst);
+      gesher::SharedFutexQueue queue(mapping);
+      const int opened = queue.Open(false);
+      if (opened < 0) return errno = -opened, -1;
+      if (opened == 0) return 0;
+      const long woken = queue.Wake(value, mask);
+      if (woken < 0) return errno = static_cast<int>(-woken), -1;
+      return woken;
+    }
+  }
+#endif
+  if (wait) return Wait(address, value, mask, private_key, deadline);
   return WakeOrRequeue(address, command, value, mask, private_key, target, requeue_count, value3);
 }
 using FutexOwner = long (*)(volatile int*, int, int, const timespec*, volatile int*, int);
@@ -270,10 +436,17 @@ extern "C" __declspec(dllexport) void gesher_futex_interrupt_request_v1(gesher_f
   AcquireSRWLockExclusive(&cell->lock);
   if (cell->waiter != nullptr) {
     auto* waiter = static_cast<Waiter*>(cell->waiter);
-    int expected = 0;
-    if (waiter->ready.compare_exchange_strong(expected, 2, std::memory_order_acq_rel)) {
-      InterlockedExchange(&cell->requested, 0);
-      WakeByAddressSingle(&waiter->ready);
+#ifdef _WIN32
+    if (waiter->event != nullptr) {
+      SetEvent(waiter->event);
+    } else
+#endif
+    {
+      int expected = 0;
+      if (waiter->ready.compare_exchange_strong(expected, 2, std::memory_order_acq_rel)) {
+        InterlockedExchange(&cell->requested, 0);
+        WakeByAddressSingle(&waiter->ready);
+      }
     }
   }
   // A WaitOnAddress waiter (the shim's pthread waits) wakes and rechecks.

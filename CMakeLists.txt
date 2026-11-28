@@ -129,6 +129,10 @@ target_compile_definitions(madvise_probe PRIVATE GESHER_MADVISE_MAIN)
 target_compile_options(madvise_probe PRIVATE -Wall -Wextra -Werror)
 set_target_properties(madvise_probe PROPERTIES LINKER_LANGUAGE CXX)
 
+# Native SIGSEGV delivery and recovery through the Windows exception bridge.
+add_executable(fault_context_probe probes/posix/fault_context_probe.cc)
+target_compile_options(fault_context_probe PRIVATE -Wall -Wextra -Werror)
+
 # eventfd and epoll, for libutils' Looper; also run in CI on Windows.
 add_executable(epoll_probe probes/posix/epoll_probe.cc)
 target_compile_options(epoll_probe PRIVATE -Wall -Wextra -Werror)
@@ -208,6 +212,10 @@ target_link_libraries(netlink_route_test PRIVATE gesher_posix)
 add_executable(pipe_kernel_test tests/native/pipe_kernel_test.cc)
 target_compile_options(pipe_kernel_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(pipe_kernel_test PRIVATE gesher_posix)
+
+add_executable(pipe_epoll_alias_probe tests/native/pipe_epoll_alias_probe.cc)
+target_compile_options(pipe_epoll_alias_probe PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(pipe_epoll_alias_probe PRIVATE gesher_posix)
 
 add_executable(revocable_file_test tests/native/revocable_file_test.cc)
 target_compile_options(revocable_file_test PRIVATE -Wall -Wextra -Werror)

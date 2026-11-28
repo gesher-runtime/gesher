@@ -1,0 +1,42 @@
+diff --git a/runtime/native/dalvik_system_VMRuntime.cc b/runtime/native/dalvik_system_VMRuntime.cc
+--- a/runtime/native/dalvik_system_VMRuntime.cc
++++ b/runtime/native/dalvik_system_VMRuntime.cc
+@@ -19,5 +19,7 @@
+ #ifdef ART_TARGET_ANDROID
+ #include <sys/resource.h>
+ #include <sys/time.h>
+ extern "C" void android_set_application_target_sdk_version(uint32_t version);
++#elif defined(_WIN32)
++#include <gesher/application_target_sdk.h>
+ #endif
+@@ -268,5 +270,7 @@
+   // This part is letting libc/dynamic linker know about current app's
+   // target sdk version to enable compatibility workarounds.
+   android_set_application_target_sdk_version(uint_target_sdk_version);
++#elif defined(_WIN32)
++  gesher::SetApplicationTargetSdkVersion(uint_target_sdk_version);
+ #endif
+ }
+diff --git a/runtime/runtime.cc b/runtime/runtime.cc
+--- a/runtime/runtime.cc
++++ b/runtime/runtime.cc
+@@ -67,6 +67,9 @@
+ #include "base/pointer_size.h"
+ #include "base/quasi_atomic.h"
+ #include "base/sdk_version.h"
++#if defined(_WIN32)
++#include <gesher/application_target_sdk.h>
++#endif
+ #include "base/stl_util.h"
+ #include "base/systrace.h"
+ #include "base/unix_file/fd_file.h"
+@@ -1830,6 +1833,9 @@
+   verify_ = runtime_options.GetOrDefault(Opt::Verify);
+
+   target_sdk_version_ = runtime_options.GetOrDefault(Opt::TargetSdkVersion);
++#if defined(_WIN32)
++  gesher::SetApplicationTargetSdkVersion(target_sdk_version_);
++#endif
+
+   // Set hidden API enforcement policy. The checks are disabled by default and
+   // we only enable them if:

@@ -62,6 +62,11 @@ static DWORD GetCurrentThreadId() {
 static void SwitchToThread() { std::this_thread::yield(); }
 static void Sleep(DWORD ms) { std::this_thread::sleep_for(std::chrono::milliseconds(ms)); }
 
+// gesher/clocks.h: a shared barrier bounds its progress wait on the monotonic
+// clock. Here it is the fixture's clock, the one its deadline is compared with.
+namespace gesher::bionic { int64_t MonotonicNanos(); }
+namespace gesher { inline int64_t MonotonicNanos() { return bionic::MonotonicNanos(); } }
+
 namespace gesher::bionic {
 static bool fixed_clock;
 static LinuxTimespec realtime{1000000, 0};
@@ -78,6 +83,9 @@ int64_t MonotonicNanos() {
       std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 void DeliverPendingSignals() {}
+::gesher_futex_interrupt* AttachSignalInterrupt() { return nullptr; }
+void DetachSignalInterrupt() {}
+int DeliverAfterInterrupt() { return kNoHandler; }
 // No fixture thread has signal state (signal_bionic.cc); for such a thread
 // InterruptibleAddressWait is the plain address wait.
 bool InterruptibleAddressWait(volatile void* address, const void* compare, size_t size,
@@ -146,7 +154,9 @@ static void test_clock_matrix() {
       monotonic_ns = 100000000000;
       int clock = explicit_clock < 0 ? attr : explicit_clock;
       timespec deadline{clock == 0 ? 1000000 : 100, 2500000};
-      int64_t attribute = attr;
+      // The attribute is opaque: select its clock through the public setter.
+      int64_t attribute = 0;
+      a.cond_attr_clock(&attribute, attr);
       pthread_mutex_t m;
       pthread_cond_t c;
       a.mutex_init(&m, nullptr);
@@ -168,7 +178,7 @@ static void test_clock_matrix() {
       check("cond attribute/explicit clock matrix uses selected 3ms budget",
             wait_calls == 1 && observed_ms == 3);
       check("explicit wait does not rewrite condvar clock attribute",
-            pthread_code::W(&c, 1)->load() == attr);
+            pthread_code::W(&c, 1)->load() == static_cast<int>(attribute));
       check("timed condvar reacquires mutex", a.mutex_try(&m) == EBUSY);
       a.mutex_unlock(&m);
     }
@@ -217,7 +227,8 @@ static void test_wait_slices() {
     timespec deadline{(clock == 0 ? 1000000 : 100) + 2147489, 0};
     pthread_mutex_t m;
     pthread_cond_t c;
-    int64_t attr = clock;
+    int64_t attr = 0;
+    a.cond_attr_clock(&attr, clock);
     a.mutex_init(&m, nullptr);
     a.cond_init(&c, &attr);
     a.mutex_lock(&m);

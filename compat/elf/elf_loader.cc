@@ -21,12 +21,15 @@
 #include <atomic>
 #include <condition_variable>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <windows.h>
 
+#include <gesher/application_target_sdk.h>
 #include <gesher/arm64_runtime.h>
 // The fork set (gesher/fork.h); a host test that compiles this file alone
 // supplies a stub of it, or none.
@@ -130,11 +133,19 @@ uint32_t SysvHash(const char* name) {
 
 }  // namespace
 
-// A loaded object. One per .so.
+struct ImageIdentity {
+  uint64_t volume;
+  uint64_t index[2];
+  bool wide;
+  bool operator==(const ImageIdentity&) const = default;
+};
+
+// A loaded object. File-backed objects keep the identity of the opened file.
 struct Library {
   std::string name;       // file base name or given name
-  std::string soname;     // DT_SONAME, else name
+  std::string soname;     // DT_SONAME, or a basename for legacy targets
   std::string path;       // the file's absolute path (realpath), else name
+  std::optional<ImageIdentity> file_id;
   uint8_t* base = nullptr;   // where the first PT_LOAD landed
   uint8_t* load_bias = nullptr;  // base - first PT_LOAD p_vaddr
   size_t map_size = 0;       // total reserved span
@@ -158,7 +169,16 @@ struct Library {
   std::unique_ptr<uint8_t[]> tls_image_copy;
   bool is_closed = false;
   bool is_closing = false;  // finalizers claimed, still visible until they finish
+  bool keep_resident = false;
+  bool reclaim_when_idle = false;
+  size_t open_references = 0;
+  size_t lifetime_pins = 0;
+  uint64_t init_order = 0;
+  Library* load_group_root = nullptr;
+  std::vector<Library*> relocation_dependencies;
   bool is_aarch64 = false;   // EM_AARCH64: translated guest code (ADR 0047)
+  bool relocation_global = false;  // DF_1_GLOBAL or the main executable
+  bool symbolic_lookup = false;    // DT_SYMBOLIC or DF_SYMBOLIC
 
   // Dynamic section data (pointers into the mapping).
   const Elf64_Sym* symtab = nullptr;
@@ -239,6 +259,7 @@ struct Library {
   // Only the loading thread can see this private relocation scope. It is
   // cleared before publishing the completed graph.
   const std::vector<Library*>* load_scope = nullptr;
+  const std::vector<Library*>* pending_globals = nullptr;
 
   // Unresolved-import diagnostics have the same lifetime as this object.
   // In particular, no process-global stub may retain its unmapped strtab.
@@ -296,8 +317,19 @@ std::vector<Library*>& Loaded() {
   static std::vector<Library*> v;
   return v;
 }
+// DF_1_GLOBAL objects in publication order, with each graph in DT_NEEDED
+// breadth-first order. As with Loaded(), all access is under g_mutex.
+std::vector<Library*>& RelocationGlobals() {
+  static std::vector<Library*> libraries;
+  return libraries;
+}
 SymbolResolver g_resolver;
 uint64_t g_load_count = 0;  // under g_mutex
+uint64_t g_init_order = 0;   // under g_mutex
+uint64_t g_unload_count = 0; // under g_mutex
+bool g_closes_pending = false;
+void CollectClosedGroups();
+void ReclaimRetiredImage(Library* library);
 UnresolvedHandler g_unresolved_handler = nullptr;
 // dl_iterate_phdr callbacks running on this thread (ForEachLoaded): an unmap
 // from inside one does not wait for other callbacks.
@@ -522,6 +554,21 @@ Library* FindLocked(const std::string& name) {
   return nullptr;
 }
 
+Library* FindSoname(const std::vector<Library*>& libraries, const std::string& name) {
+  if (name.empty()) return nullptr;
+  for (Library* lib : libraries) {
+    if (lib->soname == name) return lib;
+  }
+  return nullptr;
+}
+
+Library* FindFile(const std::vector<Library*>& libraries, const ImageIdentity& id) {
+  for (Library* lib : libraries) {
+    if (lib->file_id == id) return lib;
+  }
+  return nullptr;
+}
+
 // Looks up `name` as exported by any loaded object. Fills *out_lib/*out_sym.
 // `arch` limits the search to x86-64 (0) or arm64 (1) objects, so a guest
 // object never binds to host code and vice versa (ADR 0047); -1 is any.
@@ -548,48 +595,60 @@ struct ResolvedSymbol {
   bool found = false;
 };
 
-// Resolves an undefined symbol for a relocation: first in the object itself and
-// its dependency graph, then through the bionic shim resolver.
-ResolvedSymbol ResolveForReloc(Library* lib, const char* name) {
-  ResolvedSymbol r;
-  uint32_t gh = GnuHash(name), sh = SysvHash(name);
-  // Self first, then dependencies (global scope), as the dynamic linker does.
-  const Elf64_Sym* sym = FindDefinedSymbol(lib, name, gh, sh);
-  if (sym != nullptr && ELF64_ST_BIND(sym->st_info) != STB_LOCAL) {
-    r = {SymbolAddress(lib, sym), lib, sym, true};
-    return r;
+// The explicit ELF global group precedes the ordinary dependency search.
+// Android's relocation group uses DF_1_GLOBAL, independent of the RTLD_GLOBAL
+// dlopen flag. Keep the existing fallback for the shim and its callers.
+ResolvedSymbol ResolveForReloc(Library* lib, const Elf64_Sym* reference) {
+  if (reference->st_shndx != SHN_UNDEF &&
+      (ELF64_ST_BIND(reference->st_info) == STB_LOCAL ||
+       ELF64_ST_VISIBILITY(reference->st_other) != STV_DEFAULT)) {
+    return {SymbolAddress(lib, reference), lib, reference, true};
   }
-  for (Library* dep : lib->dependencies) {
-    if (dep->is_aarch64 != lib->is_aarch64) continue;
-    const Elf64_Sym* s = FindDefinedSymbol(dep, name, gh, sh);
-    if (s != nullptr && ELF64_ST_BIND(s->st_info) != STB_LOCAL) {
-      return {SymbolAddress(dep, s), dep, s, true};
+  const char* name = lib->strtab + reference->st_name;
+  const uint32_t gh = GnuHash(name), sh = SysvHash(name);
+  auto lookup = [&](Library* candidate) -> ResolvedSymbol {
+    if (candidate->is_closed || candidate->is_closing ||
+        candidate->is_aarch64 != lib->is_aarch64) return {};
+    const Elf64_Sym* symbol = FindDefinedSymbol(candidate, name, gh, sh);
+    if (symbol == nullptr || ELF64_ST_BIND(symbol->st_info) == STB_LOCAL) return {};
+    // The existing fallback can bind an object outside DT_NEEDED. Preserve
+    // that provider while the relocation can still be called or read.
+    if (candidate != lib &&
+        std::find(lib->relocation_dependencies.begin(), lib->relocation_dependencies.end(),
+                  candidate) == lib->relocation_dependencies.end()) {
+      lib->relocation_dependencies.push_back(candidate);
+    }
+    return {SymbolAddress(candidate, symbol), candidate, symbol, true};
+  };
+  if (lib->symbolic_lookup) {
+    if (auto self = lookup(lib); self.found) return self;
+  }
+  for (Library* candidate : RelocationGlobals()) {
+    if (auto result = lookup(candidate); result.found) return result;
+  }
+  if (lib->pending_globals != nullptr) {
+    for (Library* candidate : *lib->pending_globals) {
+      if (auto result = lookup(candidate); result.found) return result;
     }
   }
-  // Any other loaded object (global scope).
-  const Library* gl = nullptr;
-  const Elf64_Sym* gs = nullptr;
-  if (void* a = LookupGlobalLocked(name, &gl, &gs, lib->is_aarch64 ? 1 : 0)) {
-    return {a, gl, gs, true};
+  if (auto self = lookup(lib); self.found) return self;
+  for (Library* dependency : lib->dependencies) {
+    if (auto result = lookup(dependency); result.found) return result;
+  }
+  for (Library* candidate : Loaded()) {
+    if (auto result = lookup(candidate); result.found) return result;
   }
   // Siblings and transitive dependencies are prepared together but are not
   // visible through the process registry until the entire graph succeeds.
   if (lib->load_scope != nullptr) {
     for (Library* candidate : *lib->load_scope) {
-      if (candidate->is_aarch64 != lib->is_aarch64) continue;
-      const Elf64_Sym* s = FindDefinedSymbol(candidate, name, gh, sh);
-      if (s != nullptr && ELF64_ST_BIND(s->st_info) != STB_LOCAL) {
-        return {SymbolAddress(candidate, s), candidate, s, true};
-      }
+      if (auto result = lookup(candidate); result.found) return result;
     }
   }
-  // The bionic shim.
   if (g_resolver) {
-    if (void* a = g_resolver(name)) {
-      return {a, nullptr, nullptr, true};
-    }
+    if (void* address = g_resolver(name)) return {address, nullptr, nullptr, true};
   }
-  return r;
+  return {};
 }
 
 void Fail(std::string* error, const std::string& msg) {
@@ -621,6 +680,7 @@ std::string AbsolutePath(const char* path) {
 // and it is unmapped once the object is loaded.
 struct FileImage {
   int fd = -1;
+  std::optional<ImageIdentity> id;
   const uint8_t* data = nullptr;
   size_t size = 0;
   void* view = nullptr;
@@ -647,6 +707,25 @@ bool OpenImage(const char* path, FileImage* image, std::string* error) {
     return false;
   }
   image->size = static_cast<size_t>(st.st_size);
+#ifdef _WIN32
+  FILE_ID_INFO file_id{};
+  HANDLE file = reinterpret_cast<HANDLE>(_get_osfhandle(image->fd));
+  if (file != INVALID_HANDLE_VALUE &&
+      GetFileInformationByHandleEx(file, FileIdInfo, &file_id, sizeof(file_id))) {
+    ImageIdentity id{file_id.VolumeSerialNumber, {}, true};
+    std::memcpy(id.index, file_id.FileId.Identifier, sizeof(id.index));
+    if (id.index[0] != 0 || id.index[1] != 0) image->id = id;
+    return true;
+  }
+#endif
+  if (st.st_ino != 0) {
+    image->id = ImageIdentity{static_cast<uint64_t>(st.st_dev),
+                              {static_cast<uint64_t>(st.st_ino), 0}, false};
+  }
+  return true;
+}
+
+bool MapImage(const char* path, FileImage* image, std::string* error) {
   HANDLE file = reinterpret_cast<HANDLE>(_get_osfhandle(image->fd));
   if (file != INVALID_HANDLE_VALUE) {
     if (HANDLE mapping = CreateFileMappingW(file, nullptr, PAGE_READONLY, 0, 0, nullptr)) {
@@ -1093,12 +1172,36 @@ void RegisterGuestCode(Library* lib, const uint8_t* data) {
     if (phdr[i].p_type != PT_LOAD || !(phdr[i].p_flags & PF_X)) continue;
     uint8_t* start = lib->load_bias + PageDown(phdr[i].p_vaddr);
     size_t len = PageUp(phdr[i].p_vaddr + phdr[i].p_memsz) - PageDown(phdr[i].p_vaddr);
-    gesher::arm64::AddCode(start, len, lib->soname.c_str());
+    const std::string& name = lib->soname.empty() ? lib->name : lib->soname;
+    gesher::arm64::AddCode(start, len, name.c_str());
   }
 }
 
+// Resolves an on-disk dynamic string without reading past DT_STRSZ or the
+// file-backed part of its PT_LOAD segment.
+std::optional<std::string_view> DynamicString(const Library& lib, const uint8_t* data,
+                                              uint64_t offset) {
+  if (lib.strtab == nullptr || offset >= lib.strtab_size) return std::nullopt;
+  const uintptr_t table = reinterpret_cast<uintptr_t>(lib.strtab) -
+                          reinterpret_cast<uintptr_t>(lib.load_bias);
+  for (size_t i = 0; i < lib.file_phnum; ++i) {
+    const auto& ph = lib.file_phdr[i];
+    if (ph.p_type != PT_LOAD || table < ph.p_vaddr) continue;
+    const uint64_t table_offset = table - ph.p_vaddr;
+    if (table_offset >= ph.p_filesz || offset >= ph.p_filesz - table_offset) continue;
+    const size_t remaining =
+        std::min<uint64_t>(lib.strtab_size - offset, ph.p_filesz - table_offset - offset);
+    const char* start = reinterpret_cast<const char*>(data + ph.p_offset + table_offset + offset);
+    if (const void* end = std::memchr(start, 0, remaining)) {
+      return std::string_view(start, static_cast<const char*>(end) - start);
+    }
+  }
+  return std::nullopt;
+}
+
 // Parses PT_DYNAMIC and PT_TLS.
-void ParseDynamic(Library* lib, const uint8_t* data) {
+bool ParseDynamic(Library* lib, const uint8_t* data, bool main_executable,
+                  std::string_view* runpath, std::string* error) {
   const auto* ehdr = reinterpret_cast<const Elf64_Ehdr*>(data);
   const auto* phdr = reinterpret_cast<const Elf64_Phdr*>(data + ehdr->e_phoff);
   const Elf64_Dyn* dyn = nullptr;
@@ -1131,7 +1234,7 @@ void ParseDynamic(Library* lib, const uint8_t* data) {
       lib->tls.align = phdr[i].p_align ? phdr[i].p_align : 1;
     }
   }
-  if (dyn == nullptr) return;
+  if (dyn == nullptr) return true;
 
   size_t pltrel_size = 0;
   for (const Elf64_Dyn* d = dyn; d->d_tag != DT_NULL; ++d) {
@@ -1174,7 +1277,15 @@ void ParseDynamic(Library* lib, const uint8_t* data) {
       case DT_ANDROID_RELA: lib->android_rela = p; break;
       case DT_ANDROID_RELASZ: lib->android_rela_size = v; break;
       case DT_TEXTREL: lib->text_relocations = true; break;
-      case DT_FLAGS: lib->text_relocations |= (v & DF_TEXTREL) != 0; break;
+      case DT_SYMBOLIC: lib->symbolic_lookup = true; break;
+      case DT_FLAGS:
+        lib->text_relocations |= (v & DF_TEXTREL) != 0;
+        lib->symbolic_lookup |= (v & DF_SYMBOLIC) != 0;
+        break;
+      case DT_FLAGS_1:
+        lib->relocation_global |= (v & DF_1_GLOBAL) != 0;
+        lib->keep_resident |= (v & DF_1_NODELETE) != 0;
+        break;
       case DT_INIT: lib->init_func = reinterpret_cast<void (SYSV*)()>(p); break;
       case DT_FINI: lib->fini_func = reinterpret_cast<void (SYSV*)()>(p); break;
       case DT_INIT_ARRAY: lib->init_array = reinterpret_cast<void (SYSV**)()>(p); break;
@@ -1188,15 +1299,29 @@ void ParseDynamic(Library* lib, const uint8_t* data) {
   }
   lib->jmprel_count = pltrel_size / sizeof(Elf64_Rela);
 
-  // SONAME and NEEDED now that strtab is set.
+  // Dynamic strings now that strtab is set.
   for (const Elf64_Dyn* d = dyn; d->d_tag != DT_NULL; ++d) {
     if (d->d_tag == DT_SONAME && lib->strtab) {
       lib->soname = lib->strtab + d->d_un.d_val;
     } else if (d->d_tag == DT_NEEDED && lib->strtab) {
       lib->needed.emplace_back(lib->strtab + d->d_un.d_val);
+    } else if (d->d_tag == DT_RUNPATH) {
+      auto path = DynamicString(*lib, data, d->d_un.d_val);
+      if (!path) {
+        Fail(error, lib->name + ": invalid DT_RUNPATH string");
+        return false;
+      }
+      *runpath = *path;
     }
   }
-  if (lib->soname.empty()) lib->soname = lib->name;
+  // Bionic kept basename lookup for applications targeting pre-M. A modern
+  // object with no DT_SONAME is still accessible through its file identity.
+  const uint32_t target_sdk = ApplicationTargetSdkVersion();
+  if (lib->soname.empty() && !main_executable && target_sdk != 0 && target_sdk < 23) {
+    const size_t slash = lib->path.find_last_of("/\\");
+    lib->soname = slash == std::string::npos ? lib->path : lib->path.substr(slash + 1);
+  }
+  return true;
 }
 
 // Applies one RELA relocation. Returns false and sets *error if a needed symbol
@@ -1212,9 +1337,9 @@ bool ApplyRela(Library* lib, const Elf64_Rela& r, std::string* error) {
 
   auto resolve = [&](ResolvedSymbol* rs) -> bool {
     const Elf64_Sym* sym = &lib->symtab[sym_index];
-    const char* name = lib->strtab + sym->st_name;
-    *rs = ResolveForReloc(lib, name);
+    *rs = ResolveForReloc(lib, sym);
     if (!rs->found) {
+      const char* name = lib->strtab + sym->st_name;
       // A weak undefined symbol resolves to 0.
       if (ELF64_ST_BIND(sym->st_info) == STB_WEAK) {
         rs->address = nullptr;
@@ -1341,7 +1466,7 @@ bool ApplyRelaAarch64(Library* lib, const Elf64_Rela& r, std::string* error) {
   auto resolve_value = [&](bool as_function, uint64_t* out) -> bool {
     const Elf64_Sym* sym = &lib->symtab[sym_index];
     const char* name = lib->strtab + sym->st_name;
-    ResolvedSymbol rs = ResolveForReloc(lib, name);
+    ResolvedSymbol rs = ResolveForReloc(lib, sym);
     if (!rs.found || rs.lib == nullptr) {
       // A libc interface whose host (shim) version has an x86-64-specific
       // layout or numbering (struct stat, epoll_event, syscall, setjmp...):
@@ -1421,7 +1546,7 @@ bool ApplyRelaAarch64(Library* lib, const Elf64_Rela& r, std::string* error) {
         if (sym->st_shndx != SHN_UNDEF) {
           sym_value = sym->st_value;
         } else {
-          ResolvedSymbol rs = ResolveForReloc(lib, lib->strtab + sym->st_name);
+          ResolvedSymbol rs = ResolveForReloc(lib, sym);
           if (!rs.found || rs.lib == nullptr || rs.sym == nullptr) {
             Fail(error, lib->name + ": unresolved TLS symbol '" + (lib->strtab + sym->st_name) + "'");
             return false;
@@ -1746,6 +1871,7 @@ void RunInit(Library* lib) {
     for (Library* dep : lib->dependencies) RunInit(dep);
     guest_init(lib->init_func);
     for (size_t i = 0; i < lib->init_array_count; ++i) guest_init(lib->init_array[i]);
+    lib->init_order = ++g_init_order;
     return;
   }
   // An executable's DT_PREINIT_ARRAY runs before its other initializers.
@@ -1753,6 +1879,31 @@ void RunInit(Library* lib) {
   for (Library* dep : lib->dependencies) RunInit(dep);
   if (lib->init_func) CallInit(lib->init_func);
   for (size_t i = 0; i < lib->init_array_count; ++i) CallInit(lib->init_array[i]);
+  lib->init_order = ++g_init_order;
+}
+
+// The caller owns a reference before a constructor may re-enter the loader.
+Library* OpenReferenceLocked(Library* lib, bool keep_resident) {
+  if (lib == nullptr || lib->is_closing) return nullptr;
+  ++lib->open_references;
+  lib->keep_resident |= keep_resident;
+  RunInit(lib);
+  return lib;
+}
+
+void ReleaseUnresolvedImports(Library* lib) {
+  for (void* stub : lib->unresolved_functions) {
+    if (lib->is_aarch64) gesher::arm64::UnbindHostFunction(stub);
+  }
+  for (uint8_t* page : lib->unresolved_pages) VirtualFree(page, 0, MEM_RELEASE);
+  if (lib->unresolved_data != nullptr) {
+    {
+      std::lock_guard<std::mutex> lock(g_data_mutex);
+      g_data_owners.erase(std::remove(g_data_owners.begin(), g_data_owners.end(), lib),
+                          g_data_owners.end());
+    }
+    VirtualFree(lib->unresolved_data, 0, MEM_RELEASE);
+  }
 }
 
 // A pending image has never been returned to application code. Withdraw every
@@ -1769,18 +1920,7 @@ void DiscardLibrary(Library* lib) {
     }
   }
   lib->rewrite_registration.reset();
-  for (void* stub : lib->unresolved_functions) {
-    if (lib->is_aarch64) gesher::arm64::UnbindHostFunction(stub);
-  }
-  for (uint8_t* page : lib->unresolved_pages) VirtualFree(page, 0, MEM_RELEASE);
-  if (lib->unresolved_data != nullptr) {
-    {
-      std::lock_guard<std::mutex> lock(g_data_mutex);
-      g_data_owners.erase(std::remove(g_data_owners.begin(), g_data_owners.end(), lib),
-                          g_data_owners.end());
-    }
-    VirtualFree(lib->unresolved_data, 0, MEM_RELEASE);
-  }
+  ReleaseUnresolvedImports(lib);
   if (lib->mapped_by_caller) {
     // The caller's reservation (android_dlopen_ext): what was mapped over it
     // becomes PROT_NONE again and stays the caller's.
@@ -1799,13 +1939,69 @@ using PendingLibrary = std::unique_ptr<Library, decltype(&DiscardLibrary)>;
 // reaches an unread ElfReader precondition. See docs/native-load-transactions.md.
 thread_local std::vector<const std::vector<Library*>*> g_pending_scopes;
 
-bool IsPending(const std::string& name) {
+bool IsPending(const std::string& name, const std::optional<ImageIdentity>& id) {
   for (const auto* scope : g_pending_scopes) {
+    if (id) {
+      if (FindFile(*scope, *id)) return true;
+      continue;
+    }
     for (Library* lib : *scope) {
       if (lib->name == name || lib->soname == name) return true;
     }
   }
   return false;
+}
+
+bool ExpandRunpathDirectory(std::string& directory, std::string_view origin) {
+  const std::pair<std::string_view, std::string_view> tokens[] = {
+      {"${ORIGIN}", origin}, {"$ORIGIN", origin}, {"${LIB}", "lib64"}, {"$LIB", "lib64"}};
+  for (size_t pos = 0; (pos = directory.find('$', pos)) != std::string::npos;) {
+    const auto suffix = std::string_view(directory).substr(pos);
+    const auto* token = std::find_if(std::begin(tokens), std::end(tokens),
+                                    [&](const auto& item) { return suffix.starts_with(item.first); });
+    if (token == std::end(tokens)) {
+      ++pos;
+      continue;
+    }
+    if (token->second.empty()) return false;
+    auto replacement = token->second;
+    // "$ORIGIN/foo" at the filesystem root is "/foo". A double leading
+    // slash would request UNC on Windows.
+    if (replacement.ends_with('/') && suffix.substr(token->first.size()).starts_with('/')) {
+      replacement.remove_suffix(1);
+    }
+    directory.replace(pos, token->first.size(), replacement);
+    pos += replacement.size();
+  }
+  return true;
+}
+
+// Expand after splitting so a drive colon in the Windows location of the
+// object remains in its path. Both supported guest ABIs use lib64.
+std::vector<std::string> RunpathDirectories(std::string_view runpath, std::string_view origin) {
+  std::vector<std::string> result;
+  while (!runpath.empty()) {
+    const size_t separator = runpath.find(':');
+    std::string directory(runpath.substr(0, separator));
+    if (!directory.empty() && ExpandRunpathDirectory(directory, origin)) {
+      result.push_back(std::move(directory));
+    }
+    if (separator == std::string_view::npos) break;
+    runpath.remove_prefix(separator + 1);
+  }
+  return result;
+}
+
+std::string FindDependencyPath(const std::string& name, const LoadOptions& options,
+                               const std::vector<std::string>& runpaths) {
+  for (const auto* paths : {&options.environment_search_paths, &runpaths, &options.search_paths}) {
+    for (const auto& directory : *paths) {
+      std::string candidate = directory + (directory.ends_with('/') ? "" : "/") + name;
+      struct stat st {};
+      if (stat(candidate.c_str(), &st) == 0) return candidate;
+    }
+  }
+  return {};
 }
 
 class LoadTransaction {
@@ -1816,16 +2012,19 @@ class LoadTransaction {
     // still exist. No finalizers run for objects whose constructors never ran.
     for (auto it = nodes_.rbegin(); it != nodes_.rend(); ++it) (*it)->library.reset();
     g_pending_scopes.pop_back();
+    CollectClosedGroups();
   }
 
   // `path`: the root's file (null for an object loaded from memory).
-  Library* Load(const char* name, const char* path, const uint8_t* data, size_t size, int fd,
+  Library* Load(const char* name, const char* path, const FileImage* file,
+                const uint8_t* data, size_t size,
                 const LoadOptions& options, std::string* error) {
-    Library* root = Stage(name, path, data, size, fd, options, error, nullptr);
+    Library* root = Stage(name, path, file, data, size, options, error, nullptr);
     if (root == nullptr) return nullptr;
     for (const auto& node : nodes_) {
       if (!Prepare(*node, error)) return nullptr;
     }
+    CollectPendingGlobals(root);
     if (!Link(root, error)) return nullptr;
     for (const auto& node : nodes_) {
       Library* lib = node->library.get();
@@ -1836,6 +2035,8 @@ class LoadTransaction {
     // Reserve before publication: there is no remaining recoverable operation
     // after TLS images become available to existing/new threads.
     Loaded().reserve(Loaded().size() + nodes_.size());
+    auto& global_group = RelocationGlobals();
+    global_group.reserve(global_group.size() + pending_globals_.size());
     for (const auto& node : nodes_) {
       Library* lib = node->library.get();
       if (lib->tls.present) {
@@ -1849,7 +2050,9 @@ class LoadTransaction {
           TlsPublishModule(&lib->tls);
         }
       }
+      lib->load_group_root = root;
       lib->load_scope = nullptr;
+      lib->pending_globals = nullptr;
       lib->writable = {};
       lib->made_writable.clear();
       lib->file_phdr = nullptr;
@@ -1857,10 +2060,10 @@ class LoadTransaction {
       Loaded().push_back(lib);
       ++g_load_count;
     }
+    global_group.insert(global_group.end(), pending_globals_.begin(), pending_globals_.end());
     // The graph is complete before a constructor can re-enter the loader.
     for (const auto& node : nodes_) node->library.release();
-    RunInit(root);
-    return root;
+    return OpenReferenceLocked(root, options.main_executable || options.keep_resident);
   }
 
  private:
@@ -1875,18 +2078,30 @@ class LoadTransaction {
   };
   std::vector<std::unique_ptr<Node>> nodes_;
   std::vector<Library*> scope_;
+  std::vector<Library*> pending_globals_;
 
-  Library* FindStaged(const std::string& name) {
-    for (Library* lib : scope_) {
-      if (lib->name == name || lib->soname == name) return lib;
+  void CollectPendingGlobals(Library* root) {
+    if (std::none_of(scope_.begin(), scope_.end(),
+                     [](const Library* lib) { return lib->relocation_global; })) return;
+    std::vector<Library*> pending{root};
+    std::set<Library*> seen{root};
+    for (size_t i = 0; i < pending.size(); ++i) {
+      Library* library = pending[i];
+      if (library->relocation_global) pending_globals_.push_back(library);
+      for (Library* dependency : library->dependencies) {
+        if (dependency->load_scope == &scope_ && seen.insert(dependency).second) {
+          pending.push_back(dependency);
+        }
+      }
     }
-    return nullptr;
   }
 
-  Library* Stage(const char* name, const char* path, const uint8_t* data, size_t size, int fd,
+  Library* Stage(const char* name, const char* path, const FileImage* file,
+                 const uint8_t* data, size_t size,
                  const LoadOptions& options, std::string* error,
                  std::unique_ptr<FileImage> image) {
-    if (IsPending(name)) {
+    const auto id = file ? file->id : std::nullopt;
+    if (IsPending(name, id)) {
       Fail(error, std::string(name) + ": recursive load while relocation is unfinished");
       return nullptr;
     }
@@ -1912,30 +2127,36 @@ class LoadTransaction {
     Library* lib = node->library.get();
     lib->name = name;
     lib->path = path != nullptr ? AbsolutePath(path) : std::string(name);
+    lib->file_id = id;
     lib->is_aarch64 = aarch64;
     lib->stub_unresolved = options.stub_unresolved_functions;
     lib->load_scope = &scope_;
+    lib->pending_globals = &pending_globals_;
+    lib->relocation_global = options.main_executable;
     node->data = data;
     node->size = size;
     node->options = options;
     node->image = std::move(image);
-    if (!MapSegments(lib, data, size, fd, options, error)) return nullptr;
-    ParseDynamic(lib, data);
+    if (!MapSegments(lib, data, size, file ? file->fd : -1, options, error)) return nullptr;
+    std::string_view runpath;
+    if (!ParseDynamic(lib, data, options.main_executable, &runpath, error)) return nullptr;
+    std::string_view origin;
+    if (path != nullptr) {
+      const size_t slash = lib->path.find_last_of("/\\");
+      if (slash != std::string::npos) origin = std::string_view(lib->path).substr(0, slash == 0 ? 1 : slash);
+    }
+    const auto runpaths = RunpathDirectories(runpath, origin);
     TraceMapping(*lib);
     nodes_.push_back(std::move(node));
     scope_.push_back(lib);
     // Discover every dependency before allocating TLS, rewriting code or
     // running any resolver. A cycle finds its already-mapped private node.
     for (const std::string& soname : lib->needed) {
-      Library* dep = FindStaged(soname);
-      if (dep == nullptr) dep = FindLocked(soname);
+      const bool by_name = soname.find_first_of("/\\") == std::string::npos;
+      Library* dep = by_name ? FindSoname(Loaded(), soname) : nullptr;
+      if (dep == nullptr && by_name) dep = FindSoname(scope_, soname);
       if (dep == nullptr) {
-        std::string found;
-        for (const std::string& dir : options.search_paths) {
-          std::string candidate = dir + "/" + soname;
-          struct stat st {};
-          if (stat(candidate.c_str(), &st) == 0) { found = candidate; break; }
-        }
+        const std::string found = by_name ? FindDependencyPath(soname, options, runpaths) : soname;
         if (found.empty()) {
           if (options.allow_shimmed_needed) continue;
           Fail(error, lib->name + ": cannot find needed library " + soname);
@@ -1943,6 +2164,19 @@ class LoadTransaction {
         }
         auto child_image = std::make_unique<FileImage>();
         if (!OpenImage(found.c_str(), child_image.get(), error)) return nullptr;
+        if (child_image->id) {
+          dep = FindFile(scope_, *child_image->id);
+          if (dep == nullptr) dep = FindFile(Loaded(), *child_image->id);
+        }
+        if (dep != nullptr) {
+          if (dep->is_closing) {
+            Fail(error, lib->name + ": dependency is being unloaded: " + soname);
+            return nullptr;
+          }
+          lib->dependencies.push_back(dep);
+          continue;
+        }
+        if (!MapImage(found.c_str(), child_image.get(), error)) return nullptr;
         FileImage* source = child_image.get();
         LoadOptions child_options = options;
         child_options.main_executable = false;
@@ -1952,9 +2186,13 @@ class LoadTransaction {
         child_options.reserved_addr = nullptr;
         child_options.reserved_size = 0;
         child_options.reserved_hint = false;
-        dep = Stage(soname.c_str(), found.c_str(), source->data, source->size, source->fd,
+        dep = Stage(soname.c_str(), found.c_str(), source, source->data, source->size,
                     child_options, error, std::move(child_image));
         if (dep == nullptr) return nullptr;
+      }
+      if (dep->is_closing) {
+        Fail(error, lib->name + ": dependency is being unloaded: " + soname);
+        return nullptr;
       }
       lib->dependencies.push_back(dep);
     }
@@ -2036,10 +2274,11 @@ class LoadTransaction {
 
 };
 
-Library* LoadCommon(const char* name, const char* path, const uint8_t* data, size_t size, int fd,
+Library* LoadCommon(const char* name, const char* path, const FileImage* file,
+                    const uint8_t* data, size_t size,
                     std::string* error, const LoadOptions& options) {
   LoadTransaction transaction;
-  Library* lib = transaction.Load(name, path, data, size, fd, options, error);
+  Library* lib = transaction.Load(name, path, file, data, size, options, error);
   if (lib != nullptr && lib->mapped_by_caller) {
     std::lock_guard<std::mutex> lock(g_reserved_mutex);
     g_reserved_objects.push_back(lib);
@@ -2060,21 +2299,19 @@ int ForEachLoaded(const std::function<int(const PhdrInfo&)>& fn) {
       if (lib->is_closed || lib->phdr == nullptr) continue;
       PhdrInfo info;
       info.addr = reinterpret_cast<uintptr_t>(lib->load_bias);
-      info.name = lib->soname.c_str();
+      info.name = (lib->soname.empty() ? lib->name : lib->soname).c_str();
       info.path = lib->path.c_str();
       info.phdr = lib->phdr;
       info.phnum = lib->phnum;
       info.tls_modid = lib->tls.present ? lib->tls.module_id : 0;
       info.adds = g_load_count;
-      infos.emplace_back(info, lib->mapped_by_caller ? lib : nullptr);
+      info.subs = g_unload_count;
+      infos.emplace_back(info, lib);
     }
   }
-  // Called without the lock: the callback may itself look symbols up. An
-  // object in a caller's reservation that the caller unmapped since the
-  // snapshot (ForgetReservedMappings marks it retired before the pages go)
-  // is skipped; Library objects are never freed once listed, so the check
-  // itself is safe. One unmapped while a callback is reading it is the app's
-  // own race, as with bionic.
+  // The callback may re-enter the loader. The retirement flag excludes an
+  // image withdrawn after this snapshot, and the callback pin keeps the
+  // mapped headers live through a concurrent ordinary close.
   // Undone when the callback returns or is unwound through this frame's
   // destructors. A longjmp out of the callback skips them (gesher's longjmp
   // runs no host cleanups) and leaves the count raised (docs/native-libs.md).
@@ -2104,6 +2341,10 @@ int ForEachLoaded(const std::function<int(const PhdrInfo&)>& fn) {
         }
       }
       g_callbacks_cv.notify_all();
+      if (lib->retired.load()) {
+        std::lock_guard<LoaderMutex> lock(g_mutex);
+        ReclaimRetiredImage(lib);
+      }
     }
   };
   for (const auto& entry : infos) {
@@ -2113,16 +2354,9 @@ int ForEachLoaded(const std::function<int(const PhdrInfo&)>& fn) {
       // callback (and may wait for it before the pages go) or this sees
       // retired.
       lib->in_callback.fetch_add(1);
-      if (lib->retired.load()) {
-        {
-          std::lock_guard<std::mutex> lock(g_callbacks_mutex);
-          lib->in_callback.fetch_sub(1);
-        }
-        g_callbacks_cv.notify_all();
-        continue;
-      }
     }
     CallbackScope scope(lib);
+    if (lib != nullptr && lib->retired.load()) continue;
     if (int r = fn(entry.first)) return r;
   }
   return 0;
@@ -2205,31 +2439,48 @@ Library* Load(const char* path, std::string* error, const LoadOptions& options) 
   // Name the object by its file base name.
   const char* slash = std::strrchr(path, '/');
   const char* bslash = std::strrchr(path, '\\');
-  const char* base = slash > bslash ? slash : bslash;
+  const char* base = slash && (!bslash || slash > bslash) ? slash : bslash;
   std::string name = base ? base + 1 : path;
-  {
-    std::lock_guard<LoaderMutex> lock(g_mutex);
-    if (Library* existing = FindLocked(name)) return existing;
-  }
   FileImage image;
   if (!OpenImage(path, &image, error)) return nullptr;
+  if (image.id && !(options.no_load && options.reject_loaded_file)) {
+    if (Library* existing = FindFile(Loaded(), *image.id)) {
+      if (options.reject_loaded_file) {
+        Fail(error, "ANDROID_DLEXT_FORCE_LOAD of an already loaded file is not supported");
+        return nullptr;
+      }
+      if (existing->is_closing) {
+        Fail(error, std::string(path) + " is being unloaded");
+        return nullptr;
+      }
+      return OpenReferenceLocked(existing, options.keep_resident);
+    }
+  }
+  if (options.no_load) {
+    Fail(error, std::string("library \"") + path + "\" wasn't loaded and RTLD_NOLOAD prevented it");
+    return nullptr;
+  }
+  if (!MapImage(path, &image, error)) return nullptr;
   if (IsGesherLinkerImage(image.data, image.size)) {
     Fail(error, std::string(path) +
                     " is Gesher's ELF loader (/system/bin/linker64): the process's own dynamic "
                     "linker, not a library to load");
     return nullptr;
   }
-  return LoadCommon(name.c_str(), path, image.data, image.size, image.fd, error, options);
+  return LoadCommon(name.c_str(), path, &image, image.data, image.size, error, options);
 }
 
 Library* LoadFromMemory(const char* name, const void* data, size_t size, std::string* error,
                         const LoadOptions& options) {
   std::lock_guard<LoaderMutex> operation(g_mutex);
-  {
-    std::lock_guard<LoaderMutex> lock(g_mutex);
-    if (Library* existing = FindLocked(name)) return existing;
+  if (Library* existing = FindLocked(name)) {
+    if (existing->is_closing) {
+      Fail(error, std::string(name) + " is being unloaded");
+      return nullptr;
+    }
+    return OpenReferenceLocked(existing, options.keep_resident);
   }
-  return LoadCommon(name, nullptr, static_cast<const uint8_t*>(data), size, -1, error, options);
+  return LoadCommon(name, nullptr, nullptr, static_cast<const uint8_t*>(data), size, error, options);
 }
 
 void* Lookup(Library* library, const char* name) {
@@ -2287,6 +2538,11 @@ void* ResolveBionic(const char* name) {
   return g_resolver ? g_resolver(name) : nullptr;
 }
 
+Library* OpenLoaded(const char* name, bool keep_resident) {
+  std::lock_guard<LoaderMutex> lock(g_mutex);
+  return OpenReferenceLocked(FindSoname(Loaded(), name), keep_resident);
+}
+
 Library* Find(const char* name) {
   std::lock_guard<LoaderMutex> lock(g_mutex);
   return FindLocked(name);
@@ -2294,17 +2550,9 @@ Library* Find(const char* name) {
 
 const char* Soname(Library* library) { return library ? library->soname.c_str() : ""; }
 
-void Close(Library* library) {
-  std::lock_guard<LoaderMutex> operation(g_mutex);
-  if (library == nullptr) return;
-  {
-    std::lock_guard<LoaderMutex> lock(g_mutex);
-    if (library->is_closed || library->is_closing) return;
-    // Finalizers may re-enter dlclose. Claim this object before calling them,
-    // keeping its symbols visible until they finish. The recursive operation
-    // lock permits same-thread finalizer reentry and excludes concurrent loads.
-    library->is_closing = true;
-  }
+namespace {
+
+void RunFinalizers(Library* library) {
   auto finish = [library](void (SYSV* function)()) {
     if (function == nullptr || function == reinterpret_cast<void (SYSV*)()>(-1)) return;
     if (library->is_aarch64) {
@@ -2317,25 +2565,18 @@ void Close(Library* library) {
     finish(library->fini_array[i]);
   }
   finish(library->fini_func);
-  {
-    std::lock_guard<LoaderMutex> lock(g_mutex);
-    library->is_closed = true;
-    library->is_closing = false;
-  }
 }
 
-namespace {
-
-// Takes `library` out of every list: lookups, dl_iterate_phdr, dladdr, the
-// arm64 translator's code ranges, the lazy %fs rewrite. Runs none of its
-// code. Its TLS module stays registered, initialized from the loader-owned
-// copy of its image (tls_image_copy). Its unresolved-import stubs and
-// placeholders stay allocated (a few pages; code elsewhere could still hold
-// their addresses).
+// Withdraw lookup and code registrations after ordinary finalization, or
+// before the caller replaces a reserved mapping. For a reserved mapping,
+// keep the registered TLS image and import diagnostics as before.
 void RetireLocked(Library* library) {
   library->retired = true;  // first: ForEachLoaded's snapshots check it
+  ++g_unload_count;
   auto& loaded = Loaded();
   loaded.erase(std::remove(loaded.begin(), loaded.end(), library), loaded.end());
+  auto& global_group = RelocationGlobals();
+  global_group.erase(std::remove(global_group.begin(), global_group.end(), library), global_group.end());
   if (library->guest_code_registered) {
     gesher::arm64::RemoveCode(library->base, library->map_size);
     library->guest_code_registered = false;
@@ -2349,7 +2590,114 @@ void RetireLocked(Library* library) {
   library->caller_ranges.clear();
 }
 
+void ReclaimRetiredImage(Library* library) {
+  if (!library->reclaim_when_idle || library->in_callback.load() != 0) return;
+  library->reclaim_when_idle = false;
+  ReleaseUnresolvedImports(library);
+  munmap(library->base, library->map_size);
+  // Drop auxiliary allocations while preserving the opaque handle's identity
+  // and names already returned by dladdr or an iteration snapshot.
+  library->base = nullptr;
+  library->needed = std::vector<std::string>();
+  library->dependencies = std::vector<Library*>();
+  library->relocation_dependencies = std::vector<Library*>();
+  library->unresolved_functions = std::vector<void*>();
+  library->unresolved_pages = std::vector<uint8_t*>();
+  library->unresolved_data_names = std::vector<const char*>();
+  library->load_notes = std::string();
+}
+
+// Only one collection runs under the recursive loader lock. Pending objects
+// can take new bindings while their IFUNCs call dlclose, so collection waits
+// until their complete relocation transaction has published or rolled back.
+bool g_collecting_closes = false;
+void CollectClosedGroups() {
+  if (!g_closes_pending || g_collecting_closes || !g_pending_scopes.empty()) return;
+  g_collecting_closes = true;
+  while (g_closes_pending) {
+    g_closes_pending = false;
+    std::set<Library*> live;
+    std::vector<Library*> queue;
+    auto visit = [&](Library* lib) {
+      if (lib != nullptr && !lib->retired && live.insert(lib).second) queue.push_back(lib);
+    };
+    for (Library* lib : Loaded()) {
+      // Committed TLS registration and reservations currently require stable
+      // backing. A close releases the explicit handle without reclaiming them.
+      if (lib->open_references || lib->lifetime_pins || lib->keep_resident ||
+          lib->tls.present || lib->mapped_by_caller) visit(lib);
+    }
+    for (size_t i = 0; i < queue.size(); ++i) {
+      Library* lib = queue[i];
+      visit(lib->load_group_root);
+      for (Library* dep : lib->dependencies) visit(dep);
+      for (Library* dep : lib->relocation_dependencies) visit(dep);
+    }
+    std::vector<Library*> retired;
+    for (Library* lib : Loaded()) {
+      if (!live.contains(lib)) retired.push_back(lib);
+    }
+    if (retired.empty()) break;
+    std::sort(retired.begin(), retired.end(), [](Library* a, Library* b) {
+      return a->init_order > b->init_order;
+    });
+    for (Library* lib : retired) lib->is_closing = true;
+    for (Library* lib : retired) {
+      if (lib->init_done && !lib->retired) RunFinalizers(lib);
+    }
+    for (Library* lib : retired) {
+      if (lib->retired) continue;
+      RetireLocked(lib);
+      lib->reclaim_when_idle = true;
+      ReclaimRetiredImage(lib);
+    }
+  }
+  g_collecting_closes = false;
+}
+
+Library* LibraryForAddressLocked(const void* address) {
+  const uintptr_t value = reinterpret_cast<uintptr_t>(address);
+  for (Library* lib : Loaded()) {
+    const uintptr_t base = reinterpret_cast<uintptr_t>(lib->base);
+    if (value >= base && value - base < lib->map_size) return lib;
+  }
+  return nullptr;
+}
+
 }  // namespace
+
+bool Close(Library* library) {
+  std::lock_guard<LoaderMutex> lock(g_mutex);
+  if (library == nullptr ||
+      std::find(Loaded().begin(), Loaded().end(), library) == Loaded().end() ||
+      library->open_references == 0) return false;
+  if (--library->open_references == 0) {
+    g_closes_pending = true;
+    CollectClosedGroups();
+  }
+  return true;
+}
+
+Library* RetainForAddress(const void* address) {
+  std::lock_guard<LoaderMutex> lock(g_mutex);
+  Library* owner = LibraryForAddressLocked(address);
+  if (owner != nullptr) ++owner->lifetime_pins;
+  return owner;
+}
+
+void ReleaseLifetimePin(Library* library) {
+  if (library == nullptr) return;
+  std::lock_guard<LoaderMutex> lock(g_mutex);
+  if (--library->lifetime_pins == 0) {
+    g_closes_pending = true;
+    CollectClosedGroups();
+  }
+}
+
+void KeepResidentForAddress(const void* address) {
+  std::lock_guard<LoaderMutex> lock(g_mutex);
+  if (Library* owner = LibraryForAddressLocked(address)) owner->keep_resident = true;
+}
 
 void ForgetReservedMappings(const void* addr, size_t length) {
   if (g_reserved_count.load() == 0 || length == 0) return;

@@ -40,6 +40,8 @@ typedef void* pthread_t;
 #include <new>
 #include <gesher/fork.h>
 
+#include "internal.h"
+
 // The underlying winpthreads functions; callers use the POSIX adapters.
 #undef pthread_create
 #undef pthread_kill
@@ -255,6 +257,12 @@ int Send(pid_t pid, int signum, int code, const union sigval* value, bool to_thr
     return gesher_kill_other(pid, signum);
   }
   if (signum == 0) return 0;
+  // SIGKILL ends this process without waiting for a signal consumer or
+  // running exit handlers. Keep the status encoding used by the parent.
+  if (signum == SIGKILL) {
+    TerminateProcess(GetCurrentProcess(), gesher::SignalExitCode(signum));
+    return gesher::FailWithLastError();
+  }
   auto& own = CurrentPending();
   State& s = state();
   {
@@ -270,26 +278,24 @@ int Send(pid_t pid, int signum, int code, const union sigval* value, bool to_thr
   return 0;
 }
 
-// Takes the lowest pending signal in `set`, waiting until `deadline` (none:
-// forever). Returns the signal, or -1 with errno EAGAIN when it times out.
+// Takes an eligible thread signal before taking a shared process signal.
+// Waits until `deadline` (none: forever) and reports EAGAIN on timeout.
 int Take(const sigset_t* set, siginfo_t* info,
          const std::chrono::steady_clock::time_point* deadline) {
   State& s = state();
   auto& own = CurrentPending().pending;
+  const sigset_t requested = *set;
   std::unique_lock<std::mutex> guard(s.lock);
-  auto ready = [&] { return ((own.Mask() | s.pending.Mask()) & *set) != 0; };
+  auto ready = [&] { return ((own.Mask() | s.pending.Mask()) & requested) != 0; };
   if (deadline == nullptr) {
     s.sent.wait(guard, ready);
   } else if (!s.sent.wait_until(guard, *deadline, ready)) {
     return errno = EAGAIN, -1;
   }
-  for (int signum = 1; signum <= kMaxSignal; ++signum) {
-    if (((own.Mask() | s.pending.Mask()) & *set & Bit(signum)) != 0) {
-      PopSignalLocked((own.Mask() & Bit(signum)) != 0 ? own : s.pending, signum, info);
-      return signum;
-    }
-  }
-  return errno = EAGAIN, -1;  // not reached: ready() held
+  auto& queue = (own.Mask() & requested) != 0 ? own : s.pending;
+  const int signum = gesher::signals::NextPendingSignal(queue.Mask() & requested);
+  PopSignalLocked(queue, signum, info);
+  return signum;
 }
 
 }  // namespace
@@ -512,17 +518,11 @@ int sigsuspend(const sigset_t* mask) {
   int delivered_sig = 0;
 
   for (;;) {
-    int candidate = 0;
-    for (int signum = 1; signum <= kMaxSignal; ++signum) {
-      if (((own.Mask() | s.pending.Mask()) & unmasked & Bit(signum)) != 0) {
-        candidate = signum;
-        break;
-      }
-    }
-
-    if (candidate != 0) {
+    auto& queue = (own.Mask() & unmasked) != 0 ? own : s.pending;
+    const uint64_t eligible = queue.Mask() & unmasked;
+    if (eligible != 0) {
+      const int candidate = gesher::signals::NextPendingSignal(eligible);
       struct sigaction act = s.actions[candidate];
-      auto& queue = (own.Mask() & Bit(candidate)) != 0 ? own : s.pending;
       // Check if signal action is to ignore
       if (act.sa_handler == SIG_IGN ||
           (act.sa_handler == SIG_DFL &&

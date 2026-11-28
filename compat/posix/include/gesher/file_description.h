@@ -74,6 +74,8 @@ int ReadFileDescription(const DescriptorSnapshotPtr& snapshot, void* bytes, unsi
 int ReadPipeDescriptionInterruptible(const DescriptorSnapshotPtr& snapshot, void* bytes,
                                      unsigned count, HANDLE interrupted);
 int WriteFileDescription(const DescriptorSnapshotPtr& snapshot, const void* bytes, unsigned count);
+// Validate an empty preadv/pwritev through the positioned I/O admission path.
+int CheckEmptyPositionedVector(int fd, int64_t offset, bool writing);
 // Linux pwrite policy (including O_APPEND) while retaining the shared cursor.
 int64_t WriteFileDescriptionAt(const DescriptorSnapshotPtr& snapshot, const void* bytes,
                               unsigned count, int64_t offset);

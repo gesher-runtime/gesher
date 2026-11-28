@@ -26,6 +26,7 @@
 // bcrypt.h needs windows.h first.
 #include <bcrypt.h>
 
+#include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <malloc.h>
@@ -1033,6 +1034,7 @@ std::mutex g_atexit_mutex;
 std::vector<AtExitEntry> g_atexit;
 
 int BIONIC_SYSV CxaAtexit(void (BIONIC_SYSV* func)(void*), void* arg, void* dso) {
+  if (dso == nullptr) gesher::elf::KeepResidentForAddress(reinterpret_cast<void*>(func));
   std::lock_guard<std::mutex> lock(g_atexit_mutex);
   g_atexit.push_back({func, arg, dso, nullptr});
   return 0;
@@ -1053,6 +1055,7 @@ void BIONIC_SYSV CxaFinalize(void* dso) {
   }
 }
 int BIONIC_SYSV Atexit(void (BIONIC_SYSV* func)(void)) {
+  gesher::elf::KeepResidentForAddress(reinterpret_cast<void*>(func));
   std::lock_guard<std::mutex> lock(g_atexit_mutex);
   g_atexit.push_back({nullptr, nullptr, nullptr, func});
   return 0;
@@ -1133,9 +1136,9 @@ void* DlOpenUnsupported(uint64_t flags) {
   return DlOpenFail(message);
 }
 
-void* DlOpenImpl(const char* filename, const AndroidDlextinfo* ext);
-void* BIONIC_SYSV DlOpen(const char* filename, int /*flags*/) {
-  void* handle = DlOpenImpl(filename, nullptr);
+void* DlOpenImpl(const char* filename, int flags, const AndroidDlextinfo* ext);
+void* BIONIC_SYSV DlOpen(const char* filename, int flags) {
+  void* handle = DlOpenImpl(filename, flags, nullptr);
   if (TraceDl()) {
     std::fprintf(stderr, "gesher dl: dlopen(\"%s\") = %s%s%s\n", filename ? filename : "(null)",
                  handle ? "ok" : "null", handle ? "" : ": ", handle ? "" : t_dlerror.c_str());
@@ -1146,9 +1149,9 @@ void* BIONIC_SYSV DlOpen(const char* filename, int /*flags*/) {
 // RESERVED_ADDRESS and RESERVED_ADDRESS_HINT load the library into the
 // caller's reservation (LoadOptions::reserved_addr); the other valid flags
 // are not implemented and fail the call (kDlextUnsupportedFlags).
-void* BIONIC_SYSV AndroidDlOpenExt(const char* filename, int /*flags*/,
+void* BIONIC_SYSV AndroidDlOpenExt(const char* filename, int flags,
                                    const AndroidDlextinfo* ext) {
-  void* handle = DlOpenImpl(filename, ext);
+  void* handle = DlOpenImpl(filename, flags, ext);
   if (TraceDl()) {
     std::fprintf(stderr,
                  "gesher dl: android_dlopen_ext(\"%s\", flags=0x%llx, reserved_addr=%p, "
@@ -1160,8 +1163,15 @@ void* BIONIC_SYSV AndroidDlOpenExt(const char* filename, int /*flags*/,
   }
   return handle;
 }
-void* DlOpenImpl(const char* filename, const AndroidDlextinfo* ext) {
-  // bionic's do_dlopen checks the extended flags first (linker.cpp).
+void* DlOpenImpl(const char* filename, int flags, const AndroidDlextinfo* ext) {
+  constexpr int kValidFlags = RTLD_NOW | RTLD_LAZY | RTLD_LOCAL | RTLD_GLOBAL |
+                              RTLD_NODELETE | RTLD_NOLOAD;
+  if ((flags & ~kValidFlags) != 0) {
+    char message[64];
+    std::snprintf(message, sizeof(message), "invalid flags to dlopen: %x",
+                  static_cast<unsigned>(flags));
+    return DlOpenFail(message);
+  }
   if (ext != nullptr) {
     char message[160];
     if ((ext->flags & ~kDlextValidFlags) != 0) {
@@ -1187,29 +1197,23 @@ void* DlOpenImpl(const char* filename, const AndroidDlextinfo* ext) {
     }
   }
   if (filename == nullptr) return reinterpret_cast<void*>(-2);  // the "main program"
-  const char* slash = std::strrchr(filename, '/');
-  const char* base = slash ? slash + 1 : filename;
+  const bool by_path = std::strpbrk(filename, "/\\") != nullptr;
   // FORCE_LOAD only skips bionic's match of an already-loaded library by its
   // file (inode); a bare name is still found by soname first
-  // (find_loaded_library_by_soname ignores names with a '/'). So with a path,
-  // a library already loaded would be loaded a second time, which this loader
-  // cannot do (one object per name): that fails rather than returning the
-  // first copy. With a bare name the loaded library is returned, as bionic does.
-  const bool force_second_copy =
-      ext != nullptr && (ext->flags & kDlextForceLoad) != 0 && slash != nullptr;
+  // (find_loaded_library_by_soname ignores paths). The loader checks the
+  // identity of the opened file before rejecting an unsupported second copy.
+  const bool force_load = ext != nullptr && (ext->flags & kDlextForceLoad) != 0;
   if (void* platform = PlatformLibraryHandle(filename)) {
-    if (force_second_copy) return DlOpenUnsupported(kDlextForceLoad);
+    if (force_load && by_path) return DlOpenUnsupported(kDlextForceLoad);
     return platform;
   }
-  // Already loaded: the same handle, where it is, whatever reservation
-  // extinfo offers (bionic finds a loaded library before it maps anything).
-  if (gesher::elf::Library* existing = gesher::elf::Find(base)) {
-    if (force_second_copy) return DlOpenUnsupported(kDlextForceLoad);
-    return existing;
+  const bool keep_resident = (flags & (RTLD_NODELETE | RTLD_GLOBAL)) != 0;
+  if (!by_path) {
+    if (auto* existing = gesher::elf::OpenLoaded(filename, keep_resident)) return existing;
   }
   std::string path = filename;
   std::vector<std::string> dirs = LibraryDirectories();
-  if (slash == nullptr) {
+  if (!by_path) {
     path.clear();
     for (const std::string& d : dirs) {
       if (Exists(d + "/" + filename)) {
@@ -1224,6 +1228,9 @@ void* DlOpenImpl(const char* filename, const AndroidDlextinfo* ext) {
     }
   }
   gesher::elf::LoadOptions options;
+  options.reject_loaded_file = force_load;
+  options.no_load = (flags & RTLD_NOLOAD) != 0;
+  options.keep_resident = keep_resident;
   if (ext != nullptr && (ext->flags & (kDlextReservedAddress | kDlextReservedAddressHint)) != 0) {
     options.use_reserved = true;
     options.reserved_addr = ext->reserved_addr;
@@ -1239,7 +1246,7 @@ void* DlOpenImpl(const char* filename, const AndroidDlextinfo* ext) {
   if (lib == nullptr) {
     t_dlerror = "dlopen failed: " + error;
     t_has_dlerror = true;
-  } else if (!dir.empty()) {
+  } else if (!options.no_load && !dir.empty()) {
     NoteLibraryDirectory(dir);
   }
   return lib;
@@ -1271,11 +1278,13 @@ void* BIONIC_SYSV DlSym(void* handle, const char* symbol) {
   }
   return p;
 }
-// dlclose: libraries stay loaded for the life of the process, also one loaded
-// into a caller's reservation (android_dlopen_ext). The caller may unmap that
-// reservation after dlclose; the library then leaves every list
-// (gesher::elf::ForgetReservedMappings, from munmap).
-int BIONIC_SYSV DlClose(void*) { return 0; }
+int BIONIC_SYSV DlClose(void* handle) {
+  if (handle == reinterpret_cast<void*>(-2) || IsPlatformLibraryHandle(handle)) return 0;
+  if (gesher::elf::Close(static_cast<gesher::elf::Library*>(handle))) return 0;
+  t_dlerror = "dlclose: invalid or closed handle";
+  t_has_dlerror = true;
+  return -1;
+}
 const char* BIONIC_SYSV DlError() {
   if (!t_has_dlerror) return nullptr;
   t_has_dlerror = false;
@@ -1320,7 +1329,7 @@ int BIONIC_SYSV DlIteratePhdr(int (BIONIC_SYSV* cb)(BionicPhdrInfo*, size_t, voi
     info.dlpi_phdr = in.phdr;
     info.dlpi_phnum = in.phnum;
     info.dlpi_adds = in.adds;
-    info.dlpi_subs = 0;
+    info.dlpi_subs = in.subs;
     info.dlpi_tls_modid = in.tls_modid;
     info.dlpi_tls_data = nullptr;
     return cb(&info, sizeof(info), data);

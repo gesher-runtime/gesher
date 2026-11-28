@@ -15,7 +15,7 @@
 //     and the caller's; a span reaching unmapped address space fails cleanly;
 //   - Chrome's pattern: a 0xc000000 reservation whose tail is unmapped after
 //     the load, then the library's code and data used;
-//   - dlclose keeps a reserved library loaded, as every library in gesher;
+//   - dlclose keeps a reserved library loaded (an ordinary one is unloaded);
 //     the caller may then unmap its reservation (or map over it), and the
 //     library leaves dl_iterate_phdr, dladdr and dlsym without running its
 //     code - only when the munmap/mmap succeeds; its TLS keeps initializing
@@ -400,8 +400,13 @@ static int run(void) {
     h = android_dlopen_ext(path, RTLD_NOW, NULL);
     check("a null extinfo loads like dlopen", h != NULL && answer_of(h) == 42);
     dlclose(h);
-    check("  dlclose of a library not in a reservation keeps it loaded",
-          query("libdlext_d.so").found && answer_of(h) == 42);
+    // The last reference to an ordinary library: Android unloads it, and a
+    // later open loads it again.
+    check("  dlclose of the last reference unloads a library not in a reservation",
+          !query("libdlext_d.so").found);
+    h = android_dlopen_ext(path, RTLD_NOW, NULL);
+    check("  and the library loads again afterwards", h != NULL && answer_of(h) == 42 &&
+          query("libdlext_d.so").found);
   }
 
   // --- FORCE_LOAD of a library not loaded yet is an ordinary load -----------

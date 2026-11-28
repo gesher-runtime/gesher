@@ -107,6 +107,25 @@ struct ReadonlyInotify {
 };
 #include "epoll_readonly_edge_test.inc"
 
+// Model elapsed clock time while the host threadpool callback is delayed.
+// A single nonblocking wait must see the readiness its timer sample publishes.
+static void readonly_timer_delayed_callback() {
+  int fd = readonly_timer(), first = epoll_create1(0), second = epoll_create1(0);
+  check("delayed callback setup", fd >= 0 && first >= 0 && second >= 0);
+  const uint32_t flags = EPOLLIN | EPOLLET | EPOLLEXCLUSIVE;
+  check("delayed callback registrations", readonly_ctl(first, EPOLL_CTL_ADD, fd, flags, 41) &&
+        readonly_ctl(second, EPOLL_CTL_ADD, fd, flags, 42));
+  check("delayed callback arm", readonly_arm(fd, 1));
+  readonly_clock += 5000000;
+  check("first nonblocking wait sees timer readiness it publishes", readonly_event(first, 41, EPOLLIN, 0));
+  check("second idle exclusive epoll keeps published timer readiness",
+        readonly_event(second, 42, EPOLLIN, 0));
+  check("delayed callback readiness is one edge per epoll", readonly_empty(first) && readonly_empty(second));
+  close(second);
+  close(first);
+  close(fd);
+}
+
 static void readonly_timer_work() {
   int fd = readonly_timer(), ep = epoll_create1(0);
   check("timer work setup", fd >= 0 && ep >= 0);
@@ -238,6 +257,7 @@ static void readonly_wait_races() {
 
 int main() {
   test_epoll_readonly_edges();
+  readonly_timer_delayed_callback();
   readonly_timer_work();
   readonly_inotify_queue();
   for (int i = 0; i < 32; ++i) readonly_wait_races();

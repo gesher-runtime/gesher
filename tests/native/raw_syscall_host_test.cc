@@ -99,7 +99,7 @@ int main() {
   Check("affinity returns actual mask byte count", RawSyscallX64(204, args) == 16 && mask[8] == 1);
   args[1] = 8;
   Check("affinity errors stay negative errno", RawSyscallX64(204, args) == -EINVAL);
-  Check("unknown syscall remains ENOSYS", RawSyscallX64(500, args) == -ENOSYS);
+  Check("unknown syscall remains ENOSYS", RawSyscallX64(500, args) == -kENOSYS);
   Check("int error result remains EBADF", RawSyscallX64(3, args) == -EBADF);
   errno = EDOM;
   args[0] = 0x1111;

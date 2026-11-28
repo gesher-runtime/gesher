@@ -355,7 +355,7 @@ int ioctl(int fd, unsigned long request, ...) {
     if (request == FIONREAD) {
       if (gesher::ws::Available(state.socket, argp) != 0) return -1;
       // An AF_UNIX datagram pair's payload, without its framing (ADR 0088).
-      if (state.description->unix_datagram_pair.load()) *argp = gesher::ws::UnixDatagramPayload(*argp);
+      if (state.description->IsUnixDatagramPair()) *argp = gesher::ws::UnixDatagramPayload(*argp);
       return 0;
     }
     int result;
@@ -488,6 +488,9 @@ int fcntl(int fd, int cmd, ...) {
           return gesher::FailWithLastError();
         }
         return 0;
+      case F_GETPIPE_SZ:
+        if (GetFileType(h) != FILE_TYPE_PIPE) return errno = EBADF, -1;
+        [[fallthrough]];
       case F_GETFL:
       case F_SETFL:
         status_snapshot = gesher::CaptureDescriptor(fd);
@@ -509,6 +512,7 @@ int fcntl(int fd, int cmd, ...) {
   }
   // The snapshot retains the selected object and description across concurrent
   // close/dup2. Native mode operations must not hold the publication lock.
+  if (cmd == F_GETPIPE_SZ) return gesher::PipeCapacity(status_snapshot);
   return cmd == F_GETFL ? gesher::FileDescriptionFlags(status_snapshot)
                        : gesher::SetFileDescriptionFlags(status_snapshot, arg);
 }
@@ -767,6 +771,17 @@ bool FileWriteVector(int fd, const iovec* iov, int iovcnt, bool positioned,
 
 ssize_t readv(int fd, const struct iovec* iov, int iovcnt) {
   if (BadVector(fd, iovcnt)) return -1;
+  if (iovcnt == 0) {
+    // Linux still validates read access without issuing a receive. A
+    // zero-length Winsock receive can wait or consume a queued datagram.
+    pthread_testcancel();
+    auto snapshot = gesher::CaptureDescriptor(fd);
+    if (!snapshot) return -1;
+    const int flags = gesher::FileDescriptionIoFlags(snapshot);
+    if (flags < 0) return -1;
+    if ((flags & O_PATH) != 0 || (flags & O_ACCMODE) == O_WRONLY) return errno = EBADF, -1;
+    return 0;
+  }
   ssize_t total = 0;
   if (SocketIo(fd, iov, iovcnt, false, &total)) return total;
   for (int i = 0; i < iovcnt; ++i) {
@@ -820,19 +835,33 @@ ssize_t writev(int fd, const struct iovec* iov, int iovcnt) {
 }
 
 ssize_t preadv(int fd, const struct iovec* iov, int iovcnt, off_t offset) {
+  if (offset < 0) return errno = EINVAL, -1;
   if (BadVector(fd, iovcnt)) return -1;
-  ssize_t total = 0;
+  if (iovcnt == 0) return gesher::CheckEmptyPositionedVector(fd, offset, false);
+  std::array<iovec, IOV_MAX> copied;
+  if (!gesher::ws::CopyFromUser(copied.data(), iov, static_cast<size_t>(iovcnt) * sizeof(iovec)))
+    return errno = EFAULT, -1;
+  constexpr size_t maximum = 0x7ffff000;  // Linux MAX_RW_COUNT for 4 KiB pages.
   for (int i = 0; i < iovcnt; ++i) {
-    ssize_t n = pread(fd, iov[i].iov_base, iov[i].iov_len, offset + total);
+    if (copied[i].iov_len > static_cast<size_t>(std::numeric_limits<ssize_t>::max()))
+      return errno = EINVAL, -1;
+  }
+  ssize_t total = 0;
+  for (int i = 0; i < iovcnt && static_cast<size_t>(total) < maximum; ++i) {
+    const size_t length = std::min(copied[i].iov_len, maximum - static_cast<size_t>(total));
+    if (offset > std::numeric_limits<off_t>::max() - total) break;
+    const ssize_t n = pread(fd, copied[i].iov_base, length, offset + total);
     if (n < 0) return total > 0 ? total : -1;
     total += n;
-    if (static_cast<size_t>(n) < iov[i].iov_len) break;
+    if (static_cast<size_t>(n) < length) break;
   }
   return total;
 }
 
 ssize_t pwritev(int fd, const struct iovec* iov, int iovcnt, off_t offset) {
+  if (offset < 0) return errno = EINVAL, -1;
   if (BadVector(fd, iovcnt)) return -1;
+  if (iovcnt == 0) return gesher::CheckEmptyPositionedVector(fd, offset, true);
   ssize_t total = 0;
   if (FileWriteVector(fd, iov, iovcnt, true, offset, &total)) return total;
   for (int i = 0; i < iovcnt; ++i) {

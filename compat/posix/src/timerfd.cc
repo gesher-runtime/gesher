@@ -110,8 +110,8 @@ struct TimerFd {
 
   // Account for all elapsed periods, even when Windows delayed/coalesced a
   // callback. Windows' millisecond period is not used as the source of truth.
-  void Expire(int64_t now) {
-    if (next == 0 || now < next) return;
+  bool Expire(int64_t now) {
+    if (next == 0 || now < next) return false;
     uint64_t count = 1;
     if (interval > 0) {
       count += static_cast<uint64_t>((static_cast<__int128>(now) - next) / interval);
@@ -123,11 +123,11 @@ struct TimerFd {
     }
     const uint64_t room = std::numeric_limits<uint64_t>::max() - pending;
     pending += std::min(count, room);
-    if (!expired) {
-      expired = true;
-      SetReadable(*readiness, true);
-      changed.notify_all();
-    }
+    if (expired) return false;
+    expired = true;
+    SetReadable(*readiness, true);
+    changed.notify_all();
+    return true;
   }
 
   TimerFdSpec Snapshot(int64_t now) {
@@ -212,9 +212,9 @@ int TimerFdCreate(int clockid, int flags) {
   return RegisterTimerFd(std::move(timer), std::move(readiness));
 }
 
-void RefreshTimerFd(TimerFd& timer) {
+bool RefreshTimerFd(TimerFd& timer) {
   std::lock_guard<std::mutex> lock(timer.mutex);
-  if (!timer.changing) timer.Expire(timer.Now());
+  return !timer.changing && timer.Expire(timer.Now());
 }
 
 int TimerFdGetTime(int fd, TimerFdSpec* value) {

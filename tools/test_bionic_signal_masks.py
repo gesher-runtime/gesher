@@ -67,12 +67,16 @@ def main() -> int:
     # The receiver-only translated SA_SIGINFO claim; absent in history.
     guest = ([function(source, "bool IsGuestHandler(")]
              if "bool IsGuestHandler(" in source else [])
+    locked_delivery = ([function(source, "int TakeDeliverableLocked(")]
+                       if "int TakeDeliverableLocked(" in source else [])
     helpers = [function(source, "bool DefaultStops("),
                function(source, "bool ActionSupported("),
                function(source, "bool ClaimActionLocked("),
                function(source, "void Pop("),
                function(source, "int TakeDeliverable("),
                function(source, "int DeliverAll(")]
+    # TakeDeliverable's locked body precedes it, after every helper it calls.
+    helpers[4] = "\n".join(locked_delivery + [helpers[4]])
     # The wait-set filter; a historical --source-ref passes the set unfiltered.
     wait_set = ([function(source, "uint64_t WaitSet(")]
                 if "uint64_t WaitSet(" in source else [])

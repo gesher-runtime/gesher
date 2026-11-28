@@ -36,9 +36,11 @@ void SetBionicResolver(SymbolResolver resolver);
 
 // Options for a load.
 struct LoadOptions {
-  // Directories searched for a DT_NEEDED soname, in order, before the resolver.
+  // Default directories for a DT_NEEDED soname, after the requester's RUNPATH.
   // The APK's extracted lib/x86_64 goes here.
   std::vector<std::string> search_paths;
+  // The executable's LD_LIBRARY_PATH takes priority over RUNPATH.
+  std::vector<std::string> environment_search_paths;
   // When true, missing DT_NEEDED libraries that the bionic resolver can satisfy
   // symbol-by-symbol (libc.so, libm.so, libdl.so, liblog.so, libandroid.so,
   // libc++_shared.so provided by the shim) are not an error.
@@ -75,6 +77,13 @@ struct LoadOptions {
   void* reserved_addr = nullptr;
   size_t reserved_size = 0;
   bool reserved_hint = false;
+  // FORCE_LOAD can map a new file, but requesting another copy of the same
+  // already loaded file is unsupported.
+  bool reject_loaded_file = false;
+  // For Load(): accept an already-linked instance of the opened file only.
+  bool no_load = false;
+  // dlopen with RTLD_NODELETE or RTLD_GLOBAL keeps the group resident.
+  bool keep_resident = false;
 };
 
 // Loads the ELF object at `path`. On success returns a handle and runs its
@@ -103,25 +112,34 @@ void* ResolveBionic(const char* name);
 // Is `library` an arm64-v8a object (run by the arm64 translator, ADR 0047)?
 bool IsAarch64(Library* library);
 
-// Returns the already-loaded object whose soname or file base name is `name`,
-// or nullptr. Load() uses this to share dependencies.
+// Opens an already-linked object by soname, running its
+// constructors if they have not started. Returns nullptr on a miss.
+Library* OpenLoaded(const char* name, bool keep_resident = false);
+
+// Looks up an already-linked object by soname or file base name without
+// starting its constructors.
 Library* Find(const char* name);
 
-// The soname (DT_SONAME, else the file base name) of a loaded object.
+// The effective SONAME of a loaded object, empty when it has none.
 const char* Soname(Library* library);
 
-// Runs the object's DT_FINI_ARRAY / DT_FINI and marks it closed. The mapping is
-// kept (handles may still be held); full unmap is not implemented.
-void Close(Library* library);
+// Releases one explicit Load/OpenLoaded reference. Runs finalizers and retires
+// an unreachable load group when its mapping can be reclaimed safely.
+bool Close(Library* library);
+
+// Pins an ELF object named by an address in its mapping, for a runtime-owned
+// callback whose lifetime can outlast a public handle. Null when there is no object.
+Library* RetainForAddress(const void* address);
+void ReleaseLifetimePin(Library* library);
+void KeepResidentForAddress(const void* address);
 
 // The app unmaps or maps over [addr, addr + length) (munmap, MAP_FIXED), which
 // it may do with its reservation after dlclose (android_dlopen_ext): an object
 // loaded into a reservation there is gone, and is taken out of every list
 // (dlsym, dl_iterate_phdr, dladdr, symbol binding of later loads, the arm64
 // translator's code ranges) without running any of its code, so no lookup
-// reads its unmapped tables. Objects are never unloaded otherwise (dlclose
-// keeps every library loaded). The shim calls it once the operation is sure
-// to be carried out (fs_rewrite.cc).
+// reads its unmapped tables. The shim calls it once the operation is sure to be
+// carried out (fs_rewrite.cc).
 void ForgetReservedMappings(const void* addr, size_t length);
 
 // What dl_iterate_phdr reports for one loaded object.
@@ -136,6 +154,7 @@ struct PhdrInfo {
   uint16_t phnum = 0;
   size_t tls_modid = 0;          // 0 when the object has no PT_TLS
   uint64_t adds = 0;             // objects loaded so far (dlpi_adds)
+  uint64_t subs = 0;             // objects retired so far (dlpi_subs)
 };
 
 // Calls `fn` for each loaded (not closed) object, in load order, until it

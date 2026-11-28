@@ -16,6 +16,13 @@
 #include "pthread_attributes_host_windows.h"
 
 namespace gesher::elf { bool SetupThreadTls() { return true; } }
+// The ELF loader's lifetime pins (gesher/elf_loader.h). This fixture loads no
+// library: no address has an owning library, so a destructor holds no pin.
+namespace gesher::elf {
+struct Library;
+inline Library* RetainForAddress(const void*) { return nullptr; }
+inline void ReleaseLifetimePin(Library*) {}
+}  // namespace gesher::elf
 // gesher/fork.h (ADR 0092): this fixture never forks. A leaving thread passes
 // the fork's exit gate (counted here), and key destructors take their lock.
 namespace gesher {

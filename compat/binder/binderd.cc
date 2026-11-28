@@ -1709,16 +1709,15 @@ void CloseRightsGroup(RightsGroup* group) {
   group->entries.clear();
 }
 
-// Moves a group's handles into `to` (the caller's process); g_rights_lock held.
-// Each handle the broker held is closed, delivered or not; one that cannot be
-// delivered is reported as handle 0, which the receiver reports as a failure.
-void DeliverRights(HANDLE to, RightsGroup* group, WireReply* reply) {
+// Delivers new handles in the caller's process; g_rights_lock held. Normal
+// receives consume the group even if delivery fails. MSG_PEEK keeps it queued.
+void DeliverRights(HANDLE to, RightsGroup* group, WireReply* reply, bool consume = true) {
+  const DWORD options = DUPLICATE_SAME_ACCESS | (consume ? DUPLICATE_CLOSE_SOURCE : 0);
   for (const RightsEntry& e : group->entries) {
     HANDLE out = nullptr, shared = nullptr;
-    bool ok = DuplicateHandle(GetCurrentProcess(), e.handle, to, &out, 0, FALSE,
-                               DUPLICATE_SAME_ACCESS | DUPLICATE_CLOSE_SOURCE);
-    if (e.shared && !DuplicateHandle(GetCurrentProcess(), e.shared, to, &shared, 0, FALSE,
-                                    DUPLICATE_SAME_ACCESS | DUPLICATE_CLOSE_SOURCE)) ok = false;
+    bool ok = DuplicateHandle(GetCurrentProcess(), e.handle, to, &out, 0, FALSE, options);
+    if (e.shared && !DuplicateHandle(GetCurrentProcess(), e.shared, to, &shared, 0, FALSE, options))
+      ok = false;
     if (!ok) {
       Log("rights: DuplicateHandle into the receiver failed: %lu", GetLastError());
       if (out) DuplicateHandle(to, out, nullptr, nullptr, 0, FALSE, DUPLICATE_CLOSE_SOURCE);
@@ -1730,8 +1729,10 @@ void DeliverRights(HANDLE to, RightsGroup* group, WireReply* reply) {
     reply->Put<uint64_t>(static_cast<uint64_t>(reinterpret_cast<uintptr_t>(shared)));
     reply->Put<uint32_t>(e.kind);
   }
-  g_rights_in_flight -= static_cast<uint32_t>(group->entries.size());
-  group->entries.clear();
+  if (consume) {
+    g_rights_in_flight -= static_cast<uint32_t>(group->entries.size());
+    group->entries.clear();
+  }
 }
 
 void ServeRights(HANDLE pipe, In in) {
@@ -1819,7 +1820,8 @@ void ServeRights(HANDLE pipe, In in) {
       reply.Put<int32_t>(status);
       reply.Put<uint64_t>(status == 0 ? group->token[0] : 0);
       reply.Put<uint64_t>(status == 0 ? group->token[1] : 0);
-    } else if (op == wire::kRightsClaim || op == wire::kRightsCancel) {
+    } else if (op == wire::kRightsClaim || op == wire::kRightsCancel || op == wire::kRightsPeek) {
+      const bool peek = op == wire::kRightsPeek;
       uint64_t token[2];
       if (!req.Get(&token[0]) || !req.Get(&token[1])) break;
       std::lock_guard<std::mutex> lock(g_rights_lock);
@@ -1842,18 +1844,18 @@ void ServeRights(HANDLE pipe, In in) {
           }
           if (!queued) group = nullptr;
         }
-        if (group != nullptr) g_rights_groups.erase(it);
+        if (group != nullptr && !peek) g_rights_groups.erase(it);
       }
       if (group == nullptr) {
         reply.Put<int32_t>(-ENOENT);
-        if (op == wire::kRightsClaim) reply.Put<uint32_t>(0);
+        if (op != wire::kRightsCancel) reply.Put<uint32_t>(0);
       } else if (op == wire::kRightsCancel) {
         CloseRightsGroup(group.get());
         reply.Put<int32_t>(0);
       } else {
         reply.Put<int32_t>(0);
         reply.Put<uint32_t>(static_cast<uint32_t>(group->entries.size()));
-        DeliverRights(client, group.get(), &reply);
+        DeliverRights(client, group.get(), &reply, !peek);
       }
     } else if (op == wire::kRightsTake) {
       uint64_t queue, limit;

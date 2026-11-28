@@ -27,6 +27,8 @@ def main():
     cases = ['fifo', 'ignore', 'quota', 'priority', 'timeout', 'thread', 'handler',
              'cross', 'stop', 'status']
     results = []
+    # The process ends by its own SIGKILL; see expected_exit below.
+    cases.append('self-kill')
     for case in cases:
         started = time.monotonic()
         process = subprocess.Popen([str(binary), case, str(binary)], stdout=subprocess.PIPE,
@@ -38,8 +40,10 @@ def main():
             timedout = True
             os.killpg(process.pid, signal.SIGKILL)
             stdout, stderr = process.communicate(timeout=5)
-        passed = (not timedout and process.returncode == 0 and
-                  'realtime contract: 0 failures' in stdout and
+        expected_exit = -signal.SIGKILL if case == 'self-kill' else 0
+        sentinel = 'realtime contract: self SIGKILL' if case == 'self-kill' else 'realtime contract: 0 failures'
+        passed = (not timedout and process.returncode == expected_exit and
+                  sentinel in stdout and
                   not any(line.startswith('FAIL') for line in stdout.splitlines()))
         result = dict(case=case, exit=process.returncode, timeout=timedout,
                       elapsed_seconds=time.monotonic() - started, stdout=stdout,

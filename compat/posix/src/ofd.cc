@@ -376,6 +376,18 @@ bool LookupLocal(int fd, std::shared_ptr<OpenFileDescription>* out) {
   return true;
 }
 
+int FindPipeAliasLocal(int fd) {
+  if (!ValidSlot(fd) || InitializeLocal() < 0) return -1;
+  std::lock_guard<std::mutex> lock(table->mutex);
+  const auto& description = table->entries[fd];
+  if (!description) return -1;
+  for (unsigned alias = 0; alias < table->entries.size(); ++alias) {
+    if (alias != static_cast<unsigned>(fd) && table->entries[alias] == description &&
+        HandleFromFd(static_cast<int>(alias)) != INVALID_HANDLE_VALUE) return static_cast<int>(alias);
+  }
+  return -1;
+}
+
 int GetFlagsLocal(int fd) {
   auto snapshot = CaptureDescriptor(fd);
   return snapshot ? FileDescriptionFlags(snapshot) : -1;
@@ -569,6 +581,23 @@ extern "C" __declspec(dllexport) const OwnerApi* gesher_ofd_owner_v1() {
                             LookupLocal, SetKindLocal, GetKindLocal, GetFlagsLocal, SetFlagsLocal, CaptureLocal,
                             CaptureHandleLocal, AttachLocal, CaptureAllLocal, ShareLocal};
   return &api;
+}
+
+extern "C" __declspec(dllexport) int gesher_find_pipe_alias_v1(int fd) {
+  return FindPipeAliasLocal(fd);
+}
+
+std::shared_ptr<OpenFileDescription> LookupPipeDescription(int fd) {
+  std::shared_ptr<OpenFileDescription> description;
+  if (!LookupOfd(fd, &description)) return nullptr;
+  return description->OwnedPipe() || description->kind == DescriptorKind::kFifo ? description : nullptr;
+}
+
+int FindPipeAlias(int fd) {
+  using FindAlias = int (*)(int);
+  static auto find = reinterpret_cast<FindAlias>(reinterpret_cast<void*>(
+      GetProcAddress(GetModuleHandleW(nullptr), "gesher_find_pipe_alias_v1")));
+  return find ? find(fd) : -1;
 }
 
 int InitializeInheritedFileDescriptions() {

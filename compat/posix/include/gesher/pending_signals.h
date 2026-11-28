@@ -13,6 +13,16 @@ extern "C" void gesher_signal_queue_release();
 
 namespace gesher::signals {
 
+// Android gives the synchronous signal numbers priority within each queue.
+// Candidates is nonzero. These are the Linux LP64 numbers for SIGSEGV,
+// SIGBUS, SIGILL, SIGTRAP, SIGFPE, and SIGSYS.
+inline int NextPendingSignal(uint64_t candidates) {
+  constexpr auto bit = [](int sig) { return uint64_t{1} << (sig - 1); };
+  constexpr uint64_t synchronous = bit(11) | bit(7) | bit(4) | bit(5) | bit(8) | bit(31);
+  const uint64_t priority = candidates & synchronous;
+  return 1 + __builtin_ctzll(priority != 0 ? priority : candidates);
+}
+
 template <class Info>
 class Pending {
  public:

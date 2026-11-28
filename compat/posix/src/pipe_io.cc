@@ -11,6 +11,7 @@
 #include <bcrypt.h>
 #include <fcntl.h>
 #include <io.h>
+#include <limits.h>
 #include <poll.h>
 #include <pthread.h>
 #include <winternl.h>
@@ -41,16 +42,25 @@ class PipeAdmission {
     auto& description = *snapshot->description;
     if (!description.OwnedPipe() || (require_known && !description.KnownPipeStatus()))
       return errno = EOPNOTSUPP, -1;
+    const bool transfer = waiting || nonblocking_io;
+    const auto still_nonblocking = [&description]() {
+      return description.KnownPipeStatus() && (description.Flags() & O_NONBLOCK) != 0;
+    };
     for (;;) {
       if (canceled && WaitForSingleObject(canceled, 0) == WAIT_OBJECT_0) return errno = EINTR, -1;
       if (interrupted && WaitForSingleObject(interrupted, 0) == WAIT_OBJECT_0) return errno = EINTR, -1;
-      DWORD wait = WaitForSingleObject(description.pipe_mutex, waiting ? 10 : 0);
+      // Admission serializes calls on the file object. Contention between
+      // immediate native transfers says nothing about pipe capacity.
+      const DWORD wait = WaitForSingleObject(description.pipe_mutex, transfer ? 10 : 0);
       if (wait == WAIT_OBJECT_0 || wait == WAIT_ABANDONED) {
         mutex_ = description.pipe_mutex;
+        // An alias can set a new wait policy before we acquire the gate.
+        if (nonblocking_io && !still_nonblocking()) return errno = EAGAIN, -1;
         return !require_known || description.KnownPipeStatus() ? 0 : (errno = EOPNOTSUPP, -1);
       }
       if (wait != WAIT_TIMEOUT) return FailWithLastError();
-      if (!waiting) return errno = nonblocking_io ? EAGAIN : EOPNOTSUPP, -1;
+      if (!transfer) return errno = EOPNOTSUPP, -1;
+      if (nonblocking_io && !still_nonblocking()) return errno = EAGAIN, -1;
     }
   }
  private:
@@ -518,6 +528,18 @@ int PollPipeHandle(const DescriptorSnapshotPtr& snapshot, short events, short* r
   }
   *ready = result;
   return 0;
+}
+
+int PipeCapacity(const DescriptorSnapshotPtr& snapshot) {
+  if (snapshot->kind == DescriptorKind::kFifo) return FifoCapacity(snapshot);
+  PipeAdmission admission;
+  if (admission.Acquire(snapshot, false) < 0) return -1;
+  FILE_PIPE_LOCAL_INFORMATION info{};
+  if (QueryPipe(snapshot->handle, &info, sizeof(info), FilePipeLocalInformation) < 0) return -1;
+  // Created pipes send from client to server only. The inbound allocation
+  // is the capacity even when current write quota is reserved by a reader.
+  if (info.InboundQuota > INT_MAX) return errno = EOVERFLOW, -1;
+  return static_cast<int>(info.InboundQuota);
 }
 
 int PipeBytesAvailable(const DescriptorSnapshotPtr& snapshot, int* bytes) {

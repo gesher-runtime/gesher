@@ -258,6 +258,40 @@ void Sweep(FifoRing& ring, bool force) {
   }
 }
 
+// The transfer or poll needs a peer's current lifetime, even between liveness
+// sweeps. One live description suffices. Its named section survives dup,
+// inheritance and separate processes, including processes sharing one open.
+// The caller holds the ring lock.
+int HasPeer(FifoEndpoint& endpoint, uint32_t role) {
+  if (endpoint.trailer->role & role) return 1;
+  FifoRing& ring = *endpoint.ring;
+  RingHeader& header = *ring.header;
+  bool changed = false;
+  int result = 0;
+  for (Slot& slot : header.slots) {
+    if ((slot.role & role) == 0) continue;
+    HANDLE probe = OpenFileMappingW(FILE_MAP_READ, FALSE, EndpointName(ring.base, slot.nonce).c_str());
+    if (probe) {
+      CloseHandle(probe);
+      result = 1;
+      break;
+    }
+    const DWORD error = GetLastError();
+    if (error == ERROR_FILE_NOT_FOUND) {
+      std::memset(&slot, 0, sizeof(slot));
+      changed = true;
+    } else {
+      // A later accessible peer can still establish liveness.
+      result = -ErrnoFromWin32(error);
+    }
+  }
+  if (changed) {
+    Recount(header);
+    PulseEvent(ring.wake);
+  }
+  return result;
+}
+
 void RemoveSlot(FifoRing& ring, const uint64_t nonce[2]) {
   RingHeader& header = *ring.header;
   for (Slot& slot : header.slots) {
@@ -691,15 +725,15 @@ int TransferFifo(const DescriptorSnapshotPtr& snapshot, void* bytes, unsigned co
           PulseEvent(ring.wake);
           return static_cast<int>(n);
         }
-        if (header.writers == 0) return 0;
-        if (nonblocking) {
-          // EAGAIN only for a writer that really exists: a writer whose
-          // last process has just exited means end of file instead.
-          Sweep(ring, true);
-          return header.writers == 0 ? 0 : (errno = EAGAIN, -1);
-        }
+        const int writers = HasPeer(*endpoint, kWrite);
+        if (writers <= 0) return writers == 0 ? 0 : (errno = -writers, -1);
+        if (nonblocking) return errno = EAGAIN, -1;
       } else {
-        if (header.readers == 0) return done ? static_cast<int>(done) : (errno = EPIPE, -1);
+        const int readers = HasPeer(*endpoint, kRead);
+        if (readers <= 0) {
+          if (done) return static_cast<int>(done);
+          return errno = readers == 0 ? EPIPE : -readers, -1;
+        }
         const uint64_t room = kCapacity - used;
         // Up to PIPE_BUF bytes go in as one record or not at all; a larger
         // write may be split, and interleave with other writers, as on Linux.
@@ -742,14 +776,25 @@ int PollFifo(const DescriptorSnapshotPtr& snapshot, short events, short* ready) 
   if (access != O_WRONLY) {
     if (used) result |= events & (POLLIN | POLLRDNORM);
     // As pipe_poll: a reader hangs up only after a writer came and went.
-    if (header.writers == 0 && endpoint->trailer->writer_epoch != header.writer_opens) result |= POLLHUP;
+    if (endpoint->trailer->writer_epoch != header.writer_opens) {
+      const int writers = HasPeer(*endpoint, kWrite);
+      if (writers < 0) return errno = -writers, -1;
+      if (writers == 0) result |= POLLHUP;
+    }
   }
   if (access != O_RDONLY) {
-    if (header.readers == 0) result |= POLLERR;
+    const int readers = HasPeer(*endpoint, kRead);
+    if (readers < 0) return errno = -readers, -1;
+    if (readers == 0) result |= POLLERR;
     if (kCapacity - used >= kPipeBuf) result |= events & (POLLOUT | POLLWRNORM);
   }
   *ready = result;
   return 0;
+}
+
+int FifoCapacity(const DescriptorSnapshotPtr& snapshot) {
+  FifoEndpoint* endpoint = Endpoint(snapshot);
+  return endpoint ? static_cast<int>(endpoint->ring->header->capacity) : -1;
 }
 
 int FifoBytesAvailable(const DescriptorSnapshotPtr& snapshot, int* bytes) {
