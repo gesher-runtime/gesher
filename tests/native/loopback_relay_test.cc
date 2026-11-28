@@ -77,9 +77,14 @@ class Lane {
   std::shared_ptr<std::atomic<unsigned>> notified_ = std::make_shared<std::atomic<unsigned>>(0);
 };
 
-SOCKET Listener(uint16_t* port) {
+SOCKET Listener(uint16_t* port, int receive_capacity = 0) {
   SOCKET listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
   Require(listener != INVALID_SOCKET, "real listener socket");
+  if (receive_capacity) {
+    Require(setsockopt(listener, SOL_SOCKET, SO_RCVBUF,
+        reinterpret_cast<const char*>(&receive_capacity), sizeof(receive_capacity)) == 0,
+        "bound actual receive buffer before the TCP handshake");
+  }
   sockaddr_in ip{};
   ip.sin_family = AF_INET;
   ip.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
@@ -99,6 +104,32 @@ relay::Request Target(uint16_t port) {
   request.target.address[3] = 1;
   request.target.port = port;
   return request;
+}
+
+relay::Request BackpressureTarget(uint16_t port) {
+  auto request = Target(port);
+  const auto option = static_cast<uint32_t>(relay::Option::kSendBuffer);
+  request.options.mask = 1u << option;
+  request.options.values[option] = 4096;
+  return request;
+}
+
+void BackpressureBuffers(Lane& lane, SOCKET peer) {
+  int receive = 0, size = sizeof(receive);
+  int32_t send = 0;
+  Require(getsockopt(peer, SOL_SOCKET, SO_RCVBUF, reinterpret_cast<char*>(&receive), &size) == 0 &&
+      receive > 0 && receive <= 65536, "accepted socket inherits bounded real receive buffer");
+  Require(lane.client->Control(relay::Option::kSendBuffer, false, &send) == 0 &&
+      send > 0 && send <= 65536, "retained sender has bounded real send buffer before data");
+  std::printf("BACKPRESSURE actual sender SO_SNDBUF=%d peer SO_RCVBUF=%d\n", send, receive);
+}
+
+void ReportBackpressure(SOCKET peer, const relay::Snapshot& state, size_t accepted) {
+  u_long queued = 0;
+  Require(ioctlsocket(peer, FIONREAD, &queued) == 0 && queued != 0,
+      "blocked target has actual unread kernel data");
+  std::printf("BACKPRESSURE accepted=%zu client readable=%zu writable=%zu peer FIONREAD=%lu\n",
+      accepted, state.readable, state.writable, queued);
 }
 
 void EarlySource() {
@@ -364,16 +395,17 @@ void Reject() {
 
 void SocketOptions() {
   uint16_t port = 0;
-  SOCKET listener = Listener(&port);
-  auto request = Target(port);
+  SOCKET listener = Listener(&port, 4096);
+  auto request = BackpressureTarget(port);
   const auto no_delay = static_cast<uint32_t>(relay::Option::kNoDelay);
-  request.options.mask = 1u << no_delay;
+  request.options.mask |= 1u << no_delay;
   request.options.values[no_delay] = 1;
   {
     Lane lane(request);
     Require(lane.Connected().connected, "initial native option before bind/connect");
     SOCKET peer = accept(listener, nullptr, nullptr);
     Require(peer != INVALID_SOCKET, "accept option witness");
+    BackpressureBuffers(lane, peer);
     int32_t value = 0;
     const int option_result = lane.client->Control(relay::Option::kNoDelay, false, &value);
     if (option_result || value != 1) std::fprintf(stderr, "initial option: error=%d value=%d\n", option_result, value);
@@ -411,18 +443,21 @@ void SocketOptions() {
     Require(setsockopt(peer, SOL_SOCKET, SO_RCVBUF, reinterpret_cast<const char*>(&receive_capacity),
         sizeof(receive_capacity)) == 0, "small real receive buffer for outbound backpressure");
     std::array<std::byte, 8192> bytes{};
+    size_t accepted = 0;
     deadline = GetTickCount64() + 3000;
     ULONGLONG stalled = 0;
     while (GetTickCount64() < deadline) {
       size_t count = 0;
       const int result = lane.client->Send(bytes, &count);
       Require(result == 0 || result == WSAEWOULDBLOCK, "fill outgoing queue without fake progress");
+      accepted += count;
       if (count) stalled = 0;
       else if (!stalled) stalled = GetTickCount64();
       else if (GetTickCount64() - stalled > 100) break;
-      Sleep(1);
+      if (!count) Sleep(1);
     }
     Require(stalled && lane.client->State().writable == 0, "outgoing socket and queues backpressured");
+    ReportBackpressure(peer, lane.client->State(), accepted);
     std::array<std::thread, 4> queries;
     for (auto& query : queries) query = std::thread([&] {
       int32_t actual = 0;
@@ -439,11 +474,12 @@ void SocketOptions() {
 
 void BackpressuredClose() {
   uint16_t port = 0;
-  SOCKET listener = Listener(&port);
-  Lane lane(Target(port));
+  SOCKET listener = Listener(&port, 4096);
+  Lane lane(BackpressureTarget(port));
   Require(lane.Connected().connected, "connect final-close backpressure witness");
   SOCKET peer = accept(listener, nullptr, nullptr);
   Require(peer != INVALID_SOCKET, "accept final-close witness");
+  BackpressureBuffers(lane, peer);
   int buffer = 4096;
   Require(setsockopt(peer, SOL_SOCKET, SO_RCVBUF, reinterpret_cast<const char*>(&buffer),
       sizeof(buffer)) == 0, "set small actual receive buffer");
@@ -460,10 +496,11 @@ void BackpressuredClose() {
     if (count) stalled = 0;
     else if (!stalled) stalled = GetTickCount64();
     else if (GetTickCount64() - stalled > 200) break;
-    Sleep(1);
+    if (!count) Sleep(1);
   }
   Require(stalled && !lane.client->State().writable && accepted > 65536,
       "kernel, transport and client buffer are genuinely backpressured");
+  ReportBackpressure(peer, lane.client->State(), accepted);
   lane.client->Close();
   Sleep(5000);
   int timeout = 7000;
@@ -485,12 +522,13 @@ void BackpressuredClose() {
 
 void FullDuplexClose() {
   uint16_t port = 0;
-  SOCKET listener = Listener(&port);
+  SOCKET listener = Listener(&port, 4096);
   {
-    Lane lane(Target(port));
+    Lane lane(BackpressureTarget(port));
     Require(lane.Connected().connected, "connect duplex close witness");
     SOCKET peer = accept(listener, nullptr, nullptr);
     Require(peer != INVALID_SOCKET, "accept duplex close witness");
+    BackpressureBuffers(lane, peer);
     int buffer = 4096, timeout = 12000;
     Require(setsockopt(peer, SOL_SOCKET, SO_SNDBUF, reinterpret_cast<const char*>(&buffer), sizeof(buffer)) == 0 &&
         setsockopt(peer, SOL_SOCKET, SO_RCVBUF, reinterpret_cast<const char*>(&buffer), sizeof(buffer)) == 0 &&
@@ -528,10 +566,11 @@ void FullDuplexClose() {
       if (count) stalled = 0;
       else if (!stalled) stalled = GetTickCount64();
       else if (GetTickCount64() - stalled > 300 && lane.client->State().readable == 65536) break;
-      Sleep(1);
+      if (!count) Sleep(1);
     }
     Require(stalled && !wrote.load() && lane.client->State().readable == 65536 &&
         !lane.client->State().writable && accepted > 65536, "both directions are actually blocked before final close");
+    ReportBackpressure(peer, lane.client->State(), accepted);
     lane.client->Close();
     target.join();
     Require(wrote.load() && received == accepted, "final close discards inbound without losing accepted outgoing bytes");
