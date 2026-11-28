@@ -108,7 +108,6 @@ public final class ClipboardService extends IClipboard.Default
     private final PackageManagerService mPm;
     private final CallerIdentity mCallers;
     private final AppOpsService mAppOps;
-    private final UriGrants mUriGrants;
     private final ClipboardImageProvider mImages;
     private final Host mHost;
     private final AutoCloseable mPackageChanges;
@@ -134,11 +133,18 @@ public final class ClipboardService extends IClipboard.Default
         mPm = Objects.requireNonNull(pm);
         mCallers = new CallerIdentity(pm, atm);
         mAppOps = pm.appOps();
-        mUriGrants = Objects.requireNonNull(atm.uriGrants());
         mImages = atm.clipboardImages();
         mHost = Objects.requireNonNull(host);
         mPackageChanges = pm.onPackageChange(pkg -> packageLifetimeChanged(pkg.packageName));
         mPackageRemovals = pm.onPackageRemoval(this::packageLifetimeChanged);
+    }
+
+    /**
+     * The activity manager's URI grant ledger, resolved where a clipboard URI is granted
+     * or retired. A clip with content URIs is never published or released without it.
+     */
+    private UriGrants uriGrants() {
+        return Objects.requireNonNull(mAtm.uriGrants(), "URI grants are not available");
     }
 
     private record ListenerInfo(int uid, String packageName, String attributionTag, ApkPackage owner) { }
@@ -288,7 +294,7 @@ public final class ClipboardService extends IClipboard.Default
     private boolean replaceLocked(ClipData clip, String source, Uri image, ClipUris uris) {
         boolean changed = clip != null || mClip != null;
         if (mOwnedImage != null) mImages.remove(mOwnedImage);
-        if (mClipUris != null) mUriGrants.revokeByOwner(mClipUris.owner);
+        if (mClipUris != null) uriGrants().revokeByOwner(mClipUris.owner);
         mOwnedImage = image;
         mClipUris = uris;
         mClip = clip;
@@ -320,7 +326,7 @@ public final class ClipboardService extends IClipboard.Default
         if (uris != null && uris.publisher != null
                 && uris.publisher.packageName.equals(packageName) && !current(uris.publisher)) {
             uris.retired = true;
-            mUriGrants.revokeByOwner(uris.owner);
+            uriGrants().revokeByOwner(uris.owner);
         }
         pruneListeners();
     }
@@ -462,7 +468,7 @@ public final class ClipboardService extends IClipboard.Default
                 if (!current(identity)) return;
                 // Validate the publisher before changing the clipboard. The
                 // display attribution supplied to setPrimaryClipAsPackage is separate.
-                mUriGrants.prepareClipboard(identity.uid, null, uris);
+                uriGrants().prepareClipboard(identity.uid, null, uris);
             }
             clipUris = new ClipUris(identity, uris);
         }
@@ -531,9 +537,9 @@ public final class ClipboardService extends IClipboard.Default
                         if (mOwnedImage != null) {
                             mImages.grantRead(uris.owner, reader.packageName, mOwnedImage);
                         } else {
-                            List<UriGrants.Grant> grants = mUriGrants.prepareClipboard(uris.publisher.uid,
+                            List<UriGrants.Grant> grants = uriGrants().prepareClipboard(uris.publisher.uid,
                                     reader.packageName, uris.uris);
-                            mUriGrants.publish(uris.owner, grants);
+                            uriGrants().publish(uris.owner, grants);
                         }
                         uris.readers.add(reader.owner);
                     }
