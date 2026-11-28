@@ -2,6 +2,8 @@
 // Run on Windows: these checks use the production helper and real Unicode NLS
 // classification. They verify formatting, not a substitute renderer or dialog.
 #include "../../compat/shell/launch_failure_text.h"
+#include "../../compat/shell/app_crash_text.h"
+#include "../../compat/locale/ui_messages.h"
 
 #include <cstdio>
 
@@ -18,6 +20,23 @@ static void Check(const char* label, const std::wstring& input,
 }
 
 int main() {
+  for (const auto lang : {GESHER_UI_EN, GESHER_UI_HE}) {
+    for (const char* key : {"app_crash_generic", "app_crash_bluetooth",
+                            "app_crash_security", "app_crash_compatibility"}) {
+      const std::wstring report = L"C:\\\u05ea\u05d9\u05e7\u05d9\u05d4\\app{0}.log";
+      const std::wstring formatted = GesherFormatAppCrashText(
+          GesherUiText(lang, key), L"fixture.pkg{1}", report.c_str(), L"event{0}");
+      ++checks;
+      if (formatted.find(L'\u2068') != std::wstring::npos
+          || formatted.find(L'\u2069') != std::wstring::npos
+          || formatted.find(L"\u202afixture.pkg{1}\u202c") == std::wstring::npos
+          || formatted.find(L"\u202a" + report + L"\u202c") == std::wstring::npos
+          || formatted.find(L"\u202aevent{0}\u202c") == std::wstring::npos) {
+        std::fprintf(stderr, "FAIL: crash catalog markers and literal arguments (%s)\n", key);
+        ++failures;
+      }
+    }
+  }
   Check("empty", L"", L"");
   Check("LTR dialogs unchanged", L"Error.\n\u05e9\u05dc\u05d5\u05dd", L"Error.\n\u05e9\u05dc\u05d5\u05dd", false);
   Check("single English paragraph", L"Cannot open app.apk (error 5).",

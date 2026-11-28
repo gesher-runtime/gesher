@@ -169,6 +169,16 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     public PermissionPolicy permissions() { return mPermissions; }
 
+    private DeviceAdminPolicyService mDeviceAdminPolicy;
+    synchronized DeviceAdminPolicyService deviceAdminPolicy() {
+        if (mDeviceAdminPolicy == null) mDeviceAdminPolicy = new DeviceAdminPolicyService(this);
+        return mDeviceAdminPolicy;
+    }
+    private DeviceAdminRequests mDeviceAdminRequests;
+    synchronized DeviceAdminRequests deviceAdminRequests() {
+        if (mDeviceAdminRequests == null) mDeviceAdminRequests = new DeviceAdminRequests(this);
+        return mDeviceAdminRequests;
+    }
     private ExactAlarmAccessRequests mExactAlarmAccessRequests;
     synchronized ExactAlarmAccessRequests exactAlarmAccessRequests() {
         if (mExactAlarmAccessRequests == null) mExactAlarmAccessRequests = new ExactAlarmAccessRequests(this);
@@ -660,6 +670,8 @@ public final class PackageManagerService extends IPackageManager.Default {
         if (p == null && userId == 0 && ExactAlarmAccessRequests.PACKAGE.equals(className.getPackageName())) {
             ActivityInfo nativeActivity = exactAlarmAccessRequests().activityInfo(className, flags);
             if (nativeActivity != null) return nativeActivity;
+            nativeActivity = deviceAdminRequests().activityInfo(className, flags);
+            if (nativeActivity != null) return nativeActivity;
         }
         if (p == null && BrowserPackageSupport.isBrowserPackage(className.getPackageName())) {
             return BrowserPackageSupport.activityInfo(className.getClassName(), flags);
@@ -695,7 +707,7 @@ public final class PackageManagerService extends IPackageManager.Default {
             for (String removing : mRemoving.keySet()) packages.remove(removing);
         }
         return new ParceledListSlice<>(new ActivityOptionsResolver(packages, hostBrowser,
-                exactAlarmAccessRequests()).query(
+                exactAlarmAccessRequests(), deviceAdminRequests()).query(
                 caller, specifics, specificTypes, intent, resolvedType, flags));
     }
 
@@ -708,7 +720,7 @@ public final class PackageManagerService extends IPackageManager.Default {
             confirmation.isDefault = true;
             return List.of(confirmation);
         }
-        if (ExactAlarmAccessRequests.handles(intent, resolvedType)) {
+        if (ExactAlarmAccessRequests.handles(intent, resolvedType) || DeviceAdminRequests.handles(intent, resolvedType)) {
             if (userId != 0) return new ArrayList<>();
             Map<String, ApkPackage> packages = new LinkedHashMap<>(mPackages);
             for (String removing : mRemoving.keySet()) packages.remove(removing);
@@ -717,6 +729,8 @@ public final class PackageManagerService extends IPackageManager.Default {
             List<ResolveInfo> settings = new ActivityOptionsResolver(packages, false)
                     .activities(intent, resolvedType, flags);
             ResolveInfo nativeSettings = exactAlarmAccessRequests().resolve(intent, resolvedType, flags);
+            if (nativeSettings != null) settings.add(nativeSettings);
+            nativeSettings = deviceAdminRequests().resolve(intent, resolvedType, flags);
             if (nativeSettings != null) settings.add(nativeSettings);
             settings.sort(ActivityOptionsResolver.ORDER);
             return settings;

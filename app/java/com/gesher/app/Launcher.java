@@ -299,6 +299,7 @@ public final class Launcher {
                 return MobileDataCommands.run(rest);
             case "windows": return windows(rest);
             case "special-access": return specialAccess(rest);
+            case "device-admin": return deviceAdmin(rest);
             case "accounts": return accounts(rest);
             case "settings-closed": return settingsClosed(rest, false);
             case "settings-shown": return settingsClosed(rest, true);
@@ -418,6 +419,20 @@ public final class Launcher {
      * standard output: {@code special-access}, the op's public name and {@code allowed} or
      * {@code denied}, separated by tabs. The device checks the package and the op.
      */
+    private static int deviceAdmin(List<String> args) throws Exception {
+        if (args.size() != 1 && (args.size() != 2 || !"revoke".equals(args.get(1)))) return usage();
+        if (ensureDevice(false) == null) return 3;
+        try {
+            boolean active = gesher().deviceAdmin(args.get(0), args.size() == 2);
+            System.out.println("device-admin\t" + (active ? "active" : "inactive"));
+            return 0;
+        } catch (UnsupportedOperationException unavailable) {
+            log(unavailable.getMessage()); return 4;
+        } catch (IllegalArgumentException | IllegalStateException | SecurityException failure) {
+            log(failure.getMessage()); return 1;
+        }
+    }
+
     private static int specialAccess(List<String> args) throws Exception {
         if (args.size() != 1 && args.size() != 3 && args.size() < 6) return usage();
         if (args.size() >= 3 && !"allow".equals(args.get(2)) && !"deny".equals(args.get(2))) {

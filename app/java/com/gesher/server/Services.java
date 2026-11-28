@@ -327,9 +327,11 @@ public final class Services {
         services.put(Context.STORAGE_STATS_SERVICE, StandIn.of(
                 android.app.usage.IStorageStatsManager.class,
                 new StorageStatsService(pm, atm::authenticatedPackageCodeForPid)).asBinder());
-        services.put(Context.DEVICE_POLICY_SERVICE, StandIn.of(
+        pm.deviceAdminPolicy().configure(atm::authenticatedPackageCodeForPid, persistentAccounts,
+                intent -> am.sendBroadcastFor(null, intent, null));
+        services.put(Context.DEVICE_POLICY_SERVICE, StandIn.ofStrictDefaults(
                 android.app.admin.IDevicePolicyManager.class,
-                new DeviceServices.DevicePolicyService()).asBinder());
+                pm.deviceAdminPolicy()).asBinder());
         // Telephony over the host's cellular modem, if Windows reported one at boot
         // (docs/telephony.md); without one, AOSP's no-phone answers.
         TelephonyService.Endpoints telephony = TelephonyService.create(pm, am,

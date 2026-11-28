@@ -50,6 +50,7 @@ public final class GesherService extends Binder {
     /** Saved accounts as "Base64(UTF-8 type) TAB Base64(UTF-8 name)" rows, and removing one on explicit user request. */
     static final int LIST_ACCOUNTS = IBinder.FIRST_CALL_TRANSACTION + 17;
     static final int REMOVE_ACCOUNT = IBinder.FIRST_CALL_TRANSACTION + 18;
+    static final int DEVICE_ADMIN = IBinder.FIRST_CALL_TRANSACTION + 19;
 
     static final String EXIT_DESCRIPTOR = "com.gesher.ILaunchExit";
     static final int EXIT_STATUS = IBinder.FIRST_CALL_TRANSACTION;
@@ -90,6 +91,10 @@ public final class GesherService extends Binder {
 
     /** What the service does; the system server implements it. */
     interface Device {
+        /** Host Settings may query/revoke, never silently activate an administrator. */
+        default boolean deviceAdmin(String packageName, boolean revoke) {
+            throw new UnsupportedOperationException("Device administrator controls unavailable");
+        }
         String[] install(String apk) throws Exception;
         /** Explicit host installation may refresh installer eligibility without replacing code. */
         default String[] install(String apk, boolean explicitInstall) throws Exception {
@@ -163,7 +168,7 @@ public final class GesherService extends Binder {
     @Override
     protected boolean onTransact(int code, Parcel data, Parcel reply, int flags)
             throws RemoteException {
-        if (code < INSTALL || code > REMOVE_ACCOUNT) {
+        if (code < INSTALL || code > DEVICE_ADMIN) {
             return super.onTransact(code, data, reply, flags);
         }
         data.enforceInterface(DESCRIPTOR);
@@ -264,6 +269,15 @@ public final class GesherService extends Binder {
                     LaunchResult result = mDevice.startShortcutAndWait(pkg, key);
                     reply.writeNoException(); reply.writeTypedObject(result.result, 0);
                     reply.writeInt(result.taskId); reply.writeStrongBinder(result.exitReceipt);
+                    return true;
+                }
+                case DEVICE_ADMIN: {
+                    String pkg = data.readString();
+                    boolean revoke = data.readBoolean();
+                    data.enforceNoDataAvail();
+                    boolean active = mDevice.deviceAdmin(pkg, revoke);
+                    reply.writeNoException();
+                    reply.writeBoolean(active);
                     return true;
                 }
                 case SPECIAL_ACCESS: {
@@ -519,6 +533,19 @@ public final class GesherService extends Binder {
         private static UnsupportedOperationException olderDevice() {
             return new UnsupportedOperationException("The running Gesher device does not support"
                     + " this; restart it (gesher-app shutdown) to use the installed version");
+        }
+
+        /** Queries current enrollment, optionally revoking it; never grants administration. */
+        public boolean deviceAdmin(String packageName, boolean revoke) throws RemoteException {
+            Parcel data = Parcel.obtain(), reply = Parcel.obtain();
+            try {
+                data.writeInterfaceToken(DESCRIPTOR);
+                data.writeString(java.util.Objects.requireNonNull(packageName));
+                data.writeBoolean(revoke);
+                if (!mBinder.transact(DEVICE_ADMIN, data, reply, 0)) throw olderDevice();
+                reply.readException();
+                return reply.readBoolean();
+            } finally { data.recycle(); reply.recycle(); }
         }
 
         /** The installed app's special access switches: rows of "op-name TAB allowed|denied". */
