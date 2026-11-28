@@ -41,7 +41,7 @@ jobs:
       - uses: ilammy/msvc-dev-cmd@v1
       - name: Build actual Windows clipboard access implementation
         shell: cmd
-        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /Icompat\devsvc compat\devsvc\clipboard_access.cc tests\clipboard\access_windows_test.cc /Fe:clipboard-access.exe user32.lib wtsapi32.lib
+        run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 /Icompat\devsvc compat\devsvc\clipboard_access.cc tests\clipboard\access_windows_test.cc /Fe:clipboard-access.exe user32.lib wtsapi32.lib shell32.lib
       - name: Check actual foreground, session and resource lifetimes
         shell: pwsh
         run: |

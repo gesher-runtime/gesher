@@ -12,6 +12,28 @@ Check 'services: native permission dialog explicit consent and Hebrew/English co
   $permissionDialogOut
 } @('permission_dialog_test:', ' checks, 0 failures')
 
+# Same trusted enrollment controls, with no real admin grant or Windows session lock.
+$adminPolicyBcp = $bcpFixes + ':' + (NoDrive "$Dir/services-tests.dex")
+$adminPolicyArgs = @("-Xbootclasspath:$adminPolicyBcp", "-Ximage:$(NoDrive "$root/system")/framework/boot.art", '-Xint', '-Xusejit:false',
+  'com.gesher.server.DeviceAdminPolicyRuntimeTest')
+foreach ($adminFixture in @('valid', 'unsupported', 'unprotected', 'updated')) {
+  $adminPolicyArgs += NoDrive "$Dir/deviceadmin-$adminFixture.apk"
+}
+$adminPolicyOut = FixesRun $adminPolicyArgs 90
+$adminPolicyCode = $LASTEXITCODE
+Check 'services: device administrator real APK policy, identity, revocation and update contracts' {
+  $global:LASTEXITCODE = $adminPolicyCode
+  $adminPolicyOut
+} @('DeviceAdminPolicyRuntimeTest: 48 checks passed; host lock not executed')
+
+# Native enrollment controls do not grant policy or submit a session lock.
+$deviceAdminDialogOut = RunTimed "$Dir/device_admin_dialog_test.exe" @() 90
+$deviceAdminDialogCode = $LASTEXITCODE
+Check 'services: device administrator explicit consent and unsupported policies' {
+  $global:LASTEXITCODE = $deviceAdminDialogCode
+  $deviceAdminDialogOut
+} @('device admin native UI:', ' checks, 0 failures')
+
 foreach ($serviceFixture in @('RunningTaskSnapshotTest', 'TaskStackContractTest', 'TextServicesContractTest', 'MediaRouterContractTest', 'HandwritingUnavailableContractTest')) {
   $taskStackData = $null
   $taskStackSavedData = [Environment]::GetEnvironmentVariable('ANDROID_DATA', 'Process')

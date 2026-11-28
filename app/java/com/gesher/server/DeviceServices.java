@@ -168,12 +168,6 @@ final class DeviceServices {
      * {@code usagestats}: no collected usage history or Android app standby.
      */
     /**
-     * {@code device_policy}: no Android administrators; Android encryption is unsupported.
-     */
-    static final class DevicePolicyService extends UnmanagedDevicePolicyService {
-    }
-
-    /**
      * {@code device_identifiers}: Build.getSerial()'s service. The serial is
      * {@link Build#UNKNOWN}, as an app without the privileged phone permission sees it
      * through device_info_plus (Flutter's RustDesk); without the service getSerial threw

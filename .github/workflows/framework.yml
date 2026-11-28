@@ -480,6 +480,7 @@ jobs:
           chmod +x work/build-tools-36.1/zipalign  # a cache saved before zipalign was made executable
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" APP_DIR="$PWD/tests/apps/exitstatusapp" tests/apps/lifecycle/build.sh out/app --framework-res out/framework-res/framework-res.apk --framework-classes out/framework/classes --core-classes out/coremod
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" APP_DIR="$PWD/tests/apps/crashnotice" tests/apps/lifecycle/build.sh out/app --framework-res out/framework-res/framework-res.apk --framework-classes out/framework/classes --core-classes out/coremod
+          python3 tools/test_device_admin_runtime.py --fixtures-only --aapt2 "$PWD/work/build-tools-36.1/aapt2" --android-jar "$PWD/out/framework-res/framework-res.apk" --java-home "$JAVA_HOME" --output out/app/deviceadmin
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" bash tests/apps/sharedlibraryapp/build.sh out/app --framework-res out/framework-res/framework-res.apk --framework-classes out/framework/classes --core-classes out/coremod
           BUILD_TOOLS_DIR="$PWD/work/build-tools-36.1" tests/apps/lifecycle/build.sh out/app \
             --framework-res out/framework-res/framework-res.apk \
@@ -1045,6 +1046,7 @@ jobs:
           cp out/app/exitstatusapp.apk dist-framework/
           cp out/app/crashnotice.apk dist-framework/
           cp out/app/hellocred.apk dist-framework/
+          cp out/app/deviceadmin/deviceadmin-*.apk dist-framework/
           cp out/app/sharedlibraryapp.apk out/app/sharedlibrarydlc.apk out/app/sharedlibraryafter.apk out/app/sharedlibraryafterdlc.apk out/app/sharedlibrarybad.apk out/app/shared-base-v1.jar out/app/shared-base-v2.jar out/app/shared-entry.jar dist-framework/
           cp out/app/graphics-tests.dex out/app/web3-query-tests.dex dist-framework/
           ls -la dist-framework

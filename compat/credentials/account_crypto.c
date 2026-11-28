@@ -122,6 +122,43 @@ Java_com_gesher_server_AccountSecretStore_nativeUnprotect(JNIEnv* env, jclass cl
 #include "background_permission_dialog.inc"
 #include "review_permission_dialog.inc"
 #include "exact_alarm_dialog.inc"
+#include "device_admin_dialog.inc"
+
+/* Administration is available only inside the trusted system server library. */
+JNIEXPORT jboolean GESHER_NATIVE
+Java_com_gesher_server_DeviceAdminRequests_nativeAvailable(JNIEnv* env, jclass cls) {
+  (void)env; (void)cls;
+  return server_process ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jboolean GESHER_NATIVE
+Java_com_gesher_server_DeviceAdminRequests_nativeConfirm(JNIEnv* env, jclass cls,
+        jstring label, jstring description, jboolean supported) {
+  (void)cls;
+  if (!RequireServer(env) || label == NULL || description == NULL) return JNI_FALSE;
+  jsize label_length = (*env)->GetStringLength(env, label);
+  jsize description_length = (*env)->GetStringLength(env, description);
+  if (label_length > 4096 || description_length > 16384) return JNI_FALSE;
+  const jchar* label_chars = (*env)->GetStringChars(env, label, NULL);
+  if (label_chars == NULL) return JNI_FALSE;
+  const jchar* description_chars = (*env)->GetStringChars(env, description, NULL);
+  if (description_chars == NULL) { (*env)->ReleaseStringChars(env, label, label_chars); return JNI_FALSE; }
+  /* JNI strings need their own NUL termination before passing to native controls. */
+  WCHAR* label_copy = (WCHAR*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, ((SIZE_T)label_length + 1) * sizeof(WCHAR));
+  WCHAR* description_copy = (WCHAR*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, ((SIZE_T)description_length + 1) * sizeof(WCHAR));
+  BOOL accepted = FALSE;
+  if (label_copy != NULL && description_copy != NULL) {
+    memcpy(label_copy, label_chars, label_length * sizeof(WCHAR));
+    memcpy(description_copy, description_chars, description_length * sizeof(WCHAR));
+  }
+  (*env)->ReleaseStringChars(env, description, description_chars);
+  (*env)->ReleaseStringChars(env, label, label_chars);
+  if (label_copy != NULL && description_copy != NULL)
+    accepted = DeviceAdminDialog(GesherUiCurrentLanguage(), label_copy, description_copy, supported);
+  if (label_copy != NULL) HeapFree(GetProcessHeap(), 0, label_copy);
+  if (description_copy != NULL) HeapFree(GetProcessHeap(), 0, description_copy);
+  return supported && accepted ? JNI_TRUE : JNI_FALSE;
+}
 
 JNIEXPORT jboolean GESHER_NATIVE
 Java_com_gesher_server_ExactAlarmAccessRequests_nativeAvailable(JNIEnv* env, jclass cls) {

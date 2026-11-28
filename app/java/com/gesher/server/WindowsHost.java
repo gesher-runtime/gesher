@@ -21,6 +21,14 @@ public final class WindowsHost {
     private WindowsHost() {
     }
 
+    /** Probe this backend's version without submitting a lock request. */
+    static boolean deviceAdminAvailable() {
+        if (!available()) return false;
+        try { return nativeDeviceAdminAvailable(); }
+        catch (LinkageError missing) { return false; }
+    }
+    private static native boolean nativeDeviceAdminAvailable();
+
     public static final int EVENT_CLIPBOARD = 1;
     public static final int EVENT_TIME_CHANGED = 1 << 1;
     public static final int EVENT_RESUMED = 1 << 2;
@@ -133,6 +141,13 @@ public final class WindowsHost {
         if (!available()) return -1;
         try { return nativeSessionLockState(); }
         catch (UnsatisfiedLinkError unavailable) { return -1; }
+    }
+
+    /** Locks this real Windows session and waits for an observed locked state. */
+    public static boolean lockWorkstation() {
+        if (!available()) return false;
+        try { return nativeLockWorkstation(); }
+        catch (UnsatisfiedLinkError unavailable) { return false; }
     }
 
     public static String clipboardText() {
@@ -551,6 +566,7 @@ public final class WindowsHost {
     private static native int nativeClipboardSequence();
     private static native long[] nativeForegroundProcess();
     private static native int nativeSessionLockState();
+    private static native boolean nativeLockWorkstation();
     private static native int nativeAlarmWait(long utcMillis, boolean wakeup, int timeoutMs);
     private static native void nativeAlarmKick();
     private static native int[] nativePowerStatus();

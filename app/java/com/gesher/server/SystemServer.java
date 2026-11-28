@@ -752,6 +752,20 @@ public final class SystemServer {
         }
 
         @Override
+        public boolean deviceAdmin(String packageName, boolean revoke) {
+            if (packageName == null || mServices.pm.get(packageName) == null)
+                throw new IllegalArgumentException("Package is not installed");
+            DeviceAdminPolicyService policy = mServices.pm.deviceAdminPolicy();
+            java.util.List<android.content.ComponentName> admins = policy.getActiveAdmins(0);
+            if (admins == null) return false;
+            for (android.content.ComponentName admin : admins) {
+                if (!packageName.equals(admin.getPackageName())) continue;
+                if (revoke) policy.revoke(admin);
+            }
+            return policy.packageHasActiveAdmins(packageName, 0);
+        }
+
+        @Override
         public String[] specialAccess(String packageName) {
             return SpecialAccess.rows(SpecialAccess.query(mServices.pm, packageName));
         }

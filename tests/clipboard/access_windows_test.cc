@@ -34,6 +34,7 @@ int sessionState() {
 }
 }
 int main() {
+  check(!gesher::devsvc::DeviceAdminServer(), "An ordinary native test process is not system_server");
   HWND previous = GetForegroundWindow();
   HWND window = CreateWindowExW(0, L"STATIC", L"Gesher clipboard native focus contract", WS_OVERLAPPEDWINDOW,
       80, 80, 400, 160, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);

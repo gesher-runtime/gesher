@@ -578,16 +578,46 @@ Five bounded local candidate executions pass; no unique production mechanism
 is established. New failure-only diagnostics retain all rounds, deadlines and
 success conditions while recording fork/child/wait results for the next CI.
 The Notes e2e preview also remains unresolved: hosted Java issues two requests
-without native navigation, then the close watchdog exits 137. Local ordinary
-candidate runs with both the local and producer-hash-verified CI bridge reach
-both real native HTTP200 navigations and clean exit, but fail the original
-pixel assertions. Different local WebView2 and capture conditions prevent
-treating those runs as a successful reproduction or resolution. No production
-WebView change or weakened expectation was made.
+without native navigation, then the close watchdog exits 137. Initial local
+projections reach real native HTTP200 navigations and clean exit but fail the
+original pixel assertions. A subsequent complete 8a2 CI runtime, with all 958
+producer payload hashes verified and the installer assembly order preserved,
+passes the unchanged Notes workload and pixel assertions in one controlled
+ordinary-runtime execution. The exact CI core archive SHA256 is
+`882eb79a378389c94d64c438859dcb082ddfd6f0db291bcd0623ef021fb7eaeb`.
+Local WebView2 differs from the hosted version; the hosted failure mechanism
+has not been reproduced or repaired. No production WebView change or weakened
+expectation was made.
 
 The separately supplied Windows Hello candidate ZIP is explicitly tied to 8a2
 and explicit appcontainer-trusted mode. Payload integrity, genuine unavailability
-and process identity checks pass locally; configured-user approvals,
-cancellations and foreground lifecycle still require the maintainer's real
-machine. The final shipping package without explicit mode remains a separate
-qualification. General protected networking and default enablement remain open.
+and process identity checks pass locally. On the maintainer's configured machine,
+the matching manifest `1f9c73e01f310672bc6f042e1a46625a68f8fcb25edb58695d6584c854fd01f5`
+passes both real user-approved credential operations. The first run also
+approved the cancellation scenarios with PIN entry, and their logs report
+successful verification. Those runs do not exercise cancellation or establish
+a cancellation implementation defect; the intended cancellation and
+foreground-owner-loss operations still require separate execution. The final shipping package without
+explicit mode remains a separate qualification. General protected networking
+and default enablement remain open.
+
+## Main integration at 5f79e6d6
+
+The merge retains published DeviceAdmin transaction 19 and assigns the draft
+isolation control transaction 20. Both dispatch paths, controls, packaged
+fixtures and native gates are preserved. Full merged application DEX and native
+runtime builds pass.
+
+Incoming main seals an installation before its administrator-removal check,
+but ordinary policy lookups hide sealed installations. The removal veto now
+has a private lookup which preserves current installation-owner and manifest
+validation while allowing that check to inspect existing consent. Ordinary
+activation, policy use and locking continue to reject pending removal. Real
+Windows ART passes all 48 checks, including actual seal/check/unseal ordering,
+retained consent after veto and rejection of retired-owner authority. Replacing
+only the policy with exact incoming-main code fails the intended veto assertion.
+An independent rerun confirms both results. The native dialog fixture passes
+90 checks on an owned private desktop. No real workstation lock ran; runtime
+lock suppliers were injected, and the ART teardown warning does not establish
+lifecycle qualification. Evidence is bound by
+`out/qa314/main-5f79/device-admin-runtime/final-inputs.json`.

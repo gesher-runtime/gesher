@@ -1,7 +1,7 @@
 {
   "baseline": "ff2c1870053c9d0332e6abef07a25fc282d384b5",
   "native_runtime_approval": false,
-  "patch_sha256": "420c5f08c6eb577fd4dc55f306b1f5e83d208206df0db466ea4a7beca2f61c66",
+  "patch_sha256": "30ea29bdb6fe234fc379f6480c5928cc874d06551743c11a12b91c3975c7dc7d",
   "paths": [
     "compat/binder/binderd.cc",
     "compat/binder/protected_peers.cc",
@@ -118,7 +118,7 @@
     "compat/binder/binderd.cc": "562815a371c465cb4dd09165e82f5b0a38adfaa753cac13bf6f7a6ceccd6679a",
     "compat/binder/protected_peers.cc": "5ee317b30db13e118ef70f895eb08f89c9b66e115fd953b13a05fe2611857adc",
     "compat/bionic/process_bionic.cc": "01e0e3a9ae5eb2ab9890bfbb11d46755da011ddd30b2181423a7daf70ee33745",
-    "compat/credentials/account_crypto.c": "400199825206a92f7fe92d642fdf38897c058296aeaec545b3a8ea1d057325c5",
+    "compat/credentials/account_crypto.c": "2c08dbba684f8f70cf5d450f8599abdd87f1a1b86f0b3b21dc8576d1c2c2ee8f",
     "compat/elf/exec/exec.cmake": "a2dac6579333c380f566c1b480e65a49212d11041865ad69b4c62430fb83912e",
     "compat/elf/exec/exec_spawn.cc": "1f53bb153ec1be96fb45e5beb5bfaf24b8772e4cf90f7044589d4835640cffe2",
     "compat/elf/exec/gesher_shell.cc": "8a4251a25a95b51e5d37df29218c02c57a7868bbd8448df29e66e40acf9a64dd",

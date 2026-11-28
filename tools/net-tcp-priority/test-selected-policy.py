@@ -1264,7 +1264,7 @@ APPCONTAINER_INTEGRATION_BASE = 'ff2c1870053c9d0332e6abef07a25fc282d384b5'
 APPCONTAINER_INTEGRATION_PREVIOUS_SHA256 = 'cb156fd1e3054ce7a41c0492f2e0dd89f4a86e0c4018d41cacd4322bd06c395f'
 APPCONTAINER_INTEGRATION_PATCH = 'tools/net-tcp-priority/qualified/appcontainer-integration-source.patch'
 APPCONTAINER_INTEGRATION_QUALIFICATION = 'tools/net-tcp-priority/qualified/appcontainer-integration-source.json'
-APPCONTAINER_INTEGRATION_QUALIFICATION_SHA256 = '078c3a2fb5163487a2eede2dec369ccabbd44cbd9ea41b036511309b146119ed'
+APPCONTAINER_INTEGRATION_QUALIFICATION_SHA256 = '88329d3ec386147e0ab429d7dc97a7602a78529d9e9720893de31c730bf9533d'
 # In addition to the donor identity surface, the merged startup/fork path
 # intersects the exact USB and child-wait source qualification.
 APPCONTAINER_INTEGRATION_PATHS = sorted(APPCONTAINER_IDENTITY_SOURCE_SHA256.keys() | {

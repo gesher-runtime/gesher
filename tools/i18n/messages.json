@@ -8,6 +8,14 @@
     }
   },
   "messages": {
+    "device_admin_app_explanation": {"en": "Information supplied by the app:", "he": "מידע שנמסר על ידי האפליקציה:"},
+    "device_admin_title": {"en": "Device administration", "he": "ניהול מכשיר"},
+    "cp_admin_revoke": {"en": "Revoke device administrator access", "he": "ביטול הרשאת מנהל מכשיר"},
+    "cp_admin_failed": {"en": "Could not read or revoke device administrator access. Try again.", "he": "לא ניתן לקרוא או לבטל את הרשאת מנהל המכשיר. נסה שוב."},
+    "device_admin_activate": {"en": "Activate", "he": "הפעלה"},
+    "device_admin_cancel": {"en": "Cancel", "he": "ביטול"},
+    "device_admin_lock": {"en": "This app will be allowed to lock your Windows session. Sign in to Windows to unlock it. Activate only if you trust this app.", "he": "האפליקציה תוכל לנעול את ההפעלה שלך ב־Windows. כדי לבטל את הנעילה יש להיכנס שוב ל־Windows. יש לאשר רק אם האפליקציה מהימנה בעיניך."},
+    "device_admin_unsupported": {"en": "This app requests device administration policies that Gesher cannot enforce on this PC. Administration will not be activated.", "he": "האפליקציה מבקשת סמכויות ניהול שגשר אינו יכול לאכוף במחשב הזה. הרשאת הניהול לא תופעל."},
     "intent_chooser_title": {"en": "Gesher — choose an app", "he": "גשר — בחירת יישום"},
     "chooser_title": {"en": "Gesher accounts", "he": "גשר — בחירת חשבון"},
     "chooser_prompt": {"en": "Choose an account for this application:", "he": "בחר חשבון עבור יישום זה:"},
