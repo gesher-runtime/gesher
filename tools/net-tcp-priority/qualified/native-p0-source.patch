@@ -1,0 +1,1134 @@
+diff --git a/compat/binder/binderd.cc b/compat/binder/binderd.cc
+index 889533e8972a595951128934e38467b15d41bf30..8f151e72d4deb7943435940a2d4666b13513a06d 100644
+--- a/compat/binder/binderd.cc
++++ b/compat/binder/binderd.cc
+@@ -1709,16 +1709,15 @@ void CloseRightsGroup(RightsGroup* group) {
+   group->entries.clear();
+ }
+ 
+-// Moves a group's handles into `to` (the caller's process); g_rights_lock held.
+-// Each handle the broker held is closed, delivered or not; one that cannot be
+-// delivered is reported as handle 0, which the receiver reports as a failure.
+-void DeliverRights(HANDLE to, RightsGroup* group, WireReply* reply) {
++// Delivers new handles in the caller's process; g_rights_lock held. Normal
++// receives consume the group even if delivery fails. MSG_PEEK keeps it queued.
++void DeliverRights(HANDLE to, RightsGroup* group, WireReply* reply, bool consume = true) {
++  const DWORD options = DUPLICATE_SAME_ACCESS | (consume ? DUPLICATE_CLOSE_SOURCE : 0);
+   for (const RightsEntry& e : group->entries) {
+     HANDLE out = nullptr, shared = nullptr;
+-    bool ok = DuplicateHandle(GetCurrentProcess(), e.handle, to, &out, 0, FALSE,
+-                               DUPLICATE_SAME_ACCESS | DUPLICATE_CLOSE_SOURCE);
+-    if (e.shared && !DuplicateHandle(GetCurrentProcess(), e.shared, to, &shared, 0, FALSE,
+-                                    DUPLICATE_SAME_ACCESS | DUPLICATE_CLOSE_SOURCE)) ok = false;
++    bool ok = DuplicateHandle(GetCurrentProcess(), e.handle, to, &out, 0, FALSE, options);
++    if (e.shared && !DuplicateHandle(GetCurrentProcess(), e.shared, to, &shared, 0, FALSE, options))
++      ok = false;
+     if (!ok) {
+       Log("rights: DuplicateHandle into the receiver failed: %lu", GetLastError());
+       if (out) DuplicateHandle(to, out, nullptr, nullptr, 0, FALSE, DUPLICATE_CLOSE_SOURCE);
+@@ -1730,8 +1729,10 @@ void DeliverRights(HANDLE to, RightsGroup* group, WireReply* reply) {
+     reply->Put<uint64_t>(static_cast<uint64_t>(reinterpret_cast<uintptr_t>(shared)));
+     reply->Put<uint32_t>(e.kind);
+   }
+-  g_rights_in_flight -= static_cast<uint32_t>(group->entries.size());
+-  group->entries.clear();
++  if (consume) {
++    g_rights_in_flight -= static_cast<uint32_t>(group->entries.size());
++    group->entries.clear();
++  }
+ }
+ 
+ void ServeRights(HANDLE pipe, In in) {
+@@ -1819,7 +1820,8 @@ void ServeRights(HANDLE pipe, In in) {
+       reply.Put<int32_t>(status);
+       reply.Put<uint64_t>(status == 0 ? group->token[0] : 0);
+       reply.Put<uint64_t>(status == 0 ? group->token[1] : 0);
+-    } else if (op == wire::kRightsClaim || op == wire::kRightsCancel) {
++    } else if (op == wire::kRightsClaim || op == wire::kRightsCancel || op == wire::kRightsPeek) {
++      const bool peek = op == wire::kRightsPeek;
+       uint64_t token[2];
+       if (!req.Get(&token[0]) || !req.Get(&token[1])) break;
+       std::lock_guard<std::mutex> lock(g_rights_lock);
+@@ -1842,18 +1844,18 @@ void ServeRights(HANDLE pipe, In in) {
+           }
+           if (!queued) group = nullptr;
+         }
+-        if (group != nullptr) g_rights_groups.erase(it);
++        if (group != nullptr && !peek) g_rights_groups.erase(it);
+       }
+       if (group == nullptr) {
+         reply.Put<int32_t>(-ENOENT);
+-        if (op == wire::kRightsClaim) reply.Put<uint32_t>(0);
++        if (op != wire::kRightsCancel) reply.Put<uint32_t>(0);
+       } else if (op == wire::kRightsCancel) {
+         CloseRightsGroup(group.get());
+         reply.Put<int32_t>(0);
+       } else {
+         reply.Put<int32_t>(0);
+         reply.Put<uint32_t>(static_cast<uint32_t>(group->entries.size()));
+-        DeliverRights(client, group.get(), &reply);
++        DeliverRights(client, group.get(), &reply, !peek);
+       }
+     } else if (op == wire::kRightsTake) {
+       uint64_t queue, limit;
+diff --git a/compat/bionic/extra_bionic.cc b/compat/bionic/extra_bionic.cc
+index 25d29b023a397d7db1c8ac3a6a683e3fb2dd8652..c29946cf8812509a43889fb0d98c0d6871dd4053 100644
+--- a/compat/bionic/extra_bionic.cc
++++ b/compat/bionic/extra_bionic.cc
+@@ -19,6 +19,7 @@
+ #include "unicode_bionic.h"
+ #include "search_bionic.h"
+ 
++#include <gesher/application_target_sdk.h>
+ #include <gesher/bionic_shim.h>
+ #include <gesher/stdio.h>
+ #include <gesher/system_properties.h>
+@@ -1437,9 +1438,8 @@ int BIONIC_SYSV GetDeviceApiLevel() {
+   return GetProp("ro.build.version.sdk", &value) ? std::atoi(value.c_str()) : -1;
+ }
+ // android_get_application_target_sdk_version and friends (libc, API 24).
+-int g_target_sdk = 36;
+-int BIONIC_SYSV GetTargetSdk() { return g_target_sdk; }
+-void BIONIC_SYSV SetTargetSdk(int v) { g_target_sdk = v; }
++int BIONIC_SYSV GetTargetSdk() { return static_cast<int>(ApplicationTargetSdkVersion()); }
++void BIONIC_SYSV SetTargetSdk(uint32_t version) { SetApplicationTargetSdkVersion(version); }
+ void BIONIC_SYSV GetLdLibraryPath(char* buf, size_t size) {
+   std::string all;
+   for (const std::string& d : LibraryDirectories()) all += (all.empty() ? "" : ":") + d;
+diff --git a/compat/bionic/shim.cc b/compat/bionic/shim.cc
+index adcc0b82ae4e894baccc2bb4fc211b8fad26f5a1..1bd4dc45de34f9c5f81e8e3044024d3d526c7d8b 100644
+--- a/compat/bionic/shim.cc
++++ b/compat/bionic/shim.cc
+@@ -26,6 +26,7 @@
+ // bcrypt.h needs windows.h first.
+ #include <bcrypt.h>
+ 
++#include <dlfcn.h>
+ #include <errno.h>
+ #include <fcntl.h>
+ #include <malloc.h>
+@@ -1033,6 +1034,7 @@ std::mutex g_atexit_mutex;
+ std::vector<AtExitEntry> g_atexit;
+ 
+ int BIONIC_SYSV CxaAtexit(void (BIONIC_SYSV* func)(void*), void* arg, void* dso) {
++  if (dso == nullptr) gesher::elf::KeepResidentForAddress(reinterpret_cast<void*>(func));
+   std::lock_guard<std::mutex> lock(g_atexit_mutex);
+   g_atexit.push_back({func, arg, dso, nullptr});
+   return 0;
+@@ -1053,6 +1055,7 @@ void BIONIC_SYSV CxaFinalize(void* dso) {
+   }
+ }
+ int BIONIC_SYSV Atexit(void (BIONIC_SYSV* func)(void)) {
++  gesher::elf::KeepResidentForAddress(reinterpret_cast<void*>(func));
+   std::lock_guard<std::mutex> lock(g_atexit_mutex);
+   g_atexit.push_back({nullptr, nullptr, nullptr, func});
+   return 0;
+@@ -1133,9 +1136,9 @@ void* DlOpenUnsupported(uint64_t flags) {
+   return DlOpenFail(message);
+ }
+ 
+-void* DlOpenImpl(const char* filename, const AndroidDlextinfo* ext);
+-void* BIONIC_SYSV DlOpen(const char* filename, int /*flags*/) {
+-  void* handle = DlOpenImpl(filename, nullptr);
++void* DlOpenImpl(const char* filename, int flags, const AndroidDlextinfo* ext);
++void* BIONIC_SYSV DlOpen(const char* filename, int flags) {
++  void* handle = DlOpenImpl(filename, flags, nullptr);
+   if (TraceDl()) {
+     std::fprintf(stderr, "gesher dl: dlopen(\"%s\") = %s%s%s\n", filename ? filename : "(null)",
+                  handle ? "ok" : "null", handle ? "" : ": ", handle ? "" : t_dlerror.c_str());
+@@ -1146,9 +1149,9 @@ void* BIONIC_SYSV DlOpen(const char* filename, int /*flags*/) {
+ // RESERVED_ADDRESS and RESERVED_ADDRESS_HINT load the library into the
+ // caller's reservation (LoadOptions::reserved_addr); the other valid flags
+ // are not implemented and fail the call (kDlextUnsupportedFlags).
+-void* BIONIC_SYSV AndroidDlOpenExt(const char* filename, int /*flags*/,
++void* BIONIC_SYSV AndroidDlOpenExt(const char* filename, int flags,
+                                    const AndroidDlextinfo* ext) {
+-  void* handle = DlOpenImpl(filename, ext);
++  void* handle = DlOpenImpl(filename, flags, ext);
+   if (TraceDl()) {
+     std::fprintf(stderr,
+                  "gesher dl: android_dlopen_ext(\"%s\", flags=0x%llx, reserved_addr=%p, "
+@@ -1160,8 +1163,15 @@ void* BIONIC_SYSV AndroidDlOpenExt(const char* filename, int /*flags*/,
+   }
+   return handle;
+ }
+-void* DlOpenImpl(const char* filename, const AndroidDlextinfo* ext) {
+-  // bionic's do_dlopen checks the extended flags first (linker.cpp).
++void* DlOpenImpl(const char* filename, int flags, const AndroidDlextinfo* ext) {
++  constexpr int kValidFlags = RTLD_NOW | RTLD_LAZY | RTLD_LOCAL | RTLD_GLOBAL |
++                              RTLD_NODELETE | RTLD_NOLOAD;
++  if ((flags & ~kValidFlags) != 0) {
++    char message[64];
++    std::snprintf(message, sizeof(message), "invalid flags to dlopen: %x",
++                  static_cast<unsigned>(flags));
++    return DlOpenFail(message);
++  }
+   if (ext != nullptr) {
+     char message[160];
+     if ((ext->flags & ~kDlextValidFlags) != 0) {
+@@ -1187,29 +1197,23 @@ void* DlOpenImpl(const char* filename, const AndroidDlextinfo* ext) {
+     }
+   }
+   if (filename == nullptr) return reinterpret_cast<void*>(-2);  // the "main program"
+-  const char* slash = std::strrchr(filename, '/');
+-  const char* base = slash ? slash + 1 : filename;
++  const bool by_path = std::strpbrk(filename, "/\\") != nullptr;
+   // FORCE_LOAD only skips bionic's match of an already-loaded library by its
+   // file (inode); a bare name is still found by soname first
+-  // (find_loaded_library_by_soname ignores names with a '/'). So with a path,
+-  // a library already loaded would be loaded a second time, which this loader
+-  // cannot do (one object per name): that fails rather than returning the
+-  // first copy. With a bare name the loaded library is returned, as bionic does.
+-  const bool force_second_copy =
+-      ext != nullptr && (ext->flags & kDlextForceLoad) != 0 && slash != nullptr;
++  // (find_loaded_library_by_soname ignores paths). The loader checks the
++  // identity of the opened file before rejecting an unsupported second copy.
++  const bool force_load = ext != nullptr && (ext->flags & kDlextForceLoad) != 0;
+   if (void* platform = PlatformLibraryHandle(filename)) {
+-    if (force_second_copy) return DlOpenUnsupported(kDlextForceLoad);
++    if (force_load && by_path) return DlOpenUnsupported(kDlextForceLoad);
+     return platform;
+   }
+-  // Already loaded: the same handle, where it is, whatever reservation
+-  // extinfo offers (bionic finds a loaded library before it maps anything).
+-  if (gesher::elf::Library* existing = gesher::elf::Find(base)) {
+-    if (force_second_copy) return DlOpenUnsupported(kDlextForceLoad);
+-    return existing;
++  const bool keep_resident = (flags & (RTLD_NODELETE | RTLD_GLOBAL)) != 0;
++  if (!by_path) {
++    if (auto* existing = gesher::elf::OpenLoaded(filename, keep_resident)) return existing;
+   }
+   std::string path = filename;
+   std::vector<std::string> dirs = LibraryDirectories();
+-  if (slash == nullptr) {
++  if (!by_path) {
+     path.clear();
+     for (const std::string& d : dirs) {
+       if (Exists(d + "/" + filename)) {
+@@ -1224,6 +1228,9 @@ void* DlOpenImpl(const char* filename, const AndroidDlextinfo* ext) {
+     }
+   }
+   gesher::elf::LoadOptions options;
++  options.reject_loaded_file = force_load;
++  options.no_load = (flags & RTLD_NOLOAD) != 0;
++  options.keep_resident = keep_resident;
+   if (ext != nullptr && (ext->flags & (kDlextReservedAddress | kDlextReservedAddressHint)) != 0) {
+     options.use_reserved = true;
+     options.reserved_addr = ext->reserved_addr;
+@@ -1239,7 +1246,7 @@ void* DlOpenImpl(const char* filename, const AndroidDlextinfo* ext) {
+   if (lib == nullptr) {
+     t_dlerror = "dlopen failed: " + error;
+     t_has_dlerror = true;
+-  } else if (!dir.empty()) {
++  } else if (!options.no_load && !dir.empty()) {
+     NoteLibraryDirectory(dir);
+   }
+   return lib;
+@@ -1271,11 +1278,13 @@ void* BIONIC_SYSV DlSym(void* handle, const char* symbol) {
+   }
+   return p;
+ }
+-// dlclose: libraries stay loaded for the life of the process, also one loaded
+-// into a caller's reservation (android_dlopen_ext). The caller may unmap that
+-// reservation after dlclose; the library then leaves every list
+-// (gesher::elf::ForgetReservedMappings, from munmap).
+-int BIONIC_SYSV DlClose(void*) { return 0; }
++int BIONIC_SYSV DlClose(void* handle) {
++  if (handle == reinterpret_cast<void*>(-2) || IsPlatformLibraryHandle(handle)) return 0;
++  if (gesher::elf::Close(static_cast<gesher::elf::Library*>(handle))) return 0;
++  t_dlerror = "dlclose: invalid or closed handle";
++  t_has_dlerror = true;
++  return -1;
++}
+ const char* BIONIC_SYSV DlError() {
+   if (!t_has_dlerror) return nullptr;
+   t_has_dlerror = false;
+@@ -1320,7 +1329,7 @@ int BIONIC_SYSV DlIteratePhdr(int (BIONIC_SYSV* cb)(BionicPhdrInfo*, size_t, voi
+     info.dlpi_phdr = in.phdr;
+     info.dlpi_phnum = in.phnum;
+     info.dlpi_adds = in.adds;
+-    info.dlpi_subs = 0;
++    info.dlpi_subs = in.subs;
+     info.dlpi_tls_modid = in.tls_modid;
+     info.dlpi_tls_data = nullptr;
+     return cb(&info, sizeof(info), data);
+diff --git a/compat/elf/exec/gesher_exec.cc b/compat/elf/exec/gesher_exec.cc
+index eded54300beec58590bdff58d5ab89bc45a9baa1..2c48b045d04b1dff1f2252a882adaebf492e6980 100644
+--- a/compat/elf/exec/gesher_exec.cc
++++ b/compat/elf/exec/gesher_exec.cc
+@@ -289,7 +289,9 @@ DWORD WINAPI ProgramThread(void*) {
+   elf::LoadOptions options;
+   options.main_executable = true;
+   for (const std::string& e : p.env) {
+-    if (e.rfind("LD_LIBRARY_PATH=", 0) == 0) options.search_paths = LibraryPath(e.substr(16));
++    if (e.rfind("LD_LIBRARY_PATH=", 0) == 0) {
++      options.environment_search_paths = LibraryPath(e.substr(16));
++    }
+   }
+   std::string program = ex::Narrow(p.path);
+   size_t slash = program.find_last_of("\\/");
+diff --git a/compat/posix/include/gesher/file_description.h b/compat/posix/include/gesher/file_description.h
+index b2d4c09ab6b900e6a54f3231a303648396255882..18a4d463d1c01f39d4b7eee27a5813b6293225ff 100644
+--- a/compat/posix/include/gesher/file_description.h
++++ b/compat/posix/include/gesher/file_description.h
+@@ -74,6 +74,8 @@ int ReadFileDescription(const DescriptorSnapshotPtr& snapshot, void* bytes, unsi
+ int ReadPipeDescriptionInterruptible(const DescriptorSnapshotPtr& snapshot, void* bytes,
+                                      unsigned count, HANDLE interrupted);
+ int WriteFileDescription(const DescriptorSnapshotPtr& snapshot, const void* bytes, unsigned count);
++// Validate an empty preadv/pwritev through the positioned I/O admission path.
++int CheckEmptyPositionedVector(int fd, int64_t offset, bool writing);
+ // Linux pwrite policy (including O_APPEND) while retaining the shared cursor.
+ int64_t WriteFileDescriptionAt(const DescriptorSnapshotPtr& snapshot, const void* bytes,
+                               unsigned count, int64_t offset);
+diff --git a/compat/posix/posix.cmake b/compat/posix/posix.cmake
+index 0f910493ea38b08e23fafc8f716a99e4156e456f..737d591cc3e5d0b301d894d4a69099d06d27cc6c 100644
+--- a/compat/posix/posix.cmake
++++ b/compat/posix/posix.cmake
+@@ -54,6 +54,7 @@ add_library(gesher_posix STATIC
+   ${CMAKE_CURRENT_LIST_DIR}/src/stat.cc
+   ${CMAKE_CURRENT_LIST_DIR}/src/stdio_output.cc
+   ${CMAKE_CURRENT_LIST_DIR}/src/storage_policy.cc
++  ${CMAKE_CURRENT_LIST_DIR}/src/shared_futex.cc
+   ${CMAKE_CURRENT_LIST_DIR}/src/syscall.cc
+   ${CMAKE_CURRENT_LIST_DIR}/src/sysv_shims.cc
+   ${CMAKE_CURRENT_LIST_DIR}/src/system.cc
+diff --git a/compat/posix/src/binder_wire.h b/compat/posix/src/binder_wire.h
+index 50a85fb801ec706ad7a4819e1186d7fe29505c53..7371cf2612465a5ffad14a72a1048e4152b12974 100644
+--- a/compat/posix/src/binder_wire.h
++++ b/compat/posix/src/binder_wire.h
+@@ -41,7 +41,7 @@ namespace binder_wire {
+ 
+ constexpr uint32_t kMagic = 0x47424452;  // "GBDR"
+ // Both endpoints must change together; an old endpoint rejects the hello.
+-constexpr uint32_t kVersion = 4;
++constexpr uint32_t kVersion = 5;  // includes SOCK_SEQPACKET transfer metadata
+ 
+ // One entry for every FD object, in object-offset order. The file HANDLE still
+ // occupies pad_binder on the wire; this side table carries the exact shared
+@@ -109,12 +109,15 @@ enum Op : uint32_t {
+   // Takes a group back out of its queue (its sendmsg failed) and closes it.
+   // -> {token}; <- {status}: -ENOENT if a receiver already took it.
+   kRightsCancel = 11,
++  // Duplicates a datagram's group for MSG_PEEK. The broker retains its handles.
++  // The request and reply have the kRightsClaim layout.
++  kRightsPeek = 12,
+ };
+ 
+ // The descriptor broker's protocol version (kHelloRights), apart from kVersion:
+ // binderd and the processes that send or receive descriptors must agree on it;
+ // other binder clients need not.
+-constexpr uint32_t kRightsVersion = 5;
++constexpr uint32_t kRightsVersion = 7;  // includes SOCK_SEQPACKET transfer metadata
+ 
+ // The broker's doorbell for stream queues: a shared section named
+ // kRightsDoorbellPrefix + device, of kRightsDoorbellSlots uint64 values, one
+diff --git a/compat/posix/src/mman.cc b/compat/posix/src/mman.cc
+index 41be9a0e7b43283937e6a9e5bb83bea2ba3d1eee..4e2a61c18d0e6aee035925d605f91f9882ee383e 100644
+--- a/compat/posix/src/mman.cc
++++ b/compat/posix/src/mman.cc
+@@ -67,6 +67,11 @@
+ #include <gesher/fork.h>
+ #endif
+ #include "revocable_internal.h"
++#ifdef _WIN32
++#include <linux/futex.h>
++#include "record_lock_liveness.h"
++#include "shared_futex.h"
++#endif
+ 
+ // Dedicated failure object only; normal production route is fixed Win32.
+ #ifdef GESHER_FILE_MREMAP_FAILURE_TEST
+@@ -154,7 +159,11 @@ struct Region {
+   uintptr_t group = 0;
+   void* view = nullptr;       // views: what MapViewOfFile* returned
+   HANDLE mapping = nullptr;   // views: the mapping object (owned)
+-  uint64_t offset = 0;        // group views: the file offset of the region's start
++  uint64_t offset = 0;        // views: the file offset of the region's start
++#ifdef _WIN32
++  gesher::record_locks::File futex_file{};
++  int futex_file_error = 0;
++#endif
+   ULONG view_protection = 0;  // group views: the protection they were mapped with
+   // Slice A admission only: not the section maximum. Bounds certified by
+   // this successfully created, whole logical view; invalidated by splits,
+@@ -328,6 +337,10 @@ void* SharedAlias(State& s, uintptr_t begin, size_t old_size, size_t length, int
+   alias.write_lease = from.write_lease;  // another view of the same writable mapping
+   alias.shared_alias = true;
+   alias.offset = from.offset;
++#ifdef _WIN32
++  alias.futex_file = from.futex_file;
++  alias.futex_file_error = from.futex_file_error;
++#endif
+   alias.view_protection = protection;
+   alias.view_padding = padding;
+   alias.physical_extent = length + alias.view_padding;
+@@ -894,6 +907,9 @@ void* GroupFile(State& s, void* start, size_t len, int prot, int flags, HANDLE f
+     r.view = reinterpret_cast<void*>(result);
+     r.mapping = mapping;
+     r.offset = begin;
++#ifdef _WIN32
++    if (shared) r.futex_file_error = gesher::record_locks::FileIdentity(file, &r.futex_file);
++#endif
+     r.view_protection = view_protection;
+     r.shared = shared;
+     r.physical_extent = in_view;
+@@ -1142,6 +1158,9 @@ void* MapFile(State& s, void* start, size_t len, int prot, int flags, HANDLE fil
+   region.mapping = mapping;
+   region.shared = shared;
+   region.offset = static_cast<uint64_t>(offset);
++#ifdef _WIN32
++  if (shared) region.futex_file_error = gesher::record_locks::FileIdentity(file, &region.futex_file);
++#endif
+   region.view_protection = map_access;
+   region.view_padding = padding;
+   region.physical_extent = len + padding;
+@@ -1664,6 +1683,83 @@ void* mmap64(void* addr, size_t length, int prot, int flags, int fd, off_t offse
+ 
+ }  // extern "C"
+ 
++#ifdef _WIN32
++namespace {
++
++int SharedFutexRegion(State& s, const volatile int* address, gesher::SharedFutexKey* key,
++                      HANDLE* section, bool write = false) {
++  const auto at = reinterpret_cast<uintptr_t>(address);
++  MEMORY_BASIC_INFORMATION info;
++  if (VirtualQuery(const_cast<const int*>(address), &info, sizeof(info)) == 0 ||
++      info.State != MEM_COMMIT ||
++      (info.Protect & (PAGE_NOACCESS | PAGE_GUARD | PAGE_EXECUTE)) != 0) return -EFAULT;
++  constexpr DWORD kWrite = PAGE_READWRITE | PAGE_WRITECOPY |
++      PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
++  if (write && (info.Protect & kWrite) == 0) return -EFAULT;
++  if (key == nullptr) return 0;  // private key: observe protection without resolving a file key
++  auto region = FindRegion(s, at);
++  if (region == s.regions.end() || region->second.kind != Kind::kView ||
++      !region->second.shared) return 0;
++  const auto& view = region->second;
++  const uintptr_t within = at - region->first;
++  if (!view.live[within / s.page_size]) return -EFAULT;
++  if (view.futex_file_error != 0) return -view.futex_file_error;
++  *key = {view.futex_file, view.offset + within};
++  if (section != nullptr) *section = view.mapping;
++  return 1;
++}
++
++}  // namespace
++
++namespace gesher {
++
++int GetSharedFutexMapping(const volatile int* address, SharedFutexMapping* mapping) {
++  State& s = state();
++  std::lock_guard<std::mutex> guard(s.lock);
++  HANDLE section;
++  const int status = SharedFutexRegion(s, address, &mapping->key, &section);
++  if (status <= 0) return status;
++  if (int error = mapping->Pin(section)) return -error;
++  return 1;
++}
++
++int ReadSharedFutexWord(const volatile int* address, const SharedFutexKey& key, int* value) {
++  State& s = state();
++  std::lock_guard<std::mutex> guard(s.lock);
++  SharedFutexKey current;
++  const int status = SharedFutexRegion(s, address, &current, nullptr);
++  if (status < 0) return -status;
++  if (status == 0 || !(current.file == key.file) || current.offset != key.offset) return EFAULT;
++  // Compare an aligned 32-bit word while its mapping and protection are
++  // locked against replacement by mmap, munmap and mprotect.
++  *value = __atomic_load_n(address, __ATOMIC_SEQ_CST);
++  return 0;
++}
++
++int UpdateFutexWord(volatile int* address, const SharedFutexKey* key, bool private_key,
++                    int operation, int operand, int* previous) {
++  State& s = state();
++  std::lock_guard<std::mutex> guard(s.lock);
++  SharedFutexKey current;
++  const int status = SharedFutexRegion(s, address, private_key ? nullptr : &current, nullptr, true);
++  if (status < 0) return -status;
++  if ((key == nullptr && status != 0) || (key != nullptr && (status == 0 || current != *key))) {
++    return EFAULT;
++  }
++  switch (operation) {
++    case FUTEX_OP_SET: *previous = __atomic_exchange_n(address, operand, __ATOMIC_SEQ_CST); break;
++    case FUTEX_OP_ADD: *previous = __atomic_fetch_add(address, operand, __ATOMIC_SEQ_CST); break;
++    case FUTEX_OP_OR: *previous = __atomic_fetch_or(address, operand, __ATOMIC_SEQ_CST); break;
++    case FUTEX_OP_ANDN: *previous = __atomic_fetch_and(address, ~operand, __ATOMIC_SEQ_CST); break;
++    case FUTEX_OP_XOR: *previous = __atomic_fetch_xor(address, operand, __ATOMIC_SEQ_CST); break;
++    default: return ENOSYS;
++  }
++  return 0;
++}
++
++}  // namespace gesher
++#endif
++
+ namespace gesher {
+ 
+ bool MappedFileWritable(const void* address) {
+diff --git a/compat/posix/src/ofd.cc b/compat/posix/src/ofd.cc
+index c1495ced56217f9f42564fad8ef1e3823b89f04d..03b4e65282beaebf76c0d664020da36849502440 100644
+--- a/compat/posix/src/ofd.cc
++++ b/compat/posix/src/ofd.cc
+@@ -376,6 +376,18 @@ bool LookupLocal(int fd, std::shared_ptr<OpenFileDescription>* out) {
+   return true;
+ }
+ 
++int FindPipeAliasLocal(int fd) {
++  if (!ValidSlot(fd) || InitializeLocal() < 0) return -1;
++  std::lock_guard<std::mutex> lock(table->mutex);
++  const auto& description = table->entries[fd];
++  if (!description) return -1;
++  for (unsigned alias = 0; alias < table->entries.size(); ++alias) {
++    if (alias != static_cast<unsigned>(fd) && table->entries[alias] == description &&
++        HandleFromFd(static_cast<int>(alias)) != INVALID_HANDLE_VALUE) return static_cast<int>(alias);
++  }
++  return -1;
++}
++
+ int GetFlagsLocal(int fd) {
+   auto snapshot = CaptureDescriptor(fd);
+   return snapshot ? FileDescriptionFlags(snapshot) : -1;
+@@ -571,6 +583,23 @@ extern "C" __declspec(dllexport) const OwnerApi* gesher_ofd_owner_v1() {
+   return &api;
+ }
+ 
++extern "C" __declspec(dllexport) int gesher_find_pipe_alias_v1(int fd) {
++  return FindPipeAliasLocal(fd);
++}
++
++std::shared_ptr<OpenFileDescription> LookupPipeDescription(int fd) {
++  std::shared_ptr<OpenFileDescription> description;
++  if (!LookupOfd(fd, &description)) return nullptr;
++  return description->OwnedPipe() || description->kind == DescriptorKind::kFifo ? description : nullptr;
++}
++
++int FindPipeAlias(int fd) {
++  using FindAlias = int (*)(int);
++  static auto find = reinterpret_cast<FindAlias>(reinterpret_cast<void*>(
++      GetProcAddress(GetModuleHandleW(nullptr), "gesher_find_pipe_alias_v1")));
++  return find ? find(fd) : -1;
++}
++
+ int InitializeInheritedFileDescriptions() {
+   const auto* owner = Owner();
+   return owner ? owner->initialize() : -1;
+diff --git a/compat/posix/src/pipe_io.cc b/compat/posix/src/pipe_io.cc
+index 2c5158fbd5577830cda53b87779812b0d47c9783..a21566bcb39e352b55f8db15ba0696c48d7d0ef2 100644
+--- a/compat/posix/src/pipe_io.cc
++++ b/compat/posix/src/pipe_io.cc
+@@ -11,6 +11,7 @@
+ #include <bcrypt.h>
+ #include <fcntl.h>
+ #include <io.h>
++#include <limits.h>
+ #include <poll.h>
+ #include <pthread.h>
+ #include <winternl.h>
+@@ -41,16 +42,25 @@ class PipeAdmission {
+     auto& description = *snapshot->description;
+     if (!description.OwnedPipe() || (require_known && !description.KnownPipeStatus()))
+       return errno = EOPNOTSUPP, -1;
++    const bool transfer = waiting || nonblocking_io;
++    const auto still_nonblocking = [&description]() {
++      return description.KnownPipeStatus() && (description.Flags() & O_NONBLOCK) != 0;
++    };
+     for (;;) {
+       if (canceled && WaitForSingleObject(canceled, 0) == WAIT_OBJECT_0) return errno = EINTR, -1;
+       if (interrupted && WaitForSingleObject(interrupted, 0) == WAIT_OBJECT_0) return errno = EINTR, -1;
+-      DWORD wait = WaitForSingleObject(description.pipe_mutex, waiting ? 10 : 0);
++      // Admission serializes calls on the file object. Contention between
++      // immediate native transfers says nothing about pipe capacity.
++      const DWORD wait = WaitForSingleObject(description.pipe_mutex, transfer ? 10 : 0);
+       if (wait == WAIT_OBJECT_0 || wait == WAIT_ABANDONED) {
+         mutex_ = description.pipe_mutex;
++        // An alias can set a new wait policy before we acquire the gate.
++        if (nonblocking_io && !still_nonblocking()) return errno = EAGAIN, -1;
+         return !require_known || description.KnownPipeStatus() ? 0 : (errno = EOPNOTSUPP, -1);
+       }
+       if (wait != WAIT_TIMEOUT) return FailWithLastError();
+-      if (!waiting) return errno = nonblocking_io ? EAGAIN : EOPNOTSUPP, -1;
++      if (!transfer) return errno = EOPNOTSUPP, -1;
++      if (nonblocking_io && !still_nonblocking()) return errno = EAGAIN, -1;
+     }
+   }
+  private:
+@@ -520,6 +530,18 @@ int PollPipeHandle(const DescriptorSnapshotPtr& snapshot, short events, short* r
+   return 0;
+ }
+ 
++int PipeCapacity(const DescriptorSnapshotPtr& snapshot) {
++  if (snapshot->kind == DescriptorKind::kFifo) return FifoCapacity(snapshot);
++  PipeAdmission admission;
++  if (admission.Acquire(snapshot, false) < 0) return -1;
++  FILE_PIPE_LOCAL_INFORMATION info{};
++  if (QueryPipe(snapshot->handle, &info, sizeof(info), FilePipeLocalInformation) < 0) return -1;
++  // Created pipes send from client to server only. The inbound allocation
++  // is the capacity even when current write quota is reserved by a reader.
++  if (info.InboundQuota > INT_MAX) return errno = EOVERFLOW, -1;
++  return static_cast<int>(info.InboundQuota);
++}
++
+ int PipeBytesAvailable(const DescriptorSnapshotPtr& snapshot, int* bytes) {
+   if (!bytes) return errno = EFAULT, -1;
+   if (snapshot->kind == DescriptorKind::kFifo) return FifoBytesAvailable(snapshot, bytes);
+diff --git a/compat/posix/src/pipe_io.h b/compat/posix/src/pipe_io.h
+index 17291184d004cac887eed193000ec736ea101e92..04b62c661c9aa8b651a4ac5cd2076b3979c9ae17 100644
+--- a/compat/posix/src/pipe_io.h
++++ b/compat/posix/src/pipe_io.h
+@@ -7,5 +7,6 @@ int CreatePipeDescriptors(int descriptors[2], int flags);
+ int SetPipeNonBlocking(HANDLE file, bool nonblocking);
+ int TransferPipe(const DescriptorSnapshotPtr& snapshot, void* bytes, unsigned count, bool writing);
+ int PollPipeHandle(const DescriptorSnapshotPtr& snapshot, short events, short* ready);
++int PipeCapacity(const DescriptorSnapshotPtr& snapshot);
+ int PipeBytesAvailable(const DescriptorSnapshotPtr& snapshot, int* bytes);
+ }
+diff --git a/compat/posix/src/socket.cc b/compat/posix/src/socket.cc
+index 21249efe7f17f2756309ba116946d1c492dd7c1c..dd7cd19c293322252db5709eae2bdfd625966b6d 100644
+--- a/compat/posix/src/socket.cc
++++ b/compat/posix/src/socket.cc
+@@ -294,8 +294,9 @@ int socketpair(int domain, int type, int protocol, int fds[2]) {
+   if (!ws::Startup()) return -1;
+   if (domain != AF_UNIX && domain != AF_INET) return errno = EAFNOSUPPORT, -1;
+   if (protocol != 0) return errno = EPROTONOSUPPORT, -1;
+-  ws::Type ws_type = ToType(type & ~kTypeFlags);
+-  if (ws_type == ws::Type::kSeqpacket && domain == AF_UNIX) ws_type = ws::Type::kDgram;
++  const ws::Type pair_type = ToType(type & ~kTypeFlags);
++  const ws::Type ws_type =
++      pair_type == ws::Type::kSeqpacket && domain == AF_UNIX ? ws::Type::kDgram : pair_type;
+   if (ws_type != ws::Type::kStream && ws_type != ws::Type::kDgram) return errno = EOPNOTSUPP, -1;
+ 
+   sockaddr_in loopback = {};
+@@ -368,8 +369,7 @@ int socketpair(int domain, int type, int protocol, int fds[2]) {
+       end.description->peer_pid = self.pid;
+       end.description->peer_uid = self.uid;
+       end.description->peer_gid = self.gid;
+-      end.description->unix_datagram_pair.store(ws_type == ws::Type::kDgram);
+-      end.description->unix_stream_pair.store(ws_type == ws::Type::kStream);
++      end.description->unix_pair_type.store(pair_type);
+       // A stream pair's ends start at stream position 0 (binder_wire.h): their
+       // loopback ports are this connection's while it lives.
+       uint16_t local, peer;
+@@ -444,6 +444,9 @@ int getsockname(int fd, struct sockaddr* addr, socklen_t* len) {
+   if (state.description->netlink) return NetlinkName(*state.description->netlink, addr, len, false);
+   ws::Address address;
+   if (ws::GetSockName(state.socket, &address) < 0) return -1;
++  if (state.description->unix_pair_type.load() != ws::Type::kOther) {
++    address = {ws::Family::kUnix};
++  }
+   FromAddress(address, addr, len);
+   return 0;
+ }
+@@ -454,6 +457,9 @@ int getpeername(int fd, struct sockaddr* addr, socklen_t* len) {
+   if (state.description->netlink) return NetlinkName(*state.description->netlink, addr, len, true);
+   ws::Address address;
+   if (ws::GetPeerName(state.socket, &address) < 0) return -1;
++  if (state.description->unix_pair_type.load() != ws::Type::kOther) {
++    address = {ws::Family::kUnix};
++  }
+   FromAddress(address, addr, len);
+   return 0;
+ }
+@@ -540,10 +546,11 @@ ssize_t RecvBuffers(int fd, ws::Buffer* buffers, size_t count, int flags, sockad
+   }
+   if (WouldBlock(state, flags, ws::kPollIn)) return -1;
+   if (pass_credentials != nullptr) {
+-    *pass_credentials = state.description->unix_datagram_pair.load() &&
++    *pass_credentials = state.description->IsUnixDatagramPair() &&
+                         state.description->pass_credentials.load();
+   }
+   ws::Address from;
++  const bool unnamed_pair = state.description->unix_pair_type.load() != ws::Type::kOther;
+   ws::RightsToken token;
+   // SCM_RIGHTS (ADR 0088): a stream pair's groups come with the read that
+   // returns their first byte (RecvOwned), a datagram's with its token.
+@@ -552,16 +559,25 @@ ssize_t RecvBuffers(int fd, ws::Buffer* buffers, size_t count, int flags, sockad
+   if (packet_info != nullptr) *packet_info = {};
+   if (want_packet_info) ws::SetReceivePacketInfo(packet_info);
+   ssize_t n = ws::RecvOwned(state.socket, buffers, count, ToMsgFlags(flags),
+-                       addr != nullptr ? &from : nullptr, state.description,
++                       addr != nullptr && !unnamed_pair ? &from : nullptr, state.description,
+                             (flags & MSG_DONTWAIT) != 0, result_flags, credentials,
+                             rights != nullptr ? &token : nullptr, rights);
+   if (want_packet_info) ws::SetReceivePacketInfo(nullptr);
+-  if (n >= 0 && rights != nullptr && token.count != 0)
+-    gesher::ClaimRights(token, rights, (flags & MSG_CMSG_CLOEXEC) != 0);
++  if (n >= 0 && rights != nullptr && token.count != 0) {
++    const bool received = (flags & MSG_PEEK) != 0
++        ? gesher::PeekRights(token, rights, (flags & MSG_CMSG_CLOEXEC) != 0)
++        : gesher::ClaimRights(token, rights, (flags & MSG_CMSG_CLOEXEC) != 0);
++    if (!received && result_flags != nullptr) *result_flags |= ws::kMsgControlTrunc;
++  }
+   if (n >= 0 && addr != nullptr) {
+     sockaddr_storage local = {};
+-    socklen_t actual = sizeof(local), capacity = 0;
+-    FromAddress(from, reinterpret_cast<sockaddr*>(&local), &actual);
++    // An unnamed Unix peer contributed no source address to the message.
++    // Leave the caller's address bytes untouched and return a zero name length.
++    socklen_t actual = 0, capacity = 0;
++    if (!unnamed_pair) {
++      actual = sizeof(local);
++      FromAddress(from, reinterpret_cast<sockaddr*>(&local), &actual);
++    }
+     if (!ws::CopyFromUser(&capacity, addrlen, sizeof(capacity))) return errno = EFAULT, -1;
+     size_t copied = capacity < actual ? capacity : actual;
+     if (!ws::CopyToUser(addr, &local, copied) ||
+@@ -612,8 +628,8 @@ bool AcceptSendControl(int fd, const msghdr& message, std::vector<int>* rights)
+       return errno = EINVAL, false;
+     }
+     if (header.cmsg_level == SOL_SOCKET && header.cmsg_type == SCM_RIGHTS) {
+-      if (!state.description->unix_datagram_pair.load() &&
+-          !state.description->unix_stream_pair.load()) {
++      if (!state.description->IsUnixDatagramPair() &&
++          !state.description->IsUnixStreamPair()) {
+         return errno = EOPNOTSUPP, false;
+       }
+       if (!gesher::UnixRightsAvailable()) return errno = EOPNOTSUPP, false;
+@@ -631,7 +647,7 @@ bool AcceptSendControl(int fd, const msghdr& message, std::vector<int>* rights)
+     if (header.cmsg_level != SOL_SOCKET || header.cmsg_type != SCM_CREDENTIALS) {
+       return errno = EOPNOTSUPP, false;
+     }
+-    if (!state.description->unix_datagram_pair.load()) return errno = EOPNOTSUPP, false;
++    if (!state.description->IsUnixDatagramPair()) return errno = EOPNOTSUPP, false;
+     if (header.cmsg_len != CMSG_LEN(sizeof(ucred))) return errno = EINVAL, false;
+     ucred claimed;
+     memcpy(&claimed, control.data() + at + CMSG_ALIGN(sizeof(cmsghdr)), sizeof(claimed));
+@@ -679,7 +695,7 @@ ssize_t sendmsg(int fd, const struct msghdr* msg, int flags) {
+     if (!Lookup(fd, &state)) return -1;
+     size_t total = 0;
+     for (const ws::Buffer& b : buffers) total += b.len;
+-    if (state.description->unix_datagram_pair.load()) {
++    if (state.description->IsUnixDatagramPair()) {
+       if (!gesher::DepositRights(rights, 0, 0, &token)) return -1;
+     } else if (total != 0) {
+       uint16_t own, peer;
+@@ -736,8 +752,14 @@ ssize_t recvmsg(int fd, struct msghdr* msg, int flags) {
+                  local.msg_name != nullptr ? &local.msg_namelen : nullptr, &result_flags,
+                  &credentials, &pass_credentials, &rights, &packet_info);
+   pthread_cleanup_pop(0);
++  auto close_rights = [&]() {
++    for (int received : rights) {
++      if (received >= 0) close(received);
++    }
++  };
+   if (n >= 0) {
+     local.msg_flags = (result_flags & ws::kMsgTrunc) ? MSG_TRUNC : 0;
++    if (result_flags & ws::kMsgControlTrunc) local.msg_flags |= MSG_CTRUNC;
+     std::vector<unsigned char> control;
+     // Appends one control message, as much of it as fits, as Linux's put_cmsg:
+     // nothing if not even its header fits, else the header with cmsg_len
+@@ -784,15 +806,20 @@ ssize_t recvmsg(int fd, struct msghdr* msg, int flags) {
+       const size_t room = capacity - control.size();
+       if (room >= CMSG_LEN(sizeof(int))) fit = (room - CMSG_LEN(0)) / sizeof(int);
+       std::vector<int> delivered;
+-      for (int received : rights) {
++      for (int& received : rights) {
+         if (received < 0) continue;  // could not be adopted here
+-        if (delivered.size() < fit) delivered.push_back(received);
+-        else close(received);
++        if (delivered.size() < fit) {
++          delivered.push_back(received);
++        } else {
++          close(received);
++          received = -1;
++        }
+       }
+       if (delivered.size() < rights.size()) local.msg_flags |= MSG_CTRUNC;
+       if (!delivered.empty()) append(SCM_RIGHTS, delivered.data(), delivered.size() * sizeof(int));
+     }
+     if (!control.empty() && !ws::CopyToUser(local.msg_control, control.data(), control.size())) {
++      close_rights();
+       return errno = EFAULT, -1;
+     }
+     local.msg_controllen = control.size();
+@@ -802,7 +829,14 @@ ssize_t recvmsg(int fd, struct msghdr* msg, int flags) {
+         !ws::CopyToUser(reinterpret_cast<void*>(base + offsetof(msghdr, msg_controllen)),
+                         &local.msg_controllen, sizeof(local.msg_controllen)) ||
+         !ws::CopyToUser(reinterpret_cast<void*>(base + offsetof(msghdr, msg_flags)),
+-                        &local.msg_flags, sizeof(local.msg_flags))) return errno = EFAULT, -1;
++                        &local.msg_flags, sizeof(local.msg_flags))) {
++      close_rights();
++      return errno = EFAULT, -1;
++    }
++  } else {
++    const int saved = errno;
++    close_rights();
++    errno = saved;
+   }
+   return n;
+ }
+@@ -902,7 +936,7 @@ bool WriteInt(int v, void* value, socklen_t* len) {
+ // An AF_UNIX socketpair (ADR 0088): loopback sockets underneath, but Linux's
+ // AF_UNIX has no IP options (EOPNOTSUPP for their levels).
+ bool IsUnixPair(const ws::SocketDescription& description) {
+-  return description.unix_datagram_pair.load() || description.unix_stream_pair.load();
++  return description.unix_pair_type.load() != ws::Type::kOther;
+ }
+ 
+ // The index of the interface with this IPv4 address; 0 for INADDR_ANY.
+@@ -1052,7 +1086,7 @@ int setsockopt(int fd, int level, int name, const void* value, socklen_t len) {
+     // ADR 0088: an AF_UNIX datagram pair carries its senders' credentials and
+     // delivers them as SCM_CREDENTIALS. Other sockets cannot carry them yet,
+     // so the option is not accepted there instead of being ignored.
+-    if (!state.description->unix_datagram_pair.load()) return errno = ENOPROTOOPT, -1;
++    if (!state.description->IsUnixDatagramPair()) return errno = ENOPROTOOPT, -1;
+     if (!ReadInt(value, len, &v)) return -1;
+     state.description->pass_credentials.store(v != 0);
+     return 0;
+@@ -1147,7 +1181,7 @@ int getsockopt(int fd, int level, int name, void* value, socklen_t* len) {
+     if (IsUnixPair(*state.description)) return errno = EOPNOTSUPP, -1;
+     return WriteInt(state.description->recv_pktinfo.load() ? 1 : 0, value, len) ? 0 : -1;
+   }
+-  if (level == SOL_SOCKET && name == SO_PASSCRED && state.description->unix_datagram_pair.load()) {
++  if (level == SOL_SOCKET && name == SO_PASSCRED && state.description->IsUnixDatagramPair()) {
+     return WriteInt(state.description->pass_credentials.load() ? 1 : 0, value, len) ? 0 : -1;
+   }
+   if (level == SOL_SOCKET && name == SO_PEERCRED && state.description->has_peer_credentials) {
+@@ -1165,15 +1199,19 @@ int getsockopt(int fd, int level, int name, void* value, socklen_t* len) {
+     return 0;
+   }
+   if (level == SOL_SOCKET && name == SO_TYPE) {
++    const ws::Type pair_type = state.description->unix_pair_type.load();
++    if (pair_type != ws::Type::kOther) return WriteInt(FromType(pair_type), value, len) ? 0 : -1;
+     if (ws::GetOption(state.socket, ws::Option::kType, &v) < 0) return -1;
+     return WriteInt(FromType(static_cast<ws::Type>(v)), value, len) ? 0 : -1;
+   }
+   if (level == SOL_SOCKET && name == SO_DOMAIN) {
++    if (IsUnixPair(*state.description)) return WriteInt(AF_UNIX, value, len) ? 0 : -1;
+     ws::Address address;
+     if (ws::GetSockName(state.socket, &address) < 0) return -1;
+     return WriteInt(FromFamily(address.family), value, len) ? 0 : -1;
+   }
+   if (level == SOL_SOCKET && name == SO_PROTOCOL) {
++    if (IsUnixPair(*state.description)) return WriteInt(0, value, len) ? 0 : -1;
+     if (ws::GetOption(state.socket, ws::Option::kType, &v) < 0) return -1;
+     ws::Type type = static_cast<ws::Type>(v);
+     int protocol = type == ws::Type::kStream ? IPPROTO_TCP
+@@ -1236,6 +1274,8 @@ constexpr uint32_t kTransferNonBlocking = 0x8;
+ constexpr uint32_t kTransferPeerCredentials = 0x10;
+ constexpr uint32_t kTransferUnixStream = 0x20;
+ constexpr uint32_t kTransferPacketInfo = 0x40;  // IP_PKTINFO
++// The two formerly exclusive Unix pair bits encode a third logical type.
++constexpr uint32_t kTransferUnixSeqpacket = kTransferUnixDatagram | kTransferUnixStream;
+ // The pid fills bits 7..31: pid / 4 < 2^25, pids below 2^27.
+ constexpr int kTransferPidShift = 7;
+ static_assert((uint64_t{1} << kTransferPidShift) > kTransferPacketInfo, "bits overlap");
+@@ -1247,8 +1287,12 @@ bool gesher::TransferSocket(int fd, uintptr_t* socket, uint64_t* metadata) {
+   const ws::SocketDescription& d = *state.description;
+   if (d.netlink) return false;
+   uint64_t m = kTransferredSocket;
+-  if (d.unix_datagram_pair.load()) m |= kTransferUnixDatagram;
+-  if (d.unix_stream_pair.load()) m |= kTransferUnixStream;
++  switch (d.unix_pair_type.load()) {
++    case ws::Type::kDgram: m |= kTransferUnixDatagram; break;
++    case ws::Type::kStream: m |= kTransferUnixStream; break;
++    case ws::Type::kSeqpacket: m |= kTransferUnixSeqpacket; break;
++    default: break;
++  }
+   if (d.pass_credentials.load()) m |= kTransferPassCredentials;
+   if (d.nonblocking.load()) m |= kTransferNonBlocking;
+   if (d.recv_pktinfo.load()) m |= kTransferPacketInfo;
+@@ -1275,8 +1319,12 @@ int gesher::AdoptSocket(uintptr_t socket, uint64_t metadata) {
+   SocketFd end;
+   if (gesher::LookupSocket(fd, &end)) {
+     ws::SocketDescription& d = *end.description;
+-    d.unix_datagram_pair.store((metadata & kTransferUnixDatagram) != 0);
+-    d.unix_stream_pair.store((metadata & kTransferUnixStream) != 0);
++    switch (metadata & kTransferUnixSeqpacket) {
++      case kTransferUnixDatagram: d.unix_pair_type.store(ws::Type::kDgram); break;
++      case kTransferUnixStream: d.unix_pair_type.store(ws::Type::kStream); break;
++      case kTransferUnixSeqpacket: d.unix_pair_type.store(ws::Type::kSeqpacket); break;
++      default: break;
++    }
+     d.pass_credentials.store((metadata & kTransferPassCredentials) != 0);
+     // The Winsock option travels with the socket itself (SetPacketInfo).
+     d.recv_pktinfo.store((metadata & kTransferPacketInfo) != 0);
+diff --git a/compat/posix/src/socket_internal.h b/compat/posix/src/socket_internal.h
+index b8b760f2ea143a6574be3392521f61679311e8a7..52d3cdf197782a30de8c39f0f27ac87aced65971 100644
+--- a/compat/posix/src/socket_internal.h
++++ b/compat/posix/src/socket_internal.h
+@@ -46,6 +46,7 @@ inline constexpr int kMsgDontRoute = 4;
+ inline constexpr int kMsgWaitAll = 8;
+ inline constexpr int kMsgTrunc = 16;
+ inline constexpr int kMsgCmsgCloexec = 32;
++inline constexpr int kMsgControlTrunc = 64;
+ 
+ // Options with an int value. Timeouts are in milliseconds.
+ enum class Option {
+@@ -93,16 +94,20 @@ struct SocketDescription {
+   std::shared_ptr<SocketDescription> failed_close_owner;  // explicit failure quarantine
+   size_t descriptor_refs = 0;  // fd.cc's table mutex; snapshots are not fd refs
+   // AF_UNIX socketpair (ADR 0088). Set by socketpair before it returns the fds.
+-  // A datagram pair (SOCK_SEQPACKET, SOCK_DGRAM) frames each datagram with the
+-  // sender's credentials (winsock.cc's UnixDatagramHeader); SO_PASSCRED delivers them.
+-  std::atomic<bool> unix_datagram_pair{false};
++  // Preserve the caller's type even when SOCK_SEQPACKET uses the same framed
++  // datagram transport as SOCK_DGRAM. kOther denotes a socket outside this path.
++  std::atomic<Type> unix_pair_type{Type::kOther};
++  bool IsUnixDatagramPair() const {
++    const Type type = unix_pair_type.load();
++    return type == Type::kDgram || type == Type::kSeqpacket;
++  }
++  bool IsUnixStreamPair() const { return unix_pair_type.load() == Type::kStream; }
+   std::atomic<bool> pass_credentials{false};  // SO_PASSCRED
+   std::atomic<bool> recv_pktinfo{false};  // IP_PKTINFO: recvmsg delivers in_pktinfo
+   // A stream pair (SOCK_STREAM): SCM_RIGHTS goes through the broker's queue for
+   // the connection, keyed by both loopback ports (stream_ports: local << 16 |
+   // peer, 0 until first needed), at stream positions that SendOwned and
+   // RecvOwned keep (binder_wire.h's kStreamPositionsPrefix).
+-  std::atomic<bool> unix_stream_pair{false};
+   std::atomic<uint32_t> stream_ports{0};
+   bool has_peer_credentials = false;  // SO_PEERCRED: the pair's creator, as on Linux
+   int32_t peer_pid = 0;
+@@ -181,7 +186,7 @@ bool CopyToUser(void* destination, const void* source, size_t size);
+ ptrdiff_t SendOwned(Socket s, const Buffer* buffers, size_t count, int flags, const Address* to,
+                     std::shared_ptr<SocketDescription>& description, bool dont_wait = false,
+                     const RightsToken* rights = nullptr);
+-// On an AF_UNIX datagram pair (SocketDescription::unix_datagram_pair) both add
++// On an AF_UNIX datagram pair (SocketDescription::IsUnixDatagramPair) both add
+ // and remove the framing header: callers see only the payload. RecvOwned
+ // stores the sender's credentials in `credentials` when it is not null.
+ // On an AF_UNIX stream pair both keep the end's stream position, and a read
+@@ -368,6 +373,8 @@ bool DepositRights(const std::vector<int>& fds, uint64_t queue, uint64_t positio
+ // adopted). With `fds` null, the descriptors are discarded. close_on_exec
+ // belongs to this receive, not to the sender's descriptor or the shared OFD.
+ bool ClaimRights(const ws::RightsToken& token, std::vector<int>* fds, bool close_on_exec = false);
++// A datagram peek installs independent descriptors and leaves its group queued.
++bool PeekRights(const ws::RightsToken& token, std::vector<int>* fds, bool close_on_exec);
+ // The groups of a stream connection's queue whose position is below `limit`.
+ bool TakeRights(uint64_t queue, uint64_t limit, std::vector<int>* fds, bool close_on_exec = false);
+ // A sender's deposit whose message was not sent: discarded, if still queued.
+diff --git a/compat/posix/src/system.cc b/compat/posix/src/system.cc
+index 98cee968ade5684fa24086ecec4b725d93d5cb63..ce635343925b4cba447fcadc7cc5ec8900895374 100644
+--- a/compat/posix/src/system.cc
++++ b/compat/posix/src/system.cc
+@@ -355,7 +355,7 @@ int ioctl(int fd, unsigned long request, ...) {
+     if (request == FIONREAD) {
+       if (gesher::ws::Available(state.socket, argp) != 0) return -1;
+       // An AF_UNIX datagram pair's payload, without its framing (ADR 0088).
+-      if (state.description->unix_datagram_pair.load()) *argp = gesher::ws::UnixDatagramPayload(*argp);
++      if (state.description->IsUnixDatagramPair()) *argp = gesher::ws::UnixDatagramPayload(*argp);
+       return 0;
+     }
+     int result;
+@@ -488,6 +488,9 @@ int fcntl(int fd, int cmd, ...) {
+           return gesher::FailWithLastError();
+         }
+         return 0;
++      case F_GETPIPE_SZ:
++        if (GetFileType(h) != FILE_TYPE_PIPE) return errno = EBADF, -1;
++        [[fallthrough]];
+       case F_GETFL:
+       case F_SETFL:
+         status_snapshot = gesher::CaptureDescriptor(fd);
+@@ -509,6 +512,7 @@ int fcntl(int fd, int cmd, ...) {
+   }
+   // The snapshot retains the selected object and description across concurrent
+   // close/dup2. Native mode operations must not hold the publication lock.
++  if (cmd == F_GETPIPE_SZ) return gesher::PipeCapacity(status_snapshot);
+   return cmd == F_GETFL ? gesher::FileDescriptionFlags(status_snapshot)
+                        : gesher::SetFileDescriptionFlags(status_snapshot, arg);
+ }
+@@ -767,6 +771,17 @@ bool FileWriteVector(int fd, const iovec* iov, int iovcnt, bool positioned,
+ 
+ ssize_t readv(int fd, const struct iovec* iov, int iovcnt) {
+   if (BadVector(fd, iovcnt)) return -1;
++  if (iovcnt == 0) {
++    // Linux still validates read access without issuing a receive. A
++    // zero-length Winsock receive can wait or consume a queued datagram.
++    pthread_testcancel();
++    auto snapshot = gesher::CaptureDescriptor(fd);
++    if (!snapshot) return -1;
++    const int flags = gesher::FileDescriptionIoFlags(snapshot);
++    if (flags < 0) return -1;
++    if ((flags & O_PATH) != 0 || (flags & O_ACCMODE) == O_WRONLY) return errno = EBADF, -1;
++    return 0;
++  }
+   ssize_t total = 0;
+   if (SocketIo(fd, iov, iovcnt, false, &total)) return total;
+   for (int i = 0; i < iovcnt; ++i) {
+@@ -820,19 +835,33 @@ ssize_t writev(int fd, const struct iovec* iov, int iovcnt) {
+ }
+ 
+ ssize_t preadv(int fd, const struct iovec* iov, int iovcnt, off_t offset) {
++  if (offset < 0) return errno = EINVAL, -1;
+   if (BadVector(fd, iovcnt)) return -1;
+-  ssize_t total = 0;
++  if (iovcnt == 0) return gesher::CheckEmptyPositionedVector(fd, offset, false);
++  std::array<iovec, IOV_MAX> copied;
++  if (!gesher::ws::CopyFromUser(copied.data(), iov, static_cast<size_t>(iovcnt) * sizeof(iovec)))
++    return errno = EFAULT, -1;
++  constexpr size_t maximum = 0x7ffff000;  // Linux MAX_RW_COUNT for 4 KiB pages.
+   for (int i = 0; i < iovcnt; ++i) {
+-    ssize_t n = pread(fd, iov[i].iov_base, iov[i].iov_len, offset + total);
++    if (copied[i].iov_len > static_cast<size_t>(std::numeric_limits<ssize_t>::max()))
++      return errno = EINVAL, -1;
++  }
++  ssize_t total = 0;
++  for (int i = 0; i < iovcnt && static_cast<size_t>(total) < maximum; ++i) {
++    const size_t length = std::min(copied[i].iov_len, maximum - static_cast<size_t>(total));
++    if (offset > std::numeric_limits<off_t>::max() - total) break;
++    const ssize_t n = pread(fd, copied[i].iov_base, length, offset + total);
+     if (n < 0) return total > 0 ? total : -1;
+     total += n;
+-    if (static_cast<size_t>(n) < iov[i].iov_len) break;
++    if (static_cast<size_t>(n) < length) break;
+   }
+   return total;
+ }
+ 
+ ssize_t pwritev(int fd, const struct iovec* iov, int iovcnt, off_t offset) {
++  if (offset < 0) return errno = EINVAL, -1;
+   if (BadVector(fd, iovcnt)) return -1;
++  if (iovcnt == 0) return gesher::CheckEmptyPositionedVector(fd, offset, true);
+   ssize_t total = 0;
+   if (FileWriteVector(fd, iov, iovcnt, true, offset, &total)) return total;
+   for (int i = 0; i < iovcnt; ++i) {
+diff --git a/compat/posix/src/unistd.cc b/compat/posix/src/unistd.cc
+index ec17691ccf61b664ae816aa2023d67ce8ae1f3e0..10725106b0701f196f0381dbb0b7166f858926dc 100644
+--- a/compat/posix/src/unistd.cc
++++ b/compat/posix/src/unistd.cc
+@@ -6,6 +6,7 @@
+ #include <errno.h>
+ #include <fcntl.h>
+ #include <io.h>
++#include <pthread.h>
+ #include <stdlib.h>
+ #include <string.h>
+ #include <sys/stat.h>
+@@ -665,7 +666,8 @@ static ssize_t PositionedNativeIo(HANDLE anchor, DWORD type, DWORD access, bool
+   return static_cast<ssize_t>(transferred);
+ }
+ 
+-static ssize_t PositionedIo(int fd, void* buf, size_t count, off_t offset, bool writing) {
++static ssize_t PositionedIo(int fd, void* buf, size_t count, off_t offset, bool writing,
++                            bool empty_vector = false) {
+   if (offset < 0) return errno = EINVAL, -1;
+   gesher::DescriptorSnapshotPtr snapshot;
+   gesher::Device device{};
+@@ -701,7 +703,7 @@ static ssize_t PositionedIo(int fd, void* buf, size_t count, off_t offset, bool
+   // Android uses Linux's pwrite behavior: O_APPEND overrides the explicit
+   // offset, but the caller's shared ordinary file position stays unchanged.
+   const bool append = writing && type == FILE_TYPE_DISK && (status_flags & O_APPEND) != 0;
+-  if (writing && gesher::FileDescriptionIsMemfd(snapshot)) {
++  if (!empty_vector && writing && gesher::FileDescriptionIsMemfd(snapshot)) {
+     if (int error = gesher::MemfdWriteHandleError(file, false, static_cast<uint64_t>(offset), count, append))
+       return errno = error, -1;
+   }
+@@ -712,6 +714,9 @@ static ssize_t PositionedIo(int fd, void* buf, size_t count, off_t offset, bool
+   // ReOpenFile can request more access than the original. Never use that to
+   // turn O_RDONLY/O_WRONLY/O_PATH descriptors into writable/readable ones.
+   if ((granted & access) == 0) return errno = EBADF, -1;
++  // The empty vector stops after descriptor admission, even for a directory
++  // or a character device whose scalar zero-byte I/O has different effects.
++  if (empty_vector) return 0;
+   if (count != 0 && buf == nullptr) {
+     // Linux access_ok checks the user address range before dispatch, even
+     // when a backend will not actually dereference the buffer.
+@@ -921,6 +926,11 @@ int unsetenv(const char* name) {
+ }  // extern "C"
+ 
+ namespace gesher {
++int CheckEmptyPositionedVector(int fd, int64_t offset, bool writing) {
++  pthread_testcancel();
++  return static_cast<int>(PositionedIo(fd, nullptr, 0, offset, writing, true));
++}
++
+ int64_t WriteFileDescriptionAt(const DescriptorSnapshotPtr& snapshot, const void* bytes,
+                               unsigned count, int64_t offset) {
+   if (offset < 0) return errno = EINVAL, -1;
+diff --git a/compat/posix/src/unix_rights.cc b/compat/posix/src/unix_rights.cc
+index c26e8900efad5520abb1d1cc5f08a70c7b30bc23..8b4482bc3747befc86f3226621888f26f32e0621 100644
+--- a/compat/posix/src/unix_rights.cc
++++ b/compat/posix/src/unix_rights.cc
+@@ -306,9 +306,10 @@ bool DepositRights(const std::vector<int>& fds, uint64_t queue, uint64_t positio
+   return true;
+ }
+ 
+-bool ClaimRights(const ws::RightsToken& token, std::vector<int>* fds, bool close_on_exec) {
++static bool ReceiveDatagramRights(const ws::RightsToken& token, uint32_t op, std::vector<int>* fds,
++                                  bool close_on_exec) {
+   Request request;
+-  request.Put<uint32_t>(wire::kRightsClaim);
++  request.Put<uint32_t>(op);
+   request.Put<uint64_t>(token.value[0]);
+   request.Put<uint64_t>(token.value[1]);
+   std::lock_guard<std::mutex> lock(g_mutex);
+@@ -316,6 +317,14 @@ bool ClaimRights(const ws::RightsToken& token, std::vector<int>* fds, bool close
+   return Call(request, &reply) && ReadDelivered(reply, fds, fds != nullptr, close_on_exec);
+ }
+ 
++bool ClaimRights(const ws::RightsToken& token, std::vector<int>* fds, bool close_on_exec) {
++  return ReceiveDatagramRights(token, wire::kRightsClaim, fds, close_on_exec);
++}
++
++bool PeekRights(const ws::RightsToken& token, std::vector<int>* fds, bool close_on_exec) {
++  return ReceiveDatagramRights(token, wire::kRightsPeek, fds, close_on_exec);
++}
++
+ bool TakeRights(uint64_t queue, uint64_t limit, std::vector<int>* fds, bool close_on_exec) {
+   Request request;
+   request.Put<uint32_t>(wire::kRightsTake);
+diff --git a/compat/posix/src/winsock.cc b/compat/posix/src/winsock.cc
+index 68f27ff2318da3e971ee2fb112a641b34ac02308..cc93d63645500568fa033a418559a82b631f96e0 100644
+--- a/compat/posix/src/winsock.cc
++++ b/compat/posix/src/winsock.cc
+@@ -1348,20 +1348,17 @@ ptrdiff_t RecvUnixDatagram(Socket s, Buffer* buffers, size_t count, int flags, A
+       memcpy(carried.value, packet.get() + kUnixHeader, sizeof(carried.value));
+       carried.count = header.descriptors;
+     }
+-    // The descriptors leave the broker with their datagram: to the caller, or
+-    // discarded for a reader without control data, as Linux discards them. A
+-    // peek leaves the datagram, and them, in place.
+-    if ((flags & kMsgPeek) == 0) {
+-      if (rights != nullptr) *rights = carried;
+-      else if (carried.count != 0) gesher::ClaimRights(carried, nullptr);
+-    } else if (rights != nullptr) {
+-      *rights = {};
+-    }
++    // recvmsg can claim the group's descriptors or duplicate them for a peek.
++    // An ordinary read consumes the group without delivering descriptors.
++    const bool peek = (flags & kMsgPeek) != 0;
++    if (rights != nullptr) *rights = carried;
++    else if (!peek && carried.count != 0) gesher::ClaimRights(carried, nullptr);
+     const size_t payload = static_cast<size_t>(n) - header_size;
+     size_t copied = 0;
+     for (size_t i = 0; i < count && copied < payload; ++i) {
+       const size_t part = buffers[i].len < payload - copied ? buffers[i].len : payload - copied;
+       if (!CopyToUser(buffers[i].data, packet.get() + header_size + copied, part)) {
++        if (!peek && rights != nullptr && carried.count != 0) gesher::ClaimRights(carried, nullptr);
+         return errno = EFAULT, -1;
+       }
+       copied += part;
+@@ -1417,11 +1414,11 @@ ptrdiff_t SendOwned(Socket s, const Buffer* buffers, size_t count, int flags, co
+     if (rights != nullptr && rights->count != 0) return errno = EOPNOTSUPP, -1;
+     return gesher::NetlinkSend(*description->netlink, buffers, count, 0, nullptr, 0);
+   }
+-  if (description->unix_datagram_pair.load()) {
++  if (description->IsUnixDatagramPair()) {
+     return SendUnixDatagram(s, buffers, count, flags, to, description, dont_wait, rights);
+   }
+   const ptrdiff_t sent = SendOwnedRaw(s, buffers, count, flags, to, description, dont_wait);
+-  if (sent > 0 && description->unix_stream_pair.load()) {
++  if (sent > 0 && description->IsUnixStreamPair()) {
+     const int saved = errno;
+     uint16_t local, peer;
+     if (StreamPorts(s, *description, &local, &peer)) {
+@@ -1442,7 +1439,7 @@ ptrdiff_t RecvOwned(Socket s, Buffer* buffers, size_t count, int flags, Address*
+     return gesher::NetlinkRecv(description, buffers, count, 0, nullptr, nullptr,
+                                dont_wait, result_flags);
+   }
+-  if (description->unix_datagram_pair.load()) {
++  if (description->IsUnixDatagramPair()) {
+     return RecvUnixDatagram(s, buffers, count, flags, from, description, dont_wait, result_flags,
+                             credentials, rights);
+   }
+@@ -1450,7 +1447,7 @@ ptrdiff_t RecvOwned(Socket s, Buffer* buffers, size_t count, int flags, Address*
+   if (credentials != nullptr) *credentials = {};
+   const ptrdiff_t n =
+       RecvOwnedRaw(s, buffers, count, flags, from, description, dont_wait, result_flags);
+-  if (n > 0 && (flags & kMsgPeek) == 0 && description->unix_stream_pair.load()) {
++  if (n > 0 && (flags & kMsgPeek) == 0 && description->IsUnixStreamPair()) {
+     StreamReceived(s, *description, static_cast<size_t>(n), stream_rights,
+                    (flags & kMsgCmsgCloexec) != 0);
+   }
