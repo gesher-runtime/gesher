@@ -5,6 +5,7 @@
 // standalone fixture gives the registry native child process handles from the
 // test launcher and never starts or installs the privileged Windows service.
 #include <windows.h>
+#include <objbase.h>
 #include <sddl.h>
 
 #include <span>
@@ -216,6 +217,114 @@ struct UserPolicy {
   PSID Sid() const { return reinterpret_cast<const TOKEN_USER*>(data)->User.Sid; }
 };
 
+bool ObserveSealedRegistration(HANDLE job, UserPolicy& owner, PSID fixture_sid,
+                               bool* opened_by_pid, bool* cleaned) {
+  struct SuspendedProcess {
+    PROCESS_INFORMATION child{};
+    bool Close() {
+      if (!child.hProcess) return true;
+      if (WaitForSingleObject(child.hProcess, 0) != WAIT_OBJECT_0)
+        TerminateProcess(child.hProcess, 0);
+      const bool exited = WaitForSingleObject(child.hProcess, kWait) == WAIT_OBJECT_0;
+      const bool thread_closed = CloseHandle(child.hThread) != FALSE;
+      const bool process_closed = CloseHandle(child.hProcess) != FALSE;
+      child = {};
+      return exited && thread_closed && process_closed;
+    }
+    ~SuspendedProcess() { Close(); }
+  } caller, target;
+  const auto observe = [&]() -> bool {
+  wchar_t windows[MAX_PATH]{};
+  const UINT length = GetSystemDirectoryW(windows, MAX_PATH);
+  if (!length || length >= MAX_PATH) return false;
+  const std::wstring image = std::wstring(windows) + L"\\cmd.exe";
+  SECURITY_CAPABILITIES capabilities{fixture_sid, nullptr, 0, 0};
+  const auto create = [&](SECURITY_ATTRIBUTES* security, bool lowbox, PROCESS_INFORMATION* child) {
+    const DWORD attributes = lowbox ? 2 : 1;
+    SIZE_T size = 0;
+    InitializeProcThreadAttributeList(nullptr, attributes, 0, &size);
+    std::vector<std::byte> storage(size);
+    STARTUPINFOEXW setup{};
+    setup.StartupInfo.cb = sizeof(setup);
+    setup.lpAttributeList = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(storage.data());
+    if (!InitializeProcThreadAttributeList(setup.lpAttributeList, attributes, 0, &size)) return false;
+    // Both never-resumed children belong to the existing kill-on-close test
+    // job at creation, including early-return and abnormal parent-exit paths.
+    const bool created = UpdateProcThreadAttribute(setup.lpAttributeList, 0,
+        PROC_THREAD_ATTRIBUTE_JOB_LIST, &job, sizeof(job), nullptr, nullptr) &&
+        (!lowbox || UpdateProcThreadAttribute(setup.lpAttributeList, 0,
+            PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, &capabilities, sizeof(capabilities), nullptr, nullptr)) &&
+        CreateProcessW(image.c_str(), nullptr, security, security, FALSE,
+          EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW | CREATE_SUSPENDED,
+          nullptr, nullptr, &setup.StartupInfo, child);
+    DeleteProcThreadAttributeList(setup.lpAttributeList);
+    BOOL bound = FALSE;
+    return created && IsProcessInJob(child->hProcess, job, &bound) && bound;
+  };
+  if (!create(&owner.security, false, &target.child) || !create(nullptr, true, &caller.child)) return false;
+  HANDLE raw = nullptr;
+  if (!OpenProcessToken(caller.child.hProcess, TOKEN_QUERY | TOKEN_DUPLICATE, &raw)) return false;
+  const FixtureHandle lowbox(raw);
+  DWORD is_container = 0, written = 0;
+  if (!GetTokenInformation(lowbox.get(), TokenIsAppContainer, &is_container,
+          sizeof(is_container), &written) || !is_container ||
+      !DuplicateTokenEx(lowbox.get(), TOKEN_QUERY | TOKEN_IMPERSONATE, nullptr,
+          SecurityImpersonation, TokenImpersonation, &raw)) return false;
+  const FixtureHandle impersonation(raw);
+  constexpr DWORD access = PROCESS_DUP_HANDLE | PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE;
+  const HANDLE self = GetCurrentProcess();
+  if (!DuplicateHandle(self, target.child.hProcess, self, &raw, access | READ_CONTROL, FALSE, 0)) return false;
+  const FixtureHandle offered(raw);
+  if (!DuplicateHandle(self, target.child.hProcess, self, &raw, access, FALSE, 0)) return false;
+  const FixtureHandle no_acl_read(raw);
+  DWORD session = 0;
+  FILETIME birth{}, exit{}, kernel{}, user{};
+  if (!ProcessIdToSessionId(target.child.dwProcessId, &session) ||
+      !GetProcessTimes(target.child.hProcess, &birth, &exit, &kernel, &user)) return false;
+
+  ProtectedPeers peers;
+  ProtectedIdentity accepted, denied;
+  if (!SetThreadToken(nullptr, impersonation.get())) return false;
+  const FixtureHandle opened(OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, target.child.dwProcessId));
+  const DWORD open_error = GetLastError();
+  *opened_by_pid = opened != nullptr;
+  const DWORD denied_status = peers.RegisterForFixture(no_acl_read.get(), kUid,
+      PeerRole::kContextManager, owner.Sid(), &denied);
+  const DWORD status = peers.RegisterForFixture(offered.get(), kUid,
+      PeerRole::kContextManager, owner.Sid(), &accepted);
+  if (!RevertToSelf()) std::abort();
+  std::printf("Protected Binder sealed peer: native PID open=%lu ACL read absent=%lu register=%lu\n",
+              opened ? ERROR_SUCCESS : open_error, denied_status, status);
+  return !opened && open_error == ERROR_ACCESS_DENIED && denied_status == ERROR_ACCESS_DENIED && !denied &&
+      status == ERROR_SUCCESS && accepted && accepted->pid() == target.child.dwProcessId &&
+      accepted->session() == session && accepted->creation_time() ==
+          ((uint64_t{birth.dwHighDateTime} << 32) | birth.dwLowDateTime);
+  };
+  const bool observed = observe();
+  const bool target_closed = target.Close();
+  const bool caller_closed = caller.Close();
+  *cleaned = target_closed && caller_closed;
+  std::printf("Protected Binder sealed cleanup: target=%d caller=%d\n", target_closed, caller_closed);
+  return observed && *cleaned;
+}
+
+void SealedSessionRegistration(HANDLE job, UserPolicy& owner) {
+  GUID random{};
+  wchar_t text[39]{};
+  Require(SUCCEEDED(CoCreateGuid(&random)) && StringFromGUID2(random, text, 39) == 39,
+          "create a unique lowbox fixture name");
+  const std::wstring name = L"Gesher.BinderFixture." + std::wstring(text + 1, 36);
+  gesher::appcontainer::Sid sid;
+  Require(gesher::appcontainer::EnsureProfile(name, name, &sid) == ERROR_SUCCESS,
+          "create disposable lowbox profile");
+  bool opened_by_pid = false, cleaned = false;
+  const bool observed = ObserveSealedRegistration(job, owner, sid.value, &opened_by_pid, &cleaned);
+  Require(cleaned, "both owned sealed fixture children exited and handles closed");
+  Require(gesher::appcontainer::DeleteContainerProfile(name) == ERROR_SUCCESS,
+          "remove disposable lowbox profile");
+  Require(!opened_by_pid && observed, "bound session from sealed peer's exact limited handle");
+}
+
 FixtureHandle StartChild(HANDLE job, const std::wstring& args, UserPolicy& owner,
                          ProtectedPeers* peers = nullptr, ProtectedIdentity* peer = nullptr,
                          std::span<HANDLE> inherited = {}, PeerRole role = PeerRole::kClient) {
@@ -283,6 +392,7 @@ void Test() {
   Require(job && SetInformationJobObject(job.get(), JobObjectExtendedLimitInformation,
       &limits, sizeof(limits)), "bound test child lifetime");
   UserPolicy owner;
+  SealedSessionRegistration(job.get(), owner);
   ProtectedPeers peers;
   ProtectedIdentity selected, sibling, manager;
   const std::wstring name = L"\\\\.\\pipe\\gesher-protected-admission-fixture-" +

@@ -18,6 +18,25 @@ DWORD LiveStatus(HANDLE process) {
   return wait == WAIT_FAILED ? GetLastError() : ERROR_PROCESS_ABORTED;
 }
 
+DWORD ReadProcessSession(HANDLE process, DWORD* session) {
+  using QueryProcess = LONG(NTAPI*)(HANDLE, int, PVOID, ULONG, PULONG);
+  using ToError = ULONG(NTAPI*)(LONG);
+  const HMODULE native = GetModuleHandleW(L"ntdll.dll");
+  static const auto query = reinterpret_cast<QueryProcess>(reinterpret_cast<void*>(
+      GetProcAddress(native, "NtQueryInformationProcess")));
+  static const auto to_error = reinterpret_cast<ToError>(reinterpret_cast<void*>(
+      GetProcAddress(native, "RtlNtStatusToDosError")));
+  if (!query || !to_error) return ERROR_PROC_NOT_FOUND;
+  constexpr int kProcessSessionInformation = 24;
+  ULONG returned = 0;
+  // Query the transferred process object with its existing query-limited
+  // access. A PID lookup reopens the SYSTEM-owned process, which the lowbox
+  // broker cannot do. Neither a new token handle nor a wider grant is needed.
+  const LONG status = query(process, kProcessSessionInformation, session, sizeof(*session), &returned);
+  if (status < 0) return to_error(status);
+  return returned == sizeof(*session) ? ERROR_SUCCESS : ERROR_INVALID_DATA;
+}
+
 struct FreeSecurity {
   void operator()(void* value) const { LocalFree(value); }
 };
@@ -94,9 +113,8 @@ DWORD ProtectedPeers::RegisterOwned(HANDLE launched_process, uint32_t android_ui
   FILETIME created{}, exited{}, kernel{}, user{};
   if (!GetProcessTimes(peer->process_, &created, &exited, &kernel, &user)) return GetLastError();
   peer->creation_time_ = (uint64_t{created.dwHighDateTime} << 32) | created.dwLowDateTime;
-  // The retained live process object anchored this PID. Get the OS session
-  // without asking a protected lowbox broker to open another process token.
-  if (!ProcessIdToSessionId(peer->pid_, &peer->session_)) return GetLastError();
+  error = ReadProcessSession(peer->process_, &peer->session_);
+  if (error != ERROR_SUCCESS) return error;
   peer->uid_ = android_uid;
   peer->role_ = role;
 

@@ -804,23 +804,30 @@ DWORD Session::StartEntry(std::unique_ptr<Entry> entry, const std::wstring& bina
     status = entry->profile->PinPackageObjects(*entry->launch);
   }
   if (status != ERROR_SUCCESS) return status;
+  if (launch_stage) *launch_stage = "launch.read-process-creation-time";
   entry->start_time = CreationTime(entry->launch->process());
   if (!entry->start_time) return ERROR_INVALID_DATA;
+  if (launch_stage) *launch_stage = "launch.create-signal-channel";
   status = ProtectedSignalChannel::Create(entry->launch->process(), &entry->signals);
   if (status != ERROR_SUCCESS) return status;
+  if (launch_stage) *launch_stage = "launch.prepare-authority-peer";
   LocalMemory descriptor;
   status = PipeSecurity(entry->launch->process(), &descriptor);
   if (status != ERROR_SUCCESS) return status;
   SECURITY_ATTRIBUTES security{sizeof(security), descriptor.get(), FALSE};
   status = AuthorityPeer::Create(entry->launch->process(), locator.c_str(), &security, &entry->peer);
   if (status != ERROR_SUCCESS) return status;
+  if (launch_stage) *launch_stage = "launch.allow-binder-listener";
   status = factory_->AllowAppContainer(entry->profile->sid.value);
-  if (status == ERROR_SUCCESS) status = registration_->Register(entry->registration, entry->uid,
+  if (status != ERROR_SUCCESS) return status;
+  if (launch_stage) *launch_stage = "launch.register-binder-peer";
+  status = registration_->Register(entry->registration, entry->uid,
       entry->system_server ? binder::PeerRole::kSystemServer : binder::PeerRole::kClient, *entry->launch);
   if (status != ERROR_SUCCESS) return status;
   Entry* pointer = entry.get();
   processes_.emplace(entry->registration, std::move(entry));
   pointer->worker = std::thread([this, pointer] { Serve(*pointer); });
+  if (launch_stage) *launch_stage = "launch.resume-guest-thread";
   status = pointer->launch->Resume();
   if (status != ERROR_SUCCESS) { registration_->Revoke(pointer->registration); return status; }
   *created = pointer;
@@ -1595,8 +1602,14 @@ DWORD Session::Run(const std::wstring& executable, std::unique_ptr<HostDisk> sel
     launch_stage_ = "launch.pin-profile-package-namespace";
     status = service_profile_->PinPackageObjects(*manager_);
   }
-  if (status == ERROR_SUCCESS) status = registration_->Register(1, 1000, binder::PeerRole::kContextManager, *manager_);
-  if (status == ERROR_SUCCESS) status = manager_->Resume();
+  if (status != ERROR_SUCCESS) return status;
+  startup_stage_ = "runtime.register-service-manager";
+  launch_stage_ = "launch.register-binder-peer";
+  status = registration_->Register(1, 1000, binder::PeerRole::kContextManager, *manager_);
+  if (status != ERROR_SUCCESS) return status;
+  startup_stage_ = "runtime.resume-service-manager";
+  launch_stage_ = "launch.resume-guest-thread";
+  status = manager_->Resume();
   if (status != ERROR_SUCCESS) return status;
   auto system = std::make_unique<Entry>();
   system->registration = 2;
