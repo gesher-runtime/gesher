@@ -276,7 +276,8 @@ Check 'native libs: gesher-app runs nativeapp.apk; lib/x86_64 loaded from the AP
 
 # The same run's platform checks (tests/apps/nativeapp/jni/nativeapp.cpp):
 # libandroid (an asset read through AAssetManager_fromJava, AAssetDir,
-# AConfiguration, no sensors, ALooper_addFd with a pipe callback and an
+# AConfiguration, the host's sensor inventory (its count depends on the PC's
+# sensors and Gesher's stationary accelerometer), ALooper_addFd with a pipe callback and an
 # eventfd ident on the library's own thread's looper, ALooper_wake, and a pipe
 # on Java's main Looper whose callback the message loop runs) and the libc the
 # shim provides (a socket pair with poll and select, TCP over loopback,
@@ -285,7 +286,8 @@ Check 'native libs: gesher-app runs nativeapp.apk; lib/x86_64 loaded from the AP
 Check 'native libs: gesher-app runs nativeapp.apk; libandroid assets/looper and libc sockets/readdir/std::filesystem/signals from the .so' {
   $global:LASTEXITCODE = $nativeAppExit
   $nativeAppOut
-} @('NativeActivity platform: asset=Hello from an asset, assets=hello.txt, config=ok, sensors=0, looper=ok, mainlooper=armed, socketpair=ok, tcp=ok, getaddrinfo=ok, readdir=a.txt/b.txt/sub, fscanf=ok, filesystem=ok, signals=ok, strftime=ok, sysconf=ok, perfhint=ok',
+} @('NativeActivity platform: asset=Hello from an asset, assets=hello.txt, config=ok, sensors=',
+    ', looper=ok, mainlooper=armed, socketpair=ok, tcp=ok, getaddrinfo=ok, readdir=a.txt/b.txt/sub, fscanf=ok, filesystem=ok, signals=ok, strftime=ok, sysconf=ok, perfhint=ok',
     'NativeActivity main looper: fd callback ran',
     'gesher-app: done')
 
