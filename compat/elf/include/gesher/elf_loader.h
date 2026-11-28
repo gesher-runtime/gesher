@@ -114,11 +114,11 @@ const char* Soname(Library* library);
 // kept (handles may still be held); full unmap is not implemented.
 void Close(Library* library);
 
-// Pins the ELF object whose mapping contains `address`, for a runtime-owned
+// The ELF object whose mapping contains `address`, for a runtime-owned
 // callback whose lifetime can outlast a public handle; null when no object
-// contains it. Release each pin with ReleaseLifetimePin (null is accepted).
-// Close keeps every mapping, so a pin currently only names its object; it
-// must still be released for a loader that retires unreachable objects.
+// contains it. Release each result with ReleaseLifetimePin (null is accepted).
+// Here it only names the containing object and does not keep it mapped; a
+// loader that retires unreachable objects gives the pin its lifetime meaning.
 Library* RetainForAddress(const void* address);
 void ReleaseLifetimePin(Library* library);
 

@@ -31,9 +31,11 @@ foreach ($abi in @('x86_64', 'arm64-v8a')) {
   $native = Join-Path $codecDir $abi
   foreach ($mode in @('executable', 'JNI')) {
     Check "NDK codec ($abi; $mode): exports, AVC round trip, Opus, ownership and callback lifecycle" {
+      # Check passes on the expected marker below, not on a returned value.
+      $global:LASTEXITCODE = 0
       if (-not (Test-Path "$native/ndk-codec-test") -or
           -not (Test-Path "$native/libndk_codec_test.so") -or
-          -not (Test-Path "$codecDir/ndk-codec-tests.dex")) { return $false }
+          -not (Test-Path "$codecDir/ndk-codec-tests.dex")) { return 'NDK codec fixture missing' }
       if ($mode -eq 'executable') {
         $result = InvokeNdkCodec "$codecHost/gesher-exec.exe" @('--elf', "$native/ndk-codec-test", 'ndk-codec-test') $native
       } else {
@@ -46,9 +48,9 @@ foreach ($abi in @('x86_64', 'arm64-v8a')) {
             $result.Text.Contains("ndk-codec caller: $mode") -and
             -not $result.Text.Contains('FAIL:')
       if ($mode -eq 'JNI') { $ok = $ok -and $result.Text.Contains('MediaCodecNdkTest: all passed') }
-      if (-not $ok) { Write-Host "NDK codec ($abi; $mode) exit $($result.Code): $($result.Text)" }
-      return $ok
-    }
+      if (-not $ok) { return "NDK codec ($abi; $mode) exit $($result.Code): $($result.Text)" }
+      return "NDK codec ($abi; $mode) contract verified"
+    } @("NDK codec ($abi; $mode) contract verified")
   }
 }
 

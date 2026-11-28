@@ -290,6 +290,15 @@ Check 'native libs: gesher-app runs nativeapp.apk; libandroid assets/looper and 
     ', looper=ok, mainlooper=armed, socketpair=ok, tcp=ok, getaddrinfo=ok, readdir=a.txt/b.txt/sub, fscanf=ok, filesystem=ok, signals=ok, strftime=ok, sysconf=ok, perfhint=ok',
     'NativeActivity main looper: fd callback ran',
     'gesher-app: done')
+Check 'native libs: nativeapp reports the NDK sensor inventory as a non-negative count' {
+  $platformLine = @($nativeAppOut | Where-Object { "$_" -like '*NativeActivity platform:*' }) | Select-Object -First 1
+  $global:LASTEXITCODE = $nativeAppExit
+  if ("$platformLine" -match 'config=ok, sensors=(\d+), looper=ok') {
+    "nativeapp NDK sensor count: $($Matches[1]) (non-negative)"
+  } else {
+    "no non-negative NDK sensor count in: $platformLine"
+  }
+} @('nativeapp NDK sensor count: ')
 
 # The graphics half of the NDK (docs/native-libs.md, "Graphics"; ADR 0023):
 # libglapp.so (tests/apps/glapp/jni/glapp.c) draws into Gesher windows made

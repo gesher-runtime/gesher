@@ -2304,7 +2304,10 @@ Library* RetainForAddress(const void* address) {
   return nullptr;
 }
 
-// Close never unmaps an object, so a lifetime pin needs no reference count.
+// This loader keeps no reference count: RetainForAddress names the containing
+// object and does not keep it mapped (an app's munmap or MAP_FIXED over its
+// reservation can still remove it, see ForgetReservedMappings). The reference
+// counting loader of the ELF lifetime work replaces both functions.
 void ReleaseLifetimePin(Library*) {}
 
 void Close(Library* library) {
