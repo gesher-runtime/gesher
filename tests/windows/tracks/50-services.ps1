@@ -220,7 +220,7 @@ CheckTimed 'graphics: a Surface parceled to another process: its frames, sizes, 
     'SurfaceParcelTest: parceled again it stays the same producer; parceled back, the consumer''s own Surface',
     'SurfaceParcelTest: a SurfaceTexture''s Surface read into the producer''s releases the earlier one',
     'SurfaceParcelTest: SurfaceTexture.setDefaultBufferSize(48, 24) reaches the producer with its next frame',
-    'SurfaceParcelTest: the SurfaceTexture released, the producer''s lockCanvas throws IllegalArgumentException and its memfd is closed',
+    'SurfaceParcelTest: the SurfaceTexture released, the producer''s lockCanvas or post throws IllegalArgumentException and its memfd is closed',
     'SurfaceParcelTest: a producer''s Surface released takes its memfd with it',
     'SurfaceParcelTest all passed') 180
 foreach ($p in $surfaceService, $cursorService, $service, $servicemanager, $binderd) {

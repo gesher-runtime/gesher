@@ -45,7 +45,7 @@ import java.util.concurrent.TimeUnit;
  *     reuses, leaving no descriptor here. Parceled back, the Surface is the consumer's own.
  *     A SurfaceTexture's Surface read into the producer's Surface releases the earlier
  *     one; the SurfaceTexture's new default size reaches the producer with its next
- *     frame; released, its producer's lockCanvas then fails as on an abandoned
+ *     frame; released, its producer's lockCanvas or post then fails as on an abandoned
  *     BufferQueue. A producer's Surface released takes its memfd with it.
  * </ul>
  */
@@ -226,7 +226,14 @@ public final class SurfaceParcelTest {
                     canvas.drawRect(0, 0, width / 2f, height, paint);
                     paint.setColor(right);
                     canvas.drawRect(width / 2f, 0, width, height, paint);
-                    surface.unlockCanvasAndPost(canvas);
+                    try {
+                        // As on Android, an abandoned consumer can also be
+                        // reported when the frame is queued, not only on lock.
+                        surface.unlockCanvasAndPost(canvas);
+                    } catch (IllegalArgumentException e) {
+                        reply.writeString(e.getClass().getName());
+                        return true;
+                    }
                     reply.writeString(null);
                     reply.writeInt(width);
                     reply.writeInt(height);
@@ -540,7 +547,7 @@ public final class SurfaceParcelTest {
                 "the producer of a released SurfaceTexture still draws: " + failed);
         int abandoned = producerMemfds(producer);
         require(abandoned == baseline, "the abandoned producer's memfd is still open");
-        say("the SurfaceTexture released, the producer's lockCanvas throws IllegalArgumentException"
+        say("the SurfaceTexture released, the producer's lockCanvas or post throws IllegalArgumentException"
                 + " and its memfd is closed");
 
         try (ImageReader second = ImageReader.newInstance(32, 16, PixelFormat.RGBA_8888, 2)) {
