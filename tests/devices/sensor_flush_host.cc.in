@@ -100,6 +100,8 @@ void samplerTests() {
  check(sampler.Enable(&sink,1,1000000)==0,"period update does not duplicate subscription");
  check(sampler.Enable(&sink,2,1000000)==0,"second sensor enabled");
  check(sampler.Enable(&other,1,1000000)==0,"separate sink enabled");
+ check(sampler.Enable(&other,2,1000000,true)==-EINVAL,"rate change requires an existing subscription");
+ check(sampler.Enable(&other,1,2000000,true)==0,"rate change updates an existing subscription");
  sink.Take();sampler.Flush(&sink);events=sink.Take();
  check(std::count_if(events.begin(),events.end(),[](const auto&e){return e.flush;})==2,"flush snapshots own unique subscriptions");
  sampler.Disable(&sink,2);sink.Take();sampler.Flush(&sink);events=sink.Take();

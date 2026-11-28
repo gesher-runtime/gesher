@@ -354,7 +354,8 @@ class Sampler {
     return *sampler;
   }
 
-  int Enable(Sink* sink, int handle, int periodUs, bool enabledOnly) {
+  // enabledOnly changes the period of an existing subscription only (SetRate).
+  int Enable(Sink* sink, int handle, int periodUs, bool enabledOnly = false) {
     const Sensor* sensor = Find(handle);
     if (sensor == nullptr) return -EINVAL;
     int64_t period = std::max<int64_t>(periodUs, std::max(sensor->minDelayUs, 1000)) * 1000;
