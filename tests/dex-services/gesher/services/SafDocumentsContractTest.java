@@ -5,6 +5,7 @@ import android.app.*;
 import android.app.servertransaction.*;
 import android.content.*;
 import android.content.pm.*;
+import android.database.ContentObserver;
 import android.database.Cursor;
 import android.net.Uri;
 import android.os.*;
@@ -343,6 +344,8 @@ public final class SafDocumentsContractTest {
         @Override public int getUserId(){return 0;}
         @Override public ApplicationInfo getApplicationInfo(){return new ApplicationInfo();}
         @Override public PackageManager getPackageManager(){return packages;}
+        // The provider dispatches its cursor observers directly. This fixture has no global resolver.
+        @Override public ContentResolver getContentResolver(){return null;}
         @Override public String getSystemServiceName(Class<?> c){return c==PermissionCheckerManager.class?Context.PERMISSION_CHECKER_SERVICE:c==AppOpsManager.class?Context.APP_OPS_SERVICE:null;}
         @Override public Object getSystemService(String n){return Context.APP_OPS_SERVICE.equals(n)?appOps:Context.PERMISSION_CHECKER_SERVICE.equals(n)?checker:null;}
         @Override public int checkPermission(String p,int pid,int uid){return h.pm.checkUidPermission(p,uid);}
@@ -391,12 +394,33 @@ public final class SafDocumentsContractTest {
     static Uri document(File f)throws IOException{return DocumentsContract.buildDocumentUri(AUTH,f.getCanonicalPath());}
     static Uri tree(File f)throws IOException{return DocumentsContract.buildTreeDocumentUri(AUTH,f.getCanonicalPath());}
     static Intent open(){return new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("text/plain").addCategory(Intent.CATEGORY_OPENABLE);}
+    static void providerBootFlags(Harness h)throws Exception{
+        ProviderInfo info=h.pm.resolveContentProvider(AUTH,0,0);
+        check(info != null, "Hosted DocumentsProvider is visible in the unlocked profile");
+        check(!info.directBootAware, "Hosted DocumentsProvider reports its real boot awareness");
+        int aware = PackageManager.MATCH_DIRECT_BOOT_AWARE;
+        int unaware = PackageManager.MATCH_DIRECT_BOOT_UNAWARE;
+        check(h.pm.resolveContentProvider(AUTH, aware, 0) == null,
+                "Aware-only authority lookup hides the unaware hosted provider");
+        Intent discover = new Intent(DocumentsContract.PROVIDER_INTERFACE).setPackage(info.packageName);
+        check(h.pm.queryIntentContentProviders(discover, null, aware, 0).getList().isEmpty(),
+                "Aware-only discovery hides the unaware hosted provider");
+        for (int flags : new int[]{0, unaware, aware | unaware, PackageManager.MATCH_DIRECT_BOOT_AUTO}) {
+            ProviderInfo resolved = h.pm.resolveContentProvider(AUTH, flags, 0);
+            check(resolved != null && AUTH.equals(resolved.authority),
+                    "Authority lookup retains hosted provider with matching flags " + flags);
+            List<ResolveInfo> matches = h.pm.queryIntentContentProviders(discover, null, flags, 0).getList();
+            check(matches.size() == 1 && AUTH.equals(matches.get(0).providerInfo.authority),
+                    "Intent discovery retains hosted provider with matching flags " + flags);
+        }
+    }
     static void provider(File dir)throws Exception{
         Harness h=new Harness(new File(dir,"provider.xml"));File data=Files.createDirectory(new File(dir,"documents").toPath()).toFile();
         File f=new File(data,"one.txt");Files.writeString(f.toPath(),"original");Uri doc=document(f),root=tree(data),parent=DocumentsContract.buildDocumentUriUsingTree(root,data.getCanonicalPath());
         check(DocumentsProvider.class.isAssignableFrom(h.provider.getClass()),"AOSP DocumentsProvider superclass");check(h.provider.getContext()!=null,"Attached before holder publication");
         ProviderInfo info=h.pm.resolveContentProvider(AUTH,0,0);
         check(info!=null&&info.exported&&info.grantUriPermissions&&info.applicationInfo.uid==1000,"Registered real provider identity");
+        providerBootFlags(h);
         check(android.Manifest.permission.MANAGE_DOCUMENTS.equals(info.readPermission)&&info.readPermission.equals(info.writePermission),"MANAGE_DOCUMENTS protects both operations");
         try (Cursor roots = h.provider.queryRoots(new String[]{DocumentsContract.Root.COLUMN_FLAGS})) {
             check(roots.moveToFirst() && (roots.getInt(0) & DocumentsContract.Root.FLAG_LOCAL_ONLY) == 0,
@@ -439,6 +463,133 @@ public final class SafDocumentsContractTest {
         try(Cursor c=h.query(parent,new String[]{Document.COLUMN_FLAGS,Document.COLUMN_SIZE})){check(c.moveToFirst()&&(c.getInt(0)&Document.FLAG_DIR_SUPPORTS_CREATE)!=0,"Writable directory advertises create");check((c.getInt(0)&Document.FLAG_SUPPORTS_WRITE)==0&&c.isNull(1),"Directory has no regular-file write capability or invented size");}
         h.retire(owner);rejects(SecurityException.class,()->h.query(doc,null));h.grants.flush();
     }
+    private static final class ChildChanges extends ContentObserver {
+        private final BlockingQueue<Boolean> changes = new LinkedBlockingQueue<>();
+
+        ChildChanges() { super(null); }
+
+        @Override public void onChange(boolean selfChange) { changes.add(selfChange); }
+
+        void requireChange(String operation) throws InterruptedException {
+            check(Boolean.FALSE.equals(changes.poll(6, TimeUnit.SECONDS)),
+                    operation + " must notify the active directory cursor");
+        }
+    }
+
+    private static void childNotifications(File dir) throws Exception {
+        File root = Files.createDirectory(new File(dir, "child-notifications").toPath()).toFile();
+        File selected = Files.createDirectory(new File(root, "selected").toPath()).toFile();
+        File sibling = Files.createDirectory(new File(root, "sibling").toPath()).toFile();
+        Uri tree = tree(root);
+        Uri parent = DocumentsContract.buildDocumentUriUsingTree(tree, selected.getCanonicalPath());
+        Uri children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, selected.getCanonicalPath());
+        Uri unrelated = DocumentsContract.buildChildDocumentsUriUsingTree(tree, sibling.getCanonicalPath());
+        Harness h = new Harness(new File(dir, "notification-grants.xml"));
+        IBinder owner = new Binder();
+        h.owned(owner, tree, READ | WRITE | PREFIX);
+        String[] names = {Document.COLUMN_DISPLAY_NAME};
+        ChildChanges active = new ChildChanges(), retired = new ChildChanges(), unrelatedChanges = new ChildChanges();
+        try (Cursor open = h.query(children, names); Cursor second = h.query(children, names);
+                Cursor other = h.query(unrelated, names)) {
+            check(open.getCount() == 0, "Fixture starts with an empty directory");
+            if (!nativeFiles) {
+                Uri expected = DocumentsContract.buildChildDocumentsUri(AUTH, selected.getCanonicalPath());
+                check(expected.equals(open.getNotificationUri()), "Child cursor identifies its own notification URI");
+            }
+            open.registerContentObserver(active);
+            second.registerContentObserver(retired);
+            other.registerContentObserver(unrelatedChanges);
+            Uri created = h.operation(DocumentsContract.METHOD_CREATE_DOCUMENT, parent, "observed.txt")
+                    .getParcelable(DocumentsContract.EXTRA_URI, Uri.class);
+            check(created != null && new File(DocumentsContract.getDocumentId(created)).isFile(),
+                    "Notification follows real creation");
+            active.requireChange("createDocument");
+            retired.requireChange("createDocument");
+            second.close();
+            retired.changes.clear();
+
+            Uri renamed = h.operation(DocumentsContract.METHOD_RENAME_DOCUMENT, created, "renamed.txt")
+                    .getParcelable(DocumentsContract.EXTRA_URI, Uri.class);
+            active.requireChange("renameDocument");
+            check(renamed != null && !new File(DocumentsContract.getDocumentId(created)).exists(),
+                    "Notification follows the real rename");
+            try (Cursor refresh = h.query(children, names)) {
+                check(refresh.moveToFirst() && refresh.getCount() == 1 && "renamed.txt".equals(refresh.getString(0)),
+                        "Requery observes the new document name");
+            }
+
+            h.operation(DocumentsContract.METHOD_DELETE_DOCUMENT, renamed, null);
+            active.requireChange("deleteDocument");
+            try (Cursor refresh = h.query(children, names)) {
+                check(refresh.getCount() == 0, "Requery observes completed deletion");
+            }
+            check(retired.changes.poll(100, TimeUnit.MILLISECONDS) == null,
+                    "Closed cursor does not receive later mutations");
+            check(unrelatedChanges.changes.poll(100, TimeUnit.MILLISECONDS) == null,
+                    "Sibling cursor does not receive another directory's changes");
+        } finally {
+            h.retire(owner);
+            h.grants.flush();
+        }
+    }
+
+    private static void externalChildNotifications(File dir) throws Exception {
+        File root = Files.createDirectory(new File(dir, "external-child-notifications").toPath()).toFile();
+        File selected = Files.createDirectory(new File(root, "selected").toPath()).toFile();
+        File sibling = Files.createDirectory(new File(root, "sibling").toPath()).toFile();
+        Uri tree = tree(root);
+        Uri children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, selected.getCanonicalPath());
+        Uri unrelated = DocumentsContract.buildChildDocumentsUriUsingTree(tree, sibling.getCanonicalPath());
+        Harness h = new Harness(new File(dir, "external-notification-grants.xml"));
+        IBinder owner = new Binder();
+        h.owned(owner, tree, READ | PREFIX);
+        String[] names = {Document.COLUMN_DISPLAY_NAME};
+        ChildChanges active = new ChildChanges(), retired = new ChildChanges(), unrelatedChanges = new ChildChanges();
+        var added = selected.toPath().resolve("external.txt");
+        var moved = selected.toPath().resolve("external-renamed.txt");
+        try {
+            try (Cursor open = h.query(children, names); Cursor second = h.query(children, names);
+                    Cursor other = h.query(unrelated, names)) {
+                check(open.getCount() == 0, "External fixture starts with an empty directory");
+                open.registerContentObserver(active);
+                second.registerContentObserver(retired);
+                other.registerContentObserver(unrelatedChanges);
+                // No provider mutation API is used, and the cursor client has only read access.
+                Files.createFile(added);
+                active.requireChange("external creation");
+                retired.requireChange("external creation");
+                second.close();
+                retired.changes.clear();
+                active.changes.clear();
+                Files.move(added, moved);
+                active.requireChange("external rename");
+                try (Cursor refresh = h.query(children, names)) {
+                    check(refresh.moveToFirst() && refresh.getCount() == 1
+                                    && moved.getFileName().toString().equals(refresh.getString(0)),
+                            "Requery observes the external rename");
+                }
+                check(retired.changes.poll(100, TimeUnit.MILLISECONDS) == null,
+                        "Closed cursor does not receive externally initiated changes");
+                check(unrelatedChanges.changes.poll(100, TimeUnit.MILLISECONDS) == null,
+                        "Sibling cursor does not receive an externally initiated change elsewhere");
+            }
+            check(get(h.provider, "mChildWatchService") == null,
+                    "The last cursor close retires the filesystem watcher");
+            try (Cursor reopened = h.query(children, names)) {
+                ChildChanges afterReopen = new ChildChanges();
+                reopened.registerContentObserver(afterReopen);
+                Files.delete(moved);
+                afterReopen.requireChange("external deletion after reopening");
+                try (Cursor refresh = h.query(children, names)) {
+                    check(refresh.getCount() == 0, "Requery observes external deletion");
+                }
+            }
+        } finally {
+            h.retire(owner);
+            h.grants.flush();
+        }
+    }
+
     static void persistence(File dir)throws Exception{
         File f=new File(dir,"durable.txt");Files.writeString(f.toPath(),"durable");File state=new File(dir,"durable-grants.xml");Uri uri=document(f);IBinder owner=new Binder();
         Harness first=new Harness(state);first.owned(owner,uri,READ|WRITE|PERSIST);as(UID,PID,()->first.ugm.takePersistableUriPermission(uri,READ,null,0));first.grants.flush();first.retire(owner);
@@ -613,8 +764,11 @@ public final class SafDocumentsContractTest {
             check(((String[])get(dialog.request, "mimeTypes")).length == 65,
                     "Native request retains every MIME filter");
             check(result.mResultCode == Activity.RESULT_OK && result.mData.getData() == null
-                    && result.mData.getClipData().getItemCount() == paths.length,
-                    "AOSP multiple selection returns all 257 ordinary short-path documents");
+                    && result.mData.getType() == null
+                    && result.mData.getClipData().getItemCount() == paths.length
+                    && result.mData.getClipData().getDescription().getMimeTypeCount() == mimes.length
+                    && mimes[64].equals(result.mData.getClipData().getDescription().getMimeType(64)),
+                    "AOSP multiple selection returns all documents with the requested MIME alternatives");
             for (int i = 0; i < paths.length; i++) {
                 Uri uri = document(new File(paths[i]));
                 check(result.mData.getClipData().getItemAt(i).getUri().equals(uri)
@@ -712,7 +866,9 @@ public final class SafDocumentsContractTest {
                 && "text/plain".equals(libcore.content.type.MimeMap.getDefault()
                     .guessMimeTypeFromExtension((String)get(save.request, "extension"))),
                 "Save mode, name and MIME extension reach native boundary");
-        check(saved.mResultCode == Activity.RESULT_OK, "Actual create succeeds");
+        check(saved.mResultCode == Activity.RESULT_OK && saved.mData.getData() != null
+                && saved.mData.getType() == null && saved.mData.getClipData() == null,
+                "Create returns a single untyped data URI");
         Uri made = saved.mData.getData();
         File madeFile = new File(DocumentsContract.getDocumentId(made));
         check(!made.equals(document(existing)) && madeFile.isFile() && madeFile.length() == 0
@@ -727,8 +883,9 @@ public final class SafDocumentsContractTest {
         Dialog get = new Dialog(); get.install(content);
         content.start(new Intent(Intent.ACTION_GET_CONTENT).setType("text/plain"), source);
         ResultInfo got = finishSelection(content, get, existing.getPath());
-        check(got.mResultCode == Activity.RESULT_OK && got.mData.getData().equals(document(existing)),
-                "GET_CONTENT returns selected real document");
+        check(got.mResultCode == Activity.RESULT_OK && got.mData.getData().equals(document(existing))
+                && got.mData.getType() == null && got.mData.getClipData() == null,
+                "GET_CONTENT returns a single untyped data URI for the selected real document");
         check((got.mData.getFlags() & (READ | WRITE | PERSIST | PREFIX)) == READ
                 && !content.grants.canAccess(content.client, document(existing), WRITE, 0),
                 "GET_CONTENT delegates read access only");
@@ -742,7 +899,8 @@ public final class SafDocumentsContractTest {
         tree.start(new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), treeSource);
         ResultInfo picked = finishSelection(tree, folder, dir.getPath());
         check(picked.mResultCode == Activity.RESULT_OK && DocumentsContract.isTreeUri(picked.mData.getData())
-                && (picked.mData.getFlags() & PREFIX) != 0, "Tree selection returns actual prefix grant");
+                && picked.mData.getType() == null && picked.mData.getClipData() == null
+                && (picked.mData.getFlags() & PREFIX) != 0, "Tree selection returns a data URI and real prefix grant");
         Uri child = DocumentsContract.buildDocumentUriUsingTree(picked.mData.getData(), existing.getCanonicalPath());
         try (Cursor cursor = tree.query(child, null)) { check(cursor.moveToFirst(), "Selected tree opens existing descendant through AOSP transport"); }
         tree.grants.flush();
@@ -1378,7 +1536,8 @@ public final class SafDocumentsContractTest {
         fixtureMimeMap();
         nativeFiles=descriptors;field(Class.forName("com.gesher.app.locale.SystemLocale"),"sIs24Hour").set(null,Boolean.TRUE);
         File dir=Files.createTempDirectory("gesher-saf-production-").toFile().getCanonicalFile();
-        try{provider(dir);persistence(dir);deletionLifecycle(dir);selection(dir);selectionCounts(dir);localOnly(dir);failures(dir);actions(dir);pickImagesAndChooser(dir);lifecycle(dir);idleOwnership(dir);combinedNativeUi(dir);appTaskNativeUi(dir);
+        try{provider(dir);childNotifications(dir);externalChildNotifications(dir);persistence(dir);deletionLifecycle(dir);selection(dir);selectionCounts(dir);
+            localOnly(dir);failures(dir);actions(dir);pickImagesAndChooser(dir);lifecycle(dir);idleOwnership(dir);combinedNativeUi(dir);appTaskNativeUi(dir);
             if(nativeFiles){
                 check(nativeIncoming.get()>nativeOtherIncoming.get()&&nativeOtherIncoming.get()>0,
                         "SAF exercised actual incoming Binder transactions from both ordinary peers");

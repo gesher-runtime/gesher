@@ -836,7 +836,7 @@ public final class PackageManagerService extends IPackageManager.Default {
         if (android.provider.DocumentsContract.PROVIDER_INTERFACE.equals(intent.getAction())
                 && (intent.getPackage() == null || "android".equals(intent.getPackage()))
                 && intent.getComponent() == null) {
-            ProviderInfo docProvider = hostedProvider(DocumentsStorageProvider.AUTHORITY);
+            ProviderInfo docProvider = hostedProvider(DocumentsStorageProvider.AUTHORITY, flags);
             if (docProvider != null) {
                 ResolveInfo info = new ResolveInfo();
                 info.providerInfo = docProvider;
@@ -863,14 +863,8 @@ public final class PackageManagerService extends IPackageManager.Default {
     @Override
     public ProviderInfo resolveContentProvider(String name, long flags, int userId) {
         if (userId != 0) return null;
-        ProviderInfo hosted = hostedProvider(name);
-        if (hosted != null) {
-            if (ContactsProviderSupport.isSystemAuthority(name)
-                    && !ContactsProviderSupport.matchesProviderFlags(flags)) {
-                return null;
-            }
-            return hosted;
-        }
+        ProviderInfo hosted = hostedProvider(name, flags);
+        if (hosted != null) return hosted;
         if (mHostedProviders == null && ContactsProviderSupport.isSystemAuthority(name)
                 && ContentProviders.declaredProvider(this, name) == null) {
             ProviderInfo builtIn = ContactsProviderSupport.providerForAuthority(name, flags);
@@ -883,7 +877,7 @@ public final class PackageManagerService extends IPackageManager.Default {
 
     void setHostedProviders(ContentProviders providers) { mHostedProviders = providers; }
 
-    private ProviderInfo hostedProvider(String authority) {
+    private ProviderInfo hostedProvider(String authority, long flags) {
         ContentProviders providers = mHostedProviders;
         ContentProviders.RegisteredProvider registration = providers == null ? null
                 : providers.registeredProvider(authority);
@@ -891,6 +885,12 @@ public final class PackageManagerService extends IPackageManager.Default {
         if (ContentProviders.declaredProvider(this, authority) != null) {
             throw new SecurityException("Conflicting hosted provider authority");
         }
+        // With no explicit Direct Boot flags, both classes are available to the unlocked user.
+        long bootFlags = flags & (PackageManager.MATCH_DIRECT_BOOT_AWARE
+                | PackageManager.MATCH_DIRECT_BOOT_UNAWARE);
+        long awareness = registration.info.directBootAware ? PackageManager.MATCH_DIRECT_BOOT_AWARE
+                : PackageManager.MATCH_DIRECT_BOOT_UNAWARE;
+        if (bootFlags != 0 && (bootFlags & awareness) == 0) return null;
         return new ProviderInfo(registration.info);
     }
 

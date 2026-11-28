@@ -1,5 +1,7 @@
 package gesher;
 
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -30,7 +32,18 @@ public final class WatchServiceTest {
     Files.delete(file);
     expect(watcher, StandardWatchEventKinds.ENTRY_DELETE, "watched.txt");
     watcher.close();
+    finalizeClosedPoller(watcher);
     System.out.println("WatchServiceTest all passed");
+  }
+
+  private static void finalizeClosedPoller(WatchService watcher) throws Exception {
+    // Exercise the actual Android finalizer path without depending on GC timing.
+    Field pollerField = watcher.getClass().getDeclaredField("poller");
+    pollerField.setAccessible(true);
+    Object poller = pollerField.get(watcher);
+    Method finalize = poller.getClass().getDeclaredMethod("finalize");
+    finalize.setAccessible(true);
+    finalize.invoke(poller);
   }
 
   private static void expect(WatchService watcher, WatchEvent.Kind<?> kind, String name) throws Exception {

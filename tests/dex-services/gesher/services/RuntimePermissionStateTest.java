@@ -3,6 +3,7 @@ package gesher.services;
 
 import android.Manifest;
 import android.app.AppOpsManager;
+import android.app.IActivityManager;
 import android.app.IApplicationThread;
 import android.content.Context;
 import android.content.Intent;
@@ -135,14 +136,15 @@ public final class RuntimePermissionStateTest {
     }
     private static IPermissionManager api(PermissionPolicy policy) {
         if (!binder) return policy;
-        IBinder target = StandIn.of(IPermissionManager.class, policy).asBinder();
-        IBinder transport = new Binder() {
+        return IPermissionManager.Stub.asInterface(remote(StandIn.of(IPermissionManager.class, policy).asBinder()));
+    }
+    private static IBinder remote(IBinder target) {
+        return new Binder() {
             @Override public IInterface queryLocalInterface(String name) { return null; }
             @Override protected boolean onTransact(int code, Parcel data, Parcel reply, int flags) throws RemoteException {
                 return target.transact(code, data, reply, flags);
             }
         };
-        return IPermissionManager.Stub.asInterface(transport);
     }
     private static final class Harness {
         ApkPackage owner = pkg(NAME, UID, 36, (byte)7);
@@ -1318,6 +1320,47 @@ public final class RuntimePermissionStateTest {
             ((List<Object>)get(h.process, "activities")).remove(activity);
         }
     }
+    @SuppressWarnings("unchecked")
+    private static void processPermissionGeneration(Harness h) throws Exception {
+        IActivityManager local = (IActivityManager) h.am;
+        IActivityManager manager = binder
+                ? IActivityManager.Stub.asInterface(remote(StandIn.of(IActivityManager.class, local).asBinder()))
+                : local;
+        h.policy.revokeRuntimePermission(NAME, CAMERA, "default:0", 0, "fixture initial state");
+        h.asApp(() -> check(manager.checkPermission(CAMERA, PID, UID) == DENY,
+                "Original process already held the replacement permission"));
+        ApkPackage replacement = pkg(NAME, UID, 36, (byte)7);
+        call(h.pm, "add", new Class<?>[]{ApkPackage.class}, replacement);
+        h.policy.grantRuntimePermission(NAME, CAMERA, "default:0", 0);
+        check(h.policy.checkPermission(NAME, CAMERA) == GRANTED, "Replacement grant was not installed");
+        h.asApp(() -> check(manager.checkPermission(CAMERA, PID, UID) == DENY,
+                "Old process inherited the replacement installation's runtime permission"));
+
+        int newPid = PID + 90;
+        IApplicationThread thread = new IApplicationThread.Default() {
+            final Binder token = new Binder(); @Override public IBinder asBinder() { return token; }
+        };
+        withIdentity(UID, newPid, () -> {
+            Object process = make(type("ActivityTaskManagerService$ProcessRecord"),
+                    new Class<?>[]{h.atm.getClass(), int.class, IApplicationThread.class}, h.atm, newPid, thread);
+            set(process, "packageName", NAME);
+            set(process, "processName", NAME);
+            set(process, "packageCode", replacement);
+            set(process, "ready", true);
+            List<Object> processes = (List<Object>) get(h.atm, "mProcesses");
+            processes.add(process);
+            try {
+                check(manager.checkPermission(CAMERA, newPid, UID) == GRANTED,
+                        "Replacement process did not receive its actual runtime permission");
+                check(manager.checkPermission(CAMERA, newPid, UID + 1) == DENY,
+                        "Permission query admitted a mismatched process UID");
+            } finally { processes.remove(process); }
+        });
+        h.policy.revokeRuntimePermission(NAME, CAMERA, "default:0", 0, "fixture cleanup");
+        h.flush();
+        System.out.println("Runtime process permission generation passed: retired and replacement installations");
+    }
+
     public static int run(boolean binderTransport) throws Exception {
         binder = binderTransport; checks = 0;
         Harness harness = new Harness();
@@ -1325,6 +1368,7 @@ public final class RuntimePermissionStateTest {
         backgroundConsent(harness);
         installerAllowlist(harness);
         concurrentAllowlists(harness);
+        processPermissionGeneration(harness);
 
         return checks;
     }

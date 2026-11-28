@@ -53,6 +53,7 @@ struct CodecEntry {
   int max_width = 0;
   int max_height = 0;
   bool encoder = false;
+  int avc_encoder_profiles = 0;
 };
 
 struct CodecBufferInfo {

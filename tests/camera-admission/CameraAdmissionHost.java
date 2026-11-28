@@ -206,7 +206,45 @@ public final class CameraAdmissionHost {
         check(target.terminals.get() == 2, "flush publishes no duplicate terminal result");
     }
 
+    private static void disableDuringNativeRead() throws Exception {
+        Target target = new Target();
+        CameraDeviceUser camera = camera(target, true);
+        WindowsCamera.readEntered = new CountDownLatch(1);
+        WindowsCamera.readRelease = new CountDownLatch(1);
+        CountDownLatch returned = new CountDownLatch(1);
+        int closes = WindowsCamera.closes;
+        try {
+            camera.submitRequest(request(128), true);
+            check(WindowsCamera.readEntered.await(5, TimeUnit.SECONDS), "active native read is blocked");
+            Thread revocation = new Thread(() -> {
+                camera.disabled();
+                returned.countDown();
+            });
+            revocation.setDaemon(true);
+            revocation.start();
+            check(returned.await(2, TimeUnit.SECONDS), "revocation does not join the native producer");
+            check(WindowsCamera.closes == closes, "only the producer closes its blocked capture");
+            until(() -> target.events.contains("error:-1:" + ICameraDeviceCallbacks.ERROR_CAMERA_DISABLED),
+                    "blocked camera notifies its client that access was disabled");
+            try {
+                camera.submitRequest(request(128), false);
+                throw new AssertionError("disabled camera admitted a new request");
+            } catch (ServiceSpecificException expected) {
+                check(expected.errorCode == ICameraService.ERROR_DISCONNECTED, "disabled client disconnected");
+            }
+        } finally {
+            WindowsCamera.readRelease.countDown();
+            WindowsCamera.readRelease = null;
+            camera.disconnect();
+        }
+        clean();
+        check(WindowsCamera.closes == closes + 1, "producer closes its native capture once");
+        check(target.events.stream().noneMatch(event -> event.startsWith("start:") || event.startsWith("result:")),
+                "read interrupted by revocation delivers no capture");
+    }
+
     public static void main(String[] args)throws Exception{
+        disableDuringNativeRead();
         flushDuringImageDelivery();
         admissionAndFlush();bytesAndAtomicBurst();repeatingBackpressure();controlsAndFailure();reentrantAndReopen();progressAndFailureRegressions();
         System.out.println("Camera admission production checks passed: "+checks);

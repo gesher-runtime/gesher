@@ -147,6 +147,13 @@ public final class ActivityClientController extends IActivityClientController.De
     }
 
     @Override
+    public boolean shouldUpRecreateTask(IBinder token, String destinationAffinity) {
+        ActivityTaskManagerService.ActivityRecord activity = mAtm.forToken(token);
+        return activity != null && mAtm.requireActivityOwner(activity)
+                && mAtm.shouldUpRecreateTask(activity, destinationAffinity);
+    }
+
+    @Override
     public boolean navigateUpTo(IBinder token, Intent destIntent, String resolvedType,
             int resultCode, Intent resultData) {
         ActivityTaskManagerService.ActivityRecord r = mAtm.forToken(token);

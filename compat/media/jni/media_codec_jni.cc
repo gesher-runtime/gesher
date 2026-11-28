@@ -1028,9 +1028,17 @@ jint JNICALL MCL_findCodecByName(JNIEnv* env, jclass, jstring name) {
   return -2;
 }
 
-std::vector<std::pair<int, int>> ProfileLevels(const std::string& mime, bool encoder = false) {
+std::vector<std::pair<int, int>> ProfileLevels(const std::string& mime, bool encoder,
+                                               int avc_encoder_profiles) {
   if (mime == "video/avc") {
-    return {{0x01, 0x8000}, {0x02, 0x8000}, {0x08, 0x8000}, {0x10000, 0x8000}, {0x80000, 0x8000}};
+    if (!encoder) {
+      return {{0x01, 0x8000}, {0x02, 0x8000}, {0x08, 0x8000}, {0x10000, 0x8000}, {0x80000, 0x8000}};
+    }
+    std::vector<std::pair<int, int>> profiles;
+    for (int profile : {kAvcProfileBaseline, kAvcProfileMain, kAvcProfileHigh}) {
+      if ((avc_encoder_profiles & profile) != 0) profiles.emplace_back(profile, kAvcLevel41);
+    }
+    return profiles;
   }
   if (mime == "video/hevc") return {{0x01, 0x10000}};
   if (mime == "video/x-vnd.on2.vp8") return {{0x01, 0x01}};
@@ -1074,7 +1082,7 @@ jobject JNICALL MCL_getCodecCapabilities(JNIEnv* env, jclass, jint index, jstrin
     return nullptr;
   }
   jclass pl_class = env->FindClass("android/media/MediaCodecInfo$CodecProfileLevel");
-  auto pls = ProfileLevels(e->mime, e->encoder);
+  auto pls = ProfileLevels(e->mime, e->encoder, e->avc_encoder_profiles);
   jobjectArray pl_array = env->NewObjectArray(static_cast<jsize>(pls.size()), pl_class, nullptr);
   jfieldID profile = env->GetFieldID(pl_class, "profile", "I");
   jfieldID level = env->GetFieldID(pl_class, "level", "I");

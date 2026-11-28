@@ -944,8 +944,14 @@ public final class Launcher {
             intent = AppShell.dynamicShortcutIntent(pkg, shortcutId, identity);
         }
         if (intent == null) {
+            int flags = Intent.FLAG_ACTIVITY_NEW_TASK;
+            if (activity == null && shortcutId == null) {
+                // LauncherApps uses task reset for the app icon, honoring the root's
+                // and its activities' manifest policy when a matching task is reopened.
+                flags |= Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED;
+            }
             intent = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    .addFlags(flags);
             if (activity == null) {
                 intent.setPackage(pkg);
             } else {

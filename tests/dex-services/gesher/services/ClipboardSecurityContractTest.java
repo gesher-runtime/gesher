@@ -3,11 +3,21 @@ package gesher.services;
 
 import android.Manifest;
 import android.app.AppOpsManager;
+import android.app.ContentProviderHolder;
+import android.content.AttributionSource;
 import android.content.ClipData;
+import android.content.ContentProvider;
+import android.content.Context;
+import android.content.ContextWrapper;
+import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.net.Uri;
+import android.os.Bundle;
+import android.os.ParcelFileDescriptor;
+import android.provider.OpenableColumns;
 import android.os.Binder;
 import com.gesher.server.ApkPackage;
+import com.gesher.server.UriGrants;
 import java.io.File;
 import java.lang.reflect.InvocationTargetException;
 import java.util.LinkedHashMap;
@@ -187,10 +197,6 @@ public final class ClipboardSecurityContractTest {
         });
         h.nativeState.external("external", null);
         h.as(h.privileged, () -> check(h.api.getPrimaryClipSource(PRIVILEGED, null, 0, 0) == null, "Windows content retires Android source attribution"));
-        h.nativeState.external(null, new byte[]{'B', 'M', 0, 1});
-        File owned = (File)get(h.service, "mOwnedImage");
-        check(owned != null && owned.isFile(), "Native image cache belongs to this clipboard lifetime");
-        h.write("replace image"); check(!owned.exists(), "Replacing an image releases its cache file");
         File image = File.createTempFile("clipboard-fixture-", ".png");
         try {
             java.nio.file.Files.write(image.toPath(), new byte[]{1, 2, 3});
@@ -207,6 +213,149 @@ public final class ClipboardSecurityContractTest {
         h.as(h.privileged, () -> check(h.api.getPrimaryClipSource(PRIVILEGED, null, 0, 0) == null, "Clear retires source attribution"));
         h.remove(h.privileged, listener);
     }
+    private static void nativeImageGrants(ClipboardFixture h, boolean binder) throws Exception {
+        byte[] image = {'B', 'M', 0, 1};
+        h.nativeState.external("native text", image);
+        h.as(h.privileged, () -> check(h.api.hasPrimaryClip(PRIVILEGED, null, 0, 0),
+                "Image metadata does not consume the clipboard"));
+        Uri uri = (Uri)get(h.service, "mOwnedImage");
+        check(uri != null && "content".equals(uri.getScheme()),
+                "Native image is a content capability with no exposed filesystem path");
+        UriGrants grants = (UriGrants) call(h.atm, "uriGrants", new Class<?>[0]);
+        int read = Intent.FLAG_GRANT_READ_URI_PERMISSION;
+        int write = Intent.FLAG_GRANT_WRITE_URI_PERMISSION;
+        check(!grants.canAccess(h.privileged, uri, read, 0), "Metadata queries cannot issue image read grants");
+        Object provider = call(h.atm, "clipboardImages", new Class<?>[0]);
+        call(provider, "attachTo", new Class<?>[]{Context.class}, new ContextWrapper(null) {
+            @Override public int getUserId() { return 0; }
+            @Override public Object getSystemService(String name) { return null; }
+        });
+        var transport = ((ContentProvider)provider).getIContentProvider();
+        var granted = new AttributionSource(h.privileged.uid(), PRIVILEGED, null);
+        var denied = new AttributionSource(h.peer.uid(), PEER, null);
+        h.as(h.privileged, () -> rejects(SecurityException.class,
+                () -> transport.query(granted, uri, null, new Bundle(), null)));
+        h.as(h.privileged, () -> {
+            ClipData clip = h.api.getPrimaryClip(PRIVILEGED, null, 0, 0);
+            check(clip != null && uri.equals(clip.getItemAt(0).getUri())
+                    && "native text".contentEquals(clip.getItemAt(0).getText())
+                    && clip.getDescription().hasMimeType("image/*")
+                    && clip.getDescription().hasMimeType("text/plain"),
+                    "Native image delivery preserves both real formats");
+            try (var rows = transport.query(granted, uri, null, new Bundle(), null)) {
+                check(rows != null && rows.moveToFirst() && rows.getCount() == 1
+                        && rows.getLong(rows.getColumnIndexOrThrow(OpenableColumns.SIZE)) == image.length,
+                        "A paste target can query metadata on the granted image");
+            }
+            rejects(SecurityException.class, () -> transport.query(denied, uri, null, new Bundle(), null));
+            rejects(SecurityException.class, () -> transport.openFile(granted, uri, "w", null));
+            if (binder) {
+                try (var first = new ParcelFileDescriptor.AutoCloseInputStream(
+                                transport.openFile(granted, uri, "r", null));
+                     var other = new ParcelFileDescriptor.AutoCloseInputStream(
+                                transport.openFile(granted, uri, "r", null))) {
+                    check(first.read() == 'B' && other.read() == 'B',
+                            "Two target reads get independent offsets");
+                    h.write("replace granted image");
+                    check(java.util.Arrays.equals(first.readAllBytes(), new byte[]{'M', 0, 1}),
+                            "Already opened Windows image snapshots survive clipboard replacement");
+                }
+            } else h.write("replace granted image");
+            rejects(SecurityException.class, () -> transport.openFile(granted, uri, "r", null));
+        });
+        check(!grants.canAccess(h.privileged, uri, read | write, 0)
+                        && !grants.canAccess(h.privileged, uri, read, 0),
+                "Replacing an image retires its grant");
+        h.as(h.peer, () -> rejects(SecurityException.class,
+                () -> transport.query(denied, uri, null, new Bundle(), null)));
+    }
+
+    private static void clipboardUriGrants(ClipboardFixture h) throws Exception {
+        Uri item = Uri.parse("content://" + OWNER + ".files/item");
+        Uri data = Uri.parse("content://" + OWNER + ".files/intent");
+        Uri sibling = Uri.parse("content://" + OWNER + ".files/other");
+        int read = Intent.FLAG_GRANT_READ_URI_PERMISSION;
+        int write = Intent.FLAG_GRANT_WRITE_URI_PERMISSION;
+        UriGrants grants = (UriGrants) call(h.atm, "uriGrants", new Class<?>[0]);
+        ClipData content = new ClipData("private",
+                new String[]{"text/uri-list"}, new ClipData.Item(null, null,
+                        new Intent().setData(data).addFlags(write), item));
+        h.write("kept until URI validation succeeds");
+        int nativeSequence = h.nativeState.sequence;
+        h.as(h.privileged, () -> rejects(SecurityException.class,
+                () -> h.api.setPrimaryClipAsPackage(content, PRIVILEGED, null, 0, 0, OWNER)));
+        check(h.nativeState.sequence == nativeSequence, "Rejected clip changed the native clipboard");
+        h.asOwner(() -> h.api.setPrimaryClip(content, OWNER, null, 0, 0));
+        h.as(h.privileged, () -> {
+            check(h.api.hasPrimaryClip(PRIVILEGED, null, 0, 0)
+                            && h.api.getPrimaryClipDescription(PRIVILEGED, null, 0, 0) != null,
+                    "Clipboard metadata disappeared before the read");
+            check(!grants.canAccess(h.privileged, item, read, 0)
+                            && !grants.canAccess(h.privileged, data, read, 0),
+                    "A metadata query granted URI access");
+        });
+        h.nativeState.foreground = null;
+        h.as(h.peer, () -> check(h.api.getPrimaryClip(PEER, null, 0, 0) == null,
+                "Background peer read the clipboard"));
+        check(!grants.canAccess(h.peer, item, read, 0), "Denied clipboard read still granted the URI");
+        h.as(h.privileged, () -> {
+            ClipData delivered = h.api.getPrimaryClip(PRIVILEGED, null, 0, 0);
+            check(delivered != null && item.equals(delivered.getItemAt(0).getUri())
+                            && data.equals(delivered.getItemAt(0).getIntent().getData()),
+                    "Clipboard lost the typed URI or its item Intent data");
+        });
+        for (Uri uri : List.of(item, data)) {
+            check(grants.canAccess(h.privileged, uri, read, 0), "Clipboard did not grant read access");
+            check(!grants.canAccess(h.privileged, uri, write, 0), "Clipboard granted write access");
+        }
+        check(!grants.canAccess(h.privileged, sibling, read, 0), "Clipboard grant covered a sibling URI");
+        h.nativeState.external("external replaces URI clip", null);
+        check(!grants.canAccess(h.privileged, item, read, 0)
+                        && !grants.canAccess(h.privileged, data, read, 0),
+                "External clipboard replacement retained prior URI grants");
+        h.asOwner(() -> h.api.setPrimaryClip(content, OWNER, null, 0, 0));
+        h.as(h.privileged, () -> check(h.api.getPrimaryClip(PRIVILEGED, null, 0, 0) != null,
+                "A new URI clip could not be read after replacement"));
+        h.asOwner(() -> h.api.clearPrimaryClip(OWNER, null, 0, 0));
+        check(!grants.canAccess(h.privileged, item, read, 0)
+                        && !grants.canAccess(h.privileged, data, read, 0),
+                "Explicit clipboard clear retained prior URI grants");
+    }
+
+    private static void retireDelegatedUriPublisher(ClipboardFixture h) throws Exception {
+        Uri uri = Uri.parse("content://" + OWNER + ".files/delegated");
+        UriGrants grants = (UriGrants) call(h.atm, "uriGrants", new Class<?>[0]);
+        int read = Intent.FLAG_GRANT_READ_URI_PERMISSION;
+        h.asOwner(() -> call(grants, "grant", new Class<?>[]{String.class, Uri.class, int.class, int.class},
+                PRIVILEGED, uri, read, 0));
+        h.as(h.privileged, () -> h.api.setPrimaryClip(ClipData.newRawUri("delegated", uri),
+                PRIVILEGED, null, 0, 0));
+        h.configureIme(PEER + "/.Keyboard");
+        try {
+            h.as(h.peer, () -> {
+                ClipData clip = h.api.getPrimaryClip(PEER, null, 0, 0);
+                check(clip != null && uri.equals(clip.getItemAt(0).getUri()),
+                        "Authorized clipboard publisher can delegate another provider's URI");
+            });
+            check(grants.canAccess(h.peer, uri, read, 0), "Clipboard recipient initially holds the delegated URI");
+            int sequence = h.nativeState.sequence;
+            call(h.pm, "beginPackageRemoval", new Class<?>[]{ApkPackage.class}, h.privileged);
+            try {
+                call(h.pm, "revokePackageCapabilities", new Class<?>[]{String.class}, PRIVILEGED);
+                check(!grants.canAccess(h.peer, uri, read, 0),
+                        "Publisher retirement revokes its delegated clipboard grant without another read");
+                check(h.nativeState.sequence == sequence,
+                        "Retiring a delegated URI has no native clipboard side effect");
+            } finally {
+                call(h.pm, "endPackageRemoval", new Class<?>[]{ApkPackage.class}, h.privileged);
+            }
+            h.as(h.peer, () -> check(h.api.getPrimaryClip(PEER, null, 0, 0) == null,
+                    "A restored installation cannot revive the retired clipboard grant"));
+        } finally {
+            h.configureIme(null);
+        }
+    }
+
     @SuppressWarnings("unchecked") private static void callbackPolicyAndRetirement(ClipboardFixture h) throws Exception {
         Listener owner = new Listener(), peer = new Listener(), privileged = new Listener();
         h.nativeState.foreground = new long[]{PID, CREATED};
@@ -225,11 +374,27 @@ public final class ClipboardSecurityContractTest {
         Map<String, ApkPackage> packages = new LinkedHashMap<>((Map<String, ApkPackage>)get(h.pm, "mPackages"));
         ApkPackage replacement = pkg(PRIVILEGED, h.privileged.uid(), (byte)42, Manifest.permission.READ_CLIPBOARD_IN_BACKGROUND, Manifest.permission.SET_CLIP_SOURCE);
         packages.put(PRIVILEGED, replacement); set(h.pm, "mPackages", packages);
+        read(h, h.privileged, false, "The old process cannot adopt its replacement's clipboard authority");
+        Listener obsolete = new Listener();
+        h.add(h.privileged, obsolete);
+        check(obsolete.token.deaths.isEmpty(), "The old process was given a replacement-generation callback");
+        int writes = h.nativeState.writes, clears = h.nativeState.clears;
+        h.as(h.privileged, () -> {
+            h.api.setPrimaryClip(ClipData.newPlainText("obsolete", "retired write"), PRIVILEGED, null, 0, 0);
+            h.api.clearPrimaryClip(PRIVILEGED, null, 0, 0);
+        });
+        check(writes == h.nativeState.writes && clears == h.nativeState.clears,
+                "An old process wrote or cleared the clipboard under the replacement's name");
         call(h.pm, "packageInstalled", new Class<?>[]{ApkPackage.class, boolean.class, Object.class}, replacement, true, new Object());
         long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(3);
         while (h.listeners().getRegisteredCallbackCount() == 3 && System.nanoTime() < deadline) Thread.sleep(5);
         check(h.listeners().getRegisteredCallbackCount() == 2 && privileged.token.deaths.isEmpty(), "Package replacement releases old-generation callback ownership");
         h.write("replacement"); check(privileged.calls.get() == 3, "New package generation cannot revive a saved listener");
+        set(h.processes.get(2), "packageCode", replacement);
+        read(h, replacement, true, "The newly admitted process keeps its normal clipboard access");
+        h.as(replacement, () -> h.api.setPrimaryClip(ClipData.newPlainText("current", "new write"),
+                PRIVILEGED, null, 0, 0));
+        check("new write".equals(h.nativeState.text), "The newly admitted process retains write access");
         call(h.pm, "beginPackageRemoval", new Class<?>[]{ApkPackage.class}, h.owner);
         call(h.pm, "revokePackageCapabilities", new Class<?>[]{String.class}, OWNER);
         check(h.listeners().getRegisteredCallbackCount() == 1 && owner.token.deaths.isEmpty(), "Package removal revokes listener lifetime");
@@ -247,7 +412,9 @@ public final class ClipboardSecurityContractTest {
             h.asOwner(() -> check("wrapped sequence".contentEquals(h.api.getPrimaryClip(OWNER, null, 0, 0).getItemAt(0).getText()),
                     "All nonzero unsigned Windows sequence values are valid"));
             h.nativeState.sequence = 1;
-            focusAndIdentity(h); imeAndPermissions(h); appOps(h); sourceAndStorage(h); callbackPolicyAndRetirement(h);
+            focusAndIdentity(h); imeAndPermissions(h); appOps(h); sourceAndStorage(h);
+            nativeImageGrants(h, binder); clipboardUriGrants(h); retireDelegatedUriPublisher(h);
+            callbackPolicyAndRetirement(h);
         }
         return checks;
     }

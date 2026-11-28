@@ -3,6 +3,7 @@ package gesher.services;
 
 import android.Manifest;
 import android.app.AppOpsManager;
+import android.app.AsyncNotedAppOp;
 import android.app.IApplicationThread;
 import android.app.SyncNotedAppOp;
 import android.content.AttributionSourceState;
@@ -17,6 +18,7 @@ import android.os.IInterface;
 import android.os.Parcel;
 import android.os.RemoteException;
 import android.permission.IPermissionChecker;
+import com.android.internal.app.IAppOpsAsyncNotedCallback;
 import com.android.internal.app.IAppOpsCallback;
 import com.android.internal.app.IAppOpsService;
 import com.android.internal.pm.parsing.pkg.PackageImpl;
@@ -539,11 +541,187 @@ public final class AppOpsContractTest {
         h.ops.resetAllModes(0, NAME); awaitCount(watcher.calls, 2);
         h.service.stopWatchingMode(watcher); check(watcher.token.recipients.isEmpty(), "Unwatch releases the death recipient");
     }
+    private static void watcherAdmission(Harness h) throws Exception {
+        Token activeToken = new Token(), startedToken = new Token(), notedToken = new Token();
+        AtomicInteger active = new AtomicInteger(), started = new AtomicInteger(), noted = new AtomicInteger();
+        var activeCallback = new com.android.internal.app.IAppOpsActiveCallback.Default() {
+            @Override public IBinder asBinder() { return activeToken; }
+            @Override public void opActiveChanged(int op, int uid, String name, String tag, int device,
+                    boolean running, int attributionFlags, int chain) { active.incrementAndGet(); }
+        };
+        var startedCallback = new com.android.internal.app.IAppOpsStartedCallback.Default() {
+            @Override public IBinder asBinder() { return startedToken; }
+            @Override public void opStarted(int op, int uid, String name, String tag, int device, int flags,
+                    int mode, int type, int attributionFlags, int chain) { started.incrementAndGet(); }
+        };
+        var notedCallback = new com.android.internal.app.IAppOpsNotedCallback.Default() {
+            @Override public IBinder asBinder() { return notedToken; }
+            @Override public void opNoted(int op, int uid, String name, String tag, int device, int flags,
+                    int mode) { noted.incrementAndGet(); }
+        };
+        for (int[] invalid : new int[][]{null, new int[0]}) {
+            rejects(IllegalArgumentException.class, () -> h.service.startWatchingStarted(invalid, startedCallback));
+            rejects(IllegalArgumentException.class, () -> h.service.startWatchingNoted(invalid, notedCallback));
+        }
+        rejects(NullPointerException.class, () -> h.ops.stopWatchingStarted(null));
+        rejects(NullPointerException.class, () -> h.ops.stopWatchingNoted(null));
+        h.ops.startWatchingActive(new int[]{OP_VIBRATE}, null);
+        h.ops.stopWatchingActive(null);
+        h.service.startWatchingActive(new int[0], activeCallback);
+        check(activeToken.links == 0 && startedToken.links == 0 && notedToken.links == 0,
+                "No callback or death registration is created for an empty operation set");
+
+        int[] ops = {OP_VIBRATE};
+        h.service.startWatchingActive(ops, activeCallback);
+        h.service.startWatchingStarted(ops, startedCallback);
+        h.service.startWatchingNoted(ops, notedCallback);
+        Token client = new Token();
+        try {
+            check(start(h.ops, client, "one", false).getOpMode() == MODE_ALLOWED, "Valid start for admitted callbacks");
+            check(h.ops.noteOperation(OP_VIBRATE, UID, NAME, "one", false, null, false).getOpMode() == MODE_ALLOWED,
+                    "Valid note for admitted callbacks");
+            h.ops.finishOperation(client, OP_VIBRATE, UID, NAME, "one");
+            drain(h);
+            check(active.get() == 2 && started.get() == 1 && noted.get() == 1,
+                    "Admitted watchers receive one start and note plus both active transitions");
+        } finally {
+            h.service.stopWatchingActive(activeCallback);
+            h.service.stopWatchingStarted(startedCallback);
+            h.service.stopWatchingNoted(notedCallback);
+            client.die();
+        }
+        check(activeToken.recipients.isEmpty() && startedToken.recipients.isEmpty() && notedToken.recipients.isEmpty(),
+                "Stopping valid watchers releases their death registrations");
+    }
+    private static final class AsyncWatcher extends IAppOpsAsyncNotedCallback.Default {
+        final Token token = new Token();
+        final List<String> messages = new ArrayList<>();
+        boolean fail;
+        @Override public IBinder asBinder() { return token; }
+        @Override public void opNoted(AsyncNotedAppOp event) throws RemoteException {
+            if (fail) throw new RemoteException("fixture delivery failure");
+            messages.add(event.getMessage());
+        }
+    }
+
+    private static void requireAsync(boolean condition, String message) {
+        if (!condition) throw new AssertionError(message);
+    }
+
+    private static void asyncNote(Harness h, String message) throws Exception {
+        requireAsync(h.ops.noteOperation(OP_VIBRATE, UID, NAME, "one", true, message, false)
+                .getOpMode() == MODE_ALLOWED, "Async note must use an allowed real operation");
+    }
+
+    private static void asyncWatchers(Harness h) throws Exception {
+        // Callbacks use local test endpoints. Notes and extraction retain the fixture's
+        // normal service transport (generated Binder on ART).
+        AsyncWatcher first = new AsyncWatcher(), last = new AsyncWatcher();
+        h.service.startWatchingAsyncNoted(NAME, first);
+        h.service.startWatchingAsyncNoted(NAME, last);
+        h.service.stopWatchingAsyncNoted(NAME, first);
+        asyncNote(h, "surviving watcher");
+        drain(h);
+        requireAsync(first.token.recipients.isEmpty() && first.messages.isEmpty()
+                && last.messages.equals(List.of("surviving watcher")),
+                "Removing one watcher must keep delivering only to the live watcher");
+
+        last.fail = true;
+        asyncNote(h, "while monitored");
+        drain(h);
+        h.service.stopWatchingAsyncNoted(NAME, last);
+        asyncNote(h, "after stop");
+        drain(h);
+        List<AsyncNotedAppOp> pending = h.ops.extractAsyncOps(NAME);
+        requireAsync(last.token.recipients.isEmpty() && pending != null && pending.size() == 1
+                && "while monitored".equals(pending.get(0).getMessage()),
+                "Explicit stop must preserve an earlier failed delivery and discard later notes");
+
+        AsyncWatcher dying = new AsyncWatcher();
+        h.service.startWatchingAsyncNoted(NAME, dying);
+        dying.token.die();
+        asyncNote(h, "after death");
+        drain(h);
+        requireAsync(h.ops.extractAsyncOps(NAME) == null,
+                "Death of the final callback must retire the package's subscription");
+
+        // Pause the event executor, change the installed generation and register
+        // its observer before allowing the old generation's queued event to run.
+        AsyncWatcher old = new AsyncWatcher(), replacement = new AsyncWatcher();
+        h.service.startWatchingAsyncNoted(NAME, old);
+        old.fail = true;
+        asyncNote(h, "old backlog");
+        drain(h);
+        old.fail = false;
+        java.util.concurrent.CountDownLatch entered = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        var executor = (java.util.concurrent.ScheduledThreadPoolExecutor)get(h.service, "mEvents");
+        var blocker = executor.submit(() -> {
+            entered.countDown();
+            if (!release.await(5, TimeUnit.SECONDS)) throw new AssertionError("Async note fixture timed out");
+            return null;
+        });
+        try {
+            requireAsync(entered.await(5, TimeUnit.SECONDS), "Could not pause the event executor");
+            asyncNote(h, "old queued note");
+            ApkPackage replacementCode = pkg(NAME, UID, (byte)7);
+            call(replacementCode, "setRestrictedPermissionAllowlist",
+                    new Class<?>[]{Collection.class}, (Object)null);
+            call(h.pm, "add", new Class<?>[]{ApkPackage.class}, replacementCode);
+            requireAsync(h.pm.get(NAME) == replacementCode
+                    && h.ops.extractAsyncOps(NAME) == null,
+                    "The new generation must not inherit undelivered notes even before registering");
+            h.asApp(() -> {
+                try {
+                    h.service.startWatchingAsyncNoted(NAME, new AsyncWatcher());
+                    throw new AssertionError("The old process registered as the replacement's observer");
+                } catch (SecurityException expected) { }
+            });
+            h.service.startWatchingAsyncNoted(NAME, replacement);
+            asyncNote(h, "new queued note");
+        } finally {
+            release.countDown();
+        }
+        blocker.get(5, TimeUnit.SECONDS);
+        drain(h);
+        requireAsync(replacement.messages.equals(List.of("new queued note")) && old.messages.isEmpty(),
+                "An async note scheduled for the old generation must not reach the replacement");
+        h.service.stopWatchingAsyncNoted(NAME, replacement);
+        System.out.println("AppOps async watcher lifecycle contracts passed");
+    }
+
+    @SuppressWarnings("unchecked")
     private static void foreground(Harness h) throws Exception {
         h.pm.permissions().grantRuntimePermission(NAME, Manifest.permission.CAMERA, "default:0", 0);
         check(h.ops.checkOperationRaw(OP_CAMERA, UID, NAME, null) == MODE_FOREGROUND,
                 "The manifest background permission produces foreground-only camera access");
         check(h.ops.checkOperation(OP_CAMERA, UID, NAME) == MODE_IGNORED, "A cached registered process has no camera foreground capability");
+        h.visible(true);
+        Object launching = ((List<?>) get(h.process, "activities")).get(0);
+        Object launchingState = field(type("ActivityTaskManagerService$State"), "LAUNCHING").get(null);
+        set(launching, "state", launchingState);
+        set(launching, "launchingPaused", true);
+        List<Object> activities = (List<Object>) get(h.atm, "mActivities");
+        activities.add(launching);
+        try {
+            check(h.ops.checkOperation(OP_CAMERA, UID, NAME) == MODE_IGNORED,
+                    "An activity launching paused does not contribute camera foreground capability");
+            set(launching, "launchingPaused", false);
+            check(h.ops.checkOperation(OP_CAMERA, UID, NAME) == MODE_ALLOWED,
+                    "A visible activity can open the camera from onCreate before resume acknowledgement");
+        } finally {
+            activities.remove(launching);
+        }
+        h.visible(false);
+        set(h.process, "inProcessActivityState", launchingState);
+        try {
+            var states = (java.util.Map<?, ?>) call(h.atm, "appOpsUidStates", new Class<?>[0]);
+            int capabilities = (int) call(states.get(UID), "capabilities", new Class<?>[0]);
+            check((capabilities & android.app.ActivityManager.PROCESS_CAPABILITY_FOREGROUND_CAMERA) != 0,
+                    "The admitted standalone foreground launch also contributes camera capability");
+        } finally {
+            set(h.process, "inProcessActivityState", null);
+        }
         h.visible(true);
         check(h.ops.checkOperation(OP_CAMERA, UID, NAME) == MODE_ALLOWED, "A resumed activity contributes actual foreground capability");
         Token token = new Token();
@@ -1576,6 +1754,8 @@ public final class AppOpsContractTest {
         Harness h = new Harness(); fixedModeRefreshCost(h); modes(h); lifetimes(h); watchers(h); foreground(h); restrictions(h); delivery(h); persistence(h);
         permissionCheckerEdges();
         foregroundServiceExit();
+        asyncWatchers(h);
+        watcherAdmission(new Harness());
         return checks;
     }
     public static void main(String[] args) throws Exception {

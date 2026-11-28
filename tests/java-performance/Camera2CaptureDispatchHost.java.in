@@ -17,6 +17,7 @@ public final class Camera2CaptureDispatchHost {
     private final ArrayDeque<Frame> frames = new ArrayDeque<>();
     private final String mCameraId = "test";
     private final Device mDevice = new Device();
+    private final CameraService mService = new CameraService();
     private final Callbacks mCallbacks = new Callbacks();
     private WindowsCamera.Capture mCapture;
     private Size mCaptureFor;
@@ -41,6 +42,7 @@ public final class Camera2CaptureDispatchHost {
     private static final int AF_STATE_MASK = 0xff, AF_LENS_MOVING = 0x100;
     private int autoFocusFrame(CameraMetadataNative settings, byte[] nv12) { return 0; }
     private void startAutoFocus(WindowsCamera.Capture capture) {}
+    private void disabled() { throw new AssertionError("The dispatch fixture admits camera access"); }
     private void stopAutoFocus() {}
     private static void event(String value) { if (record) EVENTS.add(value); }
     private static void check(boolean condition, String message) {
@@ -104,6 +106,10 @@ public final class Camera2CaptureDispatchHost {
         static CameraMetadataNative metadata(CameraMetadataNative value) { return value; }
     }
     private static final class RemoteException extends Exception {}
+    private static final class ServiceSpecificException extends RuntimeException {
+        ServiceSpecificException(int code, String message) { super(message); }
+    }
+    private static final class ICameraService { static final int ERROR_DISABLED = 6; }
     private static final class ICameraDeviceCallbacks {
         static final int ERROR_CAMERA_DEVICE = 1, ERROR_CAMERA_BUFFER = 5, ERROR_CAMERA_REQUEST = 3, ERROR_CAMERA_RESULT = 4;
     }
@@ -114,6 +120,10 @@ public final class Camera2CaptureDispatchHost {
     private static final class CameraService {
         static final int HAL_BLOB = 33;
         static void log(String message) {}
+        // This fixture measures capture dispatch after successful admission. CameraPermissionContractTest
+        // exercises the actual AppOps service boundary, including denial and capture cleanup.
+        boolean startCapture(String id, Camera2CaptureDispatchHost owner) { return true; }
+        void captureFailedToOpen(String id, Camera2CaptureDispatchHost owner) {}
     }
     private static final class WindowsCamera {
         static final class OpenException extends Exception {}

@@ -73,6 +73,23 @@ public final class ClipboardCallbackTest {
             h.write("next snapshot"); check(mutating.calls.get() == 1 && added.calls.get() == 1, "Mutation missing from next snapshot");
             h.remove(h.owner, added);
         }
+        for (String retirement : List.of("remove", "re-register", "death")) {
+            try (ClipboardFixture h = new ClipboardFixture(binder)) {
+                Listener first = new Listener(), second = new Listener();
+                java.util.concurrent.atomic.AtomicBoolean retired = new java.util.concurrent.atomic.AtomicBoolean();
+                first.action = () -> retireOther(h, second, retirement, retired);
+                second.action = () -> retireOther(h, first, retirement, retired);
+                h.add(h.owner, first);
+                h.add(h.owner, second);
+                h.write("snapshot with both callbacks");
+                check(first.calls.get() + second.calls.get() == 1,
+                        "An older callback snapshot still ran after " + retirement);
+                h.write("snapshot after lifetime change");
+                int expected = "re-register".equals(retirement) ? 3 : 2;
+                check(first.calls.get() + second.calls.get() == expected,
+                        "The next snapshot did not reflect the callback's " + retirement);
+            }
+        }
         try (ClipboardFixture h = new ClipboardFixture(binder)) {
             Listener broken = new Listener(), healthy = new Listener(), dead = new Listener();
             broken.action = () -> { throw new IllegalStateException("Expected local listener failure"); };
@@ -84,6 +101,20 @@ public final class ClipboardCallbackTest {
         }
         return checks;
     }
+    private static void retireOther(ClipboardFixture h, Listener other, String retirement,
+            java.util.concurrent.atomic.AtomicBoolean retired) {
+        // RemoteCallbackList does not promise registration-order delivery. Whichever
+        // callback runs first invalidates the peer that is still in the snapshot.
+        if (!retired.compareAndSet(false, true)) return;
+        try {
+            if ("death".equals(retirement)) other.token.die();
+            else {
+                h.remove(h.owner, other);
+                if ("re-register".equals(retirement)) h.add(h.owner, other);
+            }
+        } catch (Exception failure) { throw new AssertionError(failure); }
+    }
+
     private static void typedNativeClipboard(ClipboardFixture h, String nonce) throws Exception {
         check(WindowsHost.sessionLockState() == 0,
                 "An actual unlocked Windows session is required to exercise typed clipboard reads");

@@ -276,7 +276,8 @@ public final class GesherAppDriver {
             activity.setTheme(theme);
         }
 
-        // ON_CREATE
+        // ON_CREATE, as part of the launch that also starts and resumes this activity.
+        sApplication.activityLaunching();
         sActivityAcceptsPermissionRequests = true;
         activity.mCalled = false;
         instrumentation.callActivityOnCreate(activity, (Bundle) null);
@@ -288,7 +289,6 @@ public final class GesherAppDriver {
 
         // ON_START, and the post-create step handleStartActivity does
         activity.performStart("gesher-app");
-        sApplication.activityStarted();
         log(info.name + " onStart");
         activity.mCalled = false;
         instrumentation.callActivityOnPostCreate(activity, (Bundle) null);
@@ -437,6 +437,7 @@ public final class GesherAppDriver {
         int theme = info.getThemeResource();
         if (theme != 0) activity.setTheme(theme);
         sActivity = activity;
+        if (resumed) sApplication.activityLaunching();
         sActivityAcceptsPermissionRequests = true;
         activity.mCalled = false;
         instrumentation.callActivityOnCreate(activity, state);
@@ -446,7 +447,7 @@ public final class GesherAppDriver {
         }
         log(info.name + " onCreate (relaunched)");
         activity.performStart("gesher-app relaunch");
-        sApplication.activityStarted();
+        if (!resumed) sApplication.activityStarted();
         instrumentation.callActivityOnRestoreInstanceState(activity, state);
         activity.mCalled = false;
         instrumentation.callActivityOnPostCreate(activity, state);

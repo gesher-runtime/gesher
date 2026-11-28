@@ -132,7 +132,7 @@ const std::vector<CodecEntry>& CodecEngine::Codecs() {
     }
     for (const EncoderInfo& e : AvailableEncoders()) {
       all.push_back({"c2.gesher." + ShortName(e.mime) + ".encoder", e.mime, e.video, false,
-                     e.video ? 1920 : 0, e.video ? 1088 : 0, true});
+                     e.video ? 1920 : 0, e.video ? 1088 : 0, true, e.avc_profiles});
     }
     return all;
   }();
@@ -900,6 +900,8 @@ Format CodecEngine::EncoderOutputFormatLocked() const {
     AMediaFormat_setInt32(f.get(), "width", enc_params_.width);
     AMediaFormat_setInt32(f.get(), "height", enc_params_.height);
     AMediaFormat_setInt32(f.get(), "frame-rate", enc_params_.frame_rate);
+    AMediaFormat_setInt32(f.get(), "profile", enc_params_.profile == 0
+        ? kAvcProfileBaseline : enc_params_.profile);
     AMediaFormat_setInt32(f.get(), "bitrate", target_bitrate_.value_or(enc_params_.bitrate));
   } else {
     AMediaFormat_setInt32(f.get(), "sample-rate", static_cast<int32_t>(audio_params_.sample_rate));

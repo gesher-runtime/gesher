@@ -13,7 +13,9 @@ import android.content.IClipboard;
 import android.content.IOnPrimaryClipChangedListener;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.net.Uri;
 import android.os.Binder;
+import android.os.IBinder;
 import android.os.Process;
 import android.os.RemoteCallbackList;
 import android.os.RemoteException;
@@ -21,8 +23,12 @@ import android.provider.Settings;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 /**
  * Android clipboard policy with Windows clipboard transport. Read access follows
@@ -86,8 +92,18 @@ public final class ClipboardService extends IClipboard.Default
         }
     }
 
+    // Guarded by mListeners. Use the identity of its cookie to distinguish a
+    // callback re-registered with the same Binder and attribution information.
+    private final Map<IBinder, ListenerInfo> mListenerRegistrations = new HashMap<>();
     private final RemoteCallbackList<IOnPrimaryClipChangedListener> mListeners =
-            new RemoteCallbackList<>();
+            new RemoteCallbackList<>() {
+                @Override public void onCallbackDied(IOnPrimaryClipChangedListener listener, Object cookie) {
+                    synchronized (this) {
+                        IBinder binder = listener.asBinder();
+                        if (mListenerRegistrations.get(binder) == cookie) mListenerRegistrations.remove(binder);
+                    }
+                }
+            };
     private final ActivityTaskManagerService mAtm;
     private final PackageManagerService mPm;
     private final CallerIdentity mCallers;
@@ -102,7 +118,8 @@ public final class ClipboardService extends IClipboard.Default
     // mClipboardLock also serializes native reads/writes, keeping sequence and provenance together.
     private ClipData mClip;
     private String mSource;
-    private File mOwnedImage;
+    private Uri mOwnedImage;
+    private volatile ClipUris mClipUris;
     private int mSequence;
     private boolean mHaveSequence;
 
@@ -116,21 +133,53 @@ public final class ClipboardService extends IClipboard.Default
         mCallers = new CallerIdentity(pm, atm);
         mAppOps = pm.appOps();
         mHost = Objects.requireNonNull(host);
-        mPackageChanges = pm.onPackageChange(ignored -> pruneListeners());
-        mPackageRemovals = pm.onPackageRemoval(ignored -> pruneListeners());
+        mPackageChanges = pm.onPackageChange(pkg -> packageLifetimeChanged(pkg.packageName));
+        mPackageRemovals = pm.onPackageRemoval(this::packageLifetimeChanged);
+    }
+
+    /**
+     * The activity manager's URI grant ledger, resolved where a clipboard URI is granted
+     * or retired. A clip with content URIs is never published or released without it.
+     */
+    private UriGrants uriGrants() {
+        return Objects.requireNonNull(mAtm.uriGrants(), "URI grants are not available");
+    }
+
+    /** The clipboard image provider, resolved where a clipboard image is stored or shared. */
+    private ClipboardImageProvider images() {
+        return Objects.requireNonNull(mAtm.clipboardImages(), "Clipboard images are not available");
     }
 
     private record ListenerInfo(int uid, String packageName, String attributionTag, ApkPackage owner) { }
     private record Callback(IOnPrimaryClipChangedListener listener, ListenerInfo identity) { }
+    // The registered provider owns imported host images, so those have no app publisher.
+    private static final class ClipUris {
+        final ListenerInfo publisher;
+        final IBinder owner = new Binder("Clipboard URI permissions");
+        final List<Uri> uris;
+        final Set<ApkPackage> readers = new HashSet<>();  // mClipboardLock
+        volatile boolean retired;
+
+        ClipUris(ListenerInfo publisher, List<Uri> uris) {
+            this.publisher = publisher;
+            this.uris = uris;
+        }
+    }
 
     private ListenerInfo caller(String packageName, String attributionTag) {
         if (mClosed) throw new IllegalStateException("Clipboard service is closed");
         int uid = Binder.getCallingUid();
         checkPackage(uid, packageName);
-        // The package/UID pair must also belong to this authenticated Binder process.
-        // Root and the system package are native control-plane identities in AOSP.
-        if (uid != Process.ROOT_UID) mCallers.requirePackage(packageName);
-        return new ListenerInfo(uid, packageName, attributionTag, mPm.get(packageName));
+        // Keep the authenticated installation with this request. A process
+        // finishing an older installation must not use the replacement's grants.
+        ApkPackage installed = mPm.get(packageName);
+        if (uid != Process.ROOT_UID && !mCallers.isSystem()) {
+            String actual = mCallers.requirePackage(packageName);
+            ApkPackage process = mCallers.packageCodeForPid(Binder.getCallingPid(), uid);
+            if (process == null || !actual.equals(process.packageName)) installed = null;
+            else if (actual.equals(packageName)) installed = process;
+        }
+        return new ListenerInfo(uid, packageName, attributionTag, installed);
     }
 
     private void checkPackage(int uid, String packageName) {
@@ -214,20 +263,22 @@ public final class ClipboardService extends IClipboard.Default
                 byte[] image = mHost.image();
                 if (mHost.sequence() != sequence) continue;
                 ClipData clip = null;
-                File imageFile = null;
+                Uri imageUri = null;
+                ClipUris uris = null;
                 if (image != null && image.length > 0 && image.length <= MAX_IMAGE_BYTES) {
-                    try {
-                        File directory = new File(System.getProperty("java.io.tmpdir", "."), "gesher_clipboard");
-                        if (!directory.isDirectory() && !directory.mkdirs()) throw new IOException("No clipboard cache");
-                        imageFile = File.createTempFile("clip-", ".bmp", directory);
-                        java.nio.file.Files.write(imageFile.toPath(), image);
-                        ClipDescription description = new ClipDescription(WINDOWS_LABEL, new String[]{"image/bmp", "image/*"});
-                        clip = new ClipData(description, new ClipData.Item(text, html, null,
-                                android.net.Uri.fromFile(imageFile)));
-                    } catch (IOException failure) {
-                        deleteImage(imageFile); imageFile = null;
-                        SystemServer.log("clipboard: could not cache native image: " + failure);
+                    List<String> mimeTypes = new ArrayList<>(3);
+                    mimeTypes.add("image/bmp");
+                    if (html != null) {
+                        mimeTypes.add(ClipDescription.MIMETYPE_TEXT_HTML);
+                        if (text == null) {
+                            text = android.text.Html.fromHtml(html, android.text.Html.FROM_HTML_MODE_LEGACY).toString();
+                        }
                     }
+                    if (text != null) mimeTypes.add(ClipDescription.MIMETYPE_TEXT_PLAIN);
+                    imageUri = images().add(image);
+                    clip = new ClipData(new ClipDescription(WINDOWS_LABEL, mimeTypes.toArray(new String[0])),
+                            new ClipData.Item(text, html, null, imageUri));
+                    uris = new ClipUris(null, List.of(imageUri));
                 }
                 if (clip == null) {
                     if (text != null && html != null) clip = ClipData.newHtmlText(WINDOWS_LABEL, text, html);
@@ -236,23 +287,19 @@ public final class ClipboardService extends IClipboard.Default
                             android.text.Html.fromHtml(html, android.text.Html.FROM_HTML_MODE_LEGACY).toString(), html);
                 }
                 mSequence = sequence; mHaveSequence = true;
-                changed = replaceLocked(clip, null, imageFile);
+                changed = replaceLocked(clip, null, imageUri, uris);
                 break;
             }
         }
         if (changed && notify) notifyListeners();
     }
 
-    private static void deleteImage(File file) {
-        if (file == null) return;
-        try { java.nio.file.Files.deleteIfExists(file.toPath()); }
-        catch (IOException failure) { SystemServer.log("clipboard: could not release cached image: " + failure); }
-    }
-
-    private boolean replaceLocked(ClipData clip, String source, File imageFile) {
+    private boolean replaceLocked(ClipData clip, String source, Uri image, ClipUris uris) {
         boolean changed = clip != null || mClip != null;
-        deleteImage(mOwnedImage);
-        mOwnedImage = imageFile;
+        if (mOwnedImage != null) images().remove(mOwnedImage);
+        if (mClipUris != null) uriGrants().revokeByOwner(mClipUris.owner);
+        mOwnedImage = image;
+        mClipUris = uris;
         mClip = clip;
         mSource = clip == null ? null : source;
         if (clip != null) clip.getDescription().setTimestamp(System.currentTimeMillis());
@@ -274,13 +321,37 @@ public final class ClipboardService extends IClipboard.Default
         return snapshot;
     }
 
+    private void packageLifetimeChanged(String packageName) {
+        // Installation retirement can revoke the delegated capability while
+        // readers are idle. Keep this callback independent of the clipboard
+        // monitor and act only on the exact captured owner.
+        ClipUris uris = mClipUris;
+        if (uris != null && uris.publisher != null
+                && uris.publisher.packageName.equals(packageName) && !current(uris.publisher)) {
+            uris.retired = true;
+            uriGrants().revokeByOwner(uris.owner);
+        }
+        pruneListeners();
+    }
+
     private void pruneListeners() {
         synchronized (mListeners) {
             // Keep a concurrent re-registration from being removed for an older cookie.
             for (Callback callback : listenerSnapshot()) {
-                if (!current(callback.identity)) mListeners.unregister(callback.listener);
+                if (!current(callback.identity)) unregisterLocked(callback.listener);
             }
         }
+    }
+
+    private boolean registered(Callback callback) {
+        synchronized (mListeners) {
+            return !mClosed && mListenerRegistrations.get(callback.listener.asBinder()) == callback.identity;
+        }
+    }
+
+    private void unregisterLocked(IOnPrimaryClipChangedListener listener) {
+        mListenerRegistrations.remove(listener.asBinder());
+        mListeners.unregister(listener);
     }
 
     private void notifyListeners() {
@@ -292,8 +363,9 @@ public final class ClipboardService extends IClipboard.Default
                 try {
                     // AOSP rechecks the saved UID/package/tag and notes a read for callbacks.
                     // Device lock gates getters, not the clipboard-change notification.
-                    if (current(callback.identity) && access(callback.identity,
-                            AppOpsManager.OP_READ_CLIPBOARD, true)) {
+                    if (registered(callback) && current(callback.identity)
+                            && access(callback.identity, AppOpsManager.OP_READ_CLIPBOARD, true)
+                            && registered(callback) && current(callback.identity)) {
                         callback.listener.dispatchPrimaryClipChanged();
                     }
                 } catch (RemoteException | RuntimeException failure) {
@@ -360,6 +432,21 @@ public final class ClipboardService extends IClipboard.Default
         return null;
     }
 
+    private static List<Uri> contentUris(ClipData clip) {
+        List<Uri> uris = new ArrayList<>();
+        for (int i = 0; i < clip.getItemCount(); i++) {
+            ClipData.Item item = clip.getItemAt(i);
+            addContentUri(uris, item.getUri());
+            Intent intent = item.getIntent();
+            if (intent != null) addContentUri(uris, intent.getData());
+        }
+        return uris;
+    }
+
+    private static void addContentUri(List<Uri> uris, Uri uri) {
+        if (uri != null && "content".equals(uri.getScheme())) uris.add(uri);
+    }
+
     private void enforceClipSourcePermission() {
         int uid = Binder.getCallingUid();
         if (uid == Process.ROOT_UID || uid == Process.SYSTEM_UID) return;
@@ -374,15 +461,27 @@ public final class ClipboardService extends IClipboard.Default
 
     private void setPrimaryClipInternal(ClipData clip, String packageName, String tag, String source) {
         if (clip == null || clip.getItemCount() <= 0) throw new IllegalArgumentException("No items");
-        if (!access(caller(packageName, tag), AppOpsManager.OP_WRITE_CLIPBOARD, true)) return;
-        start();
+        ListenerInfo identity = caller(packageName, tag);
+        if (!access(identity, AppOpsManager.OP_WRITE_CLIPBOARD, true)) return;
         ClipData saved = new ClipData(clip);
+        List<Uri> uris = contentUris(saved);
+        ClipUris clipUris = null;
+        if (!uris.isEmpty()) {
+            synchronized (mPm) {
+                if (!current(identity)) return;
+                // Validate the publisher before changing the clipboard. The
+                // display attribution supplied to setPrimaryClipAsPackage is separate.
+                uriGrants().prepareClipboard(identity.uid, null, uris);
+            }
+            clipUris = new ClipUris(identity, uris);
+        }
+        start();
         String[] windows = forWindows(saved);
         byte[] image = extractImage(saved);
         synchronized (mClipboardLock) {
-            if (mClosed) return;
+            if (mClosed || !current(identity)) return;
             int writtenSequence = mHost.available() ? mHost.write(windows[0], windows[1], image) : 0;
-            replaceLocked(saved, source, null);
+            replaceLocked(saved, source, null, clipUris);
             if (writtenSequence != 0) { mSequence = writtenSequence; mHaveSequence = true; }
             else if (mHost.available()) {
                 // No receipt can bind the saved typed clip to native data. The next
@@ -401,13 +500,14 @@ public final class ClipboardService extends IClipboard.Default
     }
 
     @Override public void clearPrimaryClip(String packageName, String tag, int userId, int deviceId) {
-        if (!access(caller(packageName, tag), AppOpsManager.OP_WRITE_CLIPBOARD, true)) return;
+        ListenerInfo identity = caller(packageName, tag);
+        if (!access(identity, AppOpsManager.OP_WRITE_CLIPBOARD, true)) return;
         start();
         boolean changed;
         synchronized (mClipboardLock) {
-            if (mClosed) return;
+            if (mClosed || !current(identity)) return;
             int writtenSequence = mHost.available() ? mHost.clear() : 0;
-            changed = replaceLocked(null, null, null);
+            changed = replaceLocked(null, null, null, null);
             if (writtenSequence != 0) { mSequence = writtenSequence; mHaveSequence = true; }
             else if (mHost.available()) {
                 // No receipt can bind the saved typed clip to native data. The next
@@ -420,9 +520,42 @@ public final class ClipboardService extends IClipboard.Default
     }
 
     @Override public ClipData getPrimaryClip(String packageName, String tag, int userId, int deviceId) {
-        if (!readAllowed(packageName, tag, true)) return null;
+        ListenerInfo reader = caller(packageName, tag);
+        if (!access(reader, AppOpsManager.OP_READ_CLIPBOARD, true) || mHost.sessionLockState() != 0) return null;
         start(); syncFromWindows(true);
-        synchronized (mClipboardLock) { return mClip == null ? null : new ClipData(mClip); }
+        synchronized (mClipboardLock) {
+            if (mClip == null || mClosed || !current(reader)) return null;
+            ClipUris uris = mClipUris;
+            if (uris == null) return new ClipData(mClip);
+            // Typed Android contents belong to the native sequence acknowledged
+            // when we wrote them. A failed write or external replacement cannot grant access.
+            if (mHost.available() && (!mHaveSequence || mHost.sequence() != mSequence)) return null;
+            synchronized (mPm) {
+                if (!current(reader)) return null;
+                try {
+                    if (uris.retired || (uris.publisher != null && !current(uris.publisher))) {
+                        throw new SecurityException("Retired clipboard publisher");
+                    }
+                    if (reader.owner != null && !uris.readers.contains(reader.owner)) {
+                        if (mOwnedImage != null) {
+                            images().grantRead(uris.owner, reader.packageName, mOwnedImage);
+                        } else {
+                            List<UriGrants.Grant> grants = uriGrants().prepareClipboard(uris.publisher.uid,
+                                    reader.packageName, uris.uris);
+                            uriGrants().publish(uris.owner, grants);
+                        }
+                        uris.readers.add(reader.owner);
+                    }
+                    return new ClipData(mClip);
+                } catch (SecurityException revoked) {
+                    // The old typed clip cannot be delivered. Leave any real native
+                    // clipboard text in place until its owner changes it.
+                    replaceLocked(null, null, null, null);
+                }
+            }
+        }
+        notifyListeners();
+        return null;
     }
 
     @Override public ClipDescription getPrimaryClipDescription(String packageName, String tag, int userId, int deviceId) {
@@ -459,14 +592,17 @@ public final class ClipboardService extends IClipboard.Default
         ListenerInfo identity = caller(packageName, tag);
         start();
         synchronized (mListeners) {
-            if (!mClosed && current(identity)) mListeners.register(listener, identity);
+            if (mClosed || !current(identity)) return;
+            IBinder binder = listener.asBinder();
+            if (mListeners.register(listener, identity)) mListenerRegistrations.put(binder, identity);
+            else mListenerRegistrations.remove(binder);
         }
     }
 
     @Override public void removePrimaryClipChangedListener(IOnPrimaryClipChangedListener listener,
             String packageName, String tag, int userId, int deviceId) {
         caller(packageName, tag);
-        mListeners.unregister(listener);
+        synchronized (mListeners) { unregisterLocked(listener); }
     }
 
     @Override public boolean areClipboardAccessNotificationsEnabledForUser(int userId) { return false; }
@@ -477,9 +613,12 @@ public final class ClipboardService extends IClipboard.Default
             mClosed = true;
             if (mStarted) mHost.removeListener(this);
         }
-        synchronized (mListeners) { mListeners.kill(); }
+        synchronized (mListeners) {
+            mListenerRegistrations.clear();
+            mListeners.kill();
+        }
         try { mPackageChanges.close(); } catch (Exception failure) { throw new IllegalStateException(failure); }
         try { mPackageRemovals.close(); } catch (Exception failure) { throw new IllegalStateException(failure); }
-        synchronized (mClipboardLock) { replaceLocked(null, null, null); }
+        synchronized (mClipboardLock) { replaceLocked(null, null, null, null); }
     }
 }

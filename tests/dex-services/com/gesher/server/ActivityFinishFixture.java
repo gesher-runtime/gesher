@@ -21,10 +21,12 @@ import android.app.servertransaction.ActivityTransactionItem;
 import android.app.servertransaction.ClientTransaction;
 import android.app.servertransaction.ClientTransactionItem;
 import android.app.servertransaction.DestroyActivityItem;
+import android.app.servertransaction.LaunchActivityItem;
 import android.app.servertransaction.PauseActivityItem;
 import android.app.servertransaction.ResumeActivityItem;
 import android.app.servertransaction.StopActivityItem;
 import android.content.ActivityNotFoundException;
+import android.content.ClipData;
 import android.content.ComponentName;
 import android.content.IIntentSender;
 import android.content.Intent;
@@ -34,12 +36,14 @@ import android.content.pm.PackageManager;
 import android.content.pm.Signature;
 import android.net.Uri;
 import android.os.Binder;
+import android.os.Bundle;
 import android.os.IBinder;
 import android.os.IInterface;
 import android.os.Parcel;
 import android.os.RemoteException;
 import com.android.internal.pm.parsing.pkg.PackageImpl;
 import com.android.internal.pm.pkg.component.ParsedActivityImpl;
+import com.android.internal.pm.pkg.component.ParsedProviderImpl;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
@@ -109,6 +113,10 @@ public final class ActivityFinishFixture {
         return code(packageName, null);
     }
     private static ApkPackage code(String packageName, String sharedUserId) throws Exception {
+        return code(packageName, sharedUserId, UID, null);
+    }
+    private static ApkPackage code(String packageName, String sharedUserId, int uid, String authority)
+            throws Exception {
         PackageImpl parsed = (PackageImpl) PackageImpl.forTesting(packageName, "/fixture/finish/base.apk");
         parsed.setEnabled(true); parsed.setTargetSdkVersion(36);
         if (sharedUserId != null) parsed.setSharedUserId(sharedUserId);
@@ -123,9 +131,18 @@ public final class ActivityFinishFixture {
             activity.setPackageName(packageName); activity.setName(packageName + "." + name); activity.setEnabled(true);
             parsed.addActivity(activity);
         }
+        if (authority != null) {
+            ParsedProviderImpl provider = new ParsedProviderImpl();
+            provider.setPackageName(packageName);
+            provider.setName(packageName + ".Provider");
+            provider.setEnabled(true);
+            provider.setAuthority(authority);
+            provider.setGrantUriPermissions(true);
+            parsed.addProvider(provider);
+        }
         parsed.hideAsFinal();
         ApkPackage code = (ApkPackage) UNSAFE.allocateInstance(ApkPackage.class);
-        set(code, "packageName", packageName); set(code, "parsed", parsed); set(code, "mUid", UID);
+        set(code, "packageName", packageName); set(code, "parsed", parsed); set(code, "mUid", uid);
         set(code, "apkPath", "/fixture/finish/base.apk"); set(code, "mDataDir", "/fixture/finish/data");
         set(code, "sharedLibraries", field(SharedLibraryGraph.class, "EMPTY").get(null));
         set(code, "mSigningIdentityChecked", true);
@@ -145,6 +162,7 @@ public final class ActivityFinishFixture {
         boolean autoAck = true;
         boolean rejectNextResult;
         Operation beforeTransaction;
+        Operation onRejectedResult;
         int exits;
         @Override public IBinder asBinder() { return binder; }
         @Override public void scheduleExit() { exits++; }
@@ -152,13 +170,16 @@ public final class ActivityFinishFixture {
             if (rejectNextResult && transaction.getTransactionItems().stream()
                     .anyMatch(ActivityResultItem.class::isInstance)) {
                 rejectNextResult = false;
+                try { if (onRejectedResult != null) onRejectedResult.run(); }
+                catch (Exception failure) { throw new AssertionError("Failed transaction fixture failed", failure); }
                 throw new RemoteException("Fixture recipient disconnected before result delivery");
             }
             try {
                 if (beforeTransaction != null) beforeTransaction.run();
                 for (ClientTransactionItem item : transaction.getTransactionItems()) {
                     Event event = new Event(item instanceof ActivityTransactionItem activity
-                            ? activity.getActivityToken() : null, item);
+                            ? activity.getActivityToken() : item instanceof LaunchActivityItem launch
+                                    ? launch.getActivityToken() : null, item);
                     events.add(event);
                     if (autoAck) acknowledge(event); else pending.addLast(event);
                 }
@@ -200,10 +221,13 @@ public final class ActivityFinishFixture {
         final List<Object> records;
         final AppThread thread = new AppThread();
         final IActivityClientController controller;
-        Harness() throws Exception { this(null); }
-        @SuppressWarnings("unchecked")
+        Harness() throws Exception { this((String) null); }
         Harness(String sharedUserId, ApkPackage... peers) throws Exception {
-            apk = code(OWNER, sharedUserId);
+            this(code(OWNER, sharedUserId), peers);
+        }
+        @SuppressWarnings("unchecked")
+        Harness(ApkPackage owner, ApkPackage... peers) throws Exception {
+            apk = owner;
             List<ApkPackage> installed = new ArrayList<>(List.of(apk));
             installed.addAll(List.of(peers));
             pm = new PackageManagerService(installed);
@@ -234,17 +258,23 @@ public final class ActivityFinishFixture {
         Object record(String name, int task, String affinity, String state) throws Exception {
             return record(name, task, affinity, state, null, null, -1);
         }
-        @SuppressWarnings("unchecked")
         Object record(String name, int task, String affinity, String state,
                 Object parent, String resultWho, int request) throws Exception {
-            ActivityInfo info = new ActivityInfo(); info.packageName = OWNER; info.name = OWNER + "." + name;
-            info.applicationInfo = apk.applicationInfo(0); info.taskAffinity = affinity;
+            return record(apk, process, name, task, affinity, state, parent, resultWho, request);
+        }
+        @SuppressWarnings("unchecked")
+        Object record(ApkPackage target, Object app, String name, int task, String affinity, String state,
+                Object parent, String resultWho, int request) throws Exception {
+            ActivityInfo info = new ActivityInfo();
+            info.packageName = target.packageName; info.name = target.packageName + "." + name;
+            info.applicationInfo = target.applicationInfo(0); info.taskAffinity = affinity;
             info.screenOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED;
             Object record = construct(recordType, new Class<?>[]{atmType, ActivityInfo.class, Intent.class,
                     int.class, int.class, String.class, recordType, String.class, int.class},
                     atm, info, new Intent(), task, PID, OWNER, parent, resultWho, request);
-            set(record, "app", process); set(record, "state", state(state));
-            records.add(record); ((List<Object>) get(process, "activities")).add(record);
+            set(record, "app", app); set(record, "state", state(state));
+            records.add(record);
+            if (app != null) ((List<Object>) get(app, "activities")).add(record);
             List<Integer> order = (List<Integer>) get(atm, "mTaskOrder");
             if (!order.contains(task)) order.add(task);
             return record;
@@ -350,6 +380,158 @@ public final class ActivityFinishFixture {
         System.out.println("Activity finish: root-only flag 1, unconditional flag 2, ordinary flag 0, interleaved tasks and unlaunched member passed");
     }
 
+    private static void activityResultUriGrants() throws Exception {
+        String authority = OWNER + ".files";
+        Uri data = Uri.parse("content://" + authority + "/data");
+        Uri item = Uri.parse("content://" + authority + "/clip");
+        Uri nested = Uri.parse("content://" + authority + "/nested");
+        Uri unflaggedUri = Uri.parse("content://" + authority + "/unflagged");
+        Uri privateUri = Uri.parse("content://fixture.finish.other.files/private");
+        int read = Intent.FLAG_GRANT_READ_URI_PERMISSION;
+        int write = Intent.FLAG_GRANT_WRITE_URI_PERMISSION;
+        ApkPackage recipient = code("fixture.finish.recipient", null, UID + 1, null);
+        ApkPackage other = code("fixture.finish.other", null, UID + 2, privateUri.getAuthority());
+        Harness h = new Harness(code(OWNER, null, UID, authority), recipient, other);
+        var uriGrants = h.atmType.getDeclaredMethod("uriGrants");
+        uriGrants.setAccessible(true);
+        UriGrants grants = (UriGrants) uriGrants.invoke(h.atm);
+        Object first = h.record(recipient, null, "Receiver", 71, "receiver", "STOPPED", null, null, -1);
+        Object second = h.record(recipient, null, "Receiver", 72, "receiver", "STOPPED", null, null, -1);
+        Object up = h.record("Parent", 75, "up", "STOPPED");
+        Object source = h.record("Caller", 73, "sender", "STOPPED", first, "finish", 41);
+        check(!grants.canAccess(recipient, data, read, 0), "Private provider was accessible before finish");
+
+        Intent invalid = new Intent().setData(data).addFlags(read);
+        invalid.setClipData(ClipData.newRawUri("inaccessible", privateUri));
+        h.asApp(() -> {
+            try {
+                h.controller.finishActivity(token(source), Activity.RESULT_OK, invalid, 0);
+                throw new AssertionError("Finish accepted an inaccessible ClipData URI");
+            } catch (SecurityException expected) {
+                h.alive(source);
+            }
+        });
+        check(((List<?>) get(first, "pendingResults")).isEmpty()
+                        && !grants.canAccess(recipient, data, read, 0),
+                "Rejected result published a partial batch or result");
+
+        Intent result = new Intent().setData(data).addFlags(read);
+        ClipData clips = ClipData.newRawUri("item", item);
+        clips.addItem(new ClipData.Item(new Intent().setData(nested).addFlags(write)));
+        result.setClipData(clips);
+        h.asApp(() -> check(h.controller.finishActivity(token(source), Activity.RESULT_OK, result, 0),
+                "Authorized provider could not finish with a URI result"));
+        h.gone(source);
+        List<?> results = (List<?>) get(first, "pendingResults");
+        check(results.size() == 1 && ((ResultInfo) results.get(0)).mRequestCode == 41
+                        && data.equals(((ResultInfo) results.get(0)).mData.getData()),
+                "Stopped recipient lost its actual pending result");
+        for (Uri uri : List.of(data, item, nested)) {
+            check(grants.canAccess(recipient, uri, read, 0), "Result did not grant read access to " + uri);
+            check(!grants.canAccess(recipient, uri, write, 0), "Result granted an unrequested write mode to " + uri);
+            check(!grants.canAccess(other, uri, read, 0), "Result granted access to an unrelated app");
+        }
+
+        Object unflagged = h.record("Child", 74, "sender", "STOPPED", second, null, 42);
+        h.asApp(() -> check(h.controller.finishActivity(token(unflagged), Activity.RESULT_OK,
+                new Intent().setData(unflaggedUri), 0), "Unflagged content result failed"));
+        check(!grants.canAccess(recipient, unflaggedUri, read, 0),
+                "URI result without grant flags conveyed a permission");
+
+        Object navigate = h.record("Top", 75, "up", "STOPPED", second, null, 43);
+        Intent destination = new Intent().setClassName(OWNER, OWNER + ".Parent");
+        h.asApp(() -> check(h.controller.navigateUpTo(token(navigate), destination, null,
+                Activity.RESULT_OK, new Intent().setData(item).addFlags(read)),
+                "Authorized Up-navigation result failed"));
+        h.gone(navigate); h.alive(up);
+
+        long old = Binder.clearCallingIdentity();
+        try {
+            check(h.controller.finishActivity(token(first), Activity.RESULT_CANCELED, null, 0),
+                    "Could not remove first recipient record");
+            check(!grants.canAccess(recipient, data, read, 0) && !grants.canAccess(recipient, nested, read, 0),
+                    "URI grants outlived the receiving Activity record");
+            check(grants.canAccess(recipient, item, read, 0), "Retiring one owner revoked the other owner's grant");
+            check(h.controller.finishActivity(token(second), Activity.RESULT_CANCELED, null, 0),
+                    "Could not remove second recipient record");
+            check(!grants.canAccess(recipient, item, read, 0), "Up result grant outlived the second recipient");
+        } finally { Binder.restoreCallingIdentity(old); }
+        System.out.println("Activity finish URI grants passed: result data, ClipData, delegation and recipient lifetime");
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void resumeResultRecovery() throws Exception {
+        for (boolean replaceDuringFailure : List.of(false, true)) {
+            Harness h = new Harness();
+            int receiverTask = 76;
+            Object receiver = h.record("Receiver", receiverTask, "receiver", "STOPPING");
+            Object source = h.record("Child", 77, "sender", "STOPPED", receiver, "resume-result", 45);
+            Bundle saved = new Bundle();
+            saved.putString("state", "saved before the result");
+            Intent data = new Intent("fixture.finish.resume");
+            h.asApp(() -> {
+                h.controller.activityStopped(token(receiver), saved, null, null, null);
+                check(h.controller.finishActivity(token(source), Activity.RESULT_OK, data, 0),
+                        "Could not queue result for stopped activity");
+            });
+            List<ResultInfo> pending = (List<ResultInfo>) get(receiver, "pendingResults");
+            check(pending.size() == 1, "Expected one pending result before resume");
+            ResultInfo expected = pending.get(0);
+            ActivityTaskManagerService atm = (ActivityTaskManagerService) h.atm;
+            AppThread replacement = new AppThread();
+            replacement.autoAck = false;
+            if (replaceDuringFailure) {
+                h.thread.onRejectedResult = () -> {
+                    long identity = Binder.clearCallingIdentity();
+                    try {
+                        var died = h.atmType.getDeclaredMethod("processDied", h.processType);
+                        died.setAccessible(true);
+                        died.invoke(h.atm, h.process);
+                        Binder.restoreCallingIdentity(((long) UID << 32) | (PID + 1));
+                        Object newProcess = construct(h.processType, new Class<?>[]{h.atmType, int.class,
+                                IApplicationThread.class}, h.atm, PID + 1, replacement);
+                        Binder.clearCallingIdentity();
+                        set(newProcess, "packageName", OWNER);
+                        set(newProcess, "processName", OWNER);
+                        set(newProcess, "ready", true);
+                        ((List<Object>) get(h.atm, "mProcesses")).add(newProcess);
+                        replacement.controller = h.controller;
+                        atm.moveTaskToFront(null, OWNER, receiverTask, 0, null);
+                        check(replacement.count(receiver, LaunchActivityItem.class) == 0,
+                                "Replacement launched before the in-flight result was settled");
+                    } finally { Binder.restoreCallingIdentity(identity); }
+                };
+            }
+            h.thread.rejectNextResult = true;
+            h.asApp(() -> atm.moveTaskToFront(h.thread, OWNER, receiverTask, 0, null));
+            check(h.thread.results(receiver).isEmpty(), "Rejected transaction delivered a result");
+            if (replaceDuringFailure) {
+                LaunchActivityItem launch = (LaunchActivityItem) replacement.events.stream()
+                        .map(event -> event.item).filter(LaunchActivityItem.class::isInstance)
+                        .findFirst().orElseThrow(() -> new AssertionError("Replacement launch was stranded"));
+                List<ResultInfo> delivered = (List<ResultInfo>) field(LaunchActivityItem.class,
+                        "mPendingResults").get(launch);
+                Bundle restored = (Bundle) field(LaunchActivityItem.class, "mState").get(launch);
+                check(List.of(expected).equals(delivered) && restored != null
+                                && "saved before the result".equals(restored.getString("state")),
+                        "Replacement launch lost the result or saved activity state");
+                long identity = Binder.clearCallingIdentity();
+                try {
+                    Binder.restoreCallingIdentity(((long) UID << 32) | (PID + 1));
+                    replacement.drain();
+                } finally { Binder.restoreCallingIdentity(identity); }
+                check(get(receiver, "state") == state("RESUMED"), "Replacement did not acknowledge resume");
+            } else {
+                check(get(receiver, "state") == state("STOPPED") && pending.equals(List.of(expected)),
+                        "Failed resume consumed the result or stranded the activity");
+                h.asApp(() -> atm.moveTaskToFront(h.thread, OWNER, receiverTask, 0, null));
+                check(h.thread.results(receiver).equals(List.of(expected)), "Resume retry lost or duplicated the result");
+            }
+            check(pending.isEmpty(), "Delivered result remained queued");
+        }
+        System.out.println("Activity resume result recovery passed: failed send, retry, and replacement launch");
+    }
+
     private static void affinity() throws Exception {
         for (String[] affinities : new String[][]{{"a", "a", "a"}, {"a", "b", "b"},
                 {"a", "b", "a"}, {null, null, null}}) {
@@ -371,6 +553,23 @@ public final class ActivityFinishFixture {
             h.asApp(() -> check(!h.controller.finishActivityAffinity(token(caller)),
                     "Destroyed affinity token was acknowledged as live"));
             check(events == h.thread.events.size(), "Repeated affinity finish emitted lifecycle work");
+        }
+        for (boolean sharedUid : new boolean[] {true, false}) {
+            String sharedIdentity = sharedUid ? OWNER + ".shared" : null;
+            ApkPackage peer = code(OWNER + ".peer", sharedIdentity, sharedUid ? UID : UID + 1, null);
+            Harness cross = new Harness(sharedIdentity, peer);
+            Object previous = cross.record(peer, null, "Bottom", 21, "a", "INITIALIZING",
+                    null, null, -1);
+            Object origin = cross.record("Caller", 21, "a", "STOPPED");
+            Object above = cross.record("Above", 21, "a", "RESUMED");
+            cross.asApp(() -> activity(origin).finishAffinity());
+            cross.gone(origin);
+            cross.alive(above);
+            if (sharedUid) {
+                cross.gone(previous);
+            } else {
+                cross.alive(previous);
+            }
         }
         Harness h = new Harness();
         Object root = h.record("Root", 23, "a", "STOPPED");
@@ -1207,7 +1406,7 @@ public final class ActivityFinishFixture {
     private static void usageQueryResources() throws Exception {
         String other = OWNER + ".query.peer";
         ApkPackage peer = code(other); set(peer, "mUid", UID + 1);
-        Harness h = new Harness(null, peer);
+        Harness h = new Harness((String) null, peer);
         set(h.process, "packageCode", h.apk);
         Path directory = Files.createTempDirectory("gesher-usage-query-service-");
         Path file = directory.resolve("usage.bin");
@@ -1283,6 +1482,8 @@ public final class ActivityFinishFixture {
     public static int run(boolean realBinder, String group) throws Exception {
         binder = realBinder; checks = 0;
         if (group.equals("all") || group.equals("task")) removeTask();
+        if (group.equals("all") || group.equals("uri")) activityResultUriGrants();
+        if (group.equals("all") || group.equals("resume")) resumeResultRecovery();
         if (group.equals("all") || group.equals("affinity")) affinity();
         if (group.equals("all") || group.equals("sub")) subActivities();
         if (group.equals("all")) externalUrlResults();

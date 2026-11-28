@@ -309,30 +309,44 @@ public final class IntentUriGrantContractTest {
         android.content.pm.ServiceInfo serviceInfo = new android.content.pm.ServiceInfo();
         serviceInfo.packageName = TARGET; serviceInfo.name = TARGET + ".Service";
         Object record = recordConstructor.newInstance(serviceInfo, targetPkg);
+        set(services, "mServices", Map.of(
+                new android.content.ComponentName(TARGET, serviceInfo.name), record));
+        set(record, "lastStartId", 2);
         Method done = servicesType.getDeclaredMethod("serviceDoneExecuting", IBinder.class,
                 int.class, int.class, int.class); done.setAccessible(true);
         Method publish = grants.getClass().getDeclaredMethod("publish", IBinder.class, List.class);
         publish.setAccessible(true);
         @SuppressWarnings("unchecked") Map<Integer, IBinder> serviceOwners =
                 (Map<Integer, IBinder>) get(record, "startGrantOwners");
-        IBinder startOwner = new Binder();
-        publish.invoke(grants, startOwner, prepare.invoke(grants, SENDER_UID, TARGET,
+        IBinder firstStartOwner = new Binder();
+        publish.invoke(grants, firstStartOwner, prepare.invoke(grants, SENDER_UID, TARGET,
                 new Intent().setData(testUri).addFlags(read)));
-        serviceOwners.put(1, startOwner);
+        serviceOwners.put(1, firstStartOwner);
         done.invoke(services, record, 1, 1, android.app.Service.START_STICKY);
-        check(serviceOwners.isEmpty(), "Completed sticky start retires its owner");
-        check(!(Boolean) canAccessMethod.invoke(grants, targetPkg, testUri, read, 0),
-                "Completed service start revokes its URI permissions");
-        publish.invoke(grants, startOwner, prepare.invoke(grants, SENDER_UID, TARGET,
-                new Intent().setData(testUri).addFlags(read)));
-        serviceOwners.put(2, startOwner);
-        done.invoke(services, record, 1, 2, android.app.Service.START_REDELIVER_INTENT);
         check(serviceOwners.size() == 1 && (Boolean) canAccessMethod.invoke(
-                grants, targetPkg, testUri, read, 0), "Redelivery start retains its grant until explicit stop");
+                grants, targetPkg, testUri, read, 0), "Sticky start keeps URI access after onStartCommand");
+
+        IBinder secondStartOwner = new Binder();
+        publish.invoke(grants, secondStartOwner, prepare.invoke(grants, SENDER_UID, TARGET,
+                new Intent().setData(childUri).addFlags(read)));
+        serviceOwners.put(2, secondStartOwner);
+        done.invoke(services, record, 1, 2, android.app.Service.START_REDELIVER_INTENT);
+        check(serviceOwners.size() == 2 && (Boolean) canAccessMethod.invoke(
+                grants, targetPkg, childUri, read, 0), "Redelivery start keeps its independent owner");
+
+        Method stopSelf = servicesType.getDeclaredMethod("stopServiceToken",
+                android.content.ComponentName.class, IBinder.class, int.class);
+        stopSelf.setAccessible(true);
+        boolean stopped = (Boolean) stopSelf.invoke(services,
+                new android.content.ComponentName(TARGET, serviceInfo.name), record, 1);
+        check(!stopped && !(Boolean) canAccessMethod.invoke(grants, targetPkg, testUri, read, 0)
+                && (Boolean) canAccessMethod.invoke(grants, targetPkg, childUri, read, 0),
+                "Finishing the older start revokes only its own URI access");
         Method clearStarts = servicesType.getDeclaredMethod("clearStartGrants", recordType, int.class);
-        clearStarts.setAccessible(true); clearStarts.invoke(services, record, 2);
+        clearStarts.setAccessible(true);
+        clearStarts.invoke(services, record, Integer.MAX_VALUE);
         check(serviceOwners.isEmpty() && !(Boolean) canAccessMethod.invoke(
-                grants, targetPkg, testUri, read, 0), "Stop through startId revokes retained redelivery grant");
+                grants, targetPkg, childUri, read, 0), "Service teardown revokes the remaining URI access");
 
         System.out.println("IntentUriGrantContractTest passed: " + checks + " checks");
     }

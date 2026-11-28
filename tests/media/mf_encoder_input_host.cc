@@ -456,6 +456,7 @@ FARPROC GetProcAddress(HMODULE, const char* name) {
   return nullptr;
 }
 HRESULT CoInitializeEx(void*, DWORD) { return S_OK; }
+void CoUninitialize() {}
 void CoTaskMemFree(void* p) { std::free(p); }
 
 namespace fixture {

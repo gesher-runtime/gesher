@@ -19,7 +19,7 @@ def main() -> None:
     parser.add_argument("--controller-source-ref", help="Compile a prior controller as a regression control")
     parser.add_argument("--usage-source-ref", help="Compile unchanged historical usage service/history together")
     parser.add_argument("--usage-baseline", action="store_true", help="Report historical allocation without the candidate budget")
-    parser.add_argument("--group", choices=("all", "task", "affinity", "sub", "usage", "usage-query"), default="all")
+    parser.add_argument("--group", choices=("all", "task", "affinity", "sub", "uri", "resume", "usage", "usage-query"), default="all")
     args = parser.parse_args()
     cc = shutil.which("cc")
     if not cc:

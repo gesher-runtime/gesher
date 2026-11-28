@@ -118,21 +118,31 @@ public final class TaskStackContractTest {
         return new Intent(pkg + "." + name).setComponent(new ComponentName(pkg, pkg + "." + name));
     }
     private static ApkPackage code(String pkg, int uid) throws Exception {
+        return code(pkg, uid, pkg);
+    }
+
+    private static ApkPackage code(String pkg, int uid, String affinity) throws Exception {
         String path = "/fixture/" + pkg + "/base.apk";
         PackageImpl parsed = (PackageImpl) PackageImpl.forTesting(pkg, path);
         parsed.setEnabled(true);
         parsed.setTargetSdkVersion(36);
         for (String name : List.of("Root", "Middle", "Top", "Other", "Private", "Guarded", "Single",
-                "Instance", "Doc", "DocNever", "DocAlways")) {
+                "Instance", "Doc", "DocNever", "DocAlways", "NoHistory", "ResetChild", "ClearResetRoot",
+                "AffinityDonor", "Reparent")) {
             ParsedActivityImpl activity = new ParsedActivityImpl();
             activity.setPackageName(pkg);
             activity.setName(pkg + "." + name);
-            activity.setTaskAffinity(pkg);
+            activity.setTaskAffinity(affinity);
             activity.setEnabled(true);
             activity.setExported(!name.equals("Private"));
             if (name.equals("Guarded")) activity.setPermission("fixture.permission.NOT_GRANTED");
             if (name.equals("Single")) activity.setLaunchMode(ActivityInfo.LAUNCH_SINGLE_TASK);
             if (name.equals("Instance")) activity.setLaunchMode(ActivityInfo.LAUNCH_SINGLE_INSTANCE);
+            if (name.equals("NoHistory")) activity.setFlags(ActivityInfo.FLAG_NO_HISTORY);
+            if (name.equals("ResetChild")) activity.setFlags(ActivityInfo.FLAG_FINISH_ON_TASK_LAUNCH);
+            if (name.equals("ClearResetRoot")) activity.setFlags(ActivityInfo.FLAG_CLEAR_TASK_ON_LAUNCH);
+            if (name.equals("AffinityDonor")) activity.setTaskAffinity(affinity + ".donor");
+            if (name.equals("Reparent")) activity.setFlags(ActivityInfo.FLAG_ALLOW_TASK_REPARENTING);
             if (name.equals("Doc")) activity.setDocumentLaunchMode(ActivityInfo.DOCUMENT_LAUNCH_INTO_EXISTING);
             if (name.equals("DocNever")) activity.setDocumentLaunchMode(ActivityInfo.DOCUMENT_LAUNCH_NEVER);
             if (name.equals("DocAlways")) activity.setDocumentLaunchMode(ActivityInfo.DOCUMENT_LAUNCH_ALWAYS);
@@ -467,6 +477,20 @@ public final class TaskStackContractTest {
                 && "LAUNCHING".equals(missing.state(missing.record("Other"))), "Failure leaked publication scope");
     }
 
+    private static void expectUpRecreation(Harness h, Object record, String destinationAffinity,
+            boolean expected, String reason) throws Exception {
+        long identity = Binder.clearCallingIdentity();
+        try {
+            Binder.restoreCallingIdentity(((long)UID << 32) | PID);
+            IBinder activity = record == null ? new Binder() : (IBinder)get(record, "token");
+            if (h.api.getActivityClientController().shouldUpRecreateTask(activity, destinationAffinity) != expected) {
+                throw new AssertionError(reason);
+            }
+        } finally {
+            Binder.restoreCallingIdentity(identity);
+        }
+    }
+
     private static void taskFlags() throws Exception {
         Harness h = new Harness();
         h.start(launch("Root").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
@@ -525,14 +549,24 @@ public final class TaskStackContractTest {
         document.start(doc, launch("Top"));
         Object docRoot = document.record("Doc"), docTop = document.record("Top");
         document.acknowledge("activityResumed", docTop);
+        expectUpRecreation(document, docTop, PKG, false,
+                "A child in a document task can navigate within that task");
         document.start(doc);
         check(document.record("Doc") == docRoot && (Boolean)get(docTop, "finishing"),
                 "document intoExisting did not clear to its existing root");
         document.acknowledge("activityPaused", docTop);
         check(document.thread.launches(docRoot) == 1, "Document root was not realized after foreground pause");
+        expectUpRecreation(document, docRoot, PKG, true,
+                "A document root with no preceding task must rebuild the parent stack");
         document.start(new Intent(doc).setData(android.net.Uri.parse("content://fixture/document/2")));
         check(document.api.getTasks(10, false, true, Display.DEFAULT_DISPLAY).size() == 2,
                 "Different document data reused the previous document task");
+        Object nextDocRoot = document.records().get(document.records().size() - 1);
+        expectUpRecreation(document, nextDocRoot, PKG, false,
+                "A document root above a task of the same affinity can return to it");
+        expectUpRecreation(document, nextDocRoot, PKG + ".other", true,
+                "A different destination affinity must rebuild even with a same-affinity predecessor");
+        System.out.println("TaskStack Up recreation contracts passed");
         Harness single = new Harness();
         single.start(launch("Root").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), launch("Single"), launch("Top"));
         Object unique = single.record("Single"), above = single.record("Top");
@@ -720,6 +754,216 @@ public final class TaskStackContractTest {
         check(h.records().size() == 3 && h.api.getTasks(10, false, true, Display.DEFAULT_DISPLAY).size() == 2
                 && h.thread.launches(null) == 3 && live(h, root) && live(h, top),
                 "Task reuse consumed MULTIPLE_TASK or retired the original task");
+    }
+
+    private static void ordinaryAffinityOwner() throws Exception {
+        String peerPackage = PKG + ".second";
+        for (boolean sharedUid : new boolean[]{true, false}) {
+            Harness h = new Harness();
+            ApkPackage peer = code(peerPackage, sharedUid ? UID : UID + 1, PKG);
+            publishFixtureCode(h, peerPackage, peer);
+            check(h.startOne(launch(peerPackage, "Root").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), null)
+                    == ActivityManager.START_SUCCESS, "Could not start the peer's task");
+            Object existing = h.record(peerPackage, "Root");
+            check(h.startOne(launch("Other").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), null)
+                    == ActivityManager.START_SUCCESS, "Could not launch the matching affinity");
+            Object destination = h.record("Other");
+            check(get(existing, "taskId").equals(get(destination, "taskId")) == sharedUid,
+                    sharedUid ? "Same-UID activities with matching affinity did not reuse the task"
+                            : "An unrelated UID's matching affinity changed task ownership");
+            check(live(h, existing) && live(h, destination), "Affinity lookup retired a live history record");
+        }
+    }
+
+    private static void launcherResetTask() throws Exception {
+        Intent launcher = Intent.makeMainActivity(new ComponentName(PKG, PKG + ".Root"));
+        launcher.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        Intent reset = new Intent(launcher).addFlags(Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
+        for (boolean replyChain : new boolean[]{false, true}) {
+            Harness h = new Harness();
+            h.startOne(launcher, null);
+            Object root = h.record("Root"); h.acknowledge("activityResumed", root);
+            h.startOne(launch("Middle"), root);
+            Object middle = h.record("Middle"); h.acknowledge("activityPaused", root);
+            h.acknowledge("activityResumed", middle); h.acknowledge("activityIdle", middle);
+            h.acknowledgeStopped(root);
+            h.asApp(() -> check(h.api.startActivity(h.thread, PKG, null, launch("ResetChild"), null,
+                    (IBinder)get(middle, "token"), "reset-owner", 75, 0, null, null)
+                    == ActivityManager.START_SUCCESS, "Could not start finishOnTaskLaunch Activity"));
+            Object child = h.record("ResetChild"); h.acknowledge("activityPaused", middle);
+            h.acknowledge("activityResumed", child); h.acknowledge("activityIdle", child);
+            h.acknowledgeStopped(middle);
+            Object top = child;
+            if (replyChain) {
+                h.asApp(() -> check(h.api.startActivity(h.thread, PKG, null, launch("Top"), null,
+                        (IBinder)get(child, "token"), "child-reply", 76, 0, null, null)
+                        == ActivityManager.START_SUCCESS, "Could not start reset child's reply Activity"));
+                top = h.record("Top"); h.acknowledge("activityPaused", child);
+                h.acknowledge("activityResumed", top); h.acknowledge("activityIdle", top);
+                h.acknowledgeStopped(child);
+            }
+            int resumes = h.thread.items(ResumeActivityItem.class, middle);
+            int launches = h.thread.launches(null);
+            check(h.startOne(launcher, null) == ActivityManager.START_TASK_TO_FRONT && live(h, top)
+                    && live(h, child), "Matching NEW_TASK without RESET finished launch history");
+            check(h.startOne(reset, null) == ActivityManager.START_TASK_TO_FRONT && !live(h, child)
+                    && !live(h, top), "Matching launcher reset retained finishOnTaskLaunch history");
+            check("PAUSING".equals(h.state(top)) && h.thread.items(ResumeActivityItem.class, middle) == resumes
+                    && h.thread.items(NewIntentItem.class, root) == 0,
+                    "Launcher reset skipped the outgoing pause or redelivered the root Intent");
+            h.acknowledge("activityPaused", top);
+            check(live(h, root) && live(h, middle) && "RESUMING".equals(h.state(middle))
+                    && h.thread.items(ResumeActivityItem.class, middle) == resumes + 1
+                    && h.thread.launches(null) == launches, "Launcher reset recreated retained history");
+            ActivityResultItem cancellation = h.thread.last(ActivityResultItem.class, middle);
+            check(cancellation != null, "Reset did not send a result to the retained recipient");
+            List<?> results = (List<?>)get(cancellation, "mResultInfoList");
+            check(results != null && results.size() == 1, "Reset lost the retained recipient's result route");
+            android.app.ResultInfo result = (android.app.ResultInfo)results.get(0);
+            check(result.mResultCode == android.app.Activity.RESULT_CANCELED && result.mRequestCode == 75
+                    && "reset-owner".equals(result.mResultWho) && result.mData == null,
+                    "Reset did not cancel the pending Activity result");
+        }
+    }
+
+    private static void launcherClearTaskOnLaunch() throws Exception {
+        for (boolean clear : new boolean[]{true, false}) {
+            Harness h = new Harness();
+            String rootName = clear ? "ClearResetRoot" : "Root";
+            String middleName = clear ? "Middle" : "ClearResetRoot";
+            Intent launcher = Intent.makeMainActivity(new ComponentName(PKG, PKG + "." + rootName))
+                    .setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            Intent reset = new Intent(launcher).addFlags(Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
+            h.startOne(launcher, null);
+            Object root = h.record(rootName); h.acknowledge("activityResumed", root);
+            h.startOne(launch(middleName), root);
+            Object middle = h.record(middleName); h.acknowledge("activityPaused", root);
+            h.acknowledge("activityResumed", middle); h.acknowledge("activityIdle", middle);
+            h.acknowledgeStopped(root);
+            h.asApp(() -> check(h.api.startActivity(h.thread, PKG, null, launch("Top"), null,
+                    (IBinder)get(middle, "token"), "middle-reply", 77, 0, null, null)
+                    == ActivityManager.START_SUCCESS, "Could not start child of clearTaskOnLaunch history"));
+            Object top = h.record("Top"); h.acknowledge("activityPaused", middle);
+            h.acknowledge("activityResumed", top); h.acknowledge("activityIdle", top);
+            h.acknowledgeStopped(middle);
+            int resumes = h.thread.items(ResumeActivityItem.class, root);
+            int launches = h.thread.launches(null);
+            check(h.startOne(launcher, null) == ActivityManager.START_TASK_TO_FRONT
+                    && live(h, middle) && live(h, top), "Launch without RESET cleared task history");
+            check(h.startOne(reset, null) == ActivityManager.START_TASK_TO_FRONT && live(h, root),
+                    "Launcher reset failed to retain the original root");
+            if (clear) {
+                check(!live(h, middle) && !live(h, top) && "PAUSING".equals(h.state(top))
+                        && h.thread.items(ResumeActivityItem.class, root) == resumes,
+                        "clearTaskOnLaunch retained above-root records or skipped the outgoing pause");
+                h.acknowledge("activityPaused", top);
+                check("RESUMING".equals(h.state(root))
+                        && h.thread.items(ResumeActivityItem.class, root) == resumes + 1,
+                        "clearTaskOnLaunch did not resume its retained root");
+            } else {
+                check(live(h, middle) && live(h, top) && "RESUMED".equals(h.state(top)),
+                        "clearTaskOnLaunch on a non-root Activity cleared the task");
+            }
+            check(h.thread.launches(null) == launches && h.thread.items(NewIntentItem.class, root) == 0,
+                    "Launcher reset duplicated the root Activity or redelivered its Intent");
+        }
+
+        Harness h = new Harness();
+        Intent launcher = Intent.makeMainActivity(new ComponentName(PKG, PKG + ".ClearResetRoot"))
+                .setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        h.startOne(launcher, null);
+        Object root = h.record("ClearResetRoot"); h.acknowledge("activityResumed", root);
+        h.asApp(() -> check(h.api.startActivity(h.thread, PKG, null, launch("Top"), null,
+                (IBinder)get(root, "token"), "root-reply", 78, 0, null, null)
+                == ActivityManager.START_SUCCESS, "Could not start the root's reply Activity"));
+        Object top = h.record("Top"); h.acknowledge("activityPaused", root);
+        h.acknowledge("activityResumed", top);
+        check(h.startOne(new Intent(launcher).addFlags(Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED), null)
+                == ActivityManager.START_TASK_TO_FRONT && live(h, top) && "RESUMED".equals(h.state(top))
+                && h.thread.items(ActivityResultItem.class, root) == 0,
+                "clearTaskOnLaunch canceled a reply owed to the retained root");
+    }
+
+    private static void launcherClearIncomingAffinity() throws Exception {
+        Harness h = new Harness();
+        h.startOne(launch("AffinityDonor").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), null);
+        Object donor = h.record("AffinityDonor"); h.acknowledge("activityResumed", donor);
+        h.startOne(launch("Reparent"), donor);
+        Object child = h.record("Reparent"); h.acknowledge("activityPaused", donor);
+        h.acknowledge("activityResumed", child); h.acknowledge("activityIdle", child);
+        h.acknowledgeStopped(donor);
+        h.asApp(() -> check(h.api.startActivity(h.thread, PKG, null, launch("Top"), null,
+                (IBinder)get(child, "token"), "donor-reply", 80, 0, null, null)
+                == ActivityManager.START_SUCCESS, "Donor reply activity did not start"));
+        Object reply = h.record("Top"); h.acknowledge("activityPaused", child);
+        h.acknowledge("activityResumed", reply); h.acknowledge("activityIdle", reply);
+        h.acknowledgeStopped(child);
+        Intent launcher = Intent.makeMainActivity(new ComponentName(PKG, PKG + ".ClearResetRoot"))
+                .setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        h.startOne(launcher, null);
+        Object target = h.record("ClearResetRoot"); h.acknowledge("activityResumed", target);
+        check(!get(donor, "taskId").equals(get(target, "taskId")), "Fixture did not create lower donor task");
+        check(h.startOne(launcher, null) == ActivityManager.START_TASK_TO_FRONT
+                && live(h, child) && live(h, reply), "Ordinary launcher intent cleared a lower task");
+        check(h.startOne(new Intent(launcher).addFlags(Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED), null)
+                == ActivityManager.START_TASK_TO_FRONT, "Forced reset did not reuse its target");
+        check(live(h, target) && live(h, donor) && !live(h, child) && !live(h, reply)
+                && "PAUSING".equals(h.state(reply)), "Forced reset left incoming affinity history");
+        check(h.thread.items(ActivityResultItem.class, child) == 0,
+                "Forced reset sent a result to a sibling finishing in the same group");
+        h.acknowledge("activityPaused", reply);
+        check(h.thread.launches(target) == 1 && h.thread.launches(donor) == 1,
+                "Forced reset recreated a retained root");
+    }
+
+    private static void launcherResetDocumentSuffix() throws Exception {
+        Intent launcher = Intent.makeMainActivity(new ComponentName(PKG, PKG + ".Root"))
+                .setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        Intent reset = new Intent(launcher).addFlags(Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
+        Harness h = new Harness();
+        h.startOne(launcher, null);
+        Object root = h.record("Root"); h.acknowledge("activityResumed", root);
+        h.startOne(launch("Middle"), root);
+        Object middle = h.record("Middle"); h.acknowledge("activityPaused", root);
+        h.acknowledge("activityResumed", middle); h.acknowledge("activityIdle", middle);
+        h.acknowledgeStopped(root);
+        h.asApp(() -> check(h.api.startActivity(h.thread, PKG, null,
+                launch("Other").addFlags(Intent.FLAG_ACTIVITY_NEW_DOCUMENT), null,
+                (IBinder)get(middle, "token"), "document-suffix", 79, 0, null, null)
+                == ActivityManager.START_SUCCESS, "Could not start document with a retained result route"));
+        Object document = h.record("Other"); h.acknowledge("activityPaused", middle);
+        h.acknowledge("activityResumed", document); h.acknowledge("activityIdle", document);
+        h.acknowledgeStopped(middle);
+        check(get(document, "taskId").equals(get(middle, "taskId")) && get(document, "resultTo") == middle,
+                "Document launch for result detached from its task");
+        h.startOne(launch("Top"), document);
+        Object top = h.record("Top"); h.acknowledge("activityPaused", document);
+        h.acknowledge("activityResumed", top); h.acknowledge("activityIdle", top);
+        h.acknowledgeStopped(document);
+        int resumes = h.thread.items(ResumeActivityItem.class, middle);
+        int launches = h.thread.launches(null);
+        check(h.startOne(launcher, null) == ActivityManager.START_TASK_TO_FRONT
+                        && live(h, document) && live(h, top),
+                "Matching launch without RESET finished the document suffix");
+        check(h.startOne(reset, null) == ActivityManager.START_TASK_TO_FRONT
+                        && live(h, middle) && !live(h, document) && !live(h, top),
+                "Launcher reset failed to clear the document and all activities above it");
+        check("PAUSING".equals(h.state(top)) && h.thread.items(ResumeActivityItem.class, middle) == resumes,
+                "Launcher reset resumed the return destination before the top activity paused");
+        h.acknowledge("activityPaused", top);
+        check(live(h, root) && "RESUMING".equals(h.state(middle))
+                        && h.thread.items(ResumeActivityItem.class, middle) == resumes + 1
+                        && h.thread.launches(null) == launches,
+                "Launcher reset did not resume the existing activity below the document");
+        ActivityResultItem cancellation = h.thread.last(ActivityResultItem.class, middle);
+        check(cancellation != null && h.thread.items(ActivityResultItem.class, middle) == 1,
+                "Expected one cancellation to the retained recipient");
+        List<?> results = (List<?>)get(cancellation, "mResultInfoList");
+        check(results != null && results.size() == 1, "Launcher reset lost the cleared document result");
+        android.app.ResultInfo result = (android.app.ResultInfo)results.get(0);
+        check(result.mResultCode == android.app.Activity.RESULT_CANCELED && result.mRequestCode == 79
+                        && "document-suffix".equals(result.mResultWho) && result.mData == null,
+                "Launcher reset did not cancel the cleared document's pending result");
     }
 
     /** A NEW_TASK result request is canceled; its new/reused destination owns no result route. */
@@ -1454,6 +1698,11 @@ public final class TaskStackContractTest {
         int task = (Integer) get(root, "taskId");
         check(backOnRoot(h, root) && !hidden.contains(task),
                 "Back on a task root another app started did not finish it");
+        expectUpRecreation(h, root, PKG, false, "Same-affinity Up must stay in an ordinary task");
+        expectUpRecreation(h, root, PKG + ".other", true,
+                "A different destination affinity must rebuild the parent stack");
+        expectUpRecreation(h, root, null, false, "An affinity-less destination does not request recreation");
+        expectUpRecreation(h, null, PKG + ".other", false, "An unknown token cannot recreate a task");
 
         Harness home = new Harness();
         home.start(launch("Root").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -1493,6 +1742,86 @@ public final class TaskStackContractTest {
         java.util.Set<Integer> topHidden = (java.util.Set<Integer>) get(top.tasks, "mHiddenTasks");
         check(backOnRoot(top, above) && !topHidden.contains((Integer) get(above, "taskId")),
                 "Back on an activity above a root home launched moved its task to the back");
+    }
+
+    private static void noHistoryOnOpaqueCover() throws Exception {
+        for (int scenario = 0; scenario < 3; scenario++) {
+            Harness h = new Harness();
+            h.startOne(launch("Root").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), null);
+            Object root = h.record("Root");
+            h.acknowledge("activityResumed", root);
+            boolean declared = scenario == 1;
+            String name = declared ? "NoHistory" : "Middle";
+            Intent ephemeral = launch(name);
+            if (!declared) ephemeral.addFlags(Intent.FLAG_ACTIVITY_NO_HISTORY);
+            h.startOne(ephemeral, root);
+            Object middle = h.record(name);
+            h.acknowledge("activityPaused", root);
+            h.acknowledge("activityResumed", middle);
+            h.acknowledgeStopped(root);
+            h.startOne(launch("Top"), middle);
+            Object top = h.record("Top");
+            boolean translucent = scenario == 2;
+            if (translucent) set(top, "translucent", true);
+            h.acknowledge("activityPaused", middle);
+            h.acknowledge("activityResumed", top);
+            if (translucent) {
+                check(!(Boolean)get(middle, "finishing") && h.thread.items(StopActivityItem.class, middle) == 0,
+                        "A visible no-history activity finished under a translucent child");
+                h.finish(top);
+                check("RESUMING".equals(h.state(middle)) && h.thread.launches(middle) == 1,
+                        "Back could not resume the still-visible no-history activity");
+                continue;
+            }
+            check((Boolean)get(middle, "finishing") && h.thread.items(StopActivityItem.class, middle) == 1,
+                    "A fully covered no-history activity remained in task history");
+            h.acknowledgeStopped(middle);
+            h.acknowledge("activityDestroyed", middle);
+            int resumes = h.thread.items(ResumeActivityItem.class, root);
+            h.finish(top);
+            check(!h.records().contains(middle) && h.thread.items(ResumeActivityItem.class, root) == resumes + 1,
+                    "Back did not return directly to the root below the removed no-history activity");
+        }
+    }
+
+    private static void restoreTaskWhilePausing() throws Exception {
+        for (int scenario = 0; scenario < 3; scenario++) {
+            Harness h = new Harness();
+            h.start(launch("Root").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            Object root = h.record("Root");
+            h.acknowledge("activityResumed", root);
+            IBinder token = (IBinder)get(root, "token");
+            int task = (Integer)get(root, "taskId");
+            int resumes = h.thread.items(ResumeActivityItem.class, root);
+            h.asApp(() -> check(h.api.getActivityClientController().moveActivityTaskToBack(token, true),
+                    "Task did not move to the back"));
+            check("PAUSING".equals(h.state(root)) && h.thread.items(PauseActivityItem.class, root) == 1,
+                    "Moving to the back did not publish one pause");
+
+            // Exercise both an app's request and a legitimate desktop activation.
+            int flags = scenario == 1 ? MOVE_TASK_FROM_WINDOW : 0;
+            h.asApp(() -> h.api.moveTaskToFront(h.thread, PKG, task, flags, null));
+            check(h.thread.items(ResumeActivityItem.class, root) == resumes,
+                    "Task resumed before the outstanding pause completed");
+            boolean hiddenAgain = scenario == 2;
+            if (hiddenAgain) {
+                h.asApp(() -> check(h.api.getActivityClientController().moveActivityTaskToBack(token, true),
+                        "The intervening hide was rejected"));
+            }
+            h.acknowledge("activityPaused", root);
+            h.acknowledge("activityPaused", root);
+            if (hiddenAgain) {
+                check(h.thread.items(ResumeActivityItem.class, root) == resumes
+                                && h.thread.items(StopActivityItem.class, root) == 1,
+                        "A newer move to the back did not retire the queued foreground request");
+                h.acknowledgeStopped(root);
+                h.asApp(() -> h.api.moveTaskToFront(h.thread, PKG, task, 0, null));
+            }
+            check("RESUMING".equals(h.state(root))
+                            && h.thread.items(ResumeActivityItem.class, root) == resumes + 1
+                            && h.thread.launches(root) == 1,
+                    "The restored live task did not resume once after the pause");
+        }
     }
 
     private static void pendingStacks() throws Exception {
@@ -2182,8 +2511,10 @@ public final class TaskStackContractTest {
         if (selected.equals("all") || selected.equals("validation")) invalidBatch();
         if (selected.equals("all") || selected.equals("tasks")) { taskFlags(); reorderedUriOwner(); abandonedUriOwners(); processDeathUriOwners(); forceStopTransientUris(); }
         if (selected.equals("all") || selected.equals("ordinary")) {
-            ordinaryTaskReuse(); ordinaryWaitReuse(); ordinaryClearTop(); ordinaryRootAndMultipleTasks();
-            ordinaryNewTaskResult(); ordinaryDocumentResult(); ordinaryReuseAdmission(); ordinaryAuthenticatorCompletion();
+            ordinaryTaskReuse(); ordinaryWaitReuse(); ordinaryClearTop(); ordinaryRootAndMultipleTasks(); ordinaryAffinityOwner(); launcherResetTask();
+            launcherClearTaskOnLaunch(); launcherClearIncomingAffinity(); launcherResetDocumentSuffix();
+            ordinaryNewTaskResult(); ordinaryDocumentResult();
+            ordinaryReuseAdmission(); ordinaryAuthenticatorCompletion();
         }
         if (selected.equals("all") || selected.equals("recents")) {
             appTaskRecents(); appTaskLaunchFlags(); appTaskForeground(); appTaskObsoleteForeground(); appTaskLaunchAdmission();
@@ -2193,7 +2524,9 @@ public final class TaskStackContractTest {
         if (selected.equals("all") || selected.equals("appwindow")) oneWindowPerApp();
         if (selected.equals("all") || selected.equals("permissions")) permissions();
         if (selected.equals("all") || selected.equals("pending")) pendingStacks();
-        if (selected.equals("all") || selected.equals("back")) backOnTaskRoot();
+        if (selected.equals("all") || selected.equals("back")) {
+            backOnTaskRoot(); restoreTaskWhilePausing(); noHistoryOnOpaqueCover();
+        }
         if (selected.equals("all") || selected.equals("windowclose")) {
             closeMinimizedAppTasks(); conditionalCloseOwnership(); conditionalCloseProtocol();
         }

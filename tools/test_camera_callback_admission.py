@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 STUBS = {
 'android/hardware/ICameraService.java': '''package android.hardware; public interface ICameraService {
- int ERROR_ILLEGAL_ARGUMENT=3, ERROR_DISCONNECTED=4, ERROR_INVALID_OPERATION=10, ERROR_MAX_CAMERAS_IN_USE=8; }''',
+ int ERROR_ILLEGAL_ARGUMENT=3, ERROR_DISCONNECTED=4, ERROR_DISABLED=6, ERROR_INVALID_OPERATION=10, ERROR_MAX_CAMERAS_IN_USE=8; }''',
 'android/os/IBinder.java': 'package android.os; public interface IBinder {}',
 'android/os/RemoteException.java': 'package android.os; public class RemoteException extends Exception {}',
 'android/os/ServiceSpecificException.java': '''package android.os; public class ServiceSpecificException extends RuntimeException {
@@ -63,7 +63,7 @@ STUBS = {
 'android/hardware/camera2/ICameraDeviceCallbacks.java': '''package android.hardware.camera2;
  import android.os.*; import android.hardware.camera2.impl.*;
  public interface ICameraDeviceCallbacks {
- int ERROR_CAMERA_DISCONNECTED=0,ERROR_CAMERA_DEVICE=1,ERROR_CAMERA_REQUEST=3,ERROR_CAMERA_RESULT=4,ERROR_CAMERA_BUFFER=5;
+ int ERROR_CAMERA_INVALID_ERROR=-1,ERROR_CAMERA_DISCONNECTED=0,ERROR_CAMERA_DEVICE=1,ERROR_CAMERA_REQUEST=3,ERROR_CAMERA_RESULT=4,ERROR_CAMERA_BUFFER=5,ERROR_CAMERA_DISABLED=6;
  void onDeviceError(int e,CaptureResultExtras x)throws RemoteException; void onDeviceIdle()throws RemoteException;
  void onCaptureStarted(CaptureResultExtras x,long t)throws RemoteException;
  void onResultReceived(CameraMetadataInfo m,CaptureResultExtras x,PhysicalCaptureResultInfo[] p)throws RemoteException;
@@ -94,7 +94,9 @@ STUBS = {
 'com/gesher/server/CameraService.java': '''package com.gesher.server; import android.hardware.camera2.impl.CameraMetadataNative;
  class CameraService {static final int HAL_BLOB=33;static final long FRAME_DURATION_NS=33333333;
  static void log(String s){} static CameraMetadataNative defaultRequest(WindowsCamera.Device d,int i){return new CameraMetadataNative();}
- static CameraMetadataNative characteristics(WindowsCamera.Device d){return new CameraMetadataNative();} void closed(String s,CameraDeviceUser u){} }''',
+ static CameraMetadataNative characteristics(WindowsCamera.Device d){return new CameraMetadataNative();}
+ boolean startCapture(String s,CameraDeviceUser u){return true;} void captureFailedToOpen(String s,CameraDeviceUser u){}
+ void closed(String s,CameraDeviceUser u){} }''',
 'com/gesher/server/CameraAutoFocus.java': '''package com.gesher.server;
  final class CameraAutoFocus {interface Lens{} CameraAutoFocus(Lens l){throw new AssertionError("fixed focus");}
  static Lens lensOf(WindowsCamera.Capture c,String id){return null;} int frame(int m,int t,long n,double s){return 0;}

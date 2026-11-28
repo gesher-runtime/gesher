@@ -335,15 +335,24 @@ public final class ServiceRebindContractTest {
         h.unbind(last); h.acknowledge(2, false); h.stop();
     }
 
-    private static void independentIntents() throws Exception {
+    private static void independentIntents(boolean nullBinding) throws Exception {
         Harness h = new Harness();
         Connection one = new Connection(Runnable::run), keeper = new Connection(Runnable::run);
-        h.bind(one, "one", Context.BIND_AUTO_CREATE); IBinder first = new Binder(); h.publish(0, first);
-        h.bind(keeper, "keeper", Context.BIND_AUTO_CREATE); IBinder other = new Binder(); h.publish(1, other);
+        h.bind(one, "one", Context.BIND_AUTO_CREATE);
+        IBinder first = nullBinding ? null : new Binder();
+        h.publish(0, first);
+        if (nullBinding) one.nullOnce();
+        h.bind(keeper, "keeper", Context.BIND_AUTO_CREATE);
+        IBinder other = new Binder();
+        h.publish(1, other);
         h.unbind(one); h.acknowledge(0, true);
         Connection next = new Connection(Runnable::run); h.bind(next, "one", 0);
-        check(next.value == first && keeper.value == other && h.thread.binds.size() == 3
-                        && h.thread.binds.get(2).rebind && h.thread.stops == 0,
+        if (nullBinding) next.nullOnce();
+        else check(next.value == first && next.connected == 1,
+                "Rebind did not receive the retained Binder for its Intent");
+        check(keeper.value == other && keeper.connected == 1 && keeper.nulls == 0
+                        && h.thread.binds.size() == 3 && h.thread.binds.get(2).rebind
+                        && h.thread.stops == 0,
                 "An independent auto-create binding did not preserve the service and per-intent Binder");
         h.unbind(next); h.acknowledge(1, false); h.unbind(keeper);
         check(h.thread.stops == 1 && h.connections() == 0, "Last independent binding did not destroy service");
@@ -367,6 +376,57 @@ public final class ServiceRebindContractTest {
         check(h.thread.binds.size() == 3 && h.thread.binds.get(2).rebind,
                 "Synchronous onUnbind acknowledgement was lost");
         h.unbind(after); h.stop();
+    }
+
+    private static void cancelDuringPublication() throws Exception {
+        for (boolean publishNull : new boolean[]{false, true}) {
+            Harness h = new Harness();
+            h.start();
+            Connection first = new Connection(Runnable::run), canceled = new Connection(Runnable::run);
+            Connection replacement = new Connection(Runnable::run);
+            Operation replace = () -> {
+                h.unbind(canceled);
+                h.bind(replacement, "publish-cancel", Context.BIND_AUTO_CREATE);
+            };
+            first.onConnected = replace;
+            first.onNull = replace;
+            h.bind(first, "publish-cancel", Context.BIND_AUTO_CREATE);
+            h.bind(canceled, "publish-cancel", Context.BIND_AUTO_CREATE);
+            IBinder value = publishNull ? null : new Binder();
+            h.publish(0, value);
+            check(canceled.connected == 0 && canceled.nulls == 0,
+                    "Published a cached result to a client removed during delivery");
+            if (publishNull) replacement.nullOnce();
+            else check(replacement.connected == 1 && replacement.value == value,
+                    "Replacement did not receive the live Binder");
+            check(h.thread.binds.size() == 1, "Reentrant bind should use the live publication");
+            h.unbind(first);
+            h.unbind(replacement);
+            h.stop();
+        }
+    }
+
+    private static void replaceProcessDuringPublication() throws Exception {
+        Harness h = new Harness();
+        AppThread client = new AppThread();
+        int clientPid = PID + 100;
+        h.clientProcess(clientPid, client);
+        Connection first = new Connection(Runnable::run), second = new Connection(Runnable::run);
+        Connection trigger = new Connection(Runnable::run);
+        IBinder old = new Binder(), replacement = new Binder();
+        first.onConnected = () -> {
+            first.onConnected = null;
+            h.restartProcess();
+            h.bind(trigger, "publish-generation", Context.BIND_AUTO_CREATE);
+            h.publish(0, replacement);
+        };
+        h.bindFrom(clientPid, client, first, "publish-generation");
+        h.bindFrom(clientPid, client, second, "publish-generation");
+        h.publish(0, old);
+        check(second.connected == 1 && second.value == replacement && second.nulls == 0,
+                "Retired process publication overwrote the replacement Binder");
+        check(trigger.connected == 1 && trigger.value == replacement,
+                "Replacement process did not publish to its new binding");
     }
 
     private static void orderedCalls() throws Exception {
@@ -570,6 +630,66 @@ public final class ServiceRebindContractTest {
         h.unbind(second);
     }
 
+    private static void retainedAcrossServiceDeath() throws Exception {
+        for (boolean published : List.of(true, false)) {
+            Harness h = new Harness();
+            int clientPid = PID + 100;
+            AppThread client = new AppThread();
+            h.clientProcess(clientPid, client);
+            Connection existing = new Connection(Runnable::run);
+            h.bindFrom(clientPid, client, existing, "provider-death");
+            if (published) h.publish(0, new Binder());
+
+            h.restartProcess();
+            check(existing.nulls == 0 && existing.died == 0,
+                    "Recovering service reported a null publication or terminal binding death");
+            check(h.connections() == 1, "Service-process death lost the surviving client");
+            Connection trigger = new Connection(Runnable::run);
+            h.bind(trigger, "provider-death", Context.BIND_AUTO_CREATE);
+            check(h.thread.binds.size() == 1 && !h.thread.binds.get(0).rebind,
+                    "Replacement service did not receive a fresh onBind");
+            IBinder replacement = new Binder();
+            h.publish(0, replacement);
+            check(existing.value == replacement && existing.connected == (published ? 2 : 1)
+                            && existing.nulls == 0 && existing.died == 0,
+                    "Replacement publication did not reach the existing client");
+            h.asCaller(clientPid, () -> check(h.am.unbindService(existing.callback),
+                    "Surviving external connection could not unbind"));
+            h.unbind(trigger);
+        }
+    }
+
+    private static void repeatedPublication() throws Exception {
+        for (boolean publishNull : List.of(false, true)) {
+            Harness h = new Harness();
+            h.start();
+            Connection first = new Connection(Runnable::run);
+            h.bind(first, "cached", Context.BIND_AUTO_CREATE);
+            IBinder original = publishNull ? null : new Binder();
+            IBinder duplicate = publishNull ? new Binder() : null;
+            h.publish(0, original);
+            h.publish(0, duplicate);
+            if (publishNull) first.nullOnce();
+            else check(first.connected == 1 && first.value == original && first.nulls == 0
+                            && first.disconnected == 0,
+                    "Repeated publication replaced an active cached Binder");
+            h.unbind(first);
+            h.acknowledge(0, true);
+            h.publish(0, duplicate);
+
+            Connection rebound = new Connection(Runnable::run);
+            h.bind(rebound, "cached", Context.BIND_AUTO_CREATE);
+            check(h.thread.binds.size() == 2 && h.thread.binds.get(1).rebind,
+                    "Cached publication did not preserve onRebind");
+            if (publishNull) rebound.nullOnce();
+            else check(rebound.connected == 1 && rebound.value == original && rebound.nulls == 0,
+                    "Later bind did not receive the first publication");
+            h.unbind(rebound);
+            h.acknowledge(1, false);
+            h.stop();
+        }
+    }
+
     private static void restarted() throws Exception {
         Harness h = new Harness(); h.start();
         Connection oldClient = new Connection(Runnable::run); h.bind(oldClient, "restart", Context.BIND_AUTO_CREATE);
@@ -586,10 +706,18 @@ public final class ServiceRebindContractTest {
     public static int contracts(boolean realBinder, String scenario) throws Exception {
         binder = realBinder; checks = 0;
         if (scenario.equals("all") || scenario.equals("retained")) retained();
+        if (scenario.equals("all") || scenario.equals("retained") || scenario.equals("publication")) {
+            repeatedPublication();
+            cancelDuringPublication();
+            replaceProcessDuringPublication();
+        }
         if (scenario.equals("all") || scenario.equals("declined")) declined();
         if (scenario.equals("all") || scenario.equals("delayed")) delayed(false);
         if (scenario.equals("all") || scenario.equals("null")) delayed(true);
-        if (scenario.equals("all") || scenario.equals("intents")) independentIntents();
+        if (scenario.equals("all") || scenario.equals("intents")) {
+            independentIntents(false);
+            independentIntents(true);
+        }
         if (scenario.equals("all") || scenario.equals("reentrant")) reentrant();
         if (scenario.equals("all") || scenario.equals("ordered")) orderedCalls();
         if (scenario.equals("all") || scenario.equals("ordered-destroyed")) orderedDestruction();
@@ -597,6 +725,7 @@ public final class ServiceRebindContractTest {
         if (scenario.equals("all") || scenario.equals("failed-local")) failedLocalDispatch();
         if (scenario.equals("all") || scenario.equals("interleaved")) interleavedAcknowledgements();
         if (scenario.equals("all") || scenario.equals("client-death")) externalClientDeath();
+        if (scenario.equals("all") || scenario.equals("process-death")) retainedAcrossServiceDeath();
         if (scenario.equals("all") || scenario.equals("force-stop")) forceStopQueued();
         if (scenario.equals("all") || scenario.equals("retired")) retiredQueued();
         if (scenario.equals("all") || scenario.equals("destroyed")) destroyed();

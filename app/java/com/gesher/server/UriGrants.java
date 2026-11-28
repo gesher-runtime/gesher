@@ -760,6 +760,15 @@ public final class UriGrants {
         if (grant != null) publish(owner, List.of(grant));
     }
 
+    List<Grant> prepareClipboard(int uid, String target, List<Uri> uris) {
+        List<Grant> result = new ArrayList<>();
+        for (Uri uri : uris) {
+            Grant grant = prepare(uid, target, uri, Intent.FLAG_GRANT_READ_URI_PERMISSION, 0, 0);
+            if (grant != null) result.add(grant);
+        }
+        return result;
+    }
+
     List<Grant> prepareIntent(int uid, String target, Intent root) {
         List<Grant> result = new ArrayList<>();
         if (root == null) return result;

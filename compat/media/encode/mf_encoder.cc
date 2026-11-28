@@ -106,10 +106,11 @@ std::string Hex(HRESULT hr) {
 }
 
 // The software encoder MFTs producing `subtype`, activated in turn until one is made.
-IMFTransform* FindEncoder(const GUID& category, const GUID& major, const GUID& subtype) {
+IMFTransform* FindEncoder(const GUID& category, const GUID& major, const GUID& subtype,
+                          bool initialize_com = true) {
   const MfApi& mf = Mf();
   if (!mf.ok) return nullptr;
-  CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+  if (initialize_com) CoInitializeEx(nullptr, COINIT_MULTITHREADED);
   MFT_REGISTER_TYPE_INFO outInfo = {major, subtype};
   IMFActivate** acts = nullptr;
   UINT32 count = 0;
@@ -387,14 +388,14 @@ class MfH264Encoder : public VideoEncoder {
 
   std::string Name() const override { return "mf avc encoder"; }
 
-  bool Init(const VideoEncoderParams& p, std::string* error) {
+  bool Init(const VideoEncoderParams& p, std::string* error, bool probe = false) {
     size_t size_bytes;
     if (!I420SampleSize(p.width, p.height, &size_bytes)) {
       *error = "H.264 encoder: unsupported buffer size";
       return false;
     }
     p_ = p;
-    t_ = FindEncoder(kCategoryVideoEncoder, kMediaTypeVideo, kH264);
+    t_ = FindEncoder(kCategoryVideoEncoder, kMediaTypeVideo, kH264, !probe);
     if (t_ == nullptr) {
       *error = "Media Foundation has no H.264 encoder";
       return false;
@@ -416,7 +417,9 @@ class MfH264Encoder : public VideoEncoder {
     out->SetUINT64(kMtFrameRate, rate);
     out->SetUINT64(kMtPixelAspect, (static_cast<UINT64>(1) << 32) | 1);
     out->SetUINT32(kMtInterlaceMode, 2 /* progressive */);
-    out->SetUINT32(kMtMpeg2Profile, p.profile == 8 ? 100 : p.profile == 2 ? 77 : 66);
+    const UINT32 profile = p.profile == kAvcProfileHigh ? 100 :
+                           p.profile == kAvcProfileMain ? 77 : 66;
+    out->SetUINT32(kMtMpeg2Profile, profile);
     hr = t_->SetOutputType(0, out, 0);
     out->Release();
     if (FAILED(hr)) {
@@ -443,6 +446,7 @@ class MfH264Encoder : public VideoEncoder {
       *error = "H.264 encoder: SetInputType (I420) " + Hex(hr);
       return false;
     }
+    if (probe) return true;  // Both media types negotiated. Do not start streaming.
     SetCodecApi(t_, kApiLowLatency, 1);
     if (p.i_frame_interval_s > 0) {
       SetCodecApi(t_, kApiGopSize, static_cast<uint32_t>(std::max(1.0f, p.i_frame_interval_s * p.frame_rate)));
@@ -698,9 +702,26 @@ class MfAacEncoder : public AudioEncoder {
 
 }  // namespace
 
-bool MfH264EncoderAvailable() {
-  static const bool has = Has(kCategoryVideoEncoder, kMediaTypeVideo, kH264);
-  return has;
+int MfH264EncoderProfiles() {
+  static const int profiles = [] {
+    // Activating a transform does not show that it accepts our I420 input.
+    // Test the same type negotiation as configure() once per process, at 1080p30.
+    const HRESULT apartment = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    if (FAILED(apartment) && apartment != RPC_E_CHANGED_MODE) return 0;
+    VideoEncoderParams params;
+    params.width = 1920;
+    params.height = 1080;
+    int negotiated = 0;
+    for (int profile : {kAvcProfileBaseline, kAvcProfileMain, kAvcProfileHigh}) {
+      params.profile = profile;
+      MfH264Encoder probe;
+      std::string error;
+      if (probe.Init(params, &error, true)) negotiated |= profile;
+    }
+    if (SUCCEEDED(apartment)) CoUninitialize();
+    return negotiated;
+  }();
+  return profiles;
 }
 
 bool MfAacEncoderAvailable() {

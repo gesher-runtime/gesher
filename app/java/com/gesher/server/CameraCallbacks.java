@@ -210,12 +210,11 @@ final class CameraCallbacks implements AutoCloseable {
     }
 
     /** One reserved terminal event per camera, independent of frame/control saturation. */
-    void disconnected(CaptureResultExtras extras) {
+    void deviceError(int error, CaptureResultExtras extras) {
         synchronized (mLock) {
             if (mDeviceErrorPosted || mClosed) return;
             mDeviceErrorPosted = true;
-            enqueueLocked(new Task(() -> mTarget.onDeviceError(
-                    ICameraDeviceCallbacks.ERROR_CAMERA_DISCONNECTED, extras), null, 0));
+            enqueueLocked(new Task(() -> mTarget.onDeviceError(error, extras), null, 0));
         }
     }
 
