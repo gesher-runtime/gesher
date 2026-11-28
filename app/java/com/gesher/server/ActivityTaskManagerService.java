@@ -3156,6 +3156,38 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             if (requiredTask != null) return ActivityManager.START_INTENT_NOT_RESOLVED;
             if (intent != null) {
                 String action = intent.getAction();
+                // RoleManager.createRequestRoleIntent's REQUEST_ROLE, with no installed
+                // activity for it. RoleManager reports no role available (app/README.md),
+                // and Android's role controller answers a request for an unavailable role
+                // by finishing RequestRoleActivity with no UI and no result: the requester
+                // gets RESULT_CANCELED. Apps that skip isRoleAvailable() (Me, #662) would
+                // otherwise crash with ActivityNotFoundException. No role is granted.
+                if ("android.app.role.action.REQUEST_ROLE".equals(action)
+                        && intent.getComponent() == null && intent.getPackage() == null) {
+                    // A PendingIntent started for a result answers its sender's activity.
+                    ProcessRecord expected = internalCreator
+                            ? mVerifiedIntentSenderSource.get() : originalProcess;
+                    ActivityRecord source = resultToToken != null && requestCode >= 0
+                            ? forToken(resultToToken) : null;
+                    ProcessRecord sourceProcess;
+                    synchronized (this) {
+                        // source.app changes while a process attaches or dies.
+                        sourceProcess = source == null ? null : source.app;
+                    }
+                    boolean answered = sourceProcess != null && sourceProcess == expected
+                            && (internalCreator || sourceProcess.pid == originalPid);
+                    if (answered) {
+                        // deliverResult rechecks the process under its own lock.
+                        deliverResult(source, resultWho, requestCode,
+                                android.app.Activity.RESULT_CANCELED, null, sourceProcess);
+                    }
+                    SystemServer.log("startActivity: " + action + ": no role is available"
+                            + (answered ? "; RESULT_CANCELED to the requesting activity"
+                                    : resultToToken == null || requestCode < 0
+                                            ? "; no result requested"
+                                            : "; no result: the requester is not the caller's live activity"));
+                    return ActivityManager.START_SUCCESS;
+                }
                 // Apps such as Gmail open a channel's settings without first resolving
                 // the intent. With no Settings APK, START_INTENT_NOT_RESOLVED becomes
                 // an uncaught ActivityNotFoundException on their UI thread. Windows
