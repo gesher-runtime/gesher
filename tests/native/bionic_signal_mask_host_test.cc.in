@@ -4,6 +4,7 @@
 // This host fixture does not register Windows threads or call guest handlers.
 // Translator code classification and handler invocation are explicit boundaries;
 // accepting native SA_SIGINFO here does not qualify its Windows ucontext frame.
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -11,13 +12,45 @@
 #include <cstdio>
 #include <cerrno>
 #include <cstdlib>
+#include <limits>
 #include <mutex>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 #include "gesher/pending_signals.h"
 #define BIONIC_SYSV __attribute__((sysv_abi))
 
 @DECLARATIONS@
+
+#define CALLBACK
+using PTP_TIMER = void*;
+using PTP_CALLBACK_INSTANCE = void*;
+using PVOID = void*;
+using DWORD = uint32_t;
+struct FILETIME { DWORD low, high; };
+[[maybe_unused]] static constexpr int WAIT_TIMEOUT = 258;
+[[maybe_unused]] static int WaitForSingleObject(void*, int) { return WAIT_TIMEOUT; }
+using TimerCallback = void (*)(PTP_CALLBACK_INSTANCE, PVOID, PTP_TIMER);
+static TimerCallback timer_callback;
+static bool timer_creation_fails;
+static int64_t timer_due_ticks;
+static int64_t timer_now;
+static bool forked_child;
+static int alarm_worker_wakes;
+[[maybe_unused]] static PTP_TIMER CreateThreadpoolTimer(TimerCallback callback, PVOID, PVOID) {
+  if (timer_creation_fails) return nullptr;
+  timer_callback = callback;
+  return &timer_callback;
+}
+[[maybe_unused]] static void SetThreadpoolTimer(PTP_TIMER, const FILETIME* time, DWORD, DWORD) {
+  timer_due_ticks = time == nullptr ? 0 :
+      static_cast<int64_t>(static_cast<uint64_t>(time->high) << 32 | time->low);
+}
+namespace gesher {
+[[maybe_unused]] static int64_t MonotonicNanos() { return timer_now; }
+[[maybe_unused]] static bool InForkedChild() { return forked_child; }
+}
+[[maybe_unused]] static void WakeAlarmWorker() { ++alarm_worker_wakes; }
 
 // Only the members used by the extracted production routines are needed here.
 // The actual pending container owns its records; accounting is a host boundary.
@@ -30,9 +63,16 @@ struct ThreadState {
   std::atomic<bool> any_pending{false};
   BionicStack alt_stack{nullptr, 2 /* SS_DISABLE */, 0};
   uint64_t waiting_for = 0;
+  void* lifetime = nullptr;
+  bool internal = false;
 };
 struct State {
   std::mutex mutex;
+  PTP_TIMER real_timer = nullptr;
+  int64_t real_deadline = 0;
+  int64_t real_interval = 0;
+  bool real_armed = false;
+  std::unordered_map<uint32_t, ThreadState*> threads;
   std::condition_variable sent;
   BionicSigaction actions[kNsig] = {};
   gesher::signals::Pending<BionicSiginfo> process_pending;
@@ -56,6 +96,8 @@ bool IsGuestCode(const void* address) {
 thread_local ThreadState* t_state = &state;
 static bool guest_context_available = false;
 bool GuestContextAvailable() { return guest_context_available; }
+
+@INTERVAL_TIMER@
 
 @ACTION_HELPERS@
 
@@ -580,7 +622,79 @@ static std::mutex watchdog_mutex;
 static std::condition_variable watchdog_done;
 static bool finished;
 
+#ifdef GESHER_TEST_INTERVAL_TIMER
+static void IntervalTimer() {
+  phase = "process real interval timer";
+  variation = 0;
+  Reset(Bit(kSigalrm));
+  S().threads.emplace(1, &state);
+  timer_now = 1000000000;
+  AlarmItimerval setup{{0, 5000}, {0, 10000}}, old{};
+  timer_creation_fails = true;
+  check("failed Windows timer creation reports EAGAIN and leaves no timer",
+        Setitimer(0, &setup, nullptr) == -1 && errno == kEAGAIN && !S().real_armed);
+  timer_creation_fails = false;
+  check("periodic timer shares its process state with getitimer",
+        Setitimer(0, &setup, &old) == 0 && old.value.sec == 0 && old.value.usec == 0 &&
+        Getitimer(0, &old) == 0 && old.value.usec == 10000 && old.interval.usec == 5000 &&
+        timer_due_ticks == -100000);
+  timer_now += 1000000;
+  timer_callback(nullptr, nullptr, S().real_timer);
+  check("early callback does not generate SIGALRM and preserves deadline",
+        (S().process_pending.Mask() & Bit(kSigalrm)) == 0 && timer_due_ticks == -90000);
+  timer_now += 9000000;
+  timer_callback(nullptr, nullptr, S().real_timer);
+  timer_now += 22000000;
+  timer_callback(nullptr, nullptr, S().real_timer);
+  check("blocked SIGALRM remains pending without periodic Windows wakes",
+        S().process_pending.Mask() == Bit(kSigalrm) && !S().real_armed &&
+        alarm_worker_wakes == 0 && Getitimer(0, &old) == 0 && old.value.usec == 0 &&
+        old.interval.usec == 5000);
+  BionicSiginfo info{};
+  {
+    std::lock_guard<std::mutex> lock(S().mutex);
+    PopProcessPending(kSigalrm, &info);
+  }
+  check("consuming pending SIGALRM forwards periodic deadline on its original phase",
+        info.code == kSiKernel && info.pid == 0 && info.uid == 0 &&
+        !S().process_pending.Mask() && timer_due_ticks == -30000);
+  setup.value.usec = 1000000;
+  check("bad replacement and unsupported CPU timers preserve real timer",
+        Setitimer(0, &setup, &old) == -1 && errno == kEINVAL &&
+        Getitimer(1, &old) == -1 && errno == kENOSYS &&
+        Getitimer(0, &old) == 0 && old.value.usec == 3000);
+  check("alarm returns nonzero for a subsecond remainder and replaces it",
+        Alarm(3) == 1 && Getitimer(0, &old) == 0 && old.value.sec == 3 &&
+        old.interval.usec == 0);
+  check("aliased setitimer copies the input before writing previous state",
+        (setup = {{0, 2000}, {0, 5000}}, Setitimer(0, &setup, &setup)) == 0 &&
+        setup.value.sec == 3 && Getitimer(0, &old) == 0 && old.value.usec == 5000);
+  check("disarming ignores nonzero interval and stops the owned timer",
+        Setitimer(0, nullptr, &old) == 0 && old.interval.usec == 2000 &&
+        timer_due_ticks == 0 && !S().real_armed);
+  timer_now += 20000000;
+  timer_callback(nullptr, nullptr, S().real_timer);
+  check("stale callback after disarm cannot synthesize a signal", !S().process_pending.Mask());
+
+  forked_child = true;
+  check("fork child reports that it cannot arm the absent thread pool",
+        (setup = {{}, {0, 1000}}, Setitimer(0, &setup, nullptr)) == -1 && errno == kENOSYS);
+  forked_child = false;
+  state.mask = 0;
+  check("unblocked plain alarm arms", Setitimer(0, &setup, nullptr) == 0);
+  timer_now += 1000000;
+  timer_callback(nullptr, nullptr, S().real_timer);
+  check("unblocked alarm can wake the existing signal worker",
+        alarm_worker_wakes == 1 && S().process_pending.Mask() == Bit(kSigalrm));
+  S().threads.clear();
+  S().process_pending.Clear();
+}
+#endif
+
 int main() {
+#ifdef GESHER_TEST_INTERVAL_TIMER
+  IntervalTimer();
+#endif
   // A wait that blocks would hang forever; report it as a failure instead.
   std::thread watchdog([] {
     std::unique_lock<std::mutex> lock(watchdog_mutex);

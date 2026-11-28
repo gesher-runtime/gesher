@@ -131,6 +131,11 @@ static void Pop(FixturePending& pending, int sig, BionicSiginfo* info) {
   }
   pending.Discard(sig);
 }
+// The process queue's dequeue hook (signal_bionic.cc). The interval timer it
+// re-arms on SIGALRM is outside this sleep boundary.
+[[maybe_unused]] static void PopProcessPending(int sig, BionicSiginfo* info) {
+  Pop(S().process_pending, sig, info);
+}
 
 @SIGNAL_SLEEP@
 @SLEEP_HELPERS@

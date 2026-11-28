@@ -11,6 +11,7 @@
 #include <poll.h>
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <vector>
 #include "poll_scratch.h"
@@ -59,6 +60,15 @@ using gesher::Epoll;
 static int adapted_epoll_wait(int fd, epoll_event* events, int count, int timeout) {
   return EpollWaitImpl(fd, events, count, timeout, nullptr, nullptr);
 }
+// epoll_ctl records whether a registered descriptor is a socket. A source from
+// before that field (a --source-ref control) has nothing to record.
+template <typename EntryType>
+static void RecordSocketEntry(EntryType& entry, int fd) {
+  if constexpr (requires { entry.is_socket; }) {
+    struct stat info{};
+    entry.is_socket = ::fstat(fd, &info) == 0 && S_ISSOCK(info.st_mode);
+  }
+}
 static int adapted_epoll_create1(int) {
   int fd = ::eventfd(0, EFD_NONBLOCK);
   std::lock_guard<std::mutex> lock(gesher::registry_lock);
@@ -69,7 +79,13 @@ static int adapted_epoll_ctl(int fd, int operation, int item, epoll_event* event
   auto ep = gesher::LookupEpoll(fd);
   std::lock_guard<std::mutex> lock(ep->mutex);
   if (operation == EPOLL_CTL_DEL) ep->entries.erase(item);
-  else ep->entries[item] = {event->events, event->data, ep->next_id++, true, {}};
+  else {
+    auto& entry = ep->entries[item];
+    entry = {};
+    entry.events = event->events; entry.data = event->data;
+    entry.id = ep->next_id++; entry.armed = true;
+    RecordSocketEntry(entry, item);
+  }
   return 0;
 }
 static int adapted_dup(int fd) {

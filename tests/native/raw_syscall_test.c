@@ -64,6 +64,8 @@ static long raw6(long nr, long a, long b, long c, long d, long e, long f) {
     return r;
 }
 
+#include "raw_file_syscall_contract.inc"
+
 // The kernel clobbers %rcx and %r11 and keeps everything else.
 static int raw_keeps_registers(void) {
     long r, rbx = 0x1111, r12 = 0x2222, r13 = 0x3333;
@@ -112,7 +114,12 @@ static void check_patched_code(void) {
     check("code written at run time runs again", patched_getpid() == getpid());
 }
 
+static long descriptor_raw2(long nr, long a, long b) { return raw3(nr, a, b, 0); }
+
+#include "raw_descriptor_syscall_contract.inc"
+
 int gesher_selftest(void) {
+    test_raw_descriptor_syscalls(descriptor_raw2);
     errno = EDOM;
     check("raw success preserves libc errno", raw0(SYS_getpid) == getpid() && errno == EDOM);
     errno = EDOM;
@@ -203,6 +210,7 @@ int gesher_selftest(void) {
     check("syscall(2) success preserves errno", syscall(SYS_getpid) == getpid() && errno == EDOM);
     errno = 0;
     check("syscall(2) failure sets errno", syscall(SYS_close, 12345) == -1 && errno == EBADF);
+    test_raw_file_syscalls();
 
     // /proc/self/auxv, which UPX's unpacker reads through raw openat/read.
     long auxv = raw3(SYS_openat, -100, (long)"/proc/self/auxv", 0);

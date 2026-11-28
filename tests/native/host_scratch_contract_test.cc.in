@@ -399,11 +399,26 @@ void erase_fd(int fd) {
   }
   ::close(fd);
 }
+// epoll_ctl records whether a registered descriptor is a socket. A source from
+// before that field (a --source-ref control) has nothing to record.
+template <typename EntryType>
+void record_socket_entry(EntryType& entry, int fd) {
+  if constexpr (requires { entry.is_socket; }) {
+    struct stat info{};
+    entry.is_socket = ::fstat(fd, &info) == 0 && S_ISSOCK(info.st_mode);
+  }
+}
 void edit_entry(int epfd, int fd, uint32_t flags, uint64_t value, bool remove = false) {
   auto ep = gesher::LookupEpoll(epfd);
   std::lock_guard<std::mutex> lock(ep->mutex);
   if (remove) ep->entries.erase(fd);
-  else ep->entries[fd] = {flags, {.u64 = value}, ep->next_id++, true, {}};
+  else {
+    auto& entry = ep->entries[fd];
+    entry = {};
+    entry.events = flags; entry.data.u64 = value;
+    entry.id = ep->next_id++; entry.armed = true;
+    record_socket_entry(entry, fd);
+  }
   ep->NotifyLocked();
 }
 template <typename EpollState>
