@@ -24,6 +24,17 @@ rechecks evidence before writing, and revokes a success if a new attempt is
 observed immediately afterwards. API errors fail closed. A schedule and a
 reporting-only manual dispatch recover missed events without rerunning CI.
 
+Aggregate discovery uses the named latest check in the canonical workflow
+run's check suite. Its GitHub Actions job link locates an individual job, whose
+ID, name, run ID, exact `run_attempt`, head and check back-reference must match.
+The check's publisher/head/suite/link are verified before discovery and again
+on readback. A green check from an older attempt is rejected. This avoids the
+job-list endpoints that returned HTTP 502 for successful CI run `46020002278`,
+attempt 2, on 2026-11-28. The changed production reader verified that run and
+the corresponding ARM64 run using read-only live API calls; authenticated App
+publication still requires post-merge validation. No requirement, permission,
+aggregate success condition or fail-closed behavior is removed.
+
 The automerge controller records outcomes as local step output. A separate
 step publishes an App check with a link to that workflow's logs. Confirmed
 protected merges are success, waiting/no merge is neutral, and controller
@@ -39,6 +50,23 @@ status gets another ID and is rejected. Any creator supplied in a readback is
 also checked. The previous implementation incorrectly required this omitted
 field, which was confirmed by live run `45991130949` on 2026-11-27. The QA flag
 was restored to unset after that validation failure, pending this correction.
+
+The subsequent activation failed readback again in run `46001151940`, while a
+read-only replay accepted a settled live receipt. The immediate failing
+response was not logged, so delayed visibility is a hypothesis rather than a
+proven diagnosis of that particular response. `GESHER_APP_QA_STATUS` was set
+to `false` on 2026-11-27; CI reporting remains enabled and Required rules remain
+unchanged.
+
+Immediately after its own POST, the QA writer now permits up to six combined
+reads, one second apart, only while the context is missing or has an older
+numeric status ID. It requests cache revalidation and never repeats the POST.
+The exact authenticated receipt must become current before it proceeds. A newer
+ID, conflicting receipt metadata, invalid ID/head/source, or API error still fails
+closed. Later pre-release checks do not retry a previously confirmed receipt.
+An exhausted/mismatched readback reports the expected and observed ID/state for
+diagnosis. Tests simulate lag, exhaustion, replacement during a retry and QA
+revocation during publication. A new live rollout is still required after merge.
 
 ## Deployment
 

@@ -93,6 +93,8 @@
                     <StackPanel Name="SwitchList"/>
                     <TextBlock Name="SwitchError" FontSize="12" Foreground="#D92D20" TextWrapping="Wrap" Margin="0,6,0,0" Visibility="Collapsed"/>
                 </StackPanel>
+                <Button Name="BtnRevokeAdmin" HorizontalAlignment="Left" Margin="0,12,0,0" Visibility="Collapsed"/>
+                <TextBlock Name="AdminStatus" FontSize="12" Foreground="#D92D20" TextWrapping="Wrap" Margin="0,6,0,0" Visibility="Collapsed"/>
             </StackPanel>
 
             <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right">

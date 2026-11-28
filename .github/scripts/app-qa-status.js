@@ -6,6 +6,7 @@ const APP_STATUS = 'qa/gesher-label-approval';
 const APP_ID = 5816428;
 const INSTALLATION_ID = 183304638;
 const BOT_ID = 358279050;
+const READBACK = {attempts: 6, delayMs: 1000};
 
 function trustedStatus(value, owner, repo, sha, context, state) {
   const writer = context === APP_STATUS ? {id: BOT_ID, login: APP_SLUG + '[bot]'} :
@@ -44,34 +45,45 @@ module.exports = ({github, readGithub = github, appGithub, owner, repo, enabled 
     }
   };
   const valid = (value, sha, state) => trustedStatus(value, owner, repo, sha, APP_STATUS, state);
-  const current = async (sha, receipt) => {
+  const current = async (sha, receipt, waitForPublication = false) => {
     if (!valid(receipt, sha, receipt?.state))
       throw new Error('Gesher App QA receipt has an invalid source');
-    // Combined status returns the current row per context, avoiding a growing
-    // full history scan on every controller event. Still paginate contexts.
-    const values = await list(async args => {
-      const response = await readGithub.rest.repos.getCombinedStatusForRef(args);
-      if (response.data.sha !== sha) throw new Error('Gesher App QA status readback head mismatch');
-      return response;
-    }, {owner, repo, ref: sha}, 'statuses');
-    const matching = values.filter(s => s.context === APP_STATUS);
-    if (matching.some(s => !Number.isSafeInteger(s.id) || s.id <= 0))
-      throw new Error('Gesher App QA status has an invalid identity');
-    const latest = matching.sort((a, b) => b.id - a.id)[0];
-    // The combined-status API omits creator. Authenticate the full receipt
-    // returned by createCommitStatus, then require that immutable status ID to
-    // remain current with the same repository/head/context/state. A status
-    // update creates a new ID; it cannot transfer this ID to another writer.
-    if (!latest || latest.id !== receipt.id || latest.context !== APP_STATUS ||
-        latest.state !== receipt.state || latest.url !== receipt.url ||
-        (Object.hasOwn(latest, 'creator') && !valid(latest, sha, receipt.state)))
-      throw new Error('Gesher App QA status is missing, replaced or from a different source');
+    const attempts = waitForPublication ? READBACK.attempts : 1;
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      // Combined status returns the current row per context, avoiding a growing
+      // full history scan on every controller event. Still paginate contexts.
+      const values = await list(async args => {
+        const response = await readGithub.rest.repos.getCombinedStatusForRef(args);
+        if (response.data.sha !== sha) throw new Error('Gesher App QA status readback head mismatch');
+        return response;
+      }, {owner, repo, ref: sha, headers: {'cache-control': 'no-cache'}}, 'statuses');
+      const matching = values.filter(s => s.context === APP_STATUS);
+      if (matching.some(s => !Number.isSafeInteger(s.id) || s.id <= 0))
+        throw new Error('Gesher App QA status has an invalid identity');
+      const latest = matching.sort((a, b) => b.id - a.id)[0];
+      // The combined-status API omits creator. Authenticate the full receipt
+      // returned by createCommitStatus, then require that immutable status ID to
+      // remain current with the same repository/head/context/state. A status
+      // update creates a new ID; it cannot transfer this ID to another writer.
+      if (latest?.id === receipt.id && latest.context === APP_STATUS &&
+          latest.state === receipt.state && latest.url === receipt.url &&
+          (!Object.hasOwn(latest, 'creator') || valid(latest, sha, receipt.state))) return;
+      // A successful POST can precede visibility through the combined reader.
+      // Wait only for an absent/older row immediately after our own write. Never
+      // retry a replacement, conflicting receipt metadata or later release checks.
+      if ((!latest || latest.id < receipt.id) && attempt + 1 < attempts) {
+        await new Promise(resolve => setTimeout(resolve, READBACK.delayMs));
+        continue;
+      }
+      throw new Error('Gesher App QA status is missing, replaced or from a different source' +
+        ` (expected ${receipt.id}/${receipt.state}; observed ${latest?.id ?? 'missing'}/${latest?.state ?? 'missing'})`);
+    }
   };
   const app = async (sha, ok) => {
     const input = args(sha, ok, APP_STATUS);
     const {data} = await appGithub.rest.repos.createCommitStatus(input);
     if (!valid(data, sha, input.state)) throw new Error('Gesher App QA status write identity mismatch');
-    await current(sha, data);
+    await current(sha, data, true);
     return data;
   };
   return {
@@ -114,4 +126,4 @@ async function appRequiredByRuleset(github, owner, repo) {
       check?.context === APP_STATUS && check.integration_id === APP_ID));
 }
 Object.assign(module.exports, {STATUS, APP_STATUS, APP_ID, INSTALLATION_ID,
-  appRequiredByRuleset, trustedStatus});
+  appRequiredByRuleset, trustedStatus, READBACK});

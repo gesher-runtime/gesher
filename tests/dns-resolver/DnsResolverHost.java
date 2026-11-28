@@ -583,9 +583,15 @@ public final class DnsResolverHost {
     }
 
     static void awaitQueuedTimeoutRetirement(long end) throws Exception {
+        awaitQueuedTimeoutRetirement(end, null);
+    }
+
+    static void awaitQueuedTimeoutRetirement(long end, CountDownLatch observationWaiting) throws Exception {
         until(() -> {
             Snapshot state = snapshot();
-            return state.requests == 32 && state.lookupQueue == 0;
+            boolean retired = state.requests == 32 && state.lookupQueue == 0;
+            if (!retired && observationWaiting != null) observationWaiting.countDown();
+            return retired;
         }, "queued timeout unlinks; timed-out uncancelable lookups keep their slots", end);
     }
 
@@ -596,11 +602,12 @@ public final class DnsResolverHost {
         check(observations.get() == 1, "a successful wait samples its predicate only once");
         CountDownLatch nativeReturn = new CountDownLatch(1), executorReturn = new CountDownLatch(1);
         CountDownLatch queuedCallbackReturned = new CountDownLatch(1), observationDone = new CountDownLatch(1);
+        CountDownLatch observationWaiting = new CountDownLatch(1);
         AtomicReference<Throwable> observationFailure = new AtomicReference<>();
         Counts<List<InetAddress>> callbacks = new Counts<>();
         backend((network, name) -> { awaitUninterruptibly(nativeReturn); return SMALL; });
         Thread observer = new Thread(() -> {
-            try { awaitQueuedTimeoutRetirement(System.nanoTime() + TimeUnit.SECONDS.toNanos(8)); }
+            try { awaitQueuedTimeoutRetirement(System.nanoTime() + TimeUnit.SECONDS.toNanos(8), observationWaiting); }
             catch (Throwable failure) { observationFailure.set(failure); }
             finally { observationDone.countDown(); }
         }, "DnsDeadline-retirement-observer");
@@ -632,7 +639,10 @@ public final class DnsResolverHost {
             check(WindowsNetworks.active.get() == 32 && WindowsNetworks.calls.get() == 32,
                     "controlled timeouts cannot retire or replace actual native calls");
             observer.start();
-            until(() -> observationDone.getCount() == 0 || observer.getState() == Thread.State.TIMED_WAITING,
+            // Thread.getState() is transient: a sleep seen by until's loop may end
+            // before its final condition check, or both polling threads may wake in
+            // phase. Observe the real ownership predicate through a stable latch.
+            until(() -> observationDone.getCount() == 0 || observationWaiting.getCount() == 0,
                     "retirement observation reaches its bounded wait");
             if (observationFailure.get() != null)
                 throw new AssertionError("callback notification is not Executor retirement", observationFailure.get());

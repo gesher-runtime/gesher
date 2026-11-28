@@ -299,6 +299,8 @@ public final class Launcher {
                 return MobileDataCommands.run(rest);
             case "windows": return windows(rest);
             case "special-access": return specialAccess(rest);
+            case "device-admin": return deviceAdmin(rest);
+            case "accounts": return accounts(rest);
             case "settings-closed": return settingsClosed(rest, false);
             case "settings-shown": return settingsClosed(rest, true);
             case "view": {
@@ -417,6 +419,20 @@ public final class Launcher {
      * standard output: {@code special-access}, the op's public name and {@code allowed} or
      * {@code denied}, separated by tabs. The device checks the package and the op.
      */
+    private static int deviceAdmin(List<String> args) throws Exception {
+        if (args.size() != 1 && (args.size() != 2 || !"revoke".equals(args.get(1)))) return usage();
+        if (ensureDevice(false) == null) return 3;
+        try {
+            boolean active = gesher().deviceAdmin(args.get(0), args.size() == 2);
+            System.out.println("device-admin\t" + (active ? "active" : "inactive"));
+            return 0;
+        } catch (UnsupportedOperationException unavailable) {
+            log(unavailable.getMessage()); return 4;
+        } catch (IllegalArgumentException | IllegalStateException | SecurityException failure) {
+            log(failure.getMessage()); return 1;
+        }
+    }
+
     private static int specialAccess(List<String> args) throws Exception {
         if (args.size() != 1 && args.size() != 3 && args.size() < 6) return usage();
         if (args.size() >= 3 && !"allow".equals(args.get(2)) && !"deny".equals(args.get(2))) {
@@ -455,6 +471,65 @@ public final class Launcher {
         for (String row : rows) out.println("special-access\t" + row);
         out.flush();
         return 0;
+    }
+
+    /**
+     * {@code accounts [list | remove TYPE NAME]}: lists saved accounts ({@code account TAB type
+     * TAB name}) or removes one on explicit host request.
+     */
+    private static int accounts(List<String> args) throws Exception {
+        boolean list = args.isEmpty() || (args.size() == 1 && ("list".equals(args.get(0)) || "list-encoded".equals(args.get(0))));
+        boolean remove = args.size() == 3 && ("remove".equals(args.get(0)) || "remove-encoded".equals(args.get(0)));
+        if (!list && !remove) return usage();
+        ensureDevice(true);
+        return accounts(gesher(), args, System.out);
+    }
+
+    static int accounts(GesherService.Client gesher, List<String> args,
+            java.io.PrintStream out) throws Exception {
+        try {
+            if (args.size() == 3 && ("remove".equals(args.get(0)) || "remove-encoded".equals(args.get(0)))) {
+                boolean encoded = "remove-encoded".equals(args.get(0));
+                String type = encoded ? decodeAccountField(args.get(1)) : args.get(1);
+                String name = encoded ? decodeAccountField(args.get(2)) : args.get(2);
+                if (!gesher.removeAccount(type, name)) {
+                    log(text("account_not_found", name));
+                    return 1;
+                }
+                out.println("account-removed");
+                out.flush();
+                return 0;
+            }
+            boolean encoded = args.size() == 1 && "list-encoded".equals(args.get(0));
+            for (String row : gesher.listAccounts()) {
+                if (encoded) out.println("account64\t" + row);
+                else {
+                    String[] fields = row.split("\\t", -1);
+                    if (fields.length != 2) throw new IllegalStateException("Invalid account row");
+                    out.println("account\t" + decodeAccountField(fields[0]) + "\t" + decodeAccountField(fields[1]));
+                }
+            }
+            out.flush();
+            return 0;
+        } catch (UnsupportedOperationException e) {
+            log(e.getMessage());
+            return 4;
+        } catch (IllegalArgumentException | IllegalStateException | SecurityException e) {
+            log(e.getMessage());
+            return 1;
+        }
+    }
+
+    /** Internal panel transport is ASCII so Windows console code pages cannot change identity. */
+    private static String decodeAccountField(String value) {
+        try {
+            return java.nio.charset.StandardCharsets.UTF_8.newDecoder()
+                    .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+                    .decode(java.nio.ByteBuffer.wrap(java.util.Base64.getDecoder().decode(value))).toString();
+        } catch (java.nio.charset.CharacterCodingException e) {
+            throw new IllegalArgumentException("Invalid account encoding", e);
+        }
     }
 
     /**
@@ -503,7 +578,7 @@ public final class Launcher {
                 + " true|false]... [--proxy host:port|socks5://host:port|direct|windows]"
                 + " [--window | --hidden-window | --headless [--keep-task]] [--detach | --wait]"
                 + " | proxy [[PACKAGE] host:port|socks5://host:port|direct|windows] | windows PACKAGE separate|shared"
-                + " | special-access PACKAGE [OP allow|deny] | install APK [--desktop-shortcut] | uninstall PACKAGE | view PACKAGE URL | list | status | start"
+                + " | special-access PACKAGE [OP allow|deny] | accounts [list | remove TYPE NAME] | install APK [--desktop-shortcut] | uninstall PACKAGE | view PACKAGE URL | list | status | start"
                 + " | shutdown | apk-icon APK | apk-info APK OUT [SNAPSHOT_DIR] | spell-checker list|use COMPONENT|automatic|enable|disable|language ID"
                 + " | " + MobileDataCommands.USAGE);
         return 2;

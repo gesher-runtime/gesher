@@ -34,20 +34,32 @@ async function evidence(github, owner, repo, pr, source) {
     return {...result, ...pending('Waiting for the current workflow attempt')};
   if (run.conclusion !== 'success')
     return {...result, state: 'failure', description: 'The current workflow attempt did not succeed'};
-  const jobs = await list(github.rest.actions.listJobsForWorkflowRunAttempt,
-    {owner, repo, run_id: run.id, attempt_number: run.run_attempt}, 'jobs');
-  const gates = jobs.filter(job => job.name === source.job);
-  if (gates.length !== 1) throw new Error('Required aggregate job is missing or ambiguous');
-  const job = gates[0];
-  const prefix = `https://api.github.com/repos/${owner}/${repo}/check-runs/`;
-  const id = job.check_run_url?.startsWith(prefix) ? Number(job.check_run_url.slice(prefix.length)) : NaN;
-  if (!positive(job.id) || job.run_id !== run.id || job.head_sha !== pr.head.sha || !positive(id))
-    throw new Error('Required aggregate job does not belong to this run/head');
-  const {data: check} = await github.rest.checks.get({owner, repo, check_run_id: id});
-  if (check.id !== id || check.name !== source.job || check.app?.id !== 15368 ||
-      check.head_sha !== pr.head.sha || check.check_suite?.id !== run.check_suite_id)
+  // Listing all attempt jobs can return HTTP 502 even for successful runs. Locate the
+  // named aggregate in this run's check suite, then read only its individual
+  // job. A successful check from an older attempt is never sufficient evidence.
+  const checks = await list(github.rest.checks.listForSuite, {owner, repo,
+    check_suite_id: run.check_suite_id, check_name: source.job, filter: 'latest'}, 'check_runs');
+  const gates = checks.filter(check => check.name === source.job);
+  if (gates.length !== 1) throw new Error('Required aggregate check is missing or ambiguous');
+  const gate = gates[0];
+  const validCheck = check => positive(check?.id) && check.id === gate.id &&
+    check.name === source.job && check.app?.id === 15368 &&
+    check.head_sha === pr.head.sha && check.check_suite?.id === run.check_suite_id;
+  if (!validCheck(gate)) throw new Error('Required aggregate check identity mismatch');
+  const prefix = `https://github.com/${owner}/${repo}/actions/runs/${run.id}/job/`;
+  const suffix = gate.details_url?.startsWith(prefix) ? gate.details_url.slice(prefix.length) : '';
+  const jobId = /^[1-9]\d*$/.test(suffix) ? Number(suffix) : NaN;
+  if (!positive(jobId)) throw new Error('Required aggregate check has an invalid job link');
+  const {data: job} = await github.rest.actions.getJobForWorkflowRun({owner, repo, job_id: jobId});
+  if (job.id !== jobId || job.name !== source.job || job.run_id !== run.id ||
+      job.run_attempt !== run.run_attempt || job.head_sha !== pr.head.sha ||
+      job.check_run_url !== `https://api.github.com/repos/${owner}/${repo}/check-runs/${gate.id}`)
+    throw new Error('Required aggregate job does not belong to this run/attempt/head/check');
+  const {data: check} = await github.rest.checks.get({owner, repo, check_run_id: gate.id});
+  if (!validCheck(check) || check.details_url !== gate.details_url)
     throw new Error('Required aggregate check identity mismatch');
-  result.fingerprint += JSON.stringify([job.id, job.status, job.conclusion, check.id, check.status, check.conclusion]);
+  result.fingerprint += JSON.stringify([job.id, job.run_attempt, job.status, job.conclusion,
+    check.id, check.status, check.conclusion]);
   const success = job.status === 'completed' && job.conclusion === 'success' &&
     check.status === 'completed' && check.conclusion === 'success';
   return {...result, state: success ? 'success' : 'failure',
