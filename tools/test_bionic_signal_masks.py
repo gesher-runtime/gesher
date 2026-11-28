@@ -75,6 +75,8 @@ def main() -> int:
                function(source, "void Pop("),
                function(source, "int TakeDeliverable("),
                function(source, "int DeliverAll(")]
+    # TakeDeliverable's locked body precedes it, after every helper it calls.
+    helpers[4] = "\n".join(locked_delivery + [helpers[4]])
     # The wait-set filter; a historical --source-ref passes the set unfiltered.
     wait_set = ([function(source, "uint64_t WaitSet(")]
                 if "uint64_t WaitSet(" in source else [])
@@ -90,7 +92,7 @@ def main() -> int:
     structs.append(function(shim, "struct LinuxTimespec {") + ";")
     replacements = {
         "@DECLARATIONS@": "\n".join(declarations + structs + bodies[:1 + len(filters)]),
-        "@ACTION_HELPERS@": "\n".join(guest + helpers[:4] + locked_delivery + helpers[4:5]),
+        "@ACTION_HELPERS@": "\n".join(guest + helpers[:5]),
         "@DELIVER_ALL@": helpers[5],
         "@ENTRY_POINTS@": "\n".join(bodies[1 + len(filters):]),
         "@SUSPEND@": "\n".join(suspend),
@@ -102,7 +104,7 @@ def main() -> int:
         fixture = fixture.replace(marker, content)
     print("production source SHA256 " + hashlib.sha256(source.encode()).hexdigest(), flush=True)
     print("production entry bodies SHA256 " + hashlib.sha256("\n".join(bodies).encode()).hexdigest(), flush=True)
-    print("production delivery helpers SHA256 " + hashlib.sha256("\n".join(guest + helpers + locked_delivery + suspend).encode()).hexdigest(), flush=True)
+    print("production delivery helpers SHA256 " + hashlib.sha256("\n".join(guest + helpers + suspend).encode()).hexdigest(), flush=True)
     print("production pending container SHA256 " + hashlib.sha256(pending.encode()).hexdigest(), flush=True)
     with tempfile.TemporaryDirectory(prefix="gesher-bionic-masks-") as temporary:
         directory = Path(temporary)

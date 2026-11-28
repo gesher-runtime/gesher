@@ -25,8 +25,10 @@ def main():
                '-pthread', str(source), '-o', str(binary)]
     subprocess.run(command, check=True, timeout=60)
     cases = ['fifo', 'ignore', 'quota', 'priority', 'timeout', 'thread', 'handler',
-             'cross', 'stop', 'status', 'self-kill']
+             'cross', 'stop', 'status']
     results = []
+    # The process ends by its own SIGKILL; see expected_exit below.
+    cases.append('self-kill')
     for case in cases:
         started = time.monotonic()
         process = subprocess.Popen([str(binary), case, str(binary)], stdout=subprocess.PIPE,

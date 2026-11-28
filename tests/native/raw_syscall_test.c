@@ -75,6 +75,8 @@ static int raw_keeps_registers(void) {
     return r > 0 && rbx == 0x1111 && r12 == 0x2222 && r13 == 0x3333;
 }
 
+#include "positioned_vector_syscall_test.inc"
+
 // Two pages of the library's own code, written at run time.
 __asm__(".section .text.gesher_patch,\"ax\",@progbits\n"
         ".p2align 12\n"
@@ -112,8 +114,6 @@ static void check_patched_code(void) {
     check("stack guard in code written at run time", patched_guard() == covered_guard());
     check("code written at run time runs again", patched_getpid() == getpid());
 }
-
-#include "positioned_vector_syscall_test.inc"
 
 int gesher_selftest(void) {
     errno = EDOM;

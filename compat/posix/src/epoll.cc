@@ -955,8 +955,9 @@ int epoll_ctl(int epfd, int op, int fd, struct epoll_event* event) {
         break;
       case EPOLL_CTL_MOD:
         if (it == ep->entries.end()) return errno = ENOENT, -1;
+        // A modifiable entry is replaced below; its pipe alias goes with it.
+        if ((it->second.events & EPOLLEXCLUSIVE) == 0) ep->ForgetPipeAlias(it->first, it->second);
         if ((it->second.events & EPOLLEXCLUSIVE) != 0) return errno = EINVAL, -1;
-        ep->ForgetPipeAlias(it->first, it->second);
         it->second = {events, event->data, ep->next_id++, true, child};
         gesher::ConfigureOwnerEntry(it->second, key, owner, ep);
         gesher::ConfigureEventFdEntry(it->second, owner ? owner->object.eventfd : nullptr,
