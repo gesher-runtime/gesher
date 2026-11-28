@@ -1,0 +1,373 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-11-22T15:36:47.317731+00:00",
+  "scope": "Issue 178 JAVA-03 connectivity-demand leaf: actual Java production paths with a controlled host JNI network boundary.",
+  "candidate_source_commit": "6abea83774fe2e9b718e0d0ee1a22df06754be54",
+  "candidate_source_tree": "4848458d4c89fd75f6e4a00e128091bbd6a58478",
+  "source_base": "751d82310f7c4c470c098ccebfd5d2d04699a0cd",
+  "source_base_verification": "git fetch origin main and GitHub fetch_commit(main) both returned this source base on 2026-11-22. This is the tested source base, not a continuing freshness claim.",
+  "environment": {
+    "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+    "java_version": "openjdk 21.0.13.1 2026-11-17 LTS\nOpenJDK Runtime Environment Temurin-21.0.13.1+2 (build 21.0.13.1+2-LTS)\nOpenJDK 64-Bit Server VM Temurin-21.0.13.1+2 (build 21.0.13.1+2-LTS, mixed mode, sharing)",
+    "cc_version": "cc (Debian 14.2.0-19) 14.2.0",
+    "python_version": "3.12.14",
+    "windows_execution_available": false,
+    "native_backend": "framework_host.c delegates WindowsNetworks.snapshot and waitForChange to ConnectivityDemandHost; waitForChange uses real monotonic 15,000 ms waits for idle-trace.",
+    "boundary": "Binder identity/allocation, controlled endpoint death and package/process metadata are host fixtures; no real Binder transport or Windows network notification execution."
+  },
+  "experiment": {
+    "protocol": "Register listener, await first native wait, remove final owner, signal the already-admitted wait to drain, stabilize 250 ms, then measure 600,000 real milliseconds with no further events/owners. This does not measure native final-wait cancellation latency.",
+    "prepared_at": "2026-11-22T15:26:30.662889+00:00",
+    "production_sha256": {
+      "app/java/android/net/ConnectivityManager.java": "4e10e822b13f28fe1a02feab4892e8fd9ddb5bac66c4954f8b33aa25d78fcf09",
+      "app/java/com/gesher/server/ConnectivityService.java": "d47f5bd9bd9fb5b82cc3ec4cc97aa76166ead58857b8ebfa72a064d080c5edcb",
+      "app/java/com/gesher/server/StickyBroadcasts.java": "237bee92bc38ca63d9c6838f12a8d4f6fa0ed02474e3eea0acd28c10ce927d29",
+      "app/java/com/gesher/server/BroadcastController.java": "19b97b66ccb1ecd8e0c2f9d59ea826d86052614b410a83657b7377c48c065e4a",
+      "app/java/com/gesher/server/JobSchedulerService.java": "b9cc98d48f915639854834437f8fd5d6d90129bcc1c629a8936f3cd674396d87"
+    },
+    "baseline_production_sha256": {
+      "app/java/android/net/ConnectivityManager.java": "4e10e822b13f28fe1a02feab4892e8fd9ddb5bac66c4954f8b33aa25d78fcf09",
+      "app/java/com/gesher/server/ConnectivityService.java": "d9a4c0174fa8cab60d32b3f4bca3b49b8ca0b9e369363a1ea34d6d8740ee1da7",
+      "app/java/com/gesher/server/StickyBroadcasts.java": "3e3377fdde3a8480e0c18a1abfc2f3494b8d5dfdbaca80aaab08c45e56ca3265",
+      "app/java/com/gesher/server/BroadcastController.java": "355dc49d8c7e48bbd30d0eb8c1cd2cbb9e4224a15d1957d39e50a9ef0381903a",
+      "app/java/com/gesher/server/JobSchedulerService.java": "913e733dab2111b1232ba09b4275331f561df21b1525844c5cc84971ec93ae39"
+    },
+    "fixture_sha256": {
+      "tools/test_connectivity_callback_contracts.py": "b4565a668df718b86b5cd4b021f01ade33b41733fa64d734114e2655e528cb07",
+      "tests/connectivity-callback/ConnectivityCallbackHost.java": "db76fc8e43a19108c7a30407a8c483f9eacb9c693c7d3bc782a25942d679d5f7",
+      "tests/connectivity-callback/ConnectivityServiceSnapshotHost.java": "b9cc8e910a04b84d8f663fc74a8411a47a6dc0ea23c795c60d1d7b088a82ba62",
+      "tests/connectivity-callback/ConnectivityDemandHost.java": "26ac7ff37673c8884308d83318b7becaea98e0c2e66b69fd78b67334b94b1aca",
+      "tests/dex-services/gesher/services/JobSchedulerConstraintContractTest.java": "8078a82eeca7a09406deb605ed9f3fdcc2e213802016cb65c018fc859ae48c2c",
+      "tests/dex-services/gesher/services/ConnectivityCallbackContractTest.java": "8eedfb679381358afe9e803e1469bcc99d7d5e841800e603152e09ccb6d765f7",
+      "tests/component-caller/framework_host.c": "1916290236258c1faa3283d10de423a8636d14c47e52c26695139cb90b1f2e70",
+      "tests/connectivity-callback/framework_host.c": "2baf10dc8efc7fba62f7df69124dc0109070c58edcd1b7b38369476a33bbb99a",
+      "tests/location/framework_host.c": "b07e7d5ff9083c8553dd0d3510d3c055e2b9143b8d6167d952078ac5073d5f0e",
+      "tests/notification/framework_host.c": "d898980d0d2697e808efe9db1e89945678c88be2c39e46896f327a242be66b9e",
+      "tests/package/framework_host.c": "d35a2e907c8c95d4370ffb6867867236a969b15988ea5ad8380bd7ba75b8abd7",
+      "tests/pending-intent/framework_host.c": "e52c55601c81cf9e233a1772c60cc93265bf66d4957ab0acba9a5cf8bafb2444",
+      "tests/scheduler/framework_host.c": "1dde5525dab5787a9e84d0af46ee617434eee4559504ff8fe38a530f3d341991",
+      "tests/uri/framework_host.c": "c247716be3447d634129caa458c1081bba6d63a6a76ac84658a899ea367038de"
+    },
+    "fixture_identity": "Both runs used the same frozen fixture bytes; --source-ref replaces the five listed production Java source files only.",
+    "classpath_app_sha256": "2c270cf0c3c431ac70db7bed20ba90aa325f95cbe48a909907d8f6a7c54ed5c8",
+    "runs": {
+      "baseline": {
+        "command": [
+          "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+          "tools/test_connectivity_callback_contracts.py",
+          "--java-home",
+          "/workspace/scratch/27698f481fcc/deps-nov21/jdk-21.0.13.1+2",
+          "--framework-classes",
+          "/workspace/scratch/27698f481fcc/deps-nov21/framework-classes-unpacked",
+          "--core-classes",
+          "/workspace/scratch/27698f481fcc/deps-nov21/coremod",
+          "--app-classes",
+          "/workspace/scratch/d5a32fb63612/java03-check/app-final/gesher-app-classes.jar",
+          "--case",
+          "idle-trace",
+          "--trace-ms",
+          "600000",
+          "--source-ref",
+          "751d82310f7c4c470c098ccebfd5d2d04699a0cd"
+        ],
+        "shell_command": "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3 tools/test_connectivity_callback_contracts.py --java-home /workspace/scratch/27698f481fcc/deps-nov21/jdk-21.0.13.1+2 --framework-classes /workspace/scratch/27698f481fcc/deps-nov21/framework-classes-unpacked --core-classes /workspace/scratch/27698f481fcc/deps-nov21/coremod --app-classes /workspace/scratch/d5a32fb63612/java03-check/app-final/gesher-app-classes.jar --case idle-trace --trace-ms 600000 --source-ref 751d82310f7c4c470c098ccebfd5d2d04699a0cd",
+        "started_at": "2026-11-22T15:26:30.750147+00:00",
+        "log": "/workspace/scratch/d5a32fb63612/java03-idle-frozen-baseline.log",
+        "exit_code": 1,
+        "finished_observed_at": "2026-11-22T15:36:34.320351+00:00",
+        "log_sha256": "55ad7bd25569f09d6651f2ef1adade6ddd8384ec0a4fbb7308545e4fb70fc5e7",
+        "output": "ConnectivityDemandHost idle_trace elapsed_ms=600000 snapshots=40 waits=40 retained_watcher=true",
+        "elapsed_ms": 600000,
+        "snapshots": 40,
+        "further_waits": 40,
+        "retained_watcher": true,
+        "expected_result": "negative control assertion failure"
+      },
+      "candidate": {
+        "command": [
+          "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+          "tools/test_connectivity_callback_contracts.py",
+          "--java-home",
+          "/workspace/scratch/27698f481fcc/deps-nov21/jdk-21.0.13.1+2",
+          "--framework-classes",
+          "/workspace/scratch/27698f481fcc/deps-nov21/framework-classes-unpacked",
+          "--core-classes",
+          "/workspace/scratch/27698f481fcc/deps-nov21/coremod",
+          "--app-classes",
+          "/workspace/scratch/d5a32fb63612/java03-check/app-final/gesher-app-classes.jar",
+          "--case",
+          "idle-trace",
+          "--trace-ms",
+          "600000"
+        ],
+        "shell_command": "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3 tools/test_connectivity_callback_contracts.py --java-home /workspace/scratch/27698f481fcc/deps-nov21/jdk-21.0.13.1+2 --framework-classes /workspace/scratch/27698f481fcc/deps-nov21/framework-classes-unpacked --core-classes /workspace/scratch/27698f481fcc/deps-nov21/coremod --app-classes /workspace/scratch/d5a32fb63612/java03-check/app-final/gesher-app-classes.jar --case idle-trace --trace-ms 600000",
+        "started_at": "2026-11-22T15:26:30.750695+00:00",
+        "log": "/workspace/scratch/d5a32fb63612/java03-idle-frozen-candidate.log",
+        "exit_code": 0,
+        "finished_observed_at": "2026-11-22T15:36:34.321096+00:00",
+        "log_sha256": "fe6011215eb61aef47d80e8acb387a20d2d2311f498394917cab1829e225ea34",
+        "output": "ConnectivityDemandHost idle_trace elapsed_ms=600000 snapshots=0 waits=0 retained_watcher=false",
+        "elapsed_ms": 600000,
+        "snapshots": 0,
+        "further_waits": 0,
+        "retained_watcher": false,
+        "expected_result": "pass"
+      }
+    }
+  },
+  "local_regressions": {
+    "java03-connectivity-frozen.log": {
+      "sha256": "541d669e4ef8cd72152c22123fb5f761f9492b63d8557cc8a41edc3860f3fa1e",
+      "outcome_lines": [
+        "ConnectivityCallbackContractTest all passed: 80, parcel=false",
+        "ConnectivityServiceSnapshotHost all passed: 9",
+        "JobScheduler connectivity ownership passed; persisted_parcel=false",
+        "ConnectivityDemandHost all passed: 74 checks; max_native_waiters=1"
+      ]
+    },
+    "java03-scheduler-frozen.log": {
+      "sha256": "2b44deed1aaecaf77b8c1bdb127f16c2e72acabfad7bea4b8348eda0110ca660",
+      "outcome_lines": [
+        "JobSchedulerConstraintContractTest all passed: 397 checks",
+        "Scheduler work host all passed: 155 checks"
+      ]
+    },
+    "java03-app-final-build.log": {
+      "sha256": "2b1fb54c2e51e9a7f90d7a61d429e4f08c8c4df4eca776be98a6227f2498de84",
+      "outcome_lines": [
+        "CompatChangesGen: 10 changes (1 disabled, 3 enabled since an SDK, 6 enabled after an SDK, 0 logging only) in 31777 classes; 0 @ChangeId, 2849 compat annotations (Landroid/compat/annotation/UnsupportedAppUsage;); 10 in sources (0 unresolved), 38 version codes",
+        "gesher-app written to /workspace/scratch/d5a32fb63612/java03-check/app-final"
+      ]
+    },
+    "java03-services-frozen-build.log": {
+      "sha256": "cb79b60b7e73f204cb473ead7d93b823b937b43c644f75b4a0aff2c4555ec35c",
+      "outcome_lines": [
+        "services-tests.dex written to /workspace/scratch/d5a32fb63612/java03-check/services-final"
+      ]
+    },
+    "java03-demand-baseline.log": {
+      "sha256": "4564ab405054fad7a13c10eeccb1b4955abc47cfbe277474d180c855fdf6a726",
+      "outcome_lines": [
+        "Exception in thread \"main\" java.lang.AssertionError: Explicit removal retained its remote death recipient"
+      ]
+    },
+    "java03-windows-fixture-crosslink.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "outcome_lines": [
+        "LLVM-mingw x86_64 Windows shared-library compile/link exited 0; no target execution."
+      ]
+    }
+  },
+  "build_inputs": {
+    "framework_classes": {
+      "id": 14620400484,
+      "name": "framework-classes",
+      "size": 56875046,
+      "digest": "sha256:962a8d970a860c0bd09e4fd1cda32135a337cf9754bd20fed20739f08f7c4b61",
+      "created_at": "2026-11-20T10:11:18Z",
+      "run": {
+        "id": 44715261143,
+        "repository_id": 1426153186,
+        "head_repository_id": 1426153186,
+        "head_branch": "main",
+        "head_sha": "8e9d442ac7617d82d53f980e58806b107ce26e0f"
+      },
+      "actual_digest": "sha256:962a8d970a860c0bd09e4fd1cda32135a337cf9754bd20fed20739f08f7c4b61",
+      "directory": "/workspace/scratch/27698f481fcc/deps-nov21/framework-classes",
+      "scope": "Historical source-bound compile inputs only; not current candidate runtime evidence"
+    },
+    "framework_assets_core_inputs": {
+      "id": 14618943726,
+      "name": "framework-assets",
+      "size": 19470637,
+      "digest": "sha256:18e9e6670bff98559c92efa2c8098161500acb7748bfed9b07a146e8642532b0",
+      "created_at": "2026-11-20T10:04:17Z",
+      "run": {
+        "id": 44715261143,
+        "repository_id": 1426153186,
+        "head_repository_id": 1426153186,
+        "head_branch": "main",
+        "head_sha": "8e9d442ac7617d82d53f980e58806b107ce26e0f"
+      },
+      "actual_digest": "sha256:18e9e6670bff98559c92efa2c8098161500acb7748bfed9b07a146e8642532b0",
+      "directory": "/workspace/scratch/27698f481fcc/deps-nov21/framework-assets",
+      "scope": "Historical source-bound compile inputs only; not current candidate runtime evidence"
+    },
+    "jdk": {
+      "url": "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.13.1%2B2/OpenJDK21U-jdk_x64_linux_hotspot_21.0.13.1_2.tar.gz",
+      "size": 207869899,
+      "digest": "sha256:bb8a93f9ae6e7a693b2b721e85dbeff26ae1a77447985a8d7afcdd9c7cf6222e",
+      "name": "OpenJDK21U-jdk_x64_linux_hotspot_21.0.13.1_2.tar.gz",
+      "actual_digest": "sha256:bb8a93f9ae6e7a693b2b721e85dbeff26ae1a77447985a8d7afcdd9c7cf6222e",
+      "jdk_home": "/workspace/scratch/27698f481fcc/deps-nov21/jdk-21.0.13.1+2"
+    },
+    "source_compatibility_metadata": {
+      "url": "https://android.googlesource.com/platform/frameworks/base/+archive/android-16.0.0_r4/apex/jobscheduler/framework/java/android/app/job.tar.gz",
+      "bytes": 54997,
+      "archive_sha256": "c3c5328cf7a91103cccd739386ab3772e8f1bf83ca975805c841f41a12162a38",
+      "files": [
+        {
+          "path": "IJobCallback.aidl",
+          "sha256": "056428ffbb5b8a8a329656cdd8475e15ee0a680351c03074e84c142ebf55955a",
+          "implementer_matches": true,
+          "reverified_for_candidate": true
+        },
+        {
+          "path": "IJobScheduler.aidl",
+          "sha256": "312f56e2f4c58b4b4c908119508bd80cc7246fcbf246df0088068ff5c8f6664a",
+          "implementer_matches": true,
+          "reverified_for_candidate": true
+        },
+        {
+          "path": "IJobService.aidl",
+          "sha256": "c50753c1efc223a7ed82e90d0f963f638ff5cc3ec7b3f44920a3043f59e65f39",
+          "implementer_matches": true,
+          "reverified_for_candidate": true
+        },
+        {
+          "path": "IUserVisibleJobObserver.aidl",
+          "sha256": "f76e007650286d5c9e3803ba5a210a73652e0f4399568699f2ad101ad1197845",
+          "implementer_matches": true,
+          "reverified_for_candidate": true
+        },
+        {
+          "path": "JobInfo.aidl",
+          "sha256": "f60419510172c6485bd21c731c94a2131c0094d9d74ca5f96be290c9717c664f",
+          "implementer_matches": true,
+          "reverified_for_candidate": true
+        },
+        {
+          "path": "JobInfo.java",
+          "sha256": "ff5e00c9dfb6262a040c0c6e88eccfe2969954870955a42373392fbc508864c6",
+          "implementer_matches": true,
+          "reverified_for_candidate": true
+        },
+        {
+          "path": "JobParameters.aidl",
+          "sha256": "0f546ce3e620af77ca31e98578c9bb7e9d31cb54a4d7e59ab210c8b519539de3",
+          "implementer_matches": true,
+          "reverified_for_candidate": true
+        },
+        {
+          "path": "JobParameters.java",
+          "sha256": "644b94f9f10b94b3d55ff46b591a20375e86b63cc02426849f93c76a70b625f9",
+          "implementer_matches": true,
+          "reverified_for_candidate": true
+        },
+        {
+          "path": "JobScheduler.java",
+          "sha256": "2b478bb3350e88cae995199681b98d419d8db58e255045bdc6919b6dcc261a10",
+          "implementer_matches": true,
+          "reverified_for_candidate": true
+        },
+        {
+          "path": "JobSchedulerFrameworkInitializer.java",
+          "sha256": "8934bf60cf51efd4687f12890f752ddb448b4321224595118cc3cb049ab2c5e9",
+          "implementer_matches": true,
+          "reverified_for_candidate": true
+        },
+        {
+          "path": "JobService.java",
+          "sha256": "e6ba9754bef62cd6d3df45851f7aa648c18cc8dbe793288bd1a2d40af979d5b4",
+          "implementer_matches": true,
+          "reverified_for_candidate": true
+        },
+        {
+          "path": "JobServiceEngine.java",
+          "sha256": "eeed7569d3620347c18a0dda1a7d0c4e27d94fa01f5f0aace5f3060c6fdf84b8",
+          "implementer_matches": true,
+          "reverified_for_candidate": true
+        },
+        {
+          "path": "JobSnapshot.aidl",
+          "sha256": "b41995749bb176172bbef6c663c323b10ee084631d5d86d0f13d1ea471457d2e",
+          "implementer_matches": true,
+          "reverified_for_candidate": true
+        },
+        {
+          "path": "JobSnapshot.java",
+          "sha256": "5284636412ca1e87c573d7e32c377b9bf0bb313c597a59daaa60ef56a1c79bc9",
+          "implementer_matches": true,
+          "reverified_for_candidate": true
+        },
+        {
+          "path": "JobWorkItem.aidl",
+          "sha256": "e066bd11a88c6878822b320af8f810ec585f660b3b2b98a6def6b478337fe0e5",
+          "implementer_matches": true,
+          "reverified_for_candidate": true
+        },
+        {
+          "path": "JobWorkItem.java",
+          "sha256": "0b67e97eb1a1340b247290658256ce75d4a0b2e181c90228792a02ef44486ba7",
+          "implementer_matches": true,
+          "reverified_for_candidate": true
+        },
+        {
+          "path": "PendingJobReasonsInfo.aidl",
+          "sha256": "b0e68181d882d5d27fd0388b9c76d71f81f9bf879afdc649dc760ccd25b6a689",
+          "implementer_matches": true,
+          "reverified_for_candidate": true
+        },
+        {
+          "path": "PendingJobReasonsInfo.java",
+          "sha256": "b2c4bef27d0f7e586ccb9a589014ae6c0edcc628b1b8b8c795a3ec8f365da370",
+          "implementer_matches": true,
+          "reverified_for_candidate": true
+        },
+        {
+          "path": "UserVisibleJobSummary.aidl",
+          "sha256": "8c99a5d58b401b9dabbb5de571267c84db58a3de4b8d6980a1b986908a703433",
+          "implementer_matches": true,
+          "reverified_for_candidate": true
+        },
+        {
+          "path": "UserVisibleJobSummary.java",
+          "sha256": "0b4105d45990649fe51514475a99dfc1a2a164709dfd4ea651550dc30689ea9a",
+          "implementer_matches": true,
+          "reverified_for_candidate": true
+        }
+      ],
+      "scope": "Genuine SOURCE-retained compatibility metadata for local app build; not the entire CI AOSP checkout."
+    },
+    "initial_input_issue": "The earlier local AOSP_DIR lacked JobScheduler SOURCE-retained compatibility annotations. The existing abandoned-job test failed. Using the genuine pinned 20-file source directory restored the original default-disabled change; no assertion, generated value, permission, pin or workflow was changed.",
+    "compiled_artifacts_sha256": {
+      "java03-check/app-final/gesher-app-classes.jar": "2c270cf0c3c431ac70db7bed20ba90aa325f95cbe48a909907d8f6a7c54ed5c8",
+      "java03-check/app-final/gesher-app.jar": "6973cff361f9ccb7ad8eadc90ba219c85b797fef784f7afe1dfedaf1d97b511a",
+      "java03-check/services-final/services-tests.dex": "fa58e8bdaedac51046439ce5a9f9f66f4a28456d10dd4b523c339339da2ef17a",
+      "java03-check/connectivity_callback_host.dll": "af9ee4ccf17cf073a3f9d38c74545aa7fd86f4e24f7239b27ef44b39168c84af"
+    }
+  },
+  "native_lifetime_limits": {
+    "final_wait_ms": 15000,
+    "existing_event_debounce_ms": 300,
+    "wait_cancellation": "Unavailable in the current native API; final wait is allowed to drain, followed by no snapshot and no additional periodic wait.",
+    "process_owned_resources": "The native event and three IP Helper registrations remain process-owned; no native network files changed.",
+    "shared_dispatcher": "WindowsHost shared dispatcher lifetime/timeout remains outside this leaf (PR251)."
+  },
+  "unmeasured": {
+    "actual_windows_network_notifications": null,
+    "physical_resume_and_vpn_wifi_cost_transitions": null,
+    "real_binder_process_death": null,
+    "windows_os_wakeups": null,
+    "context_switches": null,
+    "whole_process_cpu": null,
+    "private_commit_rss": null,
+    "native_handle_count": null,
+    "foreground_latency": null,
+    "multi_app_ratio": null,
+    "eight_hour_soak": null
+  },
+  "pending_target_validation": "New persisted network-job real-Parcel write/restore/start/load/cancel test is compiled and called by the existing track94 Windows/ART entry point, but has not executed locally.",
+  "composition": {
+    "inventory": "49 open PRs / 1,266 changed filenames at 2026-11-22 14:04 UTC: no overlap in the four changed production files.",
+    "pr245_shared_fixture_head": "6eda068919d90aab690b862ffa870c3348cb064a",
+    "pr245_result": "Its four sensor initialization lines and one executor cleanup line pass git apply --check against the candidate; textual composition only, no full sensor validation.",
+    "separate_work": [
+      "PR268 native NETLINK_ROUTE/WASAPI",
+      "PR251 dispatcher",
+      "PR257 UIA",
+      "PR270 window sessions",
+      "Bluetooth and remaining JAVA-03 acceptance"
+    ]
+  }
+}

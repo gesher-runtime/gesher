@@ -162,6 +162,7 @@
                         <Button Name="BtnEnableMicrog" Style="{StaticResource PrimaryButton}" Content="{DynamicResource Text_cp_btn_enable_microg}" Margin="0,0,8,8"/>
                         <Button Name="BtnGoogleLogin" Content="{DynamicResource Text_cp_btn_google_login}" Margin="0,0,8,8"/>
                         <Button Name="BtnMicrogSettings" Content="{DynamicResource Text_cp_btn_microg_settings}" Margin="0,0,8,8"/>
+                        <Button Name="BtnManageAccounts" Content="{DynamicResource Text_cp_btn_manage_accounts}" Margin="0,0,8,8"/>
                         <Button Name="BtnDisableMicrog" Style="{StaticResource DangerButton}" Content="{DynamicResource Text_cp_btn_disable_microg}" Margin="0,0,8,8"/>
                     </WrapPanel>
                 </StackPanel>
@@ -342,6 +343,20 @@
 
         <!-- Status & Progress Footer -->
         <Border Grid.Row="4" Margin="0,12,0,0">
+            <StackPanel>
+            <Border Background="#FFF6FA" BorderBrush="#FCE7F0" BorderThickness="1" CornerRadius="8" Padding="14,10" Margin="0,0,0,12">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Margin="0,0,16,0" VerticalAlignment="Center">
+                        <TextBlock Text="{DynamicResource Text_cp_sponsor_title}" FontSize="13" FontWeight="SemiBold" Foreground="#101828" TextWrapping="Wrap"/>
+                        <TextBlock Text="{DynamicResource Text_cp_sponsor_description}" FontSize="12" Foreground="#475467" Margin="0,3,0,0" TextWrapping="Wrap"/>
+                    </StackPanel>
+                    <Button Name="BtnSponsor" Grid.Column="1" Content="{DynamicResource Text_cp_btn_sponsor}" FontSize="12" Foreground="#C11574" BorderBrush="#FCCEEE" VerticalAlignment="Center"/>
+                </Grid>
+            </Border>
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
@@ -352,6 +367,7 @@
                 <ProgressBar Name="ActivityBar" Grid.Column="1" Width="140" Height="6" IsIndeterminate="False" Visibility="Hidden" VerticalAlignment="Center"/>
                 <Button Name="BtnOpenLogs" Grid.Column="2" Content="{DynamicResource Text_cp_btn_open_logs}" Padding="8,3" FontSize="12" BorderThickness="0" Foreground="#175CD3" Margin="12,0,0,0" VerticalAlignment="Center"/>
             </Grid>
+            </StackPanel>
         </Border>
     </Grid>
     </ScrollViewer>

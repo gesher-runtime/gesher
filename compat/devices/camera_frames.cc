@@ -251,7 +251,7 @@ void QueueRgba(const std::weak_ptr<Reader>& owner, const uint32_t* pixels,
   image->dataSpace = r->dataSpace;
   image->halFormat = r->halFormat;
   auto* output = reinterpret_cast<uint32_t*>(RgbaStorage(r, image));
-  if (width == r->width && height == r->height) {
+  if (width == r->width && height == r->height && width > 0 && height > 0) {
     memcpy(output, pixels, static_cast<size_t>(width) * height * 4);
   } else {
     for (int y = 0; y < r->height; y++)
@@ -489,6 +489,35 @@ inline uint8_t Clamp(int x) { return static_cast<uint8_t>(x < 0 ? 0 : x > 255 ? 
 // NV12 (w x h) to RGBA rows of `stride` pixels (tw x th), BT.601 limited range.
 void Nv12ToRgba(const uint8_t* src, int w, int h, uint8_t* dst, int stride, int tw, int th) {
   const uint8_t* uv = src + static_cast<size_t>(w) * h;
+  if (w == tw && h == th && w > 0 && h > 0 && w % 2 == 0 && h % 2 == 0) {
+    // One NV12 chroma pair belongs to four luma samples. With no scaling,
+    // reuse its exact BT.601 integer terms and retain the destination stride.
+    const auto pixel = [](uint8_t* out, int y, int red, int green, int blue) {
+      const int luma = 298 * (y - 16);
+      out[0] = Clamp((luma + red) >> 8);
+      out[1] = Clamp((luma + green) >> 8);
+      out[2] = Clamp((luma + blue) >> 8);
+      out[3] = 255;
+    };
+    for (int sy = 0; sy < h; sy += 2) {
+      const uint8_t* y0 = src + static_cast<size_t>(sy) * w;
+      const uint8_t* y1 = y0 + w;
+      const uint8_t* chroma = uv + static_cast<size_t>(sy / 2) * w;
+      uint8_t* row0 = dst + static_cast<size_t>(sy) * stride * 4;
+      uint8_t* row1 = row0 + static_cast<size_t>(stride) * 4;
+      for (int sx = 0; sx < w; sx += 2) {
+        const int d = chroma[sx] - 128, e = chroma[sx + 1] - 128;
+        const int red = 409 * e + 128;
+        const int green = -100 * d - 208 * e + 128;
+        const int blue = 516 * d + 128;
+        pixel(row0 + sx * 4, y0[sx], red, green, blue);
+        pixel(row0 + (sx + 1) * 4, y0[sx + 1], red, green, blue);
+        pixel(row1 + sx * 4, y1[sx], red, green, blue);
+        pixel(row1 + (sx + 1) * 4, y1[sx + 1], red, green, blue);
+      }
+    }
+    return;
+  }
   for (int ty = 0; ty < th; ++ty) {
     int sy = ty * h / th;
     uint8_t* row = dst + static_cast<size_t>(ty) * stride * 4;
@@ -555,6 +584,28 @@ void CopyReaderPlane(const uint8_t* source, int stride, int width, int height,
       for (int y = 0; y < height; ++y)
         memcpy(target + static_cast<size_t>(y) * width,
                source + static_cast<size_t>(y) * stride, static_cast<size_t>(width));
+    }
+    return;
+  }
+  if (width > 0 && height > 0 && target_width > 0 && target_height > 0) {
+    // Walk the exact floor(x * width / target_width) coordinates using a
+    // quotient and remainder. This keeps nearest-neighbour pixels unchanged
+    // without a division for every output byte or an allocated coordinate map.
+    const int step = width / target_width, remainder = width % target_width;
+    for (int y = 0; y < target_height; ++y) {
+      const size_t row = static_cast<size_t>(static_cast<int64_t>(y) * height / target_height) * stride;
+      uint8_t* out = target + static_cast<size_t>(y) * target_width;
+      int source_x = 0;
+      int64_t error = 0;
+      for (int x = 0; x < target_width; ++x) {
+        out[x] = source[row + source_x];
+        source_x += step;
+        error += remainder;
+        if (error >= target_width) {
+          error -= target_width;
+          ++source_x;
+        }
+      }
     }
     return;
   }

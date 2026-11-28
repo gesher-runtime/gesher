@@ -680,8 +680,8 @@ telemetry.
   - `PASS  installer: gesher-app installs lifecycle.apk and runs it on the Gesher device (a persistent system server); list shows it`
   - `PASS  installer: gesher-app shutdown stops the Gesher device's processes`
   - `PASS  installer: gesher-app --system-server runs the app with the services in a system server process`
-  - `PASS  installer: .apk opens with gesher-app through the registered command`
-  - `PASS  installer: the Gesher device started by a double-click keeps running after its console is gone`
+  - `PASS  installer: opening an APK whose version is installed launches the installed package through the registered command, with no dialog`
+  - `PASS  installer: the Gesher device started by opening an APK from Explorer keeps running after its console is gone`
   - `PASS  installer: uninstall stops the Gesher device and removes its data`
   - `PASS  installer: uninstall removes the .apk association`
   - `PASS  installer: installs, runs Hello and gesher-app, uninstalls`

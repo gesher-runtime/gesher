@@ -28,7 +28,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * against the interface. A {@link Proxy} over the interface dispatches to it; a call to a
  * method the subclass does not override is logged once and gets {@code Default}'s answer
  * (null, 0, false; an empty list for a method that returns one), or throws {@link UnsupportedOperationException} in strict mode
- * ({@code --strict-services}). That log is the list of what to implement next.
+ * ({@code --strict-services}, or permanently for a wrapper made with
+ * {@link #ofStrictDefaults}). That log is the list of what to implement next.
  *
  * <p>The service's Binder is {@code com.gesher.server.stub.IFooStub}, a concrete
  * {@code IFoo.Stub} that app/gen/StubGen.java writes at build time, delegating every
@@ -82,6 +83,7 @@ public final class StandIn<T extends IInterface> implements InvocationHandler {
     private final Class<T> mInterface;
     private final Class<?> mDefault;
     private final Object mImpl;
+    private final boolean mStrictDefaults;
     private final T mProxy;
     private final IBinder mBinder;
     private final Set<String> mReported = new HashSet<>();
@@ -89,9 +91,10 @@ public final class StandIn<T extends IInterface> implements InvocationHandler {
     // resolution, never results or strict-mode decisions, and retain no global classes.
     private final ConcurrentHashMap<Method, Method> mMethods = new ConcurrentHashMap<>();
 
-    private StandIn(Class<T> iface, Object impl) {
+    private StandIn(Class<T> iface, Object impl, boolean strictDefaults) {
         mInterface = iface;
         mImpl = impl;
+        mStrictDefaults = strictDefaults;
         Class<?> d = impl.getClass();
         while (d != null && !d.getName().equals(iface.getName() + "$Default")) {
             d = d.getSuperclass();
@@ -110,7 +113,12 @@ public final class StandIn<T extends IInterface> implements InvocationHandler {
 
     /** Wraps {@code impl}, an {@code iface.Default} subclass, as a service of type iface. */
     public static <T extends IInterface> StandIn<T> of(Class<T> iface, T impl) {
-        return new StandIn<>(iface, impl);
+        return new StandIn<>(iface, impl, false);
+    }
+
+    /** This service always rejects inherited AIDL defaults, independently of global strict mode. */
+    public static <T extends IInterface> StandIn<T> ofStrictDefaults(Class<T> iface, T impl) {
+        return new StandIn<>(iface, impl, true);
     }
 
     /** Methods the implementation does not override throw instead of answering a default. */
@@ -193,7 +201,7 @@ public final class StandIn<T extends IInterface> implements InvocationHandler {
             synchronized (mReported) {
                 first = mReported.add(name);
             }
-            if (sStrict) {
+            if (mStrictDefaults || sStrict) {
                 throw new UnsupportedOperationException("gesher stand-in "
                         + mInterface.getSimpleName() + "." + name + " is not implemented");
             }

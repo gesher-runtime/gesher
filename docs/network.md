@@ -21,6 +21,21 @@ on a phone. Design: [ADR 0037](decisions/0037-net-networking.md). Branch:
 
 ## Sockets and DNS
 
+### Route netlink address snapshots
+
+`AF_NETLINK` / `NETLINK_ROUTE` accepts `RTM_GETADDR` dumps over raw and datagram
+sockets. The IPv4 and IPv6 records come from the same real Windows adapter
+enumeration as `getifaddrs()`. The receive queue is bounded, and a dump returns
+`ENOBUFS` if its replies cannot fit. Route netlink multicast registration and
+destinations return `EOPNOTSUPP`. Link queries, explicit unicast binds, and route netlink ioctls return
+`EACCES` under the ordinary Android app contract. See
+[Android's route socket policy](https://android.googlesource.com/platform/system/sepolicy/+/android16-release/private/app_neverallows.te#132).
+Sending a request or connecting to the kernel allocates a local port. Descriptor
+aliases and inherited descriptors after guest fork share that port, pending
+replies and file status. Closing a process's last local descriptor leaves any
+inherited descriptors in other processes usable. Passing a route netlink
+descriptor through descriptor transfer or addressing another process is unsupported.
+
 ### Android HttpEngine
 
 `android.net.http` is supplied by gesher-app.jar, including `HttpEngine.Builder`,
@@ -75,7 +90,12 @@ loopback corpus covers 16 concurrent warm streams and measured connection/TLS
 handshake reduction, not general high-concurrency throughput. See the
 [session ownership and measurement report](research/http2-sessions-2026-11-22.md).
 
-The transport does not implement QUIC, Brotli or engine-private disk caches.
+With `HttpEngine.Builder.setEnableBrotli(true)`, the engine uses the pinned
+AOSP Brotli decoder for encoded response bodies. It advertises Brotli for
+HTTPS and loopback requests by default, keeps an explicit `Accept-Encoding`
+header, and requests identity encoding by default for range requests.
+
+The transport does not implement QUIC or engine-private disk caches.
 Protocol/DNS/cache tuning is advisory and does not install process-global settings;
 additional public-key pins fail explicitly rather than pretending to provide those
 guarantees. Received-byte counts currently measure response body bytes, excluding
@@ -340,6 +360,18 @@ reported only together with that enforcement. Its
 binder interface is `com.gesher.net.IConnectivity` (written as AIDL would
 generate it).
 
+Observation belongs to active ConnectivityManager subscriptions, registered
+`CONNECTIVITY_ACTION` receivers, and scheduled/running jobs with a network
+constraint. Removing the final owner invalidates the shared snapshot and retires
+the Java watcher after its outstanding native wait drains, without another
+snapshot. A new owner refreshes current state and reuses a still-draining watcher;
+query-only calls read current state without owning a watcher. Resume refreshes
+active observation even if Windows reports no interface change. The 15-second
+Network List Manager fallback remains while observation is required. The existing
+native event and three Windows notification registrations still have process
+lifetime; their native teardown is outside this Java ownership change. See
+[the JAVA-03 connectivity evidence](research/perf178-java03-connectivity.md).
+
 `android.net.ConnectivityManager` (gesher-app.jar; framework.jar compiles
 against the Connectivity module's API and lacks it) is its client, with the
 module's public API: `getActiveNetwork`, `getAllNetworks`,
@@ -431,8 +463,9 @@ processes of packages without it; gesher-app applies it in its own process
   not given it: without the app's own `ProxyController` override (androidx.webkit, ADR
   0058) the process's WebView2 environment gets no proxy arguments and uses Windows'
   settings.
-- **CONNECTIVITY_ACTION**: the connectivity service keeps it sticky (made at the first
-  sticky query, as BatteryService's battery broadcast) and sends it when the default
+- **CONNECTIVITY_ACTION**: the connectivity service provides its current sticky value
+  on query, without subscribing a null receiver, and sends it to active registered
+  receivers when the default
   network (its netId or kind) changes: EXTRA_NETWORK_INFO, EXTRA_NETWORK_TYPE,
   EXTRA_NO_CONNECTIVITY.
 - **PendingIntent requests and listens** (`requestNetwork`, `registerNetworkCallback` with
