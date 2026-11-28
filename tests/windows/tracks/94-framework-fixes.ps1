@@ -466,6 +466,17 @@ Check 'services: persisted URI records, release, reload and quota' {
   $persistableUriGrantsOut
 } @('PersistableUriGrantContractTest all passed: 99 checks')
 
+# Real service publication/retirement, live modes, hosted fallback and monitor
+# ownership. This uses direct service calls; the preceding URI gate keeps its
+# generated AM Binder transport coverage.
+$uriRetirementOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
+  'UriGrantRetirementContractTest') 90
+$uriRetirementCode = $LASTEXITCODE
+Check 'services: URI grant registry generations and actual owner retirement' {
+  $global:LASTEXITCODE = $uriRetirementCode
+  $uriRetirementOut
+} @('UriGrantRetirementContractTest: 6211 checks passed')
+
 $appOpsOut = FixesRun ($dvmFixes + 'gesher.services.ServiceFixtureRunner' +
   'AppOpsContractTest') 90
 $appOpsCode = $LASTEXITCODE

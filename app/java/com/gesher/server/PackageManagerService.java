@@ -47,6 +47,8 @@ import java.util.function.Consumer;
  */
 public final class PackageManagerService extends IPackageManager.Default {
     private volatile Map<String, ApkPackage> mPackages = new LinkedHashMap<>();
+    // Guarded by this monitor. Zero means the registry has never been published.
+    private long mPackageGeneration;
     // Candidate metadata only. Enabled state, removal, query flags and fresh Android
     // result objects remain the responsibility of each resolution under this monitor.
     private ProviderAuthorityIndex mProviderAuthorityIndex;
@@ -425,8 +427,12 @@ public final class PackageManagerService extends IPackageManager.Default {
     /** The map is replaced as a whole; package metadata is admitted before publication. */
     Map<String, ApkPackage> packageSnapshot() { return mPackages; }
 
+    /** Registry identity only; callers must hold this monitor and check live policy separately. */
+    long packageGeneration() { return mPackageGeneration; }
+
     /** Called under this monitor, or before the constructor publishes this service. */
     private void publishPackages(Map<String, ApkPackage> packages) {
+        ++mPackageGeneration;
         mPackages = packages;
         // Retire references to removed/replaced code even if no provider or
         // permission query follows.
