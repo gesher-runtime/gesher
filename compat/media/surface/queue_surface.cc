@@ -219,8 +219,17 @@ int QueueSurface::PostFrame(int width, int height, int stride, const uint32_t* p
     if (abandoned_) return -ENODEV;
     if (SingleBufferOccupied()) return -EAGAIN;
     f->number = ++frames_;
-    latest_ = std::move(f);
-    publication = {listener_, forwarding_listener_, forwarding_listener_ ? latest_ : nullptr};
+    auto previous = std::exchange(latest_, std::move(f));
+    publication = {listener_, forwarding_listener_, forwarding_listener_ ? latest_ : nullptr,
+                   nullptr};
+    if (forwarding_listener_) {
+      publication.withdraw = [this, frame = latest_, previous] {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (latest_ != frame || frames_ != frame->number) return;
+        latest_ = previous;
+        --frames_;
+      };
+    }
   }
   return publication.Notify();
 }
@@ -346,9 +355,18 @@ QueueSurface::Publication QueueSurface::PublishLocked(std::optional<int64_t> tim
       : timestamp_ns_ == NATIVE_WINDOW_TIMESTAMP_AUTO
           ? systemTime(SYSTEM_TIME_MONOTONIC) : timestamp_ns_;
   f->number = ++frames_;
-  latest_ = std::move(f);
+  auto previous = std::exchange(latest_, std::move(f));
   copy_site.Add(gesher::perf::Now() - start);
-  return {listener_, forwarding_listener_, forwarding_listener_ ? latest_ : nullptr};
+  if (!forwarding_listener_) return {listener_, nullptr, nullptr, nullptr};
+  // A forwarded frame the remote consumer refuses (its single buffer is still
+  // occupied, or it is gone) was not published and is not counted here.
+  std::shared_ptr<const SurfaceFrame> frame = latest_;
+  return {listener_, forwarding_listener_, frame, [this, frame, previous] {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (latest_ != frame || frames_ != frame->number) return;
+            latest_ = previous;
+            --frames_;
+          }};
 }
 
 int QueueSurface::dequeueBuffer(ANativeWindowBuffer** buffer, int* fence_fd) {
@@ -378,8 +396,10 @@ android::sp<QueueSurface::Buffer> QueueSurface::TakeDequeued(ANativeWindowBuffer
 int QueueSurface::cancelBuffer(ANativeWindowBuffer* buffer, int) {
   std::lock_guard<std::mutex> lock(mutex_);
   auto cancelled = TakeDequeued(buffer);
-  if (abandoned_) return !single_buffer_mode_ && cancelled != nullptr ? 0 : -ENODEV;
+  // As Surface::cancelBuffer does, a buffer this queue does not own is
+  // BAD_VALUE, and returning an owned one succeeds after abandonment too.
   if (cancelled == nullptr) return -EINVAL;
+  if (abandoned_) return 0;
   // Only published pixels may back an incremental CPU frame.
   if (buffer_ == nullptr) {
     buffer_ = std::move(cancelled);
@@ -393,8 +413,9 @@ int QueueSurface::queueBuffer(ANativeWindowBuffer* buffer, int) {
   {
     std::lock_guard<std::mutex> lock(mutex_);
     auto queued = TakeDequeued(buffer);
-    if (abandoned_) return -ENODEV;
+    // Surface finds the buffer's slot before the queue reports abandonment.
     if (queued == nullptr) return -EINVAL;
+    if (abandoned_) return -ENODEV;
     buffer_ = std::move(queued);
     publication = PublishLocked(std::nullopt);
   }

@@ -228,6 +228,39 @@ int Run() {
             "CPU unlock publishes its own pixels and retains immutable native frame");
     }
   }
+  {
+    // Surface::cancelBuffer: BAD_VALUE for a buffer the queue does not own,
+    // OK for an owned one after the consumer is abandoned, single buffer too.
+    auto single = android::sp<QueueSurface>::make(4, 2, true);
+    auto other = android::sp<QueueSurface>::make(4, 2);
+    ANativeWindow* window = single.get();
+    ANativeWindow* foreign_window = other.get();
+    ANativeWindowBuffer *owned = nullptr, *foreign = nullptr;
+    int fence = -1;
+    Check(window->dequeueBuffer(window, &owned, &fence) == 0 && owned != nullptr,
+          "dequeue the single buffer");
+    Check(foreign_window->dequeueBuffer(foreign_window, &foreign, &fence) == 0 && foreign != nullptr,
+          "dequeue another window's buffer");
+    single->Abandon();
+    Check(window->queueBuffer(window, foreign, fence) == -EINVAL &&
+              window->cancelBuffer(window, foreign, fence) == -EINVAL,
+          "an abandoned queue still reports an unowned buffer as BAD_VALUE");
+    Check(window->cancelBuffer(window, owned, fence) == 0,
+          "an owned single buffer cancels successfully after abandonment");
+    if (foreign != nullptr) foreign_window->cancelBuffer(foreign_window, foreign, fence);
+
+    // A CPU lock is a dequeued slot: after publication it uses the one
+    // writable slot the default limit allows.
+    auto queue = android::sp<QueueSurface>::make(4, 2);
+    ANativeWindow* queue_window = queue.get();
+    ANativeWindow_Buffer cpu = {};
+    ANativeWindowBuffer* native = nullptr;
+    Check(queue->lock(&cpu, nullptr) == 0 && queue->unlockAndPost() == 0, "publish a first frame");
+    Check(queue->lock(&cpu, nullptr) == 0, "CPU lock after publication");
+    Check(queue_window->dequeueBuffer(queue_window, &native, &fence) == -ENOSYS && native == nullptr,
+          "a CPU lock counts against the dequeued-buffer limit");
+    Check(queue->unlockAndPost() == 0, "the CPU producer posts its frame");
+  }
   std::printf("surface release contracts: %d checks, %d failures; 4K queue bytes=%zu\n",
               checks, failures, 2 * kPixelsBytes);
   return failures;

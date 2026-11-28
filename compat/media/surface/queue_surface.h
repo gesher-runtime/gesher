@@ -99,10 +99,14 @@ class QueueSurface : public android::Surface {
     std::function<void()> listener;
     std::function<int(const SurfaceFrame&)> forwarding_listener;
     std::shared_ptr<const SurfaceFrame> frame;
+    // Withdraws the local frame when the remote consumer did not queue it.
+    std::function<void()> withdraw;
 
     int Notify() const {
       if (listener) listener();
-      return forwarding_listener ? forwarding_listener(*frame) : 0;
+      const int status = forwarding_listener ? forwarding_listener(*frame) : 0;
+      if (status != 0 && withdraw) withdraw();
+      return status;
     }
   };
 

@@ -231,11 +231,14 @@ void ForwardedSingleBufferStatus() {
     Post(forwarding.get(), 1);
     auto first = sink->Latest();
     FramePixels(first, 1, HAL_PIXEL_FORMAT_RGBA_8888);
+    auto published = forwarding->Latest();
     ANativeWindow_Buffer cpu{};
     Check(forwarding->lock(&cpu, nullptr) == 0, "forwarder acquires its staging buffer");
     Check(forwarding->unlockAndPost() == -EAGAIN,
           "receiver backpressure reaches the forwarding producer");
     Check(sink->Latest() == first, "forwarding failure does not replace the receiver's buffer");
+    Check(forwarding->frames() == 1 && forwarding->Latest() == published,
+          "a refused forwarded frame is not counted or kept by the producer");
     ReleaseConsumerBuffer(sink.get(), first->number);
     Post(forwarding.get(), 2);
     FramePixels(sink->Latest(), 2, HAL_PIXEL_FORMAT_RGBA_8888);
