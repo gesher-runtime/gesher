@@ -125,8 +125,28 @@ public final class WebViewAuthBridgeTest {
    } finally {adding.endpoint.close();f.queue.pump();}
   }
  }
+ static void wakeAndWorkerOrigin()throws Exception {
+  try(Fixture f=new Fixture()){
+   f.a.endpoint.installed(0,WebViewAuthBridge.EXTENSION);f.queue.pump();
+   f.answer(f.take("Target.getTargetInfo"),object("targetInfo",object("targetId","target-A")));
+   f.answer(f.take("Target.setDiscoverTargets"),object());
+   f.answer(f.take("Target.getTargets"),object("targetInfos",new JSONArray()));
+   f.answer(f.take("ServiceWorker.enable"),object());
+   f.answer(f.take("ServiceWorker.startWorker"),object());
+   f.queue.deadlines.remove(1).run();f.queue.pump();
+   f.answer(f.take("Target.getTargets"),object("targetInfos",new JSONArray().put(object("targetId","worker","type","service_worker","url",WebViewAuthBridge.WORKER))));
+   f.answer(f.take("Target.attachToTarget"),object("sessionId",f.session));
+   f.event(f.a,"Runtime.executionContextCreated",object("context",object("id",f.context,"origin",WebViewAuthBridge.WORKER)),f.session);
+   f.answer(f.take("Runtime.enable"),object());
+   Call add=f.take("Runtime.addBinding");f.binding=add.params.getString("name");f.answer(add,object());
+   Call hello=f.take("Runtime.evaluate");JSONObject command=hello.dispatch();check(command.getString("op").equals("hello"),"Woken worker handshake missing hello");
+   f.epoch=command.getString("epoch");f.channel=command.optString("channel");f.answer(hello,object("result",object("type","boolean","value",true)));
+   f.message("ready",null,null);f.acknowledgeEvaluations();f.message("registered","target-A",null);
+   check(f.a.ready.contains(true),"Woken worker with worker.js origin did not become ready");
+  }
+ }
  public static void main(String[] args)throws Exception {
-  identity();retirement();restart();delayedStopEvent();repeatedWorkerRestart();addingViewDuringRestart();
+  identity();retirement();restart();delayedStopEvent();repeatedWorkerRestart();addingViewDuringRestart();wakeAndWorkerOrigin();
   // A last view's owner can be destroyed and recreated without leaking the singleton.
   for(int i=0;i<3;i++)try(Fixture f=new Fixture()){f.start();}
   System.out.println("WebViewAuthBridgeTest passed: "+checks+" checks");

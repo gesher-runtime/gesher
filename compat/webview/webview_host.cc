@@ -2969,7 +2969,7 @@ void Host::AuthCommand(const std::wstring& session, const std::wstring& method,
     bool root = session.empty() && (method == L"Target.getTargets"
         || method == L"Target.getTargetInfo" || method == L"Target.attachToTarget"
         || method == L"Target.detachFromTarget" || method == L"Target.setDiscoverTargets"
-        || method == L"ServiceWorker.startWorker");
+        || method == L"ServiceWorker.enable" || method == L"ServiceWorker.startWorker");
     bool worker = !session.empty() && shared->auth_sessions.count(session) != 0
         && (method == L"Runtime.enable" || method == L"Runtime.addBinding"
             || method == L"Runtime.removeBinding" || method == L"Runtime.evaluate");

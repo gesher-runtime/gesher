@@ -175,9 +175,10 @@ final class WebViewAuthBridge {
                 if (id.isEmpty()) {
                     if (!waking) {
                         waking = true;
-                        command(owner, "", "ServiceWorker.startWorker",
-                                object("scopeURL", "chrome-extension://" + EXTENSION + "/"), woke ->
-                                    scheduler.later(() -> discover(attempt), 100));
+                        command(owner, "", "ServiceWorker.enable", object(), enabled ->
+                                command(owner, "", "ServiceWorker.startWorker",
+                                        object("scopeURL", "chrome-extension://" + EXTENSION + "/"), woke ->
+                                            scheduler.later(() -> discover(attempt), 100)));
                         return;
                     }
                     scheduler.later(() -> discover(attempt), 100);
@@ -232,7 +233,7 @@ final class WebViewAuthBridge {
                     JSONObject info = event.getJSONObject("context");
                     String origin = info.optString("origin");
                     JSONObject auxiliary = info.optJSONObject("auxData");
-                    if ((origin.equals("chrome-extension://" + EXTENSION)
+                    if ((origin.equals(WORKER) || origin.equals("chrome-extension://" + EXTENSION)
                             || origin.equals("chrome-extension://" + EXTENSION + "/"))
                             && (auxiliary == null || auxiliary.optBoolean("isDefault", false))) {
                         context = info.getInt("id");
