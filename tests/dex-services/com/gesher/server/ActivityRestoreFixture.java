@@ -599,7 +599,7 @@ public final class ActivityRestoreFixture {
 
     private static void testFailedRestoreDelivery() throws Exception {
         Harness h = new Harness();
-        var record = (ActivityTaskManagerService.ActivityRecord) h.record("MainAct", 10, "a", "STOPPING");
+        Object record = h.record("MainAct", 10, "a", "STOPPING");
         Bundle saved = new Bundle(); saved.putString("retry", "snapshot");
         h.activityStopped(record, saved, null);
         h.processDied(h.process);
