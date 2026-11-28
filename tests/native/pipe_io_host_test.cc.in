@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cerrno>
 #include <chrono>
+#include <climits>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -45,7 +46,7 @@ struct OVERLAPPED { HANDLE hEvent = nullptr; };
 struct IO_STATUS_BLOCK {};
 using PIO_STATUS_BLOCK = IO_STATUS_BLOCK*;
 enum FILE_INFORMATION_CLASS { FilePipeLocalInformation };
-struct FILE_PIPE_LOCAL_INFORMATION { ULONG NamedPipeState, ReadDataAvailable, WriteQuotaAvailable; };
+struct FILE_PIPE_LOCAL_INFORMATION { ULONG NamedPipeState, ReadDataAvailable, WriteQuotaAvailable, InboundQuota; };
 constexpr DWORD ERROR_SUCCESS = 0, ERROR_BROKEN_PIPE = 109, ERROR_PIPE_BUSY = 231,
     ERROR_PIPE_NOT_CONNECTED = 233, ERROR_NO_DATA = 232, ERROR_OPERATION_ABORTED = 995,
     ERROR_MORE_DATA = 234, ERROR_NOACCESS = 998, ERROR_INVALID_USER_BUFFER = 1784,
@@ -107,7 +108,7 @@ static LONG Query(HANDLE file, PIO_STATUS_BLOCK, void* output, ULONG size, FILE_
   if (poll(&descriptor, 1, 0) < 0) return -errno;
   *static_cast<FILE_PIPE_LOCAL_INFORMATION*>(output) = {
       (descriptor.revents & (POLLERR | POLLHUP)) != 0 ? 4u : 3u,
-      static_cast<ULONG>(used), static_cast<ULONG>(capacity - used)};
+      static_cast<ULONG>(used), static_cast<ULONG>(capacity - used), static_cast<ULONG>(capacity)};
   return 0;
 }
 static ULONG Convert(LONG error) { return static_cast<ULONG>(-error); }
@@ -265,6 +266,7 @@ static int ReadFileDescription(const DescriptorSnapshotPtr&, void*, unsigned) {
 static int TransferFifo(const DescriptorSnapshotPtr&, void*, unsigned, bool, HANDLE, HANDLE) { std::abort(); }
 static int PollFifo(const DescriptorSnapshotPtr&, short, short*) { std::abort(); }
 static int FifoBytesAvailable(const DescriptorSnapshotPtr&, int*) { std::abort(); }
+static int FifoCapacity(const DescriptorSnapshotPtr&) { std::abort(); }
 // gesher/fork.h (ADR 0092): this fixture is never a forked child, so its
 // transfers keep their asynchronous cancellation.
 static bool InForkedChild() { return false; }
@@ -475,6 +477,8 @@ int main() {
   Check("failed atomic write changed no bytes", gesher::PipeBytesAvailable(r, &buffered) == 0 && buffered == capacity - 1024);
   buffered = 73;
   Check("writer FIONREAD fails without fabricated count", gesher::PipeBytesAvailable(w, &buffered) == -1 && errno == EOPNOTSUPP && buffered == 73);
+  Check("reported capacity is the pipe's allocation, not its free space",
+        gesher::PipeCapacity(r) == capacity && gesher::PipeCapacity(w) == capacity);
   Check("drain remaining contents", read(reader.fd, payload.data(), payload.size()) == capacity - 1024);
   Check("zero length read does not wait", gesher::TransferPipe(r, nullptr, 0, false) == 0);
   Check("immediate operations allocate no cancellation wait or handles", created_waits.load() == 0 && live_handles.load() == 0);
