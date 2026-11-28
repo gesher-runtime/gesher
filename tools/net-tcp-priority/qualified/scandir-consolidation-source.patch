@@ -3343,7 +3343,7 @@ index fcd68fd..4bb09c0 100644
       b'while (n > 0) {', 'scandir reverse endpoint'),
      ('public export', b'E("scandir", Scandir);', b'E("scandir", ScandirWrong);', 'scandir reverse endpoint'),
 diff --git a/tools/net-tcp-priority/test-selected-policy.py b/tools/net-tcp-priority/test-selected-policy.py
-index 5f0fff8..7108855 100644
+index 5f0fff8..f0e3695 100644
 --- a/tools/net-tcp-priority/test-selected-policy.py
 +++ b/tools/net-tcp-priority/test-selected-policy.py
 @@ -2,6 +2,9 @@
@@ -4124,7 +4124,7 @@ index 5f0fff8..7108855 100644
   assert hashlib.sha256(current).hexdigest()==transition['after_sha256'][MEMRCHR_SOURCE],MEMRCHR_SOURCE
   baseline=subprocess.check_output(['git','-C',str(ROOT),'show',MEMRCHR_BASE+':'+MEMRCHR_SOURCE])
   assert hashlib.sha256(baseline).hexdigest()==transition['before_sha256'][MEMRCHR_SOURCE],MEMRCHR_SOURCE
-@@ -474,7 +1137,379 @@ def preceding_memrchr_source(qualification):
+@@ -474,7 +1137,381 @@ def preceding_memrchr_source(qualification):
    assert (work/MEMRCHR_SOURCE).read_bytes()==current,'memrchr forward endpoint'
   return baseline
 
@@ -4253,10 +4253,10 @@ index 5f0fff8..7108855 100644
 +# ends of each changed file are exact, and no runtime pass is granted here.
 +APPCONTAINER_INTEGRATION_BASE = 'ff2c1870053c9d0332e6abef07a25fc282d384b5'
 +# Independent historical endpoint pin remains fixed when the live side is refreshed.
-+APPCONTAINER_INTEGRATION_PREVIOUS_SHA256 = 'edf0d8bc5b3adca9d83f9dd608a5cf897c5b6877b7cbeeec98c923538caab5cc'
++APPCONTAINER_INTEGRATION_PREVIOUS_SHA256 = 'cb156fd1e3054ce7a41c0492f2e0dd89f4a86e0c4018d41cacd4322bd06c395f'
 +APPCONTAINER_INTEGRATION_PATCH = 'tools/net-tcp-priority/qualified/appcontainer-integration-source.patch'
 +APPCONTAINER_INTEGRATION_QUALIFICATION = 'tools/net-tcp-priority/qualified/appcontainer-integration-source.json'
-+APPCONTAINER_INTEGRATION_QUALIFICATION_SHA256 = '1476275dace1881f732976137bfed33bcd26cfd70a33c502ce92e99c0e209d5e'
++APPCONTAINER_INTEGRATION_QUALIFICATION_SHA256 = '078c3a2fb5163487a2eede2dec369ccabbd44cbd9ea41b036511309b146119ed'
 +# In addition to the donor identity surface, the merged startup/fork path
 +# intersects the exact USB and child-wait source qualification.
 +APPCONTAINER_INTEGRATION_PATHS = sorted(APPCONTAINER_IDENTITY_SOURCE_SHA256.keys() | {
@@ -4279,6 +4279,8 @@ index 5f0fff8..7108855 100644
 + 'compat/usb_storage/protected_identity.cc',
 + # Reconstruct the exact owner-unaware profile names for the historical USB proof.
 + 'compat/usb_storage/protected_profile_name.h',
++ # Restore the exact pre-change sealed peer session query for the USB proof.
++ 'compat/binder/protected_peers.cc',
 +})
 +
 +def preceding_appcontainer_integration_sources(receipt_sha256):
@@ -4505,7 +4507,7 @@ index 5f0fff8..7108855 100644
   folder=ROOT/'tools/net-tcp-priority/qualified'
   raw=(folder/'ofd-stream-source.json').read_bytes()
   assert hashlib.sha256(raw).hexdigest()==OFD_QUALIFICATION_SHA256,'OFD source qualification changed'
-@@ -485,42 +1520,89 @@ def preceding_ofd_sources():
+@@ -485,42 +1522,89 @@ def preceding_ofd_sources():
          'compat/posix/src/system.cc','compat/posix/src/winsock.cc']
   assert qualification['paths']==paths
   assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==paths
@@ -4611,7 +4613,7 @@ index 5f0fff8..7108855 100644
  # AF_UNIX credentials and descriptor passing (ADR 0088) and memfd seals change
  # these selected sources after REVIEWED_CHECKPOINT, a commit on main. The
  # pinned REVIEWED_PATCH lists each changed line as an exact hunk at its line in
-@@ -529,7 +1611,9 @@ def preceding_ofd_sources():
+@@ -529,7 +1613,9 @@ def preceding_ofd_sources():
  # checkpoint's bytes. Any other change fails here as before.
  REVIEWED_CHECKPOINT='7a45c2468c270bfe68ee5f854aa9d4feaf2208b3'
  REVIEWED_PATCH='tools/net-tcp-priority/reviewed-adr0088-memfd-seals.json'
@@ -4622,7 +4624,7 @@ index 5f0fff8..7108855 100644
  def reviewed(path,actual):
   raw=(ROOT/REVIEWED_PATCH).read_bytes()
   assert hashlib.sha256(raw).hexdigest()==REVIEWED_PATCH_SHA256,REVIEWED_PATCH
-@@ -555,12 +1639,68 @@ NDK_ARCHIVE_SHARING={
+@@ -555,12 +1641,68 @@ NDK_ARCHIVE_SHARING={
    b"archive = Path('tcp-ndk-archive/android-ndk-r27c-linux.zip')\narchive.parent.mkdir(exist_ok=True)\n",
    b"# Shares native2's publisher-archive cache entry (same path and key), so one copy is kept.\narchive = Path('dns-ndk.zip')\n"),
  }
@@ -4695,7 +4697,7 @@ index 5f0fff8..7108855 100644
   paths=subprocess.check_output(['git','-C',str(ROOT),'diff','1745e99d7f2849ba81784545e07d60cb2b7800c3^','1745e99d7f2849ba81784545e07d60cb2b7800c3','--name-only'],text=True).splitlines()
   paths+=['.github/workflows/net-tcp-coherent-component.yml','tests/net-tcp-priority/contract.cc','tests/net-tcp-priority/native_udp_control.cc','tests/native2/net_udp_trunc.cpp','tests/native2/net_udp_fault_observer.c','tools/net-tcp-priority/qualified/TsfJobSupervisor.cs','tools/windows4/TsfJobSupervisor.cs','tools/windows4/TsfJobWorker.cs','tools/windows4/test-tsf-job-supervisor.ps1','tools/ci/receipt-diagnostics.ps1','tools/net-tcp-priority/import-policy.json','tools/net-tcp-priority/import_policy.py','tools/net-tcp-priority/build-guests.py','tools/net-tcp-priority/prepare-ndk.py']
   for path in paths:
-@@ -569,7 +1709,10 @@ def check():
+@@ -569,7 +1711,10 @@ def check():
           WINSOCK_BASE if path=='compat/posix/src/winsock.cc' else
           CONTROL_BASE if path=='tools/windows4/test-tsf-job-supervisor.ps1' else BASE)
    expected=subprocess.check_output(['git','-C',str(ROOT),'show',epoch+':'+path])
@@ -4707,7 +4709,7 @@ index 5f0fff8..7108855 100644
    if path=='compat/posix/src/winsock.cc':
     assert actual.count(TCP_PRIORITY_WAKE_AFTER)==1 and TCP_PRIORITY_WAKE_BEFORE not in actual,path
     actual=actual.replace(TCP_PRIORITY_WAKE_AFTER,TCP_PRIORITY_WAKE_BEFORE,1)
-@@ -663,11 +1806,159 @@ def check():
+@@ -663,11 +1808,159 @@ def check():
   assert pin['ordered_patch_sha256']=={'minimum-detached-retirement.patch':'ebc5aac990c6ec075431d0c25a9b74ecadc0940da1bdad9503f358d4fe3431ad','minimum-noattach-join.patch':'c4f47903af720542a584fa743932316d86c45683da70a4c8620d7a71d3eb7f96'}
   for name,digest in pin['ordered_patch_sha256'].items():assert hashlib.sha256((ROOT/'tools/host-pthread-authority'/name).read_bytes()).hexdigest()==digest
   for path in ['tools/net-tcp-priority/manifest.py','tools/host-pthread-authority/minimum_receipt.py']:ast.parse((ROOT/path).read_text(encoding='utf-8'))
@@ -4868,7 +4870,7 @@ index 5f0fff8..7108855 100644
    ('compat/posix/src/fd.cc',b'--state->description->descriptor_refs == 0',b'--state->description->descriptor_refs == 1'),
    ('compat/posix/src/fd.cc',b'return TransferPipe(snapshot, bytes, count, false);',b'return 0;'),
    ('compat/posix/src/system.cc',b'gesher::ws::RecvOwned(state.socket,',b'gesher::ws::SendOwned(state.socket,'),
-@@ -675,6 +1966,9 @@ def transition_negative_controls():
+@@ -675,6 +1968,9 @@ def transition_negative_controls():
    ('compat/posix/src/ofd.cc',b'InterlockedCompareExchange(&shared->flags,',b'InterlockedExchange(&shared->flags,'),
    ('compat/elf/exec/shell_execute.inc',b'gesher::ReadPipeDescriptionInterruptible(description, value, 1, interrupted)',b'gesher::ReadFileDescription(description, value, 1)'),
    ('tools/net-tcp-priority/qualified/ofd-stream-source.patch',b'@@',b'@x'),
@@ -4878,7 +4880,7 @@ index 5f0fff8..7108855 100644
    ('compat/posix/src/fd.cc',b'if (result < 0) return -1;',b'if (result < 0) return 0;'),
    ('compat/posix/src/fd.cc',b'SocketRegistry& socket_registry = *new (socket_registry_storage) SocketRegistry;',b'SocketRegistry socket_registry;'),
    ('compat/posix/src/stdio_output.cc',b'if (locked_stream_) _lock_file(locked_stream_);',b'if (locked_stream_) {}'),
-@@ -689,6 +1983,11 @@ def transition_negative_controls():
+@@ -689,6 +1985,11 @@ def transition_negative_controls():
    ('compat/posix/src/system_properties.cc',b'SetWideEnvironment(L"GESHER_PROPERTY_ROOT", root.c_str())',b'_wputenv_s(L"GESHER_PROPERTY_ROOT", root.c_str())'),
    ('compat/posix/include/gesher/system_properties.h',b'uint32_t generation = 0;',b'uint64_t generation = 0;'),
    ('tools/net-tcp-priority/qualified/native13-property-source.patch',b'@@',b'@x'),
@@ -4890,7 +4892,7 @@ index 5f0fff8..7108855 100644
    # The memmem normalization admits its exact reviewed delta only. The old
    # whole-file digest must still reject any unrelated shim change afterwards.
    ('compat/bionic/shim.cc',b'size_t n = std::strlen(s) + 1;',b'size_t n = std::strlen(s) + 2;'),
-@@ -696,6 +1995,40 @@ def transition_negative_controls():
+@@ -696,6 +1997,40 @@ def transition_negative_controls():
    ('compat/bionic/shim.cc',b'#include "memmem_search.h"\n',b''),
    ('compat/bionic/shim.cc',b'#include "memmem_search.h"\n',b'#include "memmem_search.h"\n#include "memmem_search.h"\n'),
    (MEMMEM_HEADER,b'if (needle_size == 0) return haystack_data;',b'if (needle_size == 0) return nullptr;'),
@@ -4931,7 +4933,7 @@ index 5f0fff8..7108855 100644
   ]
   for name,before,after in cases:
    target=ROOT/name
-@@ -703,22 +2036,217 @@ def transition_negative_controls():
+@@ -703,22 +2038,217 @@ def transition_negative_controls():
    def changed(path):
     raw=original(path)
     return raw.replace(before,after,1) if path==target else raw

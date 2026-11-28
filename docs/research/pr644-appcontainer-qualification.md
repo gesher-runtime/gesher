@@ -504,3 +504,90 @@ passes, and independent Windows execution passes all nine relay transport
 cases and 27 framing controls. CI now requires the named omission failure and
 the corrected real-exit success. Full ART fork and shipping-default approval
 remain separate gates.
+
+## Complete 8a2 CI results and next repairs
+
+Run `46032578749` completed on `8a2fe03d6`. Both original protected launches
+and both fresh observer-free jobs pass. The complete Windows host-contract jobs,
+native/Java/platform/metadata preflights, production build and framework build
+pass. Eleven of the fourteen Windows runtime shards pass; contracts on 2025
+stops before execution on a GitHub GET timeout, contracts on 2022 reaches the
+uninstall failure below, and native on 2025 reports the heap-fork result below.
+The installed ordinary-runtime install/run/uninstall gate also passes. That
+gate runs the Hello sample; it does not establish Windows Hello credential
+verification.
+
+The media preflight reaches a new missing native-only socket boundary in the
+outer poll scratch fixture. The focused repair preserves the extracted
+PollFds/Epoll code, allocation budgets and all original assertions, and aborts
+if a relay-backed object reaches that unsupported fixture boundary. Historical
+headers without the relay member still compile. The original undefined-symbol
+control is reproduced. Windows/Android projections retain their disclosed
+Linux-only pipe/procfs limitations, so actual Linux sanitizer execution remains
+required rather than inferred from those projections. Its immutable inventory
+is `out/qa314/event-loop-ci-review/final-inputs.json`.
+
+The real uninstall fixture uses application data on C: and logs on D:.
+Quarantining the logs into the data-volume transaction directory caused
+Files.move to attempt a cross-volume copy, reaching an unavailable Linux
+extended-attribute JNI entry point. New transactions instead derive two exact
+adjacent log leaves from their canonical transaction UUID and current canonical
+log root. All moves require atomic rename; the main journal remains until
+external log remnants are reaped. Occupied rollback paths, changed roots and
+unsupported log objects preserve recovery evidence. Legacy fixed slots and
+native fence/acknowledgment behavior remain. Exact old ART execution reproduces
+the failure; corrected ART runs pass 131 checks for C/D, D/C and C/C, including
+registry-failure rollback and reinstall. Independent host execution passes 109
+checks. Sources, matched artifacts and logs are bound by
+`out/qa314/uninstall-cross-volume/final-inputs.json`. This is ordinary-runtime
+evidence, not elevated-service or power-loss qualification.
+
+The native TCP fixture's previous setup reduced a receive buffer after the
+handshake but left the sender/window capacity uncontrolled. A controlled real
+large-buffer run reproduces its outgoing-backpressure assertion. The fixture
+now establishes bounded real receive capacity before listen and retained send
+capacity before connect, verifies actual option readbacks and unread kernel
+data, and avoids producer sleeps after successful writes. All 93 original
+assertions, deadlines, five-second stalls, accepted-byte/EOF/integrity checks
+remain. Both strict compiler builds pass all nine groups. This repairs the
+test precondition; it does not identify the unrecorded exact CI kernel state
+or claim a production TCP change. The before/fixed/control inventory is
+`out/qa314/relay-backpressure/final/inputs.json`.
+
+The installed CardWake run reaches an actual private Binder admission failure.
+Its old startup label still said namespace pinning after that operation had
+succeeded. Local real lowbox execution reproduces ProcessIdToSessionId failing
+with access denied despite an already-held process handle with precisely the
+production rights. The registry now queries the session through that retained
+handle using dynamically resolved ProcessSessionInformation and validates the
+returned size. No process/token ACL, role, liveness, owner, connection or access
+grant is widened. Startup diagnostics now distinguish registration and resume.
+The configured admission fixture rejects fresh PID access and a handle missing
+ACL-read rights, accepts the correct held handle, and checks exact PID, birth
+and session. Restoring only the old peer source fails the intended registration
+assertion. Both owned children are atomically job-bound and their actual exits
+and handle closure are checked before profile deletion. Sources and actual
+controls are bound by `out/qa314/cardwake-registration/final-inputs.json`.
+Supported-Windows and complete installed CardWake execution remain required in
+CI. The historical transition adds only that exact pre-change peer source;
+all 53 earlier predecessor pins, measurements and rejection controls remain.
+
+The Windows 2025 ARM64 heap-under-fork case reports 19 successes in 20 rounds
+with no hang. The unchanged main fixture passed in its recorded comparison.
+Five bounded local candidate executions pass; no unique production mechanism
+is established. New failure-only diagnostics retain all rounds, deadlines and
+success conditions while recording fork/child/wait results for the next CI.
+The Notes e2e preview also remains unresolved: hosted Java issues two requests
+without native navigation, then the close watchdog exits 137. Local ordinary
+candidate runs with both the local and producer-hash-verified CI bridge reach
+both real native HTTP200 navigations and clean exit, but fail the original
+pixel assertions. Different local WebView2 and capture conditions prevent
+treating those runs as a successful reproduction or resolution. No production
+WebView change or weakened expectation was made.
+
+The separately supplied Windows Hello candidate ZIP is explicitly tied to 8a2
+and explicit appcontainer-trusted mode. Payload integrity, genuine unavailability
+and process identity checks pass locally; configured-user approvals,
+cancellations and foreground lifecycle still require the maintainer's real
+machine. The final shipping package without explicit mode remains a separate
+qualification. General protected networking and default enablement remain open.

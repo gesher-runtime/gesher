@@ -1275,6 +1275,48 @@ index 9516fa9..4c2d5b9 100644
      DWORD error = gesher::appcontainer::BinderPipeSecurity(&pipe_security.lpSecurityDescriptor);
      if (error != ERROR_SUCCESS) {
        Log("GESHER_SANDBOX=appcontainer: no pipe security descriptor: %lu", error);
+diff --git a/compat/binder/protected_peers.cc b/compat/binder/protected_peers.cc
+index e8c5af7..829018c 100644
+--- a/compat/binder/protected_peers.cc
++++ b/compat/binder/protected_peers.cc
+@@ -18,6 +18,25 @@ DWORD LiveStatus(HANDLE process) {
+   return wait == WAIT_FAILED ? GetLastError() : ERROR_PROCESS_ABORTED;
+ }
+
++DWORD ReadProcessSession(HANDLE process, DWORD* session) {
++  using QueryProcess = LONG(NTAPI*)(HANDLE, int, PVOID, ULONG, PULONG);
++  using ToError = ULONG(NTAPI*)(LONG);
++  const HMODULE native = GetModuleHandleW(L"ntdll.dll");
++  static const auto query = reinterpret_cast<QueryProcess>(reinterpret_cast<void*>(
++      GetProcAddress(native, "NtQueryInformationProcess")));
++  static const auto to_error = reinterpret_cast<ToError>(reinterpret_cast<void*>(
++      GetProcAddress(native, "RtlNtStatusToDosError")));
++  if (!query || !to_error) return ERROR_PROC_NOT_FOUND;
++  constexpr int kProcessSessionInformation = 24;
++  ULONG returned = 0;
++  // Query the transferred process object with its existing query-limited
++  // access. A PID lookup reopens the SYSTEM-owned process, which the lowbox
++  // broker cannot do. Neither a new token handle nor a wider grant is needed.
++  const LONG status = query(process, kProcessSessionInformation, session, sizeof(*session), &returned);
++  if (status < 0) return to_error(status);
++  return returned == sizeof(*session) ? ERROR_SUCCESS : ERROR_INVALID_DATA;
++}
++
+ struct FreeSecurity {
+   void operator()(void* value) const { LocalFree(value); }
+ };
+@@ -94,9 +113,8 @@ DWORD ProtectedPeers::RegisterOwned(HANDLE launched_process, uint32_t android_ui
+   FILETIME created{}, exited{}, kernel{}, user{};
+   if (!GetProcessTimes(peer->process_, &created, &exited, &kernel, &user)) return GetLastError();
+   peer->creation_time_ = (uint64_t{created.dwHighDateTime} << 32) | created.dwLowDateTime;
+-  // The retained live process object anchored this PID. Get the OS session
+-  // without asking a protected lowbox broker to open another process token.
+-  if (!ProcessIdToSessionId(peer->pid_, &peer->session_)) return GetLastError();
++  error = ReadProcessSession(peer->process_, &peer->session_);
++  if (error != ERROR_SUCCESS) return error;
+   peer->uid_ = android_uid;
+   peer->role_ = role;
+
 diff --git a/compat/bionic/process_bionic.cc b/compat/bionic/process_bionic.cc
 index 33e275d..6881f7f 100644
 --- a/compat/bionic/process_bionic.cc
@@ -5975,7 +6017,7 @@ index 566cd0b..6ef7346 100644
    uint32_t target_sdk = 0;
    uint64_t start_sequence = 0;
 diff --git a/compat/usb_storage/protected_runtime_session.cc b/compat/usb_storage/protected_runtime_session.cc
-index 77392f4..d32355d 100644
+index 77392f4..6bef8db 100644
 --- a/compat/usb_storage/protected_runtime_session.cc
 +++ b/compat/usb_storage/protected_runtime_session.cc
 @@ -5,6 +5,7 @@
@@ -6242,7 +6284,39 @@ index 77392f4..d32355d 100644
        identity_->session_objects(), identity_->app_container_objects(), entry->profile->package_objects.get()};
    status = AuthorityLaunch::Create(identity_->token(), spec, &entry->launch, launch_stage);
    if (status == ERROR_SUCCESS) {
-@@ -807,6 +866,202 @@ DWORD Session::PinApk(const std::wstring& path, const std::wstring& digest, Hand
+@@ -745,23 +804,30 @@ DWORD Session::StartEntry(std::unique_ptr<Entry> entry, const std::wstring& bina
+     status = entry->profile->PinPackageObjects(*entry->launch);
+   }
+   if (status != ERROR_SUCCESS) return status;
++  if (launch_stage) *launch_stage = "launch.read-process-creation-time";
+   entry->start_time = CreationTime(entry->launch->process());
+   if (!entry->start_time) return ERROR_INVALID_DATA;
++  if (launch_stage) *launch_stage = "launch.create-signal-channel";
+   status = ProtectedSignalChannel::Create(entry->launch->process(), &entry->signals);
+   if (status != ERROR_SUCCESS) return status;
++  if (launch_stage) *launch_stage = "launch.prepare-authority-peer";
+   LocalMemory descriptor;
+   status = PipeSecurity(entry->launch->process(), &descriptor);
+   if (status != ERROR_SUCCESS) return status;
+   SECURITY_ATTRIBUTES security{sizeof(security), descriptor.get(), FALSE};
+   status = AuthorityPeer::Create(entry->launch->process(), locator.c_str(), &security, &entry->peer);
+   if (status != ERROR_SUCCESS) return status;
++  if (launch_stage) *launch_stage = "launch.allow-binder-listener";
+   status = factory_->AllowAppContainer(entry->profile->sid.value);
+-  if (status == ERROR_SUCCESS) status = registration_->Register(entry->registration, entry->uid,
++  if (status != ERROR_SUCCESS) return status;
++  if (launch_stage) *launch_stage = "launch.register-binder-peer";
++  status = registration_->Register(entry->registration, entry->uid,
+       entry->system_server ? binder::PeerRole::kSystemServer : binder::PeerRole::kClient, *entry->launch);
+   if (status != ERROR_SUCCESS) return status;
+   Entry* pointer = entry.get();
+   processes_.emplace(entry->registration, std::move(entry));
+   pointer->worker = std::thread([this, pointer] { Serve(*pointer); });
++  if (launch_stage) *launch_stage = "launch.resume-guest-thread";
+   status = pointer->launch->Resume();
+   if (status != ERROR_SUCCESS) { registration_->Revoke(pointer->registration); return status; }
+   *created = pointer;
+@@ -807,6 +873,202 @@ DWORD Session::PinApk(const std::wstring& path, const std::wstring& digest, Hand
    return status == ERROR_SUCCESS && actual != digest ? ERROR_FILE_INVALID : status;
  }
 
@@ -6445,7 +6519,7 @@ index 77392f4..d32355d 100644
  DWORD Session::GrantAppFiles(Entry& entry) {
    const std::wstring code = entry.apk.substr(0, entry.apk.find_last_of(L'\\'));
    DWORD status = container::Grant(code, entry.profile->sid.value, FILE_GENERIC_READ | FILE_GENERIC_EXECUTE, true);
-@@ -839,13 +1094,15 @@ DWORD Session::Spawn(Entry& requester, const wire::Request& request,
+@@ -839,13 +1101,15 @@ DWORD Session::Spawn(Entry& requester, const wire::Request& request,
    // admitted. Command exits have a separate bounded short-lived history.
    if (applications >= 64) return ERROR_NOT_ENOUGH_QUOTA;
    wire::Reader reader(payload);
@@ -6466,7 +6540,7 @@ index 77392f4..d32355d 100644
        (process_name != entry->package && !process_name.starts_with(entry->package + L":"))) return ERROR_INVALID_PARAMETER;
    std::vector<std::wstring> environment;
    std::map<std::wstring, bool> keys;
-@@ -858,13 +1115,25 @@ DWORD Session::Spawn(Entry& requester, const wire::Request& request,
+@@ -858,13 +1122,25 @@ DWORD Session::Spawn(Entry& requester, const wire::Request& request,
    }
    DWORD status = PinApk(entry->apk, entry->digest, &entry->apk_pin);
    if (status != ERROR_SUCCESS) return status;
@@ -6493,7 +6567,7 @@ index 77392f4..d32355d 100644
    if (status == ERROR_SUCCESS) status = CreateProfile(profile_name, &entry->profile);
    if (status == ERROR_SUCCESS) status = GrantAppFiles(*entry);
    if (status == ERROR_SUCCESS) status = MakeLogs(*entry);
-@@ -1011,6 +1280,42 @@ DWORD Session::Dispatch(Entry& entry, const wire::Request& request,
+@@ -1011,6 +1287,42 @@ DWORD Session::Dispatch(Entry& entry, const wire::Request& request,
    }
  }
 
@@ -6536,7 +6610,7 @@ index 77392f4..d32355d 100644
  DWORD Session::ValidateUsbObservation(const Entry& entry, const wire::Request& request,
      const std::vector<std::byte>& payload, UsbQuery* query) try {
    if (WaitForSingleObject(stop_, 0) != WAIT_TIMEOUT) return ERROR_OPERATION_ABORTED;
-@@ -1116,6 +1421,8 @@ void Session::Serve(Entry& entry) {
+@@ -1116,6 +1428,8 @@ void Session::Serve(Entry& entry) {
          reply.status = ValidateUsbObservation(entry, request, payload, &query);
        }
        if (reply.status == ERROR_SUCCESS) reply.status = ObserveUsb(entry, query, &reply);
@@ -6545,7 +6619,7 @@ index 77392f4..d32355d 100644
      } else {
        std::lock_guard lock(mutex_);
        reply.status = Dispatch(entry, request, payload, &reply);
-@@ -1200,12 +1507,19 @@ void Session::Reap() {
+@@ -1200,12 +1514,19 @@ void Session::Reap() {
      // The workers and media brokers can finish while acquiring their own
      // locks. Never join or destroy those owners while holding mutex_.
      for (auto& entry : completed) if (entry->worker.joinable()) entry->worker.join();
@@ -6565,7 +6639,7 @@ index 77392f4..d32355d 100644
    HANDLE desktop_raw = nullptr;
    startup_stage_ = "runtime.wts-desktop-token";
    if (!WTSQueryUserToken(options_.desktop_session, &desktop_raw)) return GetLastError();
-@@ -1249,7 +1563,7 @@ DWORD Session::Run(const std::wstring& executable, std::unique_ptr<HostDisk> sel
+@@ -1249,7 +1570,7 @@ DWORD Session::Run(const std::wstring& executable, std::unique_ptr<HostDisk> sel
    const std::wstring broker_image = runtime_ + L"\\binderd.exe";
    const std::wstring broker_arguments = L"--gesher-protected-binder " + registration + L" " + listeners + L" " + binder_data_;
    const AuthorityLaunchSpec broker_spec{broker_image.c_str(), runtime_.c_str(), broker_arguments,
@@ -6574,7 +6648,7 @@ index 77392f4..d32355d 100644
        identity_->session_objects(), identity_->app_container_objects(), service_profile_->package_objects.get()};
    startup_stage_ = "runtime.create-binder-broker";
    status = AuthorityLaunch::Create(identity_->token(), broker_spec, &broker_, &launch_stage_);
-@@ -1264,14 +1578,15 @@ DWORD Session::Run(const std::wstring& executable, std::unique_ptr<HostDisk> sel
+@@ -1264,14 +1585,15 @@ DWORD Session::Run(const std::wstring& executable, std::unique_ptr<HostDisk> sel
    status = BinderListenerFactory::Create(*broker_, binder_data_, packages, &factory_);
    if (status != ERROR_SUCCESS) return status;
    startup_stage_ = "runtime.binder-authority-connect";
@@ -6592,7 +6666,24 @@ index 77392f4..d32355d 100644
        identity_->session_objects(), identity_->app_container_objects(), service_profile_->package_objects.get()};
    startup_stage_ = "runtime.create-service-manager";
    status = AuthorityLaunch::Create(identity_->token(), manager_spec, &manager_, &launch_stage_);
-@@ -1423,12 +1738,13 @@ DWORD Session::SpawnCommand(Entry& requester, const wire::Request& request,
+@@ -1280,8 +1602,14 @@ DWORD Session::Run(const std::wstring& executable, std::unique_ptr<HostDisk> sel
+     launch_stage_ = "launch.pin-profile-package-namespace";
+     status = service_profile_->PinPackageObjects(*manager_);
+   }
+-  if (status == ERROR_SUCCESS) status = registration_->Register(1, 1000, binder::PeerRole::kContextManager, *manager_);
+-  if (status == ERROR_SUCCESS) status = manager_->Resume();
++  if (status != ERROR_SUCCESS) return status;
++  startup_stage_ = "runtime.register-service-manager";
++  launch_stage_ = "launch.register-binder-peer";
++  status = registration_->Register(1, 1000, binder::PeerRole::kContextManager, *manager_);
++  if (status != ERROR_SUCCESS) return status;
++  startup_stage_ = "runtime.resume-service-manager";
++  launch_stage_ = "launch.resume-guest-thread";
++  status = manager_->Resume();
+   if (status != ERROR_SUCCESS) return status;
+   auto system = std::make_unique<Entry>();
+   system->registration = 2;
+@@ -1423,12 +1751,13 @@ DWORD Session::SpawnCommand(Entry& requester, const wire::Request& request,
    child->package = root->package;
    child->digest = root->digest;
    child->signer = root->signer;
@@ -6607,7 +6698,7 @@ index 77392f4..d32355d 100644
      bool allowed = false;
      for (const auto& path : permitted) {
        if (Same(child->working_directory, path) || (child->working_directory.size() > path.size() &&
-@@ -1598,6 +1914,7 @@ DWORD RunProtectedAndroid(const std::wstring& directory, const std::wstring& exe
+@@ -1598,6 +1927,7 @@ DWORD RunProtectedAndroid(const std::wstring& directory, const std::wstring& exe
    ProtectedIdentityCleanup cleanup;
    const char* stage = "runtime.import-selection";
    const char* launch_stage = "none";
@@ -6615,7 +6706,7 @@ index 77392f4..d32355d 100644
    DWORD status = ERROR_SUCCESS;
    try {
      std::unique_ptr<HostDisk> selected;
-@@ -1607,6 +1924,7 @@ DWORD RunProtectedAndroid(const std::wstring& directory, const std::wstring& exe
+@@ -1607,6 +1937,7 @@ DWORD RunProtectedAndroid(const std::wstring& directory, const std::wstring& exe
        status = session.Run(executable, std::move(selected));
        stage = session.startup_stage();
        launch_stage = session.launch_stage();
@@ -6623,7 +6714,7 @@ index 77392f4..d32355d 100644
      }  // Guest teardown and profile unload finish before reporting the status.
    } catch (const std::bad_alloc&) {
      stage = "runtime.allocation-failure";
-@@ -1616,7 +1934,9 @@ DWORD RunProtectedAndroid(const std::wstring& directory, const std::wstring& exe
+@@ -1616,7 +1947,9 @@ DWORD RunProtectedAndroid(const std::wstring& directory, const std::wstring& exe
      status = ERROR_NOT_READY;
    }
    if (status != ERROR_SUCCESS || cleanup.profile_error.load() != ERROR_SUCCESS ||

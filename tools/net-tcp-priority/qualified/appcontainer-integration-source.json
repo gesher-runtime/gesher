@@ -1,9 +1,10 @@
 {
   "baseline": "ff2c1870053c9d0332e6abef07a25fc282d384b5",
   "native_runtime_approval": false,
-  "patch_sha256": "0ed11a4520da8332bad90b9154fa7d8e3ffde600e7d683aa0adf4c23cfe6a9d7",
+  "patch_sha256": "420c5f08c6eb577fd4dc55f306b1f5e83d208206df0db466ea4a7beca2f61c66",
   "paths": [
     "compat/binder/binderd.cc",
+    "compat/binder/protected_peers.cc",
     "compat/bionic/process_bionic.cc",
     "compat/credentials/account_crypto.c",
     "compat/elf/exec/exec.cmake",
@@ -59,6 +60,7 @@
   ],
   "previous_sha256": {
     "compat/binder/binderd.cc": "00424115aed56de032939839ce574fa08b3f58df43b3dda8da214da1540d65ff",
+    "compat/binder/protected_peers.cc": "8b3031f3cb0075a46ee4c9813af2691a036739bdec76dc9b5c530e63bba52286",
     "compat/bionic/process_bionic.cc": "0338fa535a2c7389675a842b8450ec4928a9142be90f02b8c7697914414a4442",
     "compat/credentials/account_crypto.c": "5e71ce02faabd27bee5378d6be3d73c4eac08a2128deda476ea4e770c9f70dc4",
     "compat/elf/exec/exec.cmake": "9b3f62c0914576989937dc2b878fa46545a646433d05dd2fde0ff6bd31941fff",
@@ -114,6 +116,7 @@
   },
   "source_sha256": {
     "compat/binder/binderd.cc": "562815a371c465cb4dd09165e82f5b0a38adfaa753cac13bf6f7a6ceccd6679a",
+    "compat/binder/protected_peers.cc": "5ee317b30db13e118ef70f895eb08f89c9b66e115fd953b13a05fe2611857adc",
     "compat/bionic/process_bionic.cc": "01e0e3a9ae5eb2ab9890bfbb11d46755da011ddd30b2181423a7daf70ee33745",
     "compat/credentials/account_crypto.c": "400199825206a92f7fe92d642fdf38897c058296aeaec545b3a8ea1d057325c5",
     "compat/elf/exec/exec.cmake": "a2dac6579333c380f566c1b480e65a49212d11041865ad69b4c62430fb83912e",
@@ -161,7 +164,7 @@
     "compat/usb_storage/protected_profile_name.h": "f7b086eec63010281aa8a0393c5a5aecdec5d2d8dbb4324207bb356e2429dbba",
     "compat/usb_storage/protected_runtime_client.cc": "e19c3bbdb3c41eca1e050936b6d4bcda6dadd1af5ad88246ccbd69534ef7adae",
     "compat/usb_storage/protected_runtime_client.h": "d7d1b5ae22d5eb74f3b0528b92c9fd36afb42a50db5aee1f61583caa2cbd5824",
-    "compat/usb_storage/protected_runtime_session.cc": "1025ba28ca59ab520c6fce839a281c104da00b9cbf4e659737268190225adf1d",
+    "compat/usb_storage/protected_runtime_session.cc": "cf88d8ed68e516039d9abce9cc70051a065a74a81321102406332323cb4d414a",
     "compat/usb_storage/protected_runtime_wire.h": "67923e1451debbb39983b42e5fef032bb3878bfc87a52275b25dda848cc9d3dc",
     "tests/native/ofd_transfer_host_test.cc.in": "f6072bbec3bcea28b6780a0ac1cc11ee625e5b92cf5ce86d455fe989f8a23e52",
     "tools/test_ofd_transfer_contracts.py": "6a0515f2f8ccad82c7cd8a1e1bceb25474af46db5d6ab2894441f7f644eaa545",
