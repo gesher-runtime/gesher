@@ -957,7 +957,8 @@ bool SplashWhileStarting(const std::wstring& here, const std::vector<std::wstrin
 
 struct Runner {
   std::wstring powershell;
-  std::wstring script;  // gesher-app.ps1, or the control panel's script
+  std::wstring script;      // gesher-app.ps1, or the control panel's script
+  std::wstring native_app;  // gesher-app.exe when present (avoids PowerShell startup & GPO blocks)
   STARTUPINFOW si = {};
   bool inherit = false;  // standard handles are passed on: somebody reads the output
 };
@@ -968,15 +969,19 @@ struct Child {
   std::wstring error_file;  // where the launcher writes a failure for the user, or ""
 };
 
-// Starts the script with `arguments` (as written: quoted where needed), its
-// console never shown. With `error_file` and nobody reading the output, a new
-// GESHER_LAUNCH_ERROR_FILE for it; with `job`, its processes in a new job.
+// Starts the native launcher (or script fallback) with `arguments` (as written: quoted
+// where needed), its console never shown. With `error_file` and nobody reading the output,
+// a new GESHER_LAUNCH_ERROR_FILE for it; with `job`, its processes in a new job.
 bool StartChild(const Runner& runner, const std::wstring& arguments, bool error_file, bool job,
                 Child* child) {
   static bool error_env_set = false;
-  std::wstring command = L"\"" + runner.powershell +
-                         L"\" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"" +
-                         runner.script + L"\"";
+  const bool use_native = !runner.native_app.empty();
+  const std::wstring& exe = use_native ? runner.native_app : runner.powershell;
+  std::wstring command =
+      use_native ? L"\"" + runner.native_app + L"\""
+                 : L"\"" + runner.powershell +
+                       L"\" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"" +
+                       runner.script + L"\"";
   if (!arguments.empty()) command += L" " + arguments;
   if (error_file && !runner.inherit) {
     child->error_file = NewErrorFile();
@@ -988,7 +993,7 @@ bool StartChild(const Runner& runner, const std::wstring& arguments, bool error_
     }
   }
   STARTUPINFOW si = runner.si;
-  if (!CreateProcessW(runner.powershell.c_str(), command.data(), nullptr, nullptr,
+  if (!CreateProcessW(exe.c_str(), command.data(), nullptr, nullptr,
                       runner.inherit ? TRUE : FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si,
                       &child->pi)) {
     if (!child->error_file.empty()) DeleteFileW(child->error_file.c_str());
@@ -1706,6 +1711,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
 
   runner.script = find_script(L"gesher-app.ps1");
   if (runner.script.empty()) runner.script = here + L"\\gesher-app.ps1";
+  runner.native_app = find_script(L"gesher-app.exe");
 
   // An APK or bundle opened from Explorer: installed only once the user agrees.
   if (!default_to_control_panel && args.size() == 1 && !IsCommand(args[0]) && IsFile(args[0])) {
@@ -1717,6 +1723,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     std::wstring cp_script = find_script(L"gesher-control-panel.ps1");
     if (!cp_script.empty()) {
       runner.script = cp_script;
+      runner.native_app.clear();
       direct_control_panel = true;
     }
   }

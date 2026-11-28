@@ -103,6 +103,7 @@ Source: "{#BuildDir}\gesher-exec.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; gesher-launch (compat/shell/gesher_launch.cc): what the apps' shortcuts, a
 ; double-clicked .apk and a toast click start: gesher-app with no console window.
 Source: "{#BuildDir}\gesher-launch.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#BuildDir}\gesher-app.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; The .apk file type's icon handler (compat/shell/gesher_shellext.cc): an APK
 ; shows its app's icon in Explorer, which keeps it loaded: an update renames the
 ; loaded copy (PrepareToInstall) and writes the new one beside it.

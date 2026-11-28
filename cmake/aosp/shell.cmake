@@ -30,6 +30,10 @@ add_executable(gesher-launch WIN32 ${CMAKE_SOURCE_DIR}/compat/shell/gesher_launc
 target_compile_options(gesher-launch PRIVATE -Wall -Wextra -Werror -municode)
 target_link_options(gesher-launch PRIVATE -municode)
 target_link_libraries(gesher-launch PRIVATE user32 gdi32 shell32 ole32 advapi32)
+add_executable(gesher-app ${CMAKE_SOURCE_DIR}/compat/shell/gesher_app.cc)
+target_compile_options(gesher-app PRIVATE -Wall -Wextra -Werror -municode)
+target_link_options(gesher-app PRIVATE -municode)
+target_link_libraries(gesher-app PRIVATE advapi32)
 add_library(gesher_shellext SHARED
   ${CMAKE_SOURCE_DIR}/compat/shell/gesher_shellext.cc
   ${CMAKE_SOURCE_DIR}/compat/shell/gesher_shellext.def)

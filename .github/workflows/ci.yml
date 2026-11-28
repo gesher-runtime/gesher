@@ -1702,6 +1702,10 @@ jobs:
           }
           powershell -NoProfile -STA -ExecutionPolicy Bypass -File tests/windows/shell/ControlPanelPresentationChecks.ps1 -PackageDirectory $app
           if ($LASTEXITCODE -ne 0) { throw 'Installed WPF presentation resource checks failed' }
+          # The installed gesher-app.exe (what gesher-launch and gesher-app.cmd run) against
+          # gesher-app.ps1's contract, and gesher-launch running it.
+          powershell -NoProfile -ExecutionPolicy Bypass -File tests/windows/shell/NativeAppLauncherChecks.ps1 -AppPath "$app\gesher-app.exe" -LauncherPath "$app\gesher-launch.exe"
+          if ($LASTEXITCODE -ne 0) { throw 'Installed gesher-app.exe contract checks failed' }
           . (Join-Path $app 'gesher-update.ps1')
           $installedVersion = Get-GesherInstalledVersion -InstallDirectory $app
           if ($installedVersion -cne $env:GESHER_PACKAGE_VERSION) {

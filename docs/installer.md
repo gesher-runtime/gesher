@@ -114,8 +114,19 @@ Everything is per user, under `HKCU\Software\Classes`:
 `ChangesAssociations=yes` makes Setup and the uninstaller notify the shell
 (`SHChangeNotify`), so Explorer picks up the change without a sign-out.
 
-`gesher-launch.exe` (`compat/shell/gesher_launch.cc`) runs `gesher-app.ps1`
-with the same arguments. It is a Windows-subsystem program: Explorer starting
+`gesher-launch.exe` (`compat/shell/gesher_launch.cc`) runs `gesher-app.exe`
+(`compat/shell/gesher_app.cc`) with the same arguments, or `gesher-app.ps1` when
+the program is not installed (`gesher-app.cmd` does the same). `gesher-app.exe`
+does what `gesher-app.ps1` does for the device's commands and app launches
+(profile, runtime files, the VM's options and environment) without starting
+PowerShell: a launch does not wait for it, and a machine whose policy restricts
+PowerShell scripts (`MachinePolicy` execution policy) still launches apps.
+`tests/windows/shell/NativeAppLauncherChecks.ps1` holds it to the script's
+contract, including every command the script hands to the Launcher. The
+Control Center and `control-panel` stay PowerShell. In the paragraphs below,
+`gesher-app.ps1` stands for whichever of the two runs.
+
+`gesher-launch.exe` is a Windows-subsystem program: Explorer starting
 `powershell.exe` (a console program) directly flashed a console window before
 `-WindowStyle Hidden` hid it, while gesher-launch starts it with
 `CREATE_NO_WINDOW`. It also calls `AllowSetForegroundWindow(ASFW_ANY)`: the

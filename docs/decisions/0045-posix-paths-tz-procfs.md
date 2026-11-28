@@ -85,7 +85,8 @@ device keeps an ID of its own. If the
 session record cannot be read or created, or the mutex is not acquired within
 10 seconds, an open for reading fails with `EIO`. The device name must not
 recur. The launcher uses `gesher-<milliseconds>` and
-`gesher-app.ps1 --system-server` uses `gesher-app-<pid>-<milliseconds>`.
+`gesher-app --system-server` (the script or `gesher-app.exe`) uses
+`gesher-app-<pid>-<milliseconds>`.
 
 ### Time zones: /etc/timezone and the tzdata module's files
 libcore asks `RuntimeHooks`' supplier for the default zone, which only the
