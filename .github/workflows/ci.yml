@@ -3082,7 +3082,7 @@ jobs:
           path: |
             web3-query-results.txt
             ${{ runner.temp }}/web3-query-component-${{ github.run_id }}/*.log
-            ${{ runner.temp }}/web3-query-component-${{ github.run_id }}/logs-web3/**
+            ${{ runner.temp }}/web3-query-component-${{ github.run_id }}/logs/**
             ${{ runner.temp }}/web3-query-component-${{ github.run_id }}/logs-query-device/**
           if-no-files-found: warn
 

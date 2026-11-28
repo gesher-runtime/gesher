@@ -277,6 +277,23 @@ services.put("wrapped", register(StandIn.of(IActivityManager.class, delegate)));
         self.assertEqual(rows[0]['source'], {'path': 'Services.java', 'line': 10})
         self.assertTrue(all(r['status'] == 'registered_source_unverified' for r in rows))
 
+    def test_registry_parses_parenthesised_keys_and_this_receiver(self):
+        source = """
+services.put(keyFor("a"), StandIn.of(android.app.IActivityManager.class, delegate));
+this.services.put("q", z);
+other.services.put("foreign", z);
+"""
+        ref = lambda path, text, offset: {'path': path, 'line': 1}
+        rows = audit.registry_rows('Services.java', source, {}, {}, ref)
+        self.assertEqual([r['key_expression'] for r in rows], ['keyFor("a")', '"q"'])
+        self.assertEqual([r['resolved_key'] for r in rows], [None, 'q'])
+        self.assertEqual(rows[0]['binder_interface'], 'android.app.IActivityManager')
+
+    def test_unparsed_registration_fails_instead_of_disappearing(self):
+        ref = lambda path, text, offset: {'path': path, 'line': 1}
+        with self.assertRaisesRegex(ValueError, '1 services.put registration'):
+            audit.registry_rows('Services.java', 'services.put(unbalanced("a", z);', {}, {}, ref)
+
     def test_context_values_include_non_service_suffix_and_ignore_failed_javap(self):
         text = ('  public static final java.lang.String DEVICE_IDLE_CONTROLLER = "deviceidle";\n'
                 '  public static final java.lang.String ACTIVITY_SERVICE = "activity";\n'

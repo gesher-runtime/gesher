@@ -306,6 +306,9 @@ def java_delta(before, after, rows, *, include_constants=False):
              for cls in classes.values() for key, value in cls.constant_values.items()}
             for classes in (before, after)
         )
+        if not old_constants or not new_constants:
+            # A platform without any encoded constants was not measured, not unchanged.
+            raise ValueError("constant_values_unmeasured")
         result["constant_values"] = mapping_delta(old_constants, new_constants, "java_constant_value", rows)
     return result
 

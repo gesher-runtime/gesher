@@ -1,6 +1,7 @@
 """Normal SDK artifact fixtures test distinct evidence dimensions and replay."""
 from copy import deepcopy
 import hashlib
+import contextlib
 import io
 import json
 from pathlib import Path
@@ -118,6 +119,33 @@ class SdkPlatformDiffTest(unittest.TestCase):
             default_report = json.loads((out / "summary.json").read_text(encoding="utf-8"))
             self.assertIn("java_constant_values", default_report["unmeasured"])
             self.assertEqual((out / "delta.jsonl").read_bytes(), b"")
+
+    def test_constant_comparison_without_constants_fails_instead_of_reporting_zero(self):
+        flags = diff.java.PUBLIC | diff.java.STATIC | diff.java.FINAL
+        fields = (("field", "VALUE", "I", flags),)
+
+        def platform_with(path, identity, api, constants):
+            jar = io.BytesIO()
+            write_zip(jar, {"sample/AChild.class": classfile(members=fields, constants=constants)})
+            return fixture_platform(path, identity, api, "17", {"android.jar": jar.getvalue()})
+
+        for before_constants, after_constants in (({}, {"VALUE": (3, struct.pack(">i", 1))}),
+                                                  ({"VALUE": (3, struct.pack(">i", 1))}, {}), ({}, {})):
+            with tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                before, after = root / "before.zip", root / "after.zip"
+                manifest = {"schema_version": 1, "comparison_id": "sdk-constant-missing",
+                            "before": platform_with(before, "before", "36", before_constants),
+                            "after": platform_with(after, "after", "37.0", after_constants),
+                            "repository_metadata_provenance": {}, "project_source_context": {}}
+                manifest_path = root / "manifest.json"
+                manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+                args = ["--manifest", str(manifest_path), "--before-archive", str(before),
+                        "--after-archive", str(after), "--out-dir", str(root / "report")]
+                with contextlib.redirect_stderr(io.StringIO()) as stderr:
+                    self.assertEqual(diff.main([*args, "--include-constant-values"]), 1)
+                self.assertIn("constant_values_unmeasured", stderr.getvalue())
+                self.assertEqual(diff.main(args), 0)
 
     def test_profiles_keep_minor_extension_revision_and_absent_preview_separate(self):
         before = diff.sdk_profile(sdk_properties(), repository())

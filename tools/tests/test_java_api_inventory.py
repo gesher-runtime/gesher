@@ -88,6 +88,16 @@ class InventoryTests(unittest.TestCase):
             self.assertEqual(names, {'sample.AChild', 'sample.ZParent'})
             self.assertEqual(manifest['selected_members'], 2)
 
+    def test_provider_root_dex_outside_pattern_fails_and_nested_dex_is_recorded(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bad = archive(Path(tmp)/'bad.apk', {'classes.dex': dex(), 'extra.dex': dex()})
+            with self.assertRaisesRegex(audit.InvalidInput, 'unsupported_provider_dex_member_name'):
+                audit.archive_inventory(bad, 'provider', 'provider-01', audit.Limits())
+            good = archive(Path(tmp)/'good.apk', {'classes.dex': dex(), 'assets/plugin.dex': dex()})
+            names, _, manifest = audit.archive_inventory(good, 'provider', 'provider-02', audit.Limits())
+            self.assertEqual(names, {'sample.AChild', 'sample.ZParent'})
+            self.assertEqual(manifest['skipped_nested_dex_members'], ['assets/plugin.dex'])
+
     def test_unsafe_member_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             jar = Path(tmp)/'framework.jar'

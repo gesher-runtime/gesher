@@ -53,14 +53,46 @@ def read_context_constants(framework_jar):
     return constants, 'context_constants_inspected'
 
 
+SERVICE_PUT = re.compile(r'(?<![\w$.])(?:this\s*\.\s*)?services\s*\.\s*put\s*\(')
+
+
+def argument_end(code, start):
+    """Index of the first top-level comma or closing parenthesis of a call's first argument."""
+    depth = 0
+    for i in range(start, len(code)):
+        c = code[i]
+        if c in '([{':
+            depth += 1
+        elif c in ')]}':
+            if not depth:
+                return i if c == ')' else None
+            depth -= 1
+        elif c == ',' and not depth:
+            return i
+        elif c == ';' and not depth:
+            return None
+    return None
+
+
 def registry_rows(path, text, context_constants, framework, ref):
     """Attribute direct StandIn registrations without inferring the live delegate."""
     code = mask(text)
     imports = {name.rsplit('.', 1)[-1]: name for name in
                re.findall(r'\bimport\s+([\w.]+)\s*;', code)}
     rows = []
-    for put in re.finditer(r'(?<![\w$.])services\s*\.\s*put\s*\(([^,;(){}\[\]]*),', code):
-        key_expression = text[put.start(1):put.end(1)].strip()
+    puts = []
+    for put in SERVICE_PUT.finditer(code):
+        end = argument_end(code, put.end())
+        if end is not None and code[end] == ',':
+            puts.append((put, end))
+    # Every raw `services.put(` must be parsed or be a registry owned by another object.
+    raw = len(re.findall(r'(?<![\w$])services\s*\.\s*put\s*\(', code))
+    foreign = len(re.findall(r'(?<![\w$])(?!this\s*\.)[\w$]+\s*\.\s*services\s*\.\s*put\s*\(', code))
+    unparsed = raw - foreign - len(puts)
+    if unparsed:
+        raise ValueError(f'{path}: {unparsed} services.put registration(s) could not be parsed')
+    for put, end in puts:
+        key_expression = text[put.end():end].strip()
         key_code = mask(key_expression, keep_literals=True).strip()
         literal = re.fullmatch(r'"([^"\\\n]*)"', key_code)
         constant = re.fullmatch(r'Context\s*\.\s*(\w+)', key_code)
@@ -71,10 +103,10 @@ def registry_rows(path, text, context_constants, framework, ref):
             key = context_constants.get(constant[1])
         row = {'key_expression': key_expression, 'resolved_key': key,
                'status': 'registered_source_unverified', 'source': ref(path, text, put.start()),
-               'expression_excerpt': re.sub(r'\s+', ' ', text[put.end():put.end()+180]).split(';')[0],
+               'expression_excerpt': re.sub(r'\s+', ' ', text[end + 1:end + 181]).split(';')[0],
                'binder_interface': None, 'binder_interface_class_literal': None,
                'binder_interface_status': 'adapter_not_attributed'}
-        adapter = STANDIN_ADAPTER.match(code, put.end())
+        adapter = STANDIN_ADAPTER.match(code, end + 1)
         if adapter:
             class_literal = adapter[1]
             interface = class_literal if '.' in class_literal else imports.get(class_literal)

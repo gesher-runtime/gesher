@@ -6,6 +6,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import runpy
 import subprocess
 import tempfile
@@ -586,6 +587,45 @@ class PublisherTests(unittest.TestCase):
         self.api.releases.append(release_row(901, 'v0.3.0'))
         self.assertIn('Publication already confirmed', self.publish())
         self.assertEqual(self.mutations, [])
+
+
+class E2eRuntimeProvenanceWorkflowContract(unittest.TestCase):
+    """The e2e job must keep verifying installed-runtime provenance."""
+
+    @staticmethod
+    def e2e_job():
+        text = (Path(__file__).resolve().parents[2] / '.github/workflows/ci.yml').read_text(encoding='utf-8')
+        lines = text.splitlines()
+        start = lines.index('  e2e:')
+        end = next((i for i in range(start + 1, len(lines)) if re.fullmatch(r'  [A-Za-z0-9_-]+:', lines[i])), len(lines))
+        return chr(10).join(lines[start:end])
+
+    def test_e2e_job_requires_runtime_provenance(self):
+        job = self.e2e_job()
+        runner = [line for line in job.splitlines() if 'tests/e2e/run-e2e.ps1' in line]
+        self.assertEqual(len(runner), 1)
+        self.assertRegex(runner[0], r'\s-RequireRuntimeProvenance(\s|$)')
+        coverage = [line for line in job.splitlines() if 'tests/e2e/coverage.py' in line]
+        self.assertEqual(len(coverage), 1)
+        self.assertRegex(coverage[0], r'\s--installer-dir\s+installer(\s|$)')
+        self.assertRegex(coverage[0], r'\s--installed-runtime\s+\S+')
+        self.assertIn('python tests/e2e/test_runtime_provenance.py', job)
+
+    def test_web3_log_upload_matches_the_query_script_layout(self):
+        root = Path(__file__).resolve().parents[2]
+        text = (root / '.github/workflows/ci.yml').read_text(encoding='utf-8')
+        script = (root / 'tests/windows/run-web3-query-component.ps1').read_text(encoding='utf-8')
+        base = '${{ runner.temp }}/web3-query-component-${{ github.run_id }}/'
+        self.assertIn('web3-query-component-$env:GITHUB_RUN_ID', script)
+        self.assertIn('logs-query-device', script)
+        for glob in ('*.log', 'logs/**', 'logs-query-device/**'):
+            self.assertIn(base + glob, text)
+        self.assertNotIn(base + 'logs-web3/**', text)
+
+    def test_package_job_captures_the_receipt_it_uploads(self):
+        text = (Path(__file__).resolve().parents[2] / '.github/workflows/ci.yml').read_text(encoding='utf-8')
+        self.assertIn('tests/e2e/runtime_provenance.py capture', text)
+        self.assertIn('installer/gesher-runtime-provenance.json', text)
 
 
 if __name__ == '__main__':

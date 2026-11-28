@@ -279,6 +279,7 @@ def archive_inventory(path: Path, role: str, source_id: str, limits: Limits):
         fail("zip_central_directory_limit")
     names, annotations, versions = set(), set(), Counter()
     total = selected = 0
+    skipped_dex: list[str] = []
     with zipfile.ZipFile(path) as archive:
         infos = archive.infolist()
         if len(infos) != entries:
@@ -313,7 +314,11 @@ def archive_inventory(path: Path, role: str, source_id: str, limits: Limits):
                 if not DEX_ENTRY.fullmatch(info.filename):
                     if role == "boot":
                         fail("unsupported_boot_dex_member_name")
-                    continue  # APK assets and other dynamically loaded DEX are outside this inventory.
+                    if "/" not in info.filename:
+                        fail("unsupported_provider_dex_member_name")
+                    # Nested APK assets and other dynamically loaded DEX are outside this inventory.
+                    skipped_dex.append(info.filename)
+                    continue
                 classes, version = dex_classes(archive.read(info), limits)
                 names.update(classes)
                 versions[f"dex_{version}"] += 1
@@ -324,6 +329,8 @@ def archive_inventory(path: Path, role: str, source_id: str, limits: Limits):
                 "sha256": digest.hexdigest(), "archive_bytes": size, "entries": entries,
                 "uncompressed_bytes": total, "class_definitions": len(names), "selected_members": selected,
                 "versions": dict(sorted(versions.items()))}
+    if skipped_dex:
+        manifest["skipped_nested_dex_members"] = sorted(skipped_dex)
     return names, annotations, manifest
 
 
