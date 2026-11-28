@@ -1197,9 +1197,29 @@ final class ActiveServices {
         stopServices(record -> change.disables(mPm, record.owner, record.info.name, ApkPackage.ComponentKind.SERVICE), true);
     }
 
+    /** Guarded by this. App clients still own an unbind after onBindingDied. */
+    private void retireConnectionsLocked(ServiceRecord r, List<ConnectionRecord> terminated) {
+        for (IntentBindRecord binding : r.bindings.values()) {
+            for (ConnectionRecord connection : binding.connections) {
+                terminated.add(connection);
+                // Server-local consumers use raw IServiceConnection and release
+                // their resources in their own terminal callback.
+                if (connection.systemClient) {
+                    IBinder token = connection.conn.asBinder();
+                    List<ConnectionRecord> owned = mConnections.get(token);
+                    if (owned != null) {
+                        owned.remove(connection);
+                        if (owned.isEmpty()) mConnections.remove(token);
+                    }
+                }
+            }
+            binding.connections.clear();
+        }
+    }
+
     private void stopServices(Predicate<ServiceRecord> selected, boolean disabled) {
         List<ServiceRecord> stopped = new ArrayList<>();
-        List<ConnectionRecord> disconnected = new ArrayList<>();
+        List<ConnectionRecord> terminated = new ArrayList<>();
         synchronized (this) {
             for (ServiceRecord r : mServices.values()) {
                 if (!selected.test(r)) continue;
@@ -1216,23 +1236,13 @@ final class ActiveServices {
                 }
                 resetBindingsLocked(r);
                 if (r.restart != null) { r.restart.cancel(false); r.restart = null; }
-                for (IntentBindRecord b : r.bindings.values()) {
-                    for (ConnectionRecord c : b.connections) {
-                        disconnected.add(c);
-                        List<ConnectionRecord> list = mConnections.get(c.conn.asBinder());
-                        if (list != null) {
-                            list.remove(c);
-                            if (list.isEmpty()) mConnections.remove(c.conn.asBinder());
-                        }
-                    }
-                    b.connections.clear();
-                }
+                retireConnectionsLocked(r, terminated);
                 stopped.add(r);
             }
             publishShortcutStateLocked();
         }
         mAtm.noteShortcutForeground(null, 0);
-        for (ConnectionRecord c : disconnected) connected(c, null, disabled);
+        for (ConnectionRecord c : terminated) connected(c, null, true);
         for (ServiceRecord r : stopped) maybeBringDown(r);
     }
 
@@ -1240,7 +1250,8 @@ final class ActiveServices {
     void processDied(ActivityTaskManagerService.ProcessRecord app) {
         List<ServiceRecord> recovered = new ArrayList<>();
         List<ServiceRecord> reconsider = new ArrayList<>();
-        List<ConnectionRecord> disconnected = new ArrayList<>();
+        List<ConnectionRecord> internalDisconnects = new ArrayList<>();
+        List<ConnectionRecord> terminated = new ArrayList<>();
         synchronized (this) {
             // A dead client's BIND_AUTO_CREATE must not keep somebody else's process
             // alive forever. System-owned bindings have no app caller and survive.
@@ -1294,17 +1305,8 @@ final class ActiveServices {
                 // eventual death into an intentional stop of its existing services.
                 boolean recover = (!app.exiting || app.reaped || app.recoverAfterPidSupersession)
                         && (started || r.hasAutoCreateConnections())
-                        && r.owner != null && r.owner.serviceInfo(r.info.name, 0) != null
-                        && serviceCurrent(r);
-                for (IntentBindRecord b : r.bindings.values()) {
-                    for (ConnectionRecord c : b.connections) {
-                        // LoadedApk observes a published Binder's death itself.
-                        // A null publication means onBind returned null, so don't
-                        // send one while a surviving app binding awaits restart.
-                        if (!recover || c.systemClient) disconnected.add(c);
-                    }
-                }
-                if (recover) {
+                        && r.owner != null && r.owner.serviceInfo(r.info.name, 0) != null;
+                if (serviceCurrent(r) && recover) {
                     if (r.startRequested && r.pendingStarts.isEmpty() && started) {
                         Intent redelivery = r.startResult == Service.START_REDELIVER_INTENT
                                 && r.lastStartIntent != null ? new Intent(r.lastStartIntent) : null;
@@ -1317,17 +1319,23 @@ final class ActiveServices {
                 } else {
                     r.startRequested = false;
                     mServices.remove(r.name);
-                    for (IntentBindRecord b : r.bindings.values()) {
-                        for (ConnectionRecord c : b.connections) {
-                            List<ConnectionRecord> list = mConnections.get(c.conn.asBinder());
-                            if (list != null) list.remove(c);
-                        }
+                    retireConnectionsLocked(r, terminated);
+                }
+            }
+            // LoadedApk monitors each published remote Binder. Synthesizing a
+            // null publication on a recoverable crash would signal onNullBinding.
+            // Preserve the direct disconnect for existing server-local callbacks.
+            for (ServiceRecord r : recovered) {
+                for (IntentBindRecord b : r.bindings.values()) {
+                    for (ConnectionRecord c : b.connections) {
+                        if (c.systemClient) internalDisconnects.add(c);
                     }
                 }
             }
+            publishShortcutStateLocked();
         }
-        synchronized (this) { publishShortcutStateLocked(); }
-        for (ConnectionRecord c : disconnected) connected(c, null);
+        for (ConnectionRecord c : terminated) connected(c, null, true);
+        for (ConnectionRecord c : internalDisconnects) connected(c, null);
         for (ServiceRecord r : reconsider) {
             drainBindingCalls(r);
             maybeBringDown(r);
