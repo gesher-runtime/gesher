@@ -9,6 +9,7 @@
 #include <stddef.h>
 #include <stdio.h>
 
+#include <atomic>
 #include <cstring>
 
 #include <string>
@@ -185,7 +186,12 @@ bool InterruptibleSleep(uint32_t ms, uint32_t* left_ms, int* error);
 // A blocking call's wait (wait4): up to `ms`, running the handlers of signals
 // that arrive. 0, or EINTR when a handler without SA_RESTART ran (one with
 // SA_RESTART returns 0: the call restarts), or a delivery error.
-int InterruptibleWaitPoint(uint32_t ms);
+// A wait also ends when its owner publishes a changed generation. A zero
+// timeout waits indefinitely. Wake publishers must hold no signal-state lock.
+int InterruptibleWaitPoint(uint32_t ms, const std::atomic<uint64_t>& generation,
+                           uint64_t observed);
+void NotifyInterruptibleWaiters();
+void ChildWaitStateChanged();
 
 // As above, observing an interruption before delivering its handlers. The
 // observer is an internal host callback, never loaded application code; it

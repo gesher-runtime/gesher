@@ -265,7 +265,7 @@ if ($env:OS -eq 'Windows_NT' -and [Threading.Thread]::CurrentThread.ApartmentSta
     Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase
     $uiAst = [System.Management.Automation.Language.Parser]::ParseFile([IO.Path]::GetFullPath(
         (Join-Path (Split-Path -Parent $PanelPath) 'gesher-ui.ps1')), [ref]$tokens, [ref]$parseErrors)
-    foreach ($pair in @(@($uiAst, 'Get-GesherText'), @($ast, 'Show-ModernConfirmDialog'))) {
+    foreach ($pair in @(@($uiAst, 'Get-GesherText'), @($ast, 'Show-ModernConfirmDialog'), @($ast, 'Initialize-PanelDeviceAdminControls'))) {
         $definition = $pair[0].Find({ param($node)
             $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $pair[1]
         }, $false)
@@ -277,7 +277,13 @@ if ($env:OS -eq 'Windows_NT' -and [Threading.Thread]::CurrentThread.ApartmentSta
     $flowDirection = 'LeftToRight'
     $script:Started = [Collections.Generic.List[string]]::new()
     $script:QueryAnswer = $null
-    function Start-PanelSpecialAccess([string[]] $arguments) {
+    $script:AdminAnswer = [PSCustomObject]@{ ExitCode = 0; Lines = @("device-admin`tinactive") }
+    $script:AdminRevocations = 0
+    function Start-PanelSpecialAccess([string[]] $arguments, [string] $command = 'special-access') {
+        if ($command -eq 'device-admin') {
+            if ($arguments.Count -eq 2) { $script:AdminRevocations++ }
+            return [PSCustomObject]@{ Polls = 0; Result = $script:AdminAnswer }
+        }
         $script:Started.Add(($arguments -join ' '))
         $result = if ($arguments.Count -eq 1) { $script:QueryAnswer }
             elseif ($arguments[1] -eq 'android:system_alert_window') { [PSCustomObject]@{ ExitCode = 1; Lines = @() } }
@@ -421,6 +427,43 @@ if ($env:OS -eq 'Windows_NT' -and [Threading.Thread]::CurrentThread.ApartmentSta
             Assert-Access ($script:Seen.Count -eq 0 -and $script:Seen.Error -eq (Get-GesherText 'cp_access_unavailable')) 'An unreadable device shows why, with no switch'
         } else {
             Assert-Access ($script:Seen.Panel -eq 'Collapsed' -and $script:Seen.Count -eq 0) 'An app requesting no special access shows no switch section'
+        }
+    }
+    # A real WPF button queries the host, submits one revocation, waits for its
+    # answer, and retains retry access on failure. Only the host process is scripted.
+    foreach ($succeeds in @($true, $false)) {
+        $script:AdminAnswer = [PSCustomObject]@{ ExitCode = 0; Lines = @("device-admin`tactive") }
+        $script:Seen = @{}
+        New-OwnerWindow
+        $before = $script:AdminRevocations
+        $null = Invoke-DialogProbe {
+            param($dialog)
+            $button = $dialog.FindName('BtnRevokeAdmin')
+            if ($script:Probe.Step -eq 0) {
+                if ($button.Visibility -ne 'Visible') { return $false }
+                $script:AdminAnswer = if ($succeeds) {
+                    [PSCustomObject]@{ ExitCode = 0; Lines = @("device-admin`tinactive") }
+                } else { [PSCustomObject]@{ ExitCode = 1; Lines = @() } }
+                $button.RaiseEvent([System.Windows.RoutedEventArgs]::new([System.Windows.Controls.Button]::ClickEvent))
+                $script:Seen.Disabled = -not $button.IsEnabled
+                $script:Seen.ClickTick = $script:Probe.Ticks
+                $script:Probe.Step = 1
+                return $false
+            }
+            if ($script:Probe.Ticks -lt $script:Seen.ClickTick + 24) { return $false }
+            $script:Seen.Button = [string]$button.Visibility
+            $script:Seen.Enabled = $button.IsEnabled
+            $script:Seen.Error = [string]$dialog.FindName('AdminStatus').Visibility
+            return $true
+        }
+        $null = Show-ModernConfirmDialog -Title 'Admin app' -Message 'Installed' -SpecialAccessPackage 'com.example.app' -CloseOnly
+        $window.Close()
+        Assert-Access ($null -eq $script:Probe.Failure) "Admin dialog probe: $($script:Probe.Failure)"
+        Assert-Access ($script:AdminRevocations -eq $before + 1 -and $script:Seen.Disabled) 'Revocation is submitted once and disabled while pending'
+        if ($succeeds) {
+            Assert-Access ($script:Seen.Button -eq 'Collapsed' -and $script:Seen.Error -eq 'Collapsed') "Successful revocation shows the host inactive result ($($script:Seen | ConvertTo-Json -Compress))"
+        } else {
+            Assert-Access ($script:Seen.Button -eq 'Visible' -and $script:Seen.Enabled -and $script:Seen.Error -eq 'Visible') 'Failed revocation retains retry and shows failure'
         }
     }
 } else {

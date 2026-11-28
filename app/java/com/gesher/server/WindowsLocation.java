@@ -31,6 +31,19 @@ public final class WindowsLocation {
         "unknown", "default", "obfuscated"};
 
     private static final long ACCESS_REFRESH_MS = 10_000;
+    private static final int MAX_PROMPTED_PACKAGES = 256;
+    private static final Object PROMPT_LOCK = new Object();
+    private static final java.util.Set<String> sPromptedPackages = new java.util.HashSet<>();
+    private static boolean sPrompting;
+
+    /** Replaced by tests; defaults to the native host prompt. */
+    static volatile java.util.function.Predicate<String> sPromptEnable =
+            WindowsLocation::promptOnHost;
+    /** Replaced by tests; defaults to opening Windows Location settings. */
+    static volatile java.util.function.Predicate<String> sOpenLocationSettings =
+            WindowsHost::openUrl;
+    /** Replaced by tests; null runs each prompt on its own daemon thread. */
+    static volatile java.util.concurrent.Executor sPromptExecutor;
 
     private static volatile int sAccess = Integer.MIN_VALUE;
     private static volatile int sAccessHr;
@@ -195,6 +208,87 @@ public final class WindowsLocation {
         }
         return present;
     }
+
+    /**
+     * Prompts the user once per package per boot (off the caller's Binder thread) when an
+     * Android app with location access is blocked because Windows Location is off, offering
+     * to open Windows Location settings ({@code ms-settings:privacy-location}).
+     */
+    static void maybePromptEnable(String packageName, String appLabel) {
+        if (packageName == null || packageName.isEmpty()) return;
+        access();
+        synchronized (WindowsLocation.class) {
+            // A missing provider or an unknown access result cannot be fixed by
+            // assuming that the user disabled location in Windows Settings.
+            if (sAccess != DENIED && sStatus != STATUS_DISABLED) return;
+        }
+        synchronized (PROMPT_LOCK) {
+            if (sPrompting || sPromptedPackages.contains(packageName)
+                    || sPromptedPackages.size() >= MAX_PROMPTED_PACKAGES) {
+                return;
+            }
+            sPromptedPackages.add(packageName);
+            sPrompting = true;
+        }
+        final String label = sanitizeLabel(appLabel, packageName);
+        Runnable task = () -> {
+            try {
+                SystemServer.log("WindowsLocation: " + packageName
+                        + " blocked because Windows location is off (" + describe() + ")");
+                if (sPromptEnable.test(label)) {
+                    boolean opened = sOpenLocationSettings.test("ms-settings:privacy-location");
+                    SystemServer.log("WindowsLocation: Windows location settings "
+                            + (opened ? "opened" : "unavailable"));
+                }
+            } catch (RuntimeException | LinkageError e) {
+                SystemServer.log("WindowsLocation: prompt unavailable: "
+                        + e.getClass().getSimpleName());
+            } finally {
+                synchronized (PROMPT_LOCK) {
+                    sPrompting = false;
+                }
+            }
+        };
+        try {
+            java.util.concurrent.Executor executor = sPromptExecutor;
+            if (executor != null) {
+                executor.execute(task);
+            } else {
+                Thread t = new Thread(task, "windows-location-prompt");
+                t.setDaemon(true);
+                t.start();
+            }
+        } catch (RuntimeException | Error e) {
+            synchronized (PROMPT_LOCK) {
+                sPrompting = false;
+            }
+            throw e;
+        }
+    }
+
+    static void resetPromptStateForTests() {
+        synchronized (PROMPT_LOCK) {
+            sPromptedPackages.clear();
+            sPrompting = false;
+        }
+    }
+
+    private static boolean promptOnHost(String appLabel) {
+        AccountSecretStore.ensureLoaded();
+        return nativePromptEnable(appLabel);
+    }
+
+    private static String sanitizeLabel(String appLabel, String fallback) {
+        String raw = (appLabel != null && !appLabel.isEmpty()) ? appLabel : fallback;
+        StringBuilder out = new StringBuilder(Math.min(raw.length(), 256));
+        for (int i = 0; i < raw.length() && out.length() < 256; i++) {
+            char c = raw.charAt(i);
+            out.append(Character.isISOControl(c) ? ' ' : c);
+        }
+        return out.length() > 0 ? out.toString() : fallback;
+    }
+
+    private static native boolean nativePromptEnable(String appLabel);
 
     private static native boolean nativeHasGnss(int[] hr);
 

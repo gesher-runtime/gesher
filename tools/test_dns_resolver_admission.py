@@ -45,7 +45,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--java-home', type=Path, required=True)
     parser.add_argument('--source-ref', help='Prior complete resolver for public-API negative controls')
-    parser.add_argument('--case', choices=('all', 'deadline', 'delayed-deadline',
+    parser.add_argument('--case', choices=('all', 'deadline', 'deadline-retirement', 'delayed-deadline',
                                           'recovery', 'burst', 'copy'), default='all')
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix='gesher-dns-admission-') as temporary:
@@ -68,7 +68,7 @@ def main() -> None:
             sources.append(target)
         subprocess.run([str(args.java_home / 'bin/javac'), '-J-XX:-UsePerfData', '-encoding', 'UTF-8',
                         '-d', str(work), *map(str, sources)], check=True, timeout=60)
-        cases = ['all', 'deadline', 'delayed-deadline'] if args.case == 'all' and not args.source_ref else [args.case]
+        cases = ['all', 'deadline-retirement', 'deadline', 'delayed-deadline'] if args.case == 'all' and not args.source_ref else [args.case]
         if args.source_ref and args.case == 'all':
             cases = ['burst']
         for case in cases:

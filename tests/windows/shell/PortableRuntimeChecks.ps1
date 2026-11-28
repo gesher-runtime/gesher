@@ -99,9 +99,18 @@ function Host-State {
             }
         }
     }
+    # A portable Gesher makes no desktop shortcuts either (issue 519): every .lnk on
+    # the user's desktop is preserved as it was.
+    $desktop = [Environment]::GetFolderPath('Desktop')
+    $desktopLinks = @()
+    if ($desktop -and (Test-Path -LiteralPath $desktop)) {
+        foreach ($file in @(Get-ChildItem -LiteralPath $desktop -Filter '*.lnk' -File -Force | Sort-Object FullName)) {
+            $desktopLinks += [ordered]@{ Path = $file.FullName; Hash = File-Hash $file.FullName }
+        }
+    }
     return [ordered]@{
         Registry = $registry; UserPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-        Shortcuts = $shortcuts
+        Shortcuts = $shortcuts; DesktopLinks = $desktopLinks
         UninstallerHash = File-Hash (Join-Path $InstalledRuntimeDirectory 'unins000.exe')
         UninstallerDataHash = File-Hash (Join-Path $InstalledRuntimeDirectory 'unins000.dat')
         InstalledVersionHash = File-Hash (Join-Path $InstalledRuntimeDirectory 'gesher-version.ini')
@@ -113,8 +122,11 @@ function Assert-HostUnchanged([string] $Phase) {
     [IO.File]::WriteAllText((Join-Path $logs ($Phase + '-host.json')), $current)
     Assert-PortableRuntime ($current -ceq $script:hostBefore) "Portable $Phase changed the normal uninstall registration, PATH, associations, shortcuts or package registry. Evidence: $logs"
 }
+# $WhileRunning, when given, runs with the started process (e.g. to answer its
+# dialogs); its result is left in $script:whileRunningResult, the exit code in
+# $script:lastProcessExit.
 function Invoke-CheckedProcess([string] $Executable, [string[]] $Arguments, [string] $Directory,
-        [string] $Name, [int] $TimeoutSeconds = 180, [switch] $ExpectFailure) {
+        [string] $Name, [int] $TimeoutSeconds = 180, [switch] $ExpectFailure, [scriptblock] $WhileRunning = $null) {
     $script:sequence++
     $log = Join-Path $logs ('{0:D2}-{1}' -f $script:sequence, $Name)
     $start = [Diagnostics.ProcessStartInfo]::new($Executable)
@@ -140,6 +152,8 @@ function Invoke-CheckedProcess([string] $Executable, [string[]] $Arguments, [str
         if (-not $started) { throw "Could not start $Name" }
         $output = $process.StandardOutput.ReadToEndAsync()
         $errors = $process.StandardError.ReadToEndAsync()
+        $script:whileRunningResult = $null
+        if ($WhileRunning) { $script:whileRunningResult = & $WhileRunning $process }
         $finished = $process.WaitForExit($TimeoutSeconds * 1000)
         if (-not $finished) {
             $process.Kill($true)
@@ -151,6 +165,7 @@ function Invoke-CheckedProcess([string] $Executable, [string[]] $Arguments, [str
         if (-not $finished) { throw "$Name exceeded ${TimeoutSeconds}s; its own process tree was stopped. Evidence: $log" }
         if (-not $outputClosed -or -not $errorsClosed) { throw "$Name output pipes did not close within 5s" }
         $combined = $output.Result + "`n" + $errors.Result
+        $script:lastProcessExit = $process.ExitCode
         Write-Host "$Name (exit $($process.ExitCode)):"
         Write-Host (($combined -split "`r?`n" | Select-Object -Last 15) -join "`n")
         if ($ExpectFailure) {
@@ -321,6 +336,12 @@ namespace Gesher {
     Assert-Layout $original $originalRuntime
     Invoke-Hello $originalRuntime 'zip-hello'
     $null = Invoke-App $originalRuntime @('install', (Join-Path $originalRuntime 'lifecycle.apk')) 'zip-install-lifecycle'
+    # A desktop shortcut asked for in portable mode: none, and the output says why
+    # (Assert-HostUnchanged below: no .lnk on the desktop changed or appeared).
+    $desktopInstall = Invoke-App $originalRuntime @('install', (Join-Path $originalRuntime 'lifecycle.apk'), '--desktop-shortcut') 'zip-install-desktop-shortcut'
+    Assert-PortableRuntime ($desktopInstall -match 'no desktop shortcut for com\.gesher\.lifecycle') 'Portable install --desktop-shortcut did not say why it made no desktop shortcut'
+    $lifecycleRecordText = Get-Content -LiteralPath (Join-Path $original 'Data\data\data\com.gesher.lifecycle\gesher-shell\shortcut.properties') -Raw
+    Assert-PortableRuntime ($lifecycleRecordText -notmatch '(?m)^desktop_link=') 'Portable install recorded a desktop shortcut'
     $launched = Invoke-App $originalRuntime @('launch', 'com.gesher.lifecycle', '--headless', '--wait') 'zip-launch-lifecycle'
     Assert-PortableRuntime ($launched.Contains('LifecycleActivity onResume') -and $launched.Contains('gesher-app: done')) 'Portable lifecycle did not reach onResume through the real Android runtime'
     if ($ComponentsApk) {
@@ -362,6 +383,34 @@ namespace Gesher {
         $null = Invoke-App $copyRuntime @('uninstall', 'com.gesher.components') 'copy-remove-components'
         Assert-HostUnchanged 'portable-protocol-removal'
     }
+    # An APK dropped on the portable Gesher.exe (Explorer's bare form): the
+    # confirmation dialog without a desktop shortcut box; Install, then Done,
+    # installs it in the portable profile and launches nothing; the same file
+    # again opens the installed package with no dialog.
+    . (Join-Path $PSScriptRoot 'InstallConfirmDialog.ps1')
+    $null = Invoke-App $copyRuntime @('uninstall', 'com.gesher.lifecycle') 'copy-remove-lifecycle'
+    $dropped = Join-Path $copyRuntime 'lifecycle.apk'
+    $cancelled = Invoke-CheckedProcess (Join-Path $copy 'Gesher.exe') @($dropped) $copy 'copy-dropped-apk-cancel' 600 -ExpectFailure -WhileRunning {
+        param($process)
+        Invoke-GesherInstallConfirm -ProcessId $process.Id -Process $process -Answer Cancel -ExpectDesktopBox $false
+    }
+    Assert-PortableRuntime (-not $script:whileRunningResult.Problems) "Portable dropped APK, Cancel: $($script:whileRunningResult.Problems -join '; ')"
+    Assert-PortableRuntime ($script:lastProcessExit -eq 1223 -and $cancelled -notmatch 'installed com\.gesher\.lifecycle') "Portable dropped APK, Cancel: exit $($script:lastProcessExit), not 1223, or it installed"
+    $installed = Invoke-CheckedProcess (Join-Path $copy 'Gesher.exe') @($dropped) $copy 'copy-dropped-apk-install' 600 -WhileRunning {
+        param($process)
+        Invoke-GesherInstallConfirm -ProcessId $process.Id -Process $process -Answer Install -ExpectDesktopBox $false -Done Done
+    }
+    Assert-PortableRuntime (-not $script:whileRunningResult.Problems) "Portable dropped APK, Install: $($script:whileRunningResult.Problems -join '; ')"
+    Assert-PortableRuntime ($installed -match 'installed com\.gesher\.lifecycle' -and $installed -notmatch 'gesher-app: done' -and $installed -notmatch 'LifecycleActivity') 'Portable dropped APK: Install did not install it, or launched it without Open'
+    $reopened = Invoke-CheckedProcess (Join-Path $copy 'Gesher.exe') @($dropped) $copy 'copy-dropped-apk-same-version' 600 -WhileRunning {
+        param($process)
+        @(Watch-GesherNoInstallDialog $process 600)
+    }
+    Assert-PortableRuntime (@($script:whileRunningResult | Where-Object { $_ }).Count -eq 0) "Portable dropped APK of the installed version showed a dialog: $($script:whileRunningResult -join ', ')"
+    Assert-PortableRuntime ($reopened -match 'launching the installed package com\.gesher\.lifecycle' -and $reopened -match 'LifecycleActivity onResume') 'Portable dropped APK of the installed version did not launch the installed package'
+    $afterDrop = Invoke-CheckedProcess (Join-Path $copy 'Gesher.exe') @('list') $copy 'copy-dropped-apk-list'
+    Assert-PackageProfile $afterDrop $copy $copyRuntime
+    Assert-HostUnchanged 'portable-dropped-apk'
     Stop-PortableDevice $copy $copyRuntime 'copy-final-shutdown'
     Assert-HostUnchanged 'all-portable-operations'
     $receipt = [ordered]@{
@@ -369,7 +418,7 @@ namespace Gesher {
         ZipSha256 = File-Hash $ZipPath; InstallerSha256 = File-Hash $InstallerPath
         ComponentsApkSha256 = $(if ($ComponentsApk) { File-Hash $ComponentsApk })
         ProtocolCandidateExercised = [bool]$ComponentsApk
-        Scope = 'Actual Windows/ART Hello, lifecycle install/launch/list, populated-copy isolation, flat/App Setup refresh and preservation of normal uninstall/PATH/associations/shortcuts.'
+        Scope = 'Actual Windows/ART Hello, lifecycle install/launch/list, populated-copy isolation, an APK dropped on Gesher.exe (confirmation without a desktop shortcut box, Cancel, Install, the installed version opened directly), flat/App Setup refresh and preservation of normal uninstall/PATH/associations/shortcuts/desktop links.'
         Limits = 'Same artifact reinstalls exercise update layout; no network update discovery or physical USB removal. Notifications can still register AppUserModelIds.'
     }
 } catch {

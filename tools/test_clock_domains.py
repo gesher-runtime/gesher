@@ -16,6 +16,8 @@ import shlex
 import subprocess
 import tempfile
 
+from codec_contract_source import member, shared, method
+
 ROOT = Path(__file__).resolve().parents[1]
 PINNED = {
     "SystemClock.cpp": "2e4d1d550d9bcabf52ea11a3aef4bb05928cdc0875266fdb715afb23e7803da7",
@@ -60,8 +62,9 @@ def main() -> int:
         for path in ("patches/art/0572-native3-runtime-cpu-clocks.patch",
                      "patches/art/0573-native3-runtime-monotonic-clocks.patch",
                      "patches/system/core/0006-libutils-monotonic-clocks-on-gesher.patch"):
+            # Pass LF patch bytes unchanged: text pipes translate to CRLF on Windows.
             subprocess.run(["git", "apply", "--whitespace=error-all", "-"], cwd=work,
-                           input=read(path), text=True, check=True, timeout=15)
+                           input=read(path).encode(), check=True, timeout=15)
         system_clock = (work / "libutils/SystemClock.cpp").read_text()
         art = (work / "libartbase/base/time_utils.cc").read_text()
         utils = (work / "libutils/Timers.cpp").read_text()
@@ -72,13 +75,27 @@ def main() -> int:
         helper_start = "int64_t QpcNanos() {" if "int64_t QpcNanos() {" in shim else "int64_t MonotonicNanos() {"
         capture = read("compat/media/audio/capture.cc")
         codec = read("compat/media/jni/media_codec_jni.cc")
+        is_shared = shared(args.source_ref)
+        if is_shared:
+            engine = read("compat/media/codec/codec_engine.cc")
+            render = section(engine, "  if (delivery_status == android::OK) {",
+                             "\n  return true;\n}\n\nvoid CodecEngine::RetireSurfaceFailure")
+            render = ("void PostFrameRendered(int64_t time_us) {\n"
+                      "const int delivery_status = 0;\n"
+                      "const uint64_t execution_generation = execution_generation_;\n"
+                      + render + "\n}")
+            codec_input = member(engine, "OnSurfaceFrame")
+        else:
+            render = section(codec, "  void PostFrameRendered(", "  // With mu_ held: the decoder")
+            codec_input = section(codec, "  void OnSurfaceFrame(", "  // With mu_ held: the format of what comes out.")
         player = read("compat/media/player/player.cc")
         anchors = re.findall(r"^  (?:std::chrono::steady_clock::time_point|int64_t) clock_anchor_[^;]*;", player, re.M)
         if len(anchors) != 1:
             raise ValueError("player clock anchor changed")
         parts = {
-            "@CODEC_RENDER@": section(codec, "  void PostFrameRendered(", "  // With mu_ held: the decoder"),
-            "@CODEC_INPUT@": section(codec, "  void OnSurfaceFrame(", "  // With mu_ held: the format of what comes out."),
+            "@CODEC_RENDER@": render,
+            "@CODEC_FRAME_LISTENER@": method(codec, "  void EnableFrameRendered(") if is_shared else "",
+            "@CODEC_INPUT@": codec_input,
             "@PLAYER_CLOCK@": section(player, "  int64_t WallClockLocked()", "  // The timestamp exposes"),
             "@PLAYER_ANCHOR@": anchors[0],
             "@PLAYER_START@": re.search(r"clock_anchor_ = [^;]+;", player).group(),
@@ -107,7 +124,7 @@ def main() -> int:
             body = content.replace("std::chrono::steady_clock", "HostSteadyClock")
             template = template.replace(marker, body)
             print(marker.strip("@"), hashlib.sha256(content.encode()).hexdigest(), flush=True)
-        (work / "host.cc").write_text(template)
+        (work / "host.cc").write_text(f"#define SHARED_CODEC_ENGINE {int(is_shared)}\n" + template)
         (work / "windows.h").write_text("// Win32 boundary types are supplied by host.cc.\n")
         (work / "gesher").mkdir()
         (work / "gesher/clocks.h").write_text((ROOT / "compat/posix/include/gesher/clocks.h").read_text())

@@ -14,6 +14,8 @@ static void* StdioCanceledCall(void* raw) {
   if (call.operation == 0) fgetc(call.stream);
   else if (call.operation == 1) fprintf(call.stream, "%d-%s", 1, "pending");
   else if (call.operation == 2) fflush(NULL);
+  else if (call.operation == 4) { int value; fscanf(call.stream, "%d", &value); }
+  else if (call.operation == 5) { int value; fwscanf(call.stream, L"%d", &value); }
   else fclose(call.stream);
   return NULL;
 }
@@ -22,25 +24,33 @@ static void StdioPause(void) {
   nanosleep(&delay, NULL);
 }
 static void test_stdio_cancel_contracts(void) {
-  for (int operation = 0; operation != 4; ++operation) {
+  // The generic glibc envelope has no wide parser. The dedicated pinned-MinGW
+  // scanner fixture and this actual Windows target both cover wide cancellation.
+#ifdef GESHER_STDIO_HOST_ENVELOPE
+  const int operations = 5;
+#else
+  const int operations = 6;
+#endif
+  for (int operation = 0; operation != operations; ++operation) {
     fprintf(stderr, "stdio cancellation phase: %d\n", operation);
     int ends[2] = {-1, -1};
     check("stdio cancel pipe opens", pipe(ends) == 0);
     if (ends[0] < 0) continue;
-    if (operation != 0) {
+    const bool input = operation == 0 || operation >= 4;
+    if (!input) {
       check("stdio cancel fill is nonblocking", fcntl(ends[1], F_SETFL, O_NONBLOCK) == 0);
       char block[4096] = {};
       while (write(ends[1], block, sizeof(block)) > 0) {}
       check("stdio cancel fixture is full", errno == EAGAIN);
       check("stdio cancel writer becomes blocking", fcntl(ends[1], F_SETFL, 0) == 0);
     }
-    FILE* stream = fdopen(ends[operation == 0 ? 0 : 1], operation == 0 ? "r" : "w");
+    FILE* stream = fdopen(ends[input ? 0 : 1], input ? "r" : "w");
     check("stdio cancel stream opens", stream != NULL);
     if (!stream) { close(ends[0]); close(ends[1]); continue; }
     char buffer[4096];
-    check("stdio cancel buffering configured", setvbuf(stream, operation >= 2 ? buffer : NULL,
-          operation >= 2 ? _IOFBF : _IONBF, operation >= 2 ? sizeof(buffer) : 0) == 0);
-    if (operation >= 2) check("stdio cancel flush has pending bytes", fputs("pending", stream) >= 0);
+    check("stdio cancel buffering configured", setvbuf(stream, !input && operation >= 2 ? buffer : NULL,
+          !input && operation >= 2 ? _IOFBF : _IONBF, !input && operation >= 2 ? sizeof(buffer) : 0) == 0);
+    if (!input && operation >= 2) check("stdio cancel flush has pending bytes", fputs("pending", stream) >= 0);
     StdioCanceledOperation call{stream, operation};
     pthread_t thread;
     int created = pthread_create(&thread, NULL, StdioCanceledCall, &call);
@@ -54,8 +64,9 @@ static void test_stdio_cancel_contracts(void) {
       int acquired = ftrylockfile(stream);
       check("stdio cancellation releases its stream lock", acquired == 0);
       if (acquired == 0) funlockfile(stream);
-      if (operation == 0) {
-        check("stdio canceled read leaves stream usable", write(ends[1], "r", 1) == 1 && fgetc(stream) == 'r');
+      if (input) {
+        check("stdio canceled read leaves stream usable", write(ends[1], "r", 1) == 1 &&
+              (operation == 5 ? fgetwc(stream) == L'r' : fgetc(stream) == 'r'));
       } else {
         check("stdio canceled write drain becomes nonblocking", fcntl(ends[0], F_SETFL, O_NONBLOCK) == 0);
         char block[4096];
@@ -64,6 +75,6 @@ static void test_stdio_cancel_contracts(void) {
       }
     }
     check("stdio canceled stream closes normally", fclose(stream) == 0);
-    close(ends[operation == 0 ? 1 : 0]);
+    close(ends[input ? 1 : 0]);
   }
 }

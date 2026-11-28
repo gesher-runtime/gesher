@@ -16,6 +16,11 @@ namespace shell {
 // {userprograms}); empty when the shell does not answer.
 std::u16string ProgramsFolder();
 
+// The user's Desktop folder (FOLDERID_Desktop, as Inno Setup's {userdesktop}),
+// for the desktop shortcut the user asked for at install; empty when the shell
+// does not answer.
+std::u16string DesktopFolder();
+
 // Creates or replaces the shortcut `link` (IShellLinkW, saved with
 // IPersistFile) to `target` with `arguments`, `work_dir`, the icon `icon`
 // (index 0; none when empty), `description`, and System.AppUserModel.ID

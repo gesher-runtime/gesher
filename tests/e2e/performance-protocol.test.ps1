@@ -83,6 +83,32 @@ try {
   Check (RegisterPerfParticipants @(@{ pid = 1; created_100ns = 1 })) 'matching verified registration acknowledgement accepted'
 
   if ([Environment]::OSVersion.Platform -eq [PlatformID]::Win32NT) {
+    $missing = Join-Path $OutDir 'missing-snapshot.json'
+    $script:ioSleeps = 0; $script:publishMissing = $false
+    function Start-Sleep([int] $Milliseconds) {
+      $script:ioSleeps++
+      if ($script:publishMissing) {
+        [IO.File]::WriteAllText($missing, '{"phase":"stop"}')
+        $script:publishMissing = $false
+      }
+    }
+    try {
+      $absent = Rejected { ReadPerfJson $missing ([Diagnostics.Stopwatch]::StartNew()) } 'persistent missing snapshot rejected'
+      Check (($absent.HResult -band 0xffff) -eq 2) 'missing snapshot preserves native error'
+      Check ($script:ioSleeps -eq 4) 'missing snapshot uses exactly five attempts'
+      $script:ioSleeps = 0; $script:publishMissing = $true
+      Check ((ReadPerfJson $missing ([Diagnostics.Stopwatch]::StartNew())).phase -eq 'stop') 'missing snapshot recovers after complete publication'
+      Check ($script:ioSleeps -eq 1) 'missing snapshot retries its actual read once'
+      Remove-Item -LiteralPath $missing
+      $script:ioSleeps = 0
+      $null = Rejected { InvokePerfFileIo -Operation {
+        [IO.File]::Move($missing, "$missing.published")
+      } } 'publication never retries missing source'
+      Check ($script:ioSleeps -eq 0) 'missing publication remains immediate failure'
+      $missingParent = Join-Path $OutDir 'absent/ack.json'
+      $null = Rejected { ReadPerfJson $missingParent ([Diagnostics.Stopwatch]::StartNew()) } 'missing snapshot parent rejected'
+      Check ($script:ioSleeps -eq 0) 'missing parent never retried'
+    } finally { Remove-Item Function:\Start-Sleep }
     WritePerfJson 'phase.json' @{ phase = 'start' }
     $script:held = [IO.File]::Open($path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
     $script:ioSleeps = 0; $script:release = $false

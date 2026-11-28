@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const run = require('./label-automerge.js');
 // Stale-state re-reads are bounded by count; the fixture needs no wall-clock delay.
 run.RELEASE_STATE.delayMs = 0;
+require('./app-qa-status.js').READBACK.delayMs = 0;
 const HEAD = 'a'.repeat(40);
 const OTHER = 'b'.repeat(40);
 const BASE = 'c'.repeat(40);
@@ -194,11 +195,13 @@ function world(over = {}) {
       getCombinedStatusForRef: async args => {
         const response = await page('statuses', () => {
           const latest = new Map();
-          for (const s of w.statuses) if (!latest.has(s.context) || latest.get(s.context).id < s.id)
+          const statuses = w.combinedStatusView ? w.combinedStatusView(w.statuses) : w.statuses;
+          for (const s of statuses) if (!latest.has(s.context) || latest.get(s.context).id < s.id)
             latest.set(s.context, s);
           return [...latest.values()];
         }, 'statuses')(args);
         response.data.sha = w.statusReadbackHead ?? args.ref;
+        if (w.combinedOmitsCreator) for (const status of response.data.statuses) delete status.creator;
         return response;
       },
       compareCommits: rec('compare', (args) => {
@@ -261,7 +264,9 @@ function world(over = {}) {
       state: r.state, submittedAt: r.submitted_at, lastEditedAt: null,
       commit: {oid: r.commit_id}, ...(bot ? w.approvalNodeOverride : w.reviewNodeOverride)} : null});
   };
-  const core = {info: () => {}, warning: (s) => w.warnings.push(s)};
+  w.outputs = {};
+  const core = {info: () => {}, warning: (s) => w.warnings.push(s),
+    setOutput: (key, value) => {w.outputs[key] = value;}};
   w.useApp = () => {w.prGithub = {rest: {...writes(APP_BOT, 'app-'),
     repos: {createCommitStatus: statusWrite(APP_BOT, 'app-status'),
       createDispatchEvent: rec('app-dispatch', args => {

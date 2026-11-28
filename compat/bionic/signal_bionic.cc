@@ -1518,7 +1518,9 @@ void InstallSignalHook(bool authoritative) {
 namespace {
 bool SleepWithObservation(uint32_t ms, uint32_t* left_ms,
                           void (*observe)(void*), void* context, int* error,
-                          int64_t boottime_deadline = -1) {
+                          int64_t boottime_deadline = -1,
+                          const std::atomic<uint64_t>* generation = nullptr,
+                          uint64_t observed = 0) {
   if (error != nullptr) *error = 0;
   ThreadState* self = Self();
   if (self == nullptr) {
@@ -1585,8 +1587,11 @@ bool SleepWithObservation(uint32_t ms, uint32_t* left_ms,
         interrupted = true;
         break;
       }
+      if (generation != nullptr && generation->load(std::memory_order_acquire) != observed) break;
       self->waiting_for = ~self->mask;
-      if (boottime_deadline >= 0) {
+      if (generation != nullptr && ms == 0) {
+        S().sent.wait(lock);
+      } else if (boottime_deadline >= 0) {
         const int64_t now = gesher::BoottimeNanos();
         if (now >= boottime_deadline) break;
         const int64_t left = boottime_deadline - now;
@@ -1663,17 +1668,24 @@ void DeliverPendingSignals() {
 // when no handler ran, the wait goes on. The same SA_RESTART record as the
 // futex waits' (DeliverAfterInterrupt): Dispatch sets it, and an outer
 // delivery's record comes back unchanged.
-int InterruptibleWaitPoint(uint32_t ms) {
+int InterruptibleWaitPoint(uint32_t ms, const std::atomic<uint64_t>& generation,
+                           uint64_t observed) {
   const bool outer_ran = t_handler_ran, outer_no_restart = t_handler_no_restart;
   t_handler_ran = false;
   t_handler_no_restart = false;
   int error = 0;
-  SleepWithObservation(ms, nullptr, [](void*) {}, nullptr, &error);
+  SleepWithObservation(ms, nullptr, [](void*) {}, nullptr, &error, -1, &generation, observed);
   const bool interrupt = t_handler_ran && t_handler_no_restart;
   t_handler_ran = outer_ran;
   t_handler_no_restart = outer_no_restart;
   if (error != 0) return error;
   return interrupt ? kEINTR : 0;
+}
+
+void NotifyInterruptibleWaiters() {
+  // Pair with the check before arming the condition in SleepWithObservation.
+  std::lock_guard<std::mutex> lock(S().mutex);
+  S().sent.notify_all();
 }
 
 void RegisterSignal(SymbolTable& t) {

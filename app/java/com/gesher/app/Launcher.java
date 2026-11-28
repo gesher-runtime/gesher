@@ -81,7 +81,11 @@ import java.util.Properties;
  *                       Gesher's own proxy, over Windows' settings: for every app, or for
  *                       one package (windows: Windows' settings for it); no argument
  *                       shows them. App processes started from now on use it
- *     install APK       install or update the package
+ *     install APK [--desktop-shortcut]
+ *                       install or update the package; --desktop-shortcut (gesher-launch's
+ *                       install confirmation, when the user checks it): also a shortcut on
+ *                       the user's desktop (AppShell.createDesktopLinkQuietly; not in portable
+ *                       Gesher or with GESHER_SHORTCUTS=0)
  *     view PACKAGE URL  (run by an app's URL protocol, docs/installer.md) start the package's
  *                       activity for URL (ACTION_VIEW, BROWSABLE) in its task: an OAuth
  *                       redirect the Windows browser opened comes back to the app
@@ -94,9 +98,13 @@ import java.util.Properties;
  *     toast-activated   (run by COM) a click on an app's toast, given to the device
  *     apk-icon APK      (run by the .apk icon handler, gesher_shellext.dll) draw the APK's
  *                       app icon for Explorer without installing it (AppShell.apkIcon)
+ *     apk-info APK OUT [SNAPSHOT_DIR]  (run by gesher-launch before it asks to install an APK opened from
+ *                       Explorer) the APK's package, version, label and icon, and the
+ *                       installed version, written to OUT as key=value lines, without
+ *                       installing it (AppShell.apkInfo)
  * </pre>
  *
- * Every command but shutdown, status and apk-icon starts the device if it does not run: binderd,
+ * Every command but shutdown, status, apk-icon and apk-info starts the device if it does not run: binderd,
  * servicemanager and the system server ({@code --persistent}), detached (no console
  * window: they outlive the console), with a binder device of their own; it stops when shut
  * down, or after {@code $GESHER_IDLE_TIMEOUT} seconds (default 600) with no app in use (an
@@ -247,16 +255,30 @@ public final class Launcher {
         switch (command) {
             case "launch": return launch(rest);
             case "install": {
-                if (rest.size() != 1) return usage();
+                boolean desktopShortcut = rest.remove("--desktop-shortcut");
+                String confirmedPackage = null;
+                String confirmedVersion = null;
+                String confirmedInputs = null;
+                if (rest.size() == 5 && "--confirmed".equals(rest.get(1))) {
+                    confirmedPackage = rest.get(2);
+                    confirmedVersion = rest.get(3);
+                    confirmedInputs = rest.get(4);
+                } else if (rest.size() != 1) {
+                    return usage();
+                }
                 ensureDevice(true);
-                install(gesher(), rest.get(0), true);
+                String pkg = install(gesher(), rest.get(0), true, confirmedPackage, confirmedVersion,
+                        confirmedInputs);
+                // Asked for by the user (gesher-launch's install confirmation): a failure is
+                // printed, but the package is installed all the same.
+                if (desktopShortcut) AppShell.createDesktopLinkQuietly(pkg);
                 return 0;
             }
             case "uninstall": {
                 if (rest.size() != 1) return usage();
                 ensureDevice(true);
-                // Its Start menu shortcut and URL protocols, recorded in its data directory,
-                // which goes too.
+                // Its Start menu shortcut (and the desktop shortcut the user asked for) and
+                // URL protocols, recorded in its data directory, which goes too.
                 Properties shortcut = AppShell.shortcutOf(rest.get(0));
                 Properties protocols = AppShell.urlProtocolsOf(rest.get(0));
                 boolean removed = gesher().uninstall(rest.get(0));
@@ -277,6 +299,8 @@ public final class Launcher {
                 return MobileDataCommands.run(rest);
             case "windows": return windows(rest);
             case "special-access": return specialAccess(rest);
+            case "device-admin": return deviceAdmin(rest);
+            case "accounts": return accounts(rest);
             case "settings-closed": return settingsClosed(rest, false);
             case "settings-shown": return settingsClosed(rest, true);
             case "view": {
@@ -303,6 +327,15 @@ public final class Launcher {
                 // Not on the device: the APK is read here, not installed.
                 if (rest.size() != 1) return usage();
                 return AppShell.apkIcon(new File(rest.get(0)));
+            }
+            case "apk-info": {
+                // Not on the device either: gesher-launch asks before it installs anything.
+                if (rest.size() != 2 && rest.size() != 3) return usage();
+                File apk = new File(rest.get(0));
+                if (!apk.isFile()) throw new IllegalArgumentException(text("no_file", rest.get(0)));
+                File snapshot = rest.size() == 3 ? new File(rest.get(2)) : null;
+                AppShell.apkInfo(apk, new File(rest.get(1)), snapshot);
+                return 0;
             }
             default: return usage();
         }
@@ -386,6 +419,20 @@ public final class Launcher {
      * standard output: {@code special-access}, the op's public name and {@code allowed} or
      * {@code denied}, separated by tabs. The device checks the package and the op.
      */
+    private static int deviceAdmin(List<String> args) throws Exception {
+        if (args.size() != 1 && (args.size() != 2 || !"revoke".equals(args.get(1)))) return usage();
+        if (ensureDevice(false) == null) return 3;
+        try {
+            boolean active = gesher().deviceAdmin(args.get(0), args.size() == 2);
+            System.out.println("device-admin\t" + (active ? "active" : "inactive"));
+            return 0;
+        } catch (UnsupportedOperationException unavailable) {
+            log(unavailable.getMessage()); return 4;
+        } catch (IllegalArgumentException | IllegalStateException | SecurityException failure) {
+            log(failure.getMessage()); return 1;
+        }
+    }
+
     private static int specialAccess(List<String> args) throws Exception {
         if (args.size() != 1 && args.size() != 3 && args.size() < 6) return usage();
         if (args.size() >= 3 && !"allow".equals(args.get(2)) && !"deny".equals(args.get(2))) {
@@ -424,6 +471,65 @@ public final class Launcher {
         for (String row : rows) out.println("special-access\t" + row);
         out.flush();
         return 0;
+    }
+
+    /**
+     * {@code accounts [list | remove TYPE NAME]}: lists saved accounts ({@code account TAB type
+     * TAB name}) or removes one on explicit host request.
+     */
+    private static int accounts(List<String> args) throws Exception {
+        boolean list = args.isEmpty() || (args.size() == 1 && ("list".equals(args.get(0)) || "list-encoded".equals(args.get(0))));
+        boolean remove = args.size() == 3 && ("remove".equals(args.get(0)) || "remove-encoded".equals(args.get(0)));
+        if (!list && !remove) return usage();
+        ensureDevice(true);
+        return accounts(gesher(), args, System.out);
+    }
+
+    static int accounts(GesherService.Client gesher, List<String> args,
+            java.io.PrintStream out) throws Exception {
+        try {
+            if (args.size() == 3 && ("remove".equals(args.get(0)) || "remove-encoded".equals(args.get(0)))) {
+                boolean encoded = "remove-encoded".equals(args.get(0));
+                String type = encoded ? decodeAccountField(args.get(1)) : args.get(1);
+                String name = encoded ? decodeAccountField(args.get(2)) : args.get(2);
+                if (!gesher.removeAccount(type, name)) {
+                    log(text("account_not_found", name));
+                    return 1;
+                }
+                out.println("account-removed");
+                out.flush();
+                return 0;
+            }
+            boolean encoded = args.size() == 1 && "list-encoded".equals(args.get(0));
+            for (String row : gesher.listAccounts()) {
+                if (encoded) out.println("account64\t" + row);
+                else {
+                    String[] fields = row.split("\\t", -1);
+                    if (fields.length != 2) throw new IllegalStateException("Invalid account row");
+                    out.println("account\t" + decodeAccountField(fields[0]) + "\t" + decodeAccountField(fields[1]));
+                }
+            }
+            out.flush();
+            return 0;
+        } catch (UnsupportedOperationException e) {
+            log(e.getMessage());
+            return 4;
+        } catch (IllegalArgumentException | IllegalStateException | SecurityException e) {
+            log(e.getMessage());
+            return 1;
+        }
+    }
+
+    /** Internal panel transport is ASCII so Windows console code pages cannot change identity. */
+    private static String decodeAccountField(String value) {
+        try {
+            return java.nio.charset.StandardCharsets.UTF_8.newDecoder()
+                    .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+                    .decode(java.nio.ByteBuffer.wrap(java.util.Base64.getDecoder().decode(value))).toString();
+        } catch (java.nio.charset.CharacterCodingException e) {
+            throw new IllegalArgumentException("Invalid account encoding", e);
+        }
     }
 
     /**
@@ -472,8 +578,8 @@ public final class Launcher {
                 + " true|false]... [--proxy host:port|socks5://host:port|direct|windows]"
                 + " [--window | --hidden-window | --headless [--keep-task]] [--detach | --wait]"
                 + " | proxy [[PACKAGE] host:port|socks5://host:port|direct|windows] | windows PACKAGE separate|shared"
-                + " | special-access PACKAGE [OP allow|deny] | install APK | uninstall PACKAGE | view PACKAGE URL | list | status | start"
-                + " | shutdown | apk-icon APK | spell-checker list|use COMPONENT|automatic|enable|disable|language ID"
+                + " | special-access PACKAGE [OP allow|deny] | accounts [list | remove TYPE NAME] | install APK [--desktop-shortcut] | uninstall PACKAGE | view PACKAGE URL | list | status | start"
+                + " | shutdown | apk-icon APK | apk-info APK OUT [SNAPSHOT_DIR] | spell-checker list|use COMPONENT|automatic|enable|disable|language ID"
                 + " | " + MobileDataCommands.USAGE);
         return 2;
     }
@@ -641,9 +747,22 @@ public final class Launcher {
 
     private static String install(GesherService.Client gesher, String apk, boolean explicitInstall)
             throws Exception {
+        return install(gesher, apk, explicitInstall, null, null, null);
+    }
+
+    private static String install(GesherService.Client gesher, String apk, boolean explicitInstall,
+            String confirmedPackage, String confirmedVersion, String confirmedInputs)
+            throws Exception {
         File f = new File(apk);
         if (!f.isFile()) throw new IllegalArgumentException(text("no_file", apk));
-        String[] r = gesher.install(f.getAbsolutePath(), explicitInstall);
+        String[] r = confirmedPackage == null ? gesher.install(f.getAbsolutePath(), explicitInstall)
+                : gesher.installConfirmed(f.getAbsolutePath(), confirmedPackage,
+                        Long.parseLong(confirmedVersion), confirmedInputs);
+        if (confirmedPackage != null && (r == null || r.length < 4
+                || !confirmedPackage.equals(r[0]) || !confirmedVersion.equals(r[3]))) {
+            throw new IllegalStateException("Installation result does not match the confirmed package "
+                    + confirmedPackage + " (version " + confirmedVersion + ")");
+        }
         switch (r[1]) {
             case "unchanged":
                 log(text("unchanged", r[0], r[2]));
@@ -655,7 +774,7 @@ public final class Launcher {
         AppShell.registerQuietly(r[0], r[2], !"unchanged".equals(r[1]));
         AppShell.registerUrlProtocolsQuietly(r[0], r[2], !"unchanged".equals(r[1]));
         // The APK file shows the app's icon in Explorer (gesher_shellext.dll).
-        AppShell.rememberApkQuietly(r[0], f);
+        if (confirmedPackage == null) AppShell.rememberApkQuietly(r[0], f);
         return r[0];
     }
 

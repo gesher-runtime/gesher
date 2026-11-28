@@ -265,6 +265,7 @@ async function reconcile(github, prGithub, owner, repo, number, core, mergeGithu
   if (pr.state !== 'open' || (expectedHead && pr.head.sha !== expectedHead)) return;
   let nativeOff = false;
   const statuses = {...publisher, set: (sha, ok) => publisher.set(sha, ok, {nativeOff})};
+  let outcome = 'neutral';
   try {
     // An old green gate may already have native waiting armed. Disarm before
     // any status write, including revocation of an invalid approval: even a
@@ -338,10 +339,14 @@ async function reconcile(github, prGithub, owner, repo, number, core, mergeGithu
       // This policy-enforced, exact-head mutation is the only release point.
       // An error never falls back to native waiting or another merge API.
       await release(mergeGithub, pr);
+      outcome = 'success';
     }
   } catch (error) {
+    outcome = 'failure';
     await invalidate(github, mergeGithub, owner, repo, pr, publisher, core);
     throw error;
+  } finally {
+    if (nativeOff) publisher.reportAutomerge(pr, outcome);
   }
 }
 
@@ -365,6 +370,15 @@ module.exports = async ({github: actionsGithub, readGithub, context, core, prGit
     required ??= qaStatuses.appRequiredByRuleset(github, owner, repo);
   const statuses = qaStatuses({github: actionsGithub, readGithub: github, appGithub: prGithub, owner, repo,
     enabled: appQaStatus, appId, installationId: appInstallationId, appRequired, core});
+  const outcomes = [];
+  // Local job output only: protected release remains the final GitHub action
+  // in this controller. A separate workflow step publishes advisory checks.
+  statuses.reportAutomerge = (pr, outcome) => {
+    if (!appQaStatus) return;
+    outcomes.push({number: pr.number, head: {sha: pr.head.sha}, base: {ref: pr.base.ref}, outcome});
+    try { core.setOutput('automerge-results', JSON.stringify(outcomes)); }
+    catch (error) { core.warning('Automerge outcome output unavailable: ' + error.message); }
+  };
   // Only the App can queue a retry: GITHUB_TOKEN dispatches start no workflow.
   const appGithub = prGithub ?? null;
   const chain = attempt => ({attempt, github: appGithub});

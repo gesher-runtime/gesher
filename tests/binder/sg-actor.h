@@ -372,7 +372,14 @@ inline int OutputPage(Driver* driver, bool readonly, const std::string& prefix, 
     report->Check(same, "whole readonly output page remains unchanged after failure");
     report->Check(fcntl(vacant, F_GETFD, 0) == -1 && errno == EBADF,
         "failed publication rolls back adopted owned descriptor slot");
+    // Other framework threads can close lower slots between these observations.
+    // Request this lower bound so a newly freed lower slot cannot hide reuse.
     int reused = open("/dev/null", O_RDONLY);
+    if (reused >= 0 && reused < vacant) {
+      int lower = reused;
+      reused = fcntl(lower, F_DUPFD_CLOEXEC, vacant);
+      close(lower);
+    }
     report->Check(reused == vacant, "rolled-back descriptor slot is actually reusable");
     if (reused >= 0) close(reused);
   } else {
