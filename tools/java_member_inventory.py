@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter, defaultdict
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from functools import lru_cache
 import hashlib
 import json
@@ -52,7 +52,7 @@ class Class:
     superclass: str | None
     interfaces: tuple[str, ...]
     members: dict[tuple[str, str, str], Member]
-    dex_source: tuple[str, str] | None = None
+    dex_source: tuple[str, str] | None = field(default=None, kw_only=True)
 
 
 def modified_utf8(raw: bytes, expected_units: int | None = None) -> str:
