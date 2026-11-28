@@ -1,0 +1,148 @@
+{
+  "schema": 1,
+  "date": "2026-11-23",
+  "public_main": "3b2eaca95b5ddd9cee3c3db4e430460e512eb355",
+  "motivating_pr": 298,
+  "original_run": 45178885879,
+  "original_attempt": 2,
+  "failed_job": 137715173763,
+  "paired_success_job": 137715173749,
+  "observations": {
+    "failed": {
+      "MainMilliseconds": 6666,
+      "CleanupMilliseconds": 18,
+      "StdoutBytes": 1552,
+      "StderrBytes": 16,
+      "Reason": "timeout",
+      "ExitCode": 124,
+      "OwnedHandles": 8,
+      "ClosedHandles": 8,
+      "RootSignaled": true,
+      "JobEmpty": true,
+      "OutputRead": true,
+      "CapturedBytes": 1568,
+      "ExclusiveSnapshot": true
+    },
+    "paired_success": {
+      "MainMilliseconds": 88,
+      "CleanupMilliseconds": 13,
+      "StdoutBytes": 1100016,
+      "StderrBytes": 16,
+      "Reason": "output-limit",
+      "ExitCode": 124,
+      "OwnedHandles": 8,
+      "ClosedHandles": 8,
+      "RootSignaled": true,
+      "JobEmpty": true,
+      "OutputRead": false,
+      "CapturedBytes": 0,
+      "ExclusiveSnapshot": false
+    }
+  },
+  "scope": "Common CI-controller file-object ownership repair; no Android runtime or threshold changes",
+  "candidate_source_sha256": {
+    "tools/windows4/TsfJobSupervisor.cs": "15dd6752990656078caf08aa20f45dbce3fca734847cbe5948f27871cc05f20e",
+    "tools/windows4/TsfOutputMetadataChecks.cs": "d1e37f5f6dd8df17e562fba08785a8cad1d78dcc81a9775db4432d76579d3b00",
+    "tools/windows4/test-tsf-job-supervisor.ps1": "2a87580b1c5cb7af735c9536807798854f439e0601bf648f1d59b580c07bdf05"
+  },
+  "source_preservation": "Full old controller restored by reversing only observer additions/query handles; full original PS entry restored by removing only three additive integration edits; worker and complete public-main workflows unchanged",
+  "source_preservation_checks": 37,
+  "resource_cost": {
+    "additional_owned_handles_per_invocation": 2,
+    "new_controller_threads": 0
+  },
+  "host": {
+    "positive_exit_code": 0,
+    "negative_exit_code": 1,
+    "actual_native_execution": false,
+    "positive_log_sha256": "70beb568eaab422b9a1256cc6ac6e4ebde95f9a64b1777170bc4111111da4f42",
+    "negative_log_sha256": "dd3e3d49eac3a61fb2f875e8b8c26174d9e20bf79a9a0f1c8fd40faf10330df6"
+  },
+  "windows_runtime": "Pending actual existing Windows controller/full manual CI execution; no local Windows result",
+  "limits": [
+    "Original6666ms syscall/scheduler cause remains unproven",
+    "Old250ms reader condition is only a bounded armed-query observation",
+    "Actual Win32 pending-I/O and full manual CI acceptance are pending",
+    "No universal bound for arbitrary filesystem or scheduling delay"
+  ],
+  "archive": {
+    "path": "data/tsf-output-observation-2026-11-23.tar.gz",
+    "sha256": "5d77bb339cc968a07080cb2eac9a39f50991c536ed2c7b385a4cad330ff645c1",
+    "bytes": 57198,
+    "members": 21,
+    "manifest_sha256": "0a025b4d65358b67859f7b5ab0b95a0ad0b1af00e733150ade59ecca2c93f1c2"
+  },
+  "references": [
+    "https://learn.microsoft.com/en-us/windows/win32/fileio/file-handles",
+    "https://devblogs.microsoft.com/oldnewthing/20140711-00/?p=523",
+    "https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-reopenfile",
+    "https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getfilesizeex",
+    "https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-lockfileex",
+    "https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-getthreadiopendingflag"
+  ],
+  "source_qualification_followup": {
+    "parent": "8d955bd7b6ec85b84fa31f7df685197ddb963276",
+    "genuine_manual_run": 45206220649,
+    "failed_jobs": [
+      137819438218,
+      137819439343
+    ],
+    "original_failure": "Unchanged selected-source policy rejected tools/windows4/TsfJobSupervisor.cs; reproduced exactly with original published policy",
+    "runtime_controller_fixture_workflow_changed": false,
+    "policy_proof": {
+      "parent": "8d955bd7b6ec85b84fa31f7df685197ddb963276",
+      "baseline": "3b2eaca95b5ddd9cee3c3db4e430460e512eb355",
+      "checks": 35,
+      "original_policy_sha256": "8ea68df5b79b1ba3a9f0feeb49a9a96d3201264a0275f8b2b49d7b83c570ead0",
+      "current_policy_sha256": "98f6787774bbcb26f2e25206479f6f7e47ef594ea4fdaee38b3eb8351a8a4baf",
+      "original_policy_reconstructed_exactly": true,
+      "runtime_windows_fixture_workflow_bytes_changed": false,
+      "original_qualification_files": {
+        "tools/net-tcp-priority/qualified/TsfJobSupervisor.cs": "070a03b1e1cc55538cd8bd5e5ff8bb2c65db5998b4d5442fc084f97f8c875359",
+        "tools/net-tcp-priority/qualified/native13-property-source.patch": "5bb1443e1964494445e1818a9d6116979e095b23856fcf7a96f0850f865eab27",
+        "tools/net-tcp-priority/qualified/ofd-stream-source.json": "9512156833c9d5dff459e7b0768ac5467138acc8a1268695e26fb3e39933fe01",
+        "tools/net-tcp-priority/qualified/ofd-stream-source.patch": "9ee2f32e66053405e4b283bbfc5ba1302aa2456d75bbaa1872913bfe6dfc0f33",
+        "tools/net-tcp-priority/qualified/shared-stdio-source.json": "6de1e4d1363de0477e9c89aec4ae4b9b16cd1ee5b2bd1c002d626e5e129dd443",
+        "tools/net-tcp-priority/qualified/shared-stdio-source.patch": "254f0205eaee8cd9d7262bd11e58a52b2e249104b5b158d06223cf46db69632d"
+      },
+      "controller_and_windows_sources": {
+        "tools/windows4/TsfJobSupervisor.cs": "15dd6752990656078caf08aa20f45dbce3fca734847cbe5948f27871cc05f20e",
+        "tools/windows4/test-tsf-job-supervisor.ps1": "2a87580b1c5cb7af735c9536807798854f439e0601bf648f1d59b580c07bdf05",
+        "tools/windows4/TsfOutputMetadataChecks.cs": "d1e37f5f6dd8df17e562fba08785a8cad1d78dcc81a9775db4432d76579d3b00"
+      },
+      "patch_is_exact_published_feature_diff": true,
+      "manifest_sha256": "b6f40f75fa20ebfd9e47473c2cd2a2d5dfe697dd4b01e50d2c04f925545d6e22",
+      "patch_sha256": "e3768c81c5a196eb83c04718664ecbf9a148fa721641b0d2d1fd059a4e210e72",
+      "original_index_fields_preserved": 19,
+      "original_archive_sha256": "5d77bb339cc968a07080cb2eac9a39f50991c536ed2c7b385a4cad330ff645c1",
+      "native_execution_or_runtime_approval": false
+    },
+    "validation": {
+      "selected_policy_transition_controls": 26,
+      "repinned_property_controls": 4,
+      "shared_stdio_controls": 23,
+      "tsf_metadata_controls": 22,
+      "supplier_semantic_mutants": 36,
+      "supplier_authority_hash_negative": 1,
+      "vector_policy_entry": "PASS including vector9, stream7, priority5, diagnostics6, thread10, receipts4 and transition26+4",
+      "independent_selected_policy_replay": "media-review-tsf-metadata-policy.log",
+      "windows_execution": "Pending genuine full manual CI on follow-up head; no runtime gate relaxed"
+    },
+    "archive": {
+      "path": "data/tsf-output-source-qualification-2026-11-23.tar.gz",
+      "bytes": 193948,
+      "sha256": "66b983d7dac69a11c5c48902b5767b2dd7a2eafffa60555d026b210ecbec47ca",
+      "members": 26,
+      "manifest_sha256": "f9f0b98e478de1ff896acb10067d62bdffa86bcea4dcf806cd9e4e1b77d0429d"
+    },
+    "log_sha256": {
+      "native-manual-1737-393-artifact.log": "e3485bd11a7d3e50f1ba055e44b1a53abd10c25b32b61a2e7cbcde2858e38f34",
+      "native-manual-1737-393-selected.log": "4a571e21b6cb9fe265d85f7bb9f43c0498ca81a164c87c9d0c66607666fd4cc3",
+      "pr393-policy-original-negative.log": "05bae401a350cd04a865f80c89a849793fd7e788f53fbbeed44da9372b0113d1",
+      "pr393-policy-fixed.log": "fb87c4470aa1bdb9b6083d27ba8cd0a5e5e07275020c5d93664e77f2e59b77bb",
+      "pr393-supplier-fixed.log": "651082038c49ccb553c0e469d5a34b32689e254480339bca0cdf12d03d6c2120",
+      "pr393-vector-fixed.log": "d24e6cfdbb25d6d19fd035787f9947619fd2dd3ec060da33469cd6d37db3a409",
+      "media-review-tsf-metadata-policy.log": "fb87c4470aa1bdb9b6083d27ba8cd0a5e5e07275020c5d93664e77f2e59b77bb"
+    }
+  }
+}

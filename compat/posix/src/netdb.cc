@@ -459,17 +459,6 @@ char* inet_ntoa(struct in_addr in) {
 
 namespace {
 
-// Windows' interface names ("ethernet_32769", the names its own
-// if_indextoname gives); one that does not fit IFNAMSIZ becomes "if<index>",
-// the same way in every function here.
-bool ListNamedInterfaces(std::vector<ws::Interface>* interfaces) {
-  if (!ws::ListInterfaces(interfaces)) return false;
-  for (ws::Interface& iface : *interfaces) {
-    if (iface.name.size() >= IFNAMSIZ) iface.name = "if" + std::to_string(iface.index);
-  }
-  return true;
-}
-
 unsigned ToIfFlags(unsigned flags) {
   unsigned result = 0;
   if (flags & ws::kIfUp) result |= IFF_UP;
@@ -623,6 +612,15 @@ int getifaddrs(struct ifaddrs** ifap) {
 }  // extern "C"
 
 namespace gesher::sock {
+
+// Use the Windows name when it fits IFNAMSIZ, as in if_indextoname.
+bool ListNamedInterfaces(std::vector<ws::Interface>* interfaces) {
+  if (!ws::ListInterfaces(interfaces)) return false;
+  for (ws::Interface& iface : *interfaces) {
+    if (iface.name.size() >= IFNAMSIZ) iface.name = "if" + std::to_string(iface.index);
+  }
+  return true;
+}
 
 namespace {
 

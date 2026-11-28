@@ -2640,12 +2640,14 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
     private int requestExactAlarmAccess(Intent intent, String callingPackage,
             IBinder resultToToken, String resultWho, int requestCode, int launchTaskId,
             AppTaskRecord requiredTask) {
-        String target = ExactAlarmAccessRequests.target(intent);
-        if (!mExactAlarmRequests.available()) return ActivityManager.START_INTENT_NOT_RESOLVED;
+        boolean deviceAdmin = DeviceAdminRequests.handles(intent, intent.getType());
+        String target = deviceAdmin ? null : ExactAlarmAccessRequests.target(intent);
+        if (!(deviceAdmin ? mPm.deviceAdminRequests().available() : mExactAlarmRequests.available())) return ActivityManager.START_INTENT_NOT_RESOLVED;
         final ActivityRecord origin;
         final ActivityRecord covered;
         final ExactAlarmSettingsSession session;
         final boolean cancelResult;
+        final boolean cancelEnrollment;
         final ActivityResultRoute resultRoute;
         List<ActivityRecord> toStop = new ArrayList<>();
         boolean pauseCovered = false;
@@ -2669,6 +2671,7 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                     || (intent.getFlags() & Intent.FLAG_ACTIVITY_NEW_TASK) != 0
                     || origin != null && origin.info.launchMode == ActivityInfo.LAUNCH_SINGLE_INSTANCE
                     || resultRoute.recipient == null && (intent.getFlags() & Intent.FLAG_ACTIVITY_NEW_DOCUMENT) != 0;
+            cancelEnrollment = deviceAdmin && newTask;
             cancelResult = resultRoute.recipient != null && newTask;
             int taskId = launchTaskId >= 0 && topOf(launchTaskId) != null ? launchTaskId
                     : !newTask ? origin.taskId : -1;
@@ -2708,7 +2711,13 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                     (intent.getFlags() & Intent.FLAG_ACTIVITY_NO_USER_ACTION) == 0);
             for (ActivityRecord activity : toStop) stop(activity);
             updateTopResumed();
-            boolean queued = mExactAlarmRequests.request(target, () -> {
+            // Enrollment requires an existing activity task. Check the actual
+            // route too: a direct Binder caller can omit the NEW_TASK flag.
+            if (cancelEnrollment) {
+                complete.accept(android.app.Activity.RESULT_CANCELED);
+                return ActivityManager.START_SUCCESS;
+            }
+            Runnable beforeOpen = () -> {
                 // Preserve pause-before-Settings ordering without holding a Binder
                 // transaction open. Android also bounds a missing pause acknowledgment.
                 if (covered == null) return;
@@ -2722,7 +2731,9 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
                         catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); break; }
                     }
                 }
-            }, complete);
+            };
+            boolean queued = deviceAdmin ? mPm.deviceAdminRequests().request(intent, beforeOpen, complete)
+                    : mExactAlarmRequests.request(target, beforeOpen, complete);
             if (!queued) { complete.accept(android.app.Activity.RESULT_CANCELED); return ActivityManager.START_CANCELED; }
             return ActivityManager.START_SUCCESS;
         } catch (RuntimeException | Error failure) {
@@ -3083,10 +3094,11 @@ public final class ActivityTaskManagerService extends IActivityTaskManager.Defau
             return requestPermissions(caller, callingPackage, intent, resultToToken,
                     resultWho, requestCode);
         }
-        if (ExactAlarmAccessRequests.handles(intent, resolvedType)
+        if ((ExactAlarmAccessRequests.handles(intent, resolvedType) || DeviceAdminRequests.handles(intent, resolvedType))
                 && mPm.get(ExactAlarmAccessRequests.PACKAGE) == null) {
             ResolveInfo settings = mPm.resolveIntent(intent, resolvedType, PackageManager.MATCH_DEFAULT_ONLY, 0);
-            if (settings != null && ExactAlarmAccessRequests.isActivity(settings.activityInfo)) {
+            if (settings != null && (ExactAlarmAccessRequests.isActivity(settings.activityInfo)
+                    || DeviceAdminRequests.isActivity(settings.activityInfo))) {
                 return requestExactAlarmAccess(intent, callingPackage, resultToToken, resultWho,
                         requestCode, launchTaskId, requiredTask);
             }

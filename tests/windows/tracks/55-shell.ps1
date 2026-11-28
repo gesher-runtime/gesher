@@ -111,8 +111,17 @@ try {
 # parent's splash and, per $env:SPLASH_PROBE_MODE: 'app' shows a window with the
 # app's AppUserModelID and sees the splash go; 'close' closes the splash (the
 # launch is cancelled and its processes are terminated); 'none' expects no splash (install,
-# --headless). A double-clicked APK's package comes from apk-icons.list.
-$splashName = 'shell: gesher-launch shows a splash (the app''s label, icon and AppUserModelID) until the app''s window is up; closing it cancels the launch; none for install or --headless'
+# --headless); 'nolaunch' expects no launch at all. An APK given with options (the CLI)
+# is installed and launched as before; its package comes from apk-icons.list.
+# An APK opened from Explorer (the bare form, gesher-launch "<file>"; docs/installer.md,
+# "Opening an APK from Explorer"): the stand-in answers apk-info as SPLASH_PROBE_INFO
+# says, and InstallConfirmDialog.ps1 answers gesher-launch's dialogs: the installed
+# version opens with no dialog; Cancel installs nothing (exit 1223); Install runs
+# install (--desktop-shortcut only when the box was checked; the box absent in portable
+# mode, with GESHER_SHORTCUTS=0 and when the recorded desktop shortcut is there), then
+# Done ends and Open launches; a failing step ends with its exit code and no success.
+. (Join-Path $PSScriptRoot '..\shell\InstallConfirmDialog.ps1')
+$splashName = 'shell: gesher-launch shows a splash (the app''s label, icon and AppUserModelID) until the app''s window is up; closing it cancels the launch; none for install or --headless; an APK opened from Explorer is installed only after Install in its confirmation dialog and launched only on Open'
 $problems = @()
 if (-not (Test-Path "$Dir/gesher-launch.exe")) {
   $problems += "no $Dir/gesher-launch.exe"
@@ -145,6 +154,35 @@ if (-not (Test-Path "$Dir/gesher-launch.exe")) {
     "$($apkItem.Length)`t$apkMillis`t$(Join-Path $splashShell 'icon.ico')`tcom.gesher.splashprobe")
   Set-Content -LiteralPath (Join-Path $splashDir 'gesher-app.ps1') -Encoding utf8 -Value @'
 $ErrorActionPreference = 'Stop'
+# Every run's arguments, in order, for the case to check (the bare-file flow runs
+# apk-info, then install and/or launch).
+if ($env:SPLASH_PROBE_STEPS) { Add-Content -LiteralPath $env:SPLASH_PROBE_STEPS -Encoding utf8 -Value "step=$($args -join '|')" }
+# The bare-file flow's apk-info (Launcher's apk-info APK OUT SNAPSHOT_DIR): what SPLASH_PROBE_INFO
+# says is installed ('same': this version, 'older'/'older-desktop': an older one,
+# with its desktop shortcut there; 'fail': not an app).
+if ($args.Count -ge 1 -and $args[0] -eq 'apk-info') {
+  if ($env:SPLASH_PROBE_INFO -eq 'fail') {
+    [Console]::Error.WriteLine('gesher-app: probe.apk cannot be read as an Android app: splash probe')
+    exit 3
+  }
+  Copy-Item -LiteralPath $args[1] -Destination $args[3]
+  $info = @('package=com.gesher.splashprobe', 'version_code=2', 'version_name=2.0', ('inputs_sha256=' + ('a' * 64)),
+    "label=Splash Probe $([char]0xE9)", "icon=$(Join-Path $PSScriptRoot 'gesher.ico')")
+  switch ($env:SPLASH_PROBE_INFO) {
+    'same' { $info += 'installed_version_code=2', 'installed_version_name=2.0' }
+    'older' { $info += 'installed_version_code=1', 'installed_version_name=1.0' }
+    'older-desktop' { $info += 'installed_version_code=1', 'installed_version_name=1.0', 'desktop_shortcut=1' }
+  }
+  [IO.File]::WriteAllText($args[2], ($info -join "`n") + "`n", [Text.UTF8Encoding]::new($false))
+  exit 0
+}
+# The bare-file flow's install (after Install in the confirmation dialog).
+if ($args.Count -ge 1 -and $args[0] -eq 'install' -and $env:SPLASH_PROBE_DIALOG) {
+  $code = [int]$env:SPLASH_PROBE_INSTALL_EXIT
+  if ($code -ne 0) { [Console]::Error.WriteLine('gesher-app: splash probe install failed'); exit $code }
+  'gesher-app: installed com.gesher.splashprobe (version 2.0) in the splash probe'
+  exit 0
+}
 . (Join-Path $PSScriptRoot 'SplashReceipts.ps1')
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -TypeDefinition @"
@@ -429,16 +467,52 @@ public static class SplashLifetimeProbe {
 }
 '@
   }
+  # The steps each case's gesher-launch ran (regular expressions, in order).
+  $bare = "`"$probeApk`""
+  # Only the bare-file flow replaces the original path with the private snapshot.
+  $probePath = '(?:' + [regex]::Escape($probeApk) + '|' + [regex]::Escape([IO.Path]::GetFullPath($probeApk)) + ')'
+  $payloadPath = '.+\\gesher-install-[0-9a-f-]+\\payload'
+  $snapshotPath = $payloadPath + '\\' + [regex]::Escape([IO.Path]::GetFileName($probeApk))
+  $apkInfoStep = '^apk-info\|' + $probePath + '\|.+\\info\.txt\|' + $payloadPath + '$'
+  $installStep = '^install\|' + $snapshotPath + '\|--confirmed\|com\.gesher\.splashprobe\|2\|a{64}$'
+  $desktopStep = $installStep.TrimEnd('$') + '\|--desktop-shortcut$'
+  $launchStep = '^launch\|com\.gesher\.splashprobe$'
   $cases = @(
     @{ Mode = 'app'; Args = 'launch com.gesher.splashprobe'; Code = 0 },
-    @{ Mode = 'app'; Args = "`"$probeApk`""; Code = 0 },
+    @{ Mode = 'app'; Args = "$bare --window"; Code = 0; Steps = @('^' + [regex]::Escape($probeApk) + '\|--window$') },
     @{ Mode = 'close'; Args = 'launch com.gesher.splashprobe'; Code = 1 },
-    @{ Mode = 'none'; Args = "install `"$probeApk`""; Code = 0 },
+    @{ Mode = 'none'; Args = "install $bare"; Code = 0; Steps = @('^install\|' + $probePath + '$') },
     @{ Mode = 'none'; Args = 'launch com.gesher.splashprobe --headless'; Code = 0 },
     @{ Mode = 'late'; Args = 'launch com.gesher.splashprobe'; Code = 0; Detach = $true },
     @{ Mode = 'late'; Args = 'launch com.gesher.splashprobe --ez --wait true'; Code = 0; Detach = $true },
     @{ Mode = 'late-cancel'; Args = 'launch com.gesher.splashprobe'; Code = 1; Detach = $true },
-    @{ Mode = 'late-cancel'; Args = "`"$probeApk`""; Code = 1; Detach = $true; InitialUnknown = $true }
+    @{ Mode = 'late-cancel'; Args = "$bare --window"; Code = 1; Detach = $true; InitialUnknown = $true },
+    # Opened from Explorer: the same version installed opens it, with no dialog.
+    @{ Mode = 'app'; Args = $bare; Code = 0; Info = 'same'; NoDialog = $true; Steps = @($apkInfoStep, $launchStep) },
+    # Not installed: Cancel installs nothing.
+    @{ Mode = 'nolaunch'; Args = $bare; Code = 1223; Info = 'new'; Confirm = 'Cancel'; Box = $true; Steps = @($apkInfoStep) },
+    # Install with the desktop shortcut box checked, then Done: installed, not launched.
+    @{ Mode = 'nolaunch'; Args = $bare; Code = 0; Info = 'new'; Confirm = 'Install'; Desktop = $true; Box = $true; Done = 'Done'
+       Steps = @($apkInfoStep, $desktopStep) },
+    # Install, then Open: launched as its Start menu shortcut launches it (here cancelled
+    # from its splash, as 'late-cancel' does).
+    @{ Mode = 'late-cancel'; Args = $bare; Code = 1; Detach = $true; Info = 'new'; Confirm = 'Install'; Box = $true; Done = 'Open'
+       Steps = @($apkInfoStep, $installStep, $launchStep) },
+    # An update whose recorded desktop shortcut is there: no box.
+    @{ Mode = 'nolaunch'; Args = $bare; Code = 0; Info = 'older-desktop'; Confirm = 'Install'; Box = $false; Done = 'Done'
+       Steps = @($apkInfoStep, $installStep) },
+    # An update without one: the box (left unchecked).
+    @{ Mode = 'nolaunch'; Args = $bare; Code = 1223; Info = 'older'; Confirm = 'Cancel'; Box = $true; Steps = @($apkInfoStep) },
+    # GESHER_SHORTCUTS=0 and portable Gesher (portable.marker beside it): no box.
+    @{ Mode = 'nolaunch'; Args = $bare; Code = 1223; Info = 'new'; Confirm = 'Cancel'; Box = $false; Shortcuts = '0'; Steps = @($apkInfoStep) },
+    @{ Mode = 'nolaunch'; Args = $bare; Code = 0; Info = 'new'; Confirm = 'Install'; Box = $false; Done = 'Done'; Portable = $true
+       Steps = @($apkInfoStep, $installStep) },
+    # A file apk-info cannot read, and a failing install: their exit code, no dialog that
+    # claims success (redirected handles, as CI's: the error goes to them, not to a box).
+    @{ Mode = 'nolaunch'; Args = $bare; Code = 3; Info = 'fail'; Redirect = $true; NoDialog = $true; Output = 'cannot be read as an Android app'
+       Steps = @($apkInfoStep) },
+    @{ Mode = 'nolaunch'; Args = $bare; Code = 4; Info = 'new'; InstallExit = 4; Redirect = $true; Confirm = 'Install'; Box = $true; Done = 'None'
+       Output = 'splash probe install failed'; Steps = @($apkInfoStep, $installStep) }
   )
   foreach ($case in $cases) {
     # Never reuse receipts between the two 'late' or 'late-cancel' cases.
@@ -447,7 +521,9 @@ public static class SplashLifetimeProbe {
     $probeOut = Join-Path $caseDir 'parent.txt'
     $childOut = Join-Path $caseDir 'child.txt'
     $childError = Join-Path $caseDir 'child-error.txt'
+    $stepsFile = Join-Path $caseDir 'steps.txt'
     $child = $null
+    $marker = Join-Path $splashDir 'portable.marker'
     $psi = [Diagnostics.ProcessStartInfo]::new((Join-Path $splashDir 'gesher-launch.exe'), $case.Args)
     $psi.UseShellExecute = $false
     $psi.WorkingDirectory = $splashDir
@@ -456,7 +532,23 @@ public static class SplashLifetimeProbe {
     $psi.EnvironmentVariables['SPLASH_PROBE_PARENT_RECEIPT'] = $probeOut
     $psi.EnvironmentVariables['SPLASH_PROBE_CHILD_RECEIPT'] = $childOut
     $psi.EnvironmentVariables['SPLASH_PROBE_CHILD_ERROR'] = $childError
-    foreach ($v in 'GESHER_APP_WINDOW', 'GESHER_SPLASH', 'GESHER_DISPLAY', 'GESHER_LAUNCH_DETACH', 'SPLASH_PROBE_APK') { $psi.EnvironmentVariables.Remove($v) }
+    $psi.EnvironmentVariables['SPLASH_PROBE_STEPS'] = $stepsFile
+    foreach ($v in 'GESHER_APP_WINDOW', 'GESHER_SPLASH', 'GESHER_DISPLAY', 'GESHER_LAUNCH_DETACH', 'SPLASH_PROBE_APK',
+                   'SPLASH_PROBE_INFO', 'SPLASH_PROBE_DIALOG', 'SPLASH_PROBE_INSTALL_EXIT', 'GESHER_SHORTCUTS', 'GESHER_PROFILE') {
+      $psi.EnvironmentVariables.Remove($v)
+    }
+    if ($case.Info) {
+      $psi.EnvironmentVariables['SPLASH_PROBE_INFO'] = $case.Info
+      $psi.EnvironmentVariables['SPLASH_PROBE_DIALOG'] = '1'
+      $psi.EnvironmentVariables['SPLASH_PROBE_INSTALL_EXIT'] = [string][int]$case.InstallExit
+    }
+    if ($case.Shortcuts) { $psi.EnvironmentVariables['GESHER_SHORTCUTS'] = $case.Shortcuts }
+    # Portable Gesher: a portable.marker beside gesher-launch (its profile, Data, unused here).
+    if ($case.Portable) { Set-Content -LiteralPath $marker -Value '' } else { Remove-Item -LiteralPath $marker -ErrorAction SilentlyContinue }
+    if ($case.Redirect) {
+      $psi.RedirectStandardOutput = $true
+      $psi.RedirectStandardError = $true
+    }
     if ($case.InitialUnknown) {
       Remove-Item (Join-Path $splashData 'Gesher\data\system\apk-icons.list') -ErrorAction SilentlyContinue
       $psi.EnvironmentVariables['SPLASH_PROBE_APK'] = $probeApk
@@ -464,8 +556,21 @@ public static class SplashLifetimeProbe {
     # A detached launch (as with no output handles: the Start menu's).
     if ($case.Detach) { $psi.EnvironmentVariables['GESHER_LAUNCH_DETACH'] = '1' }
     $p = [Diagnostics.Process]::Start($psi)
-    $what = "gesher-launch $($case.Args) ($($case.Mode))"
+    $what = "gesher-launch $($case.Args) ($($case.Mode)$(if ($case.Info) { ", installed: $($case.Info)" })$(if ($case.Confirm) { ", $($case.Confirm)" })$(if ($case.Done) { ", $($case.Done)" }))"
+    $outputs = if ($case.Redirect) { @($p.StandardOutput.ReadToEndAsync(), $p.StandardError.ReadToEndAsync()) } else { @() }
     try {
+    if ($case.Confirm) {
+      $answer = Invoke-GesherInstallConfirm -ProcessId $p.Id -Process $p -Answer $case.Confirm -DesktopShortcut:([bool]$case.Desktop) `
+        -ExpectDesktopBox $case.Box -Done $(if ($case.Done) { $case.Done } else { 'Done' }) -ConfirmTimeoutSeconds 60 -InstallTimeoutSeconds 60
+      foreach ($a in $answer.Problems) { $problems += "$($what): $a" }
+      # After a failing install: no installed dialog (it would claim success).
+      if ($case.Done -eq 'None') {
+        foreach ($t in @(Watch-GesherNoInstallDialog $p 120)) { $problems += "$($what): a dialog '$t' after the failed install" }
+      }
+    }
+    if ($case.NoDialog) {
+      foreach ($t in @(Watch-GesherNoInstallDialog $p 120)) { $problems += "$($what): an install dialog '$t'" }
+    }
     if (-not $p.WaitForExit(120000)) {
       $p.Kill($true)
       if (-not $p.WaitForExit(5000)) { $problems += "$($what): launcher survived forced retirement" }
@@ -473,6 +578,27 @@ public static class SplashLifetimeProbe {
       continue
     }
     if ($p.ExitCode -ne $case.Code) { $problems += "$($what): exit $($p.ExitCode), not $($case.Code)" }
+    if ($case.Redirect) {
+      $p.WaitForExit()
+      $text = $outputs[0].Result + $outputs[1].Result
+      if ($case.Output -and -not $text.Contains($case.Output)) { $problems += "$($what): its output lacks '$($case.Output)' ($text)" }
+      if ($text -match 'installed com\.gesher\.splashprobe' -and $case.Code -ne 0 -and -not $case.InstallExit) { $problems += "$($what): it installed ($text)" }
+    }
+    if ($case.Steps) {
+      $steps = @(if ([IO.File]::Exists($stepsFile)) { [IO.File]::ReadAllLines($stepsFile) | Where-Object { $_ -match '^\W*step=' } | ForEach-Object { $_ -replace '^\W*step=', '' } })
+      $stepsOk = $steps.Count -eq $case.Steps.Count
+      for ($i = 0; $stepsOk -and $i -lt $steps.Count; $i++) { $stepsOk = $steps[$i] -match $case.Steps[$i] }
+      if (-not $stepsOk) { $problems += "$($what): gesher-app.ps1 ran $($steps.Count) step(s): $($steps -join ' ; ')" }
+      if ($stepsOk -and $case.Info) {
+        $readPath = Join-Path ($steps[0] -split '\|')[3] ([IO.Path]::GetFileName($probeApk))
+        if ($steps.Count -gt 1 -and $steps[1].StartsWith('install|') -and
+            ($steps[1] -split '\|')[1] -cne $readPath) {
+          $problems += "$($what): install read a different snapshot than apk-info"
+        }
+        $snapshotDir = Split-Path -Parent (Split-Path -Parent $readPath)
+        if (Test-Path -LiteralPath $snapshotDir) { $problems += "$($what): snapshot was not cleaned up" }
+      }
+    }
     $probe = if ([IO.File]::Exists($probeOut)) { @([IO.File]::ReadAllLines($probeOut)) } else { @() }
     # The child publishes a separate closed receipt. Polling existence cannot
     # race a Windows PowerShell 5.1 append/read lock on the parent's report.
@@ -516,9 +642,12 @@ public static class SplashLifetimeProbe {
       'late' { 'splash=True', 'splash-after-exit=True', 'set-aumid=0', 'gone=True', 'app-closed=0/1', 'child-done=True' }
       'late-cancel' { 'splash=True', 'splash-after-exit=True', 'app-closed=2/2', 'other-splash-kept=True', 'child-done=True' }
       'none' { 'splash=False' }
+      'nolaunch' { @() }
     }
+    # No launch: the stand-in never got to look for a splash.
+    if ($case.Mode -eq 'nolaunch' -and [IO.File]::Exists($probeOut)) { $problems += "$($what): it launched the app ($($probe -join '; '))" }
     if ($case.InitialUnknown) { $want += 'installed-package=com.gesher.splashprobe' }
-    if ($case.Mode -ne 'none' -and (Test-Path (Join-Path $splashShell 'icon.ico'))) { $want += 'icon=True' }
+    if ($case.Mode -notin 'none', 'nolaunch' -and (Test-Path (Join-Path $splashShell 'icon.ico'))) { $want += 'icon=True' }
     foreach ($w in $want) { if ($probe -notcontains $w) { $problems += "$($what): no '$w' ($($probe -join '; '))" } }
     } catch {
       $problems += "$($what): fixture error $_"
@@ -537,6 +666,7 @@ public static class SplashLifetimeProbe {
         finally { $child.Dispose() }
       }
       $p.Dispose()
+      Remove-Item -LiteralPath $marker -ErrorAction SilentlyContinue
     }
   }
 }

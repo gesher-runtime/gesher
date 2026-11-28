@@ -1,5 +1,6 @@
-"""One PR CI run covers every job and native auto-merge retains QA gating."""
+"""Required PR CI jobs and native auto-merge retain QA gating."""
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -10,6 +11,43 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class QueueWorkflows(unittest.TestCase):
+    def test_bot_required_checks_use_only_trusted_scripts_and_reporting_permissions(self):
+        doc = yaml.safe_load((ROOT / '.github/workflows/required-checks.yml').read_text())
+        self.assertEqual(doc['permissions'], {'contents': 'read'})
+        self.assertEqual(set(doc[True]['workflow_run']['workflows']), {'ci', 'arm64-windows'})
+        self.assertEqual(set(doc[True]['workflow_run']['types']), {'requested', 'in_progress', 'completed'})
+        job = doc['jobs']['publish']
+        self.assertEqual(job['if'], "vars.GESHER_APP_REQUIRED_CHECKS == 'true'")
+        checkout, repo, token, publisher = job['steps']
+        self.assertEqual(checkout['with']['ref'], '${{ github.event.repository.default_branch }}')
+        self.assertFalse(checkout['with']['persist-credentials'])
+        self.assertEqual(checkout['with']['sparse-checkout'], '.github/scripts')
+        permissions = {key: value for key, value in token['with'].items() if key.startswith('permission-')}
+        self.assertEqual(permissions, {'permission-actions': 'read', 'permission-checks': 'read',
+                                      'permission-pull-requests': 'read', 'permission-statuses': 'write'})
+        self.assertEqual(token['with']['repositories'], '${{ steps.repo.outputs.name }}')
+        self.assertEqual(publisher['with']['github-token'], '${{ steps.bot.outputs.token }}')
+        self.assertNotIn('mergePullRequest', publisher['with']['script'])
+
+    def test_advisory_automerge_report_is_a_separate_step_after_the_controller(self):
+        doc = yaml.safe_load((ROOT / '.github/workflows/automerge.yml').read_text())
+        controller, report = doc['jobs']['automerge']['steps'][-2:]
+        self.assertEqual(controller['id'], 'controller')
+        self.assertIn('always()', report['if'])
+        self.assertEqual(report['env']['RESULTS'], '${{ steps.controller.outputs.automerge-results }}')
+        self.assertEqual(report['with']['github-token'], '${{ steps.gesher-bot.outputs.token }}')
+        self.assertIn('app-automerge-check.js', report['with']['script'])
+
+    def test_contract_checkout_contains_planner_and_preflight_audit_inputs(self):
+        doc = yaml.safe_load((ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8'))
+        steps = doc['jobs']['automerge-script']['steps']
+        checkout = next(step for step in steps if step.get('uses') == 'actions/checkout@v4')
+        paths = set(checkout['with']['sparse-checkout'].splitlines())
+        # The planner reads the shard manifest. Preflight ownership audits scan
+        # all Python tools and verify every mapped entry point exists.
+        self.assertTrue({'tools', 'tests/windows/test-shards.json',
+                         '.github/workflows', '.github/scripts'} <= paths)
+
     def test_local_controller_pool_requires_main_and_an_explicit_flag(self):
         doc = yaml.safe_load((ROOT / '.github/workflows/automerge.yml').read_text())
         job = doc['jobs']['automerge']
@@ -33,16 +71,89 @@ class QueueWorkflows(unittest.TestCase):
             doc = yaml.safe_load((ROOT / f'.github/workflows/{workflow}.yml').read_text(encoding='utf-8'))
             # PyYAML's YAML 1.1 reader treats the unquoted key 'on' as True.
             self.assertIn('pull_request', doc[True])
+            pr = doc[True]['pull_request'] or {}
+            self.assertNotIn('paths', pr)
+            self.assertNotIn('paths-ignore', pr)
             self.assertNotIn('merge_group', doc[True])
             jobs = doc['jobs']
-            self.assertEqual(set(jobs[gate]['needs']), set(jobs) - {gate})
+            required = {'plan', 'source-identity'}
+            if workflow == 'ci':
+                required.add('automerge-script')
+            tracked = set(jobs) - {gate}
+            selectable = sorted(tracked - required)
+            self.assertEqual(jobs[gate]['name'], gate)
+            self.assertEqual(set(jobs[gate]['needs']), tracked)
             self.assertEqual(jobs[gate]['if'], 'always()')
-            body = jobs[gate]['steps'][0]['run'].split("<<'PY'\n", 1)[1].rsplit('\nPY', 1)[0]
-            for result in ['success', 'failure', 'cancelled', 'skipped']:
-                import os
-                env = dict(os.environ, JOB_RESULTS=json.dumps({'producer': {'result': result}}))
-                run = subprocess.run([sys.executable, '-c', body], env=env, capture_output=True)
-                self.assertEqual(run.returncode == 0, result == 'success')
+            planner = jobs['plan']
+            step = next(step for step in planner['steps'] if 'select_pr_jobs.py plan' in step.get('run', ''))
+            self.assertEqual(planner['outputs']['selected'], '${{ steps.' + step['id'] + '.outputs.selected }}')
+            self.assertIn(f'python3 tools/ci/select_pr_jobs.py plan --workflow {workflow}', step['run'].splitlines())
+            for job in required:
+                self.assertNotIn('if', jobs[job])
+            for job in selectable:
+                with self.subTest(workflow=workflow, job=job):
+                    self.assertIn('plan', jobs[job]['needs'])
+                    self.assertIn("needs.plan.result == 'success'", jobs[job]['if'])
+                    self.assertRegex(jobs[job]['if'],
+                                     rf"contains\(fromJSON\(needs\.plan\.outputs\.selected[^)]*\), '{job}'\)")
+
+            verify = next(step for step in jobs[gate]['steps']
+                          if 'select_pr_jobs.py verify' in step.get('run', ''))
+            self.assertNotIn('if', verify)
+            self.assertEqual(verify['env']['SHARDS'], '${{ needs.plan.outputs.shards }}')
+            self.assertEqual(verify['env']['PREFLIGHT_GROUPS'], '${{ needs.plan.outputs.preflight_groups }}')
+            self.assertEqual(verify['env']['GH_TOKEN'], '${{ github.token }}')
+            checkout = next(step for step in jobs[gate]['steps']
+                            if step.get('uses') == 'actions/checkout@v4')
+            self.assertEqual(checkout['with']['fetch-depth'], 0)
+            self.assertNotIn('if', checkout)
+            self.assertIn('tests/windows/test-shards.json', checkout['with']['sparse-checkout'])
+            self.assertEqual(verify['env']['SELECTED'], '${{ needs.plan.outputs.selected }}')
+            self.assertEqual(verify['env']['JOB_RESULTS'], '${{ toJSON(needs) }}')
+            verification_lines = [line for line in verify['run'].splitlines() if 'select_pr_jobs.py' in line]
+            self.assertEqual(verification_lines, [f'python3 tools/ci/select_pr_jobs.py verify --workflow {workflow}'])
+            # Aggregate predicates remain independent of GitHub transport. The planner
+            # suite exercises recomputation and exact matrix inventory rejection.
+            command = [sys.executable, '-c',
+                       "import json, os, sys; sys.path.insert(0, 'tools/ci'); "
+                       "import select_pr_jobs as p; "
+                       f"p.verify(p.load_workflow('{workflow}'), "
+                       "json.loads(os.environ['SELECTED']), json.loads(os.environ['JOB_RESULTS']))"]
+
+            full = {job: {'result': 'success'} for job in tracked}
+            docs_only = {job: {'result': 'success' if job in required else 'skipped'} for job in tracked}
+            worker = selectable[0]
+            cases = [
+                ('full', selectable, full, True),
+                ('docs only', [], docs_only, True),
+                ('failed plan', [], dict(docs_only, plan={'result': 'failure'}), False),
+                ('unknown job', ['unknown'], docs_only, False),
+                ('selected job missing', selectable, {k: v for k, v in full.items() if k != worker}, False),
+                ('unselected job ran', [], full, False),
+                *((result, selectable, dict(full, **{worker: {'result': result}}), False)
+                  for result in ['failure', 'cancelled', 'skipped']),
+            ]
+            for name, selected, results, succeeds in cases:
+                with self.subTest(workflow=workflow, case=name):
+                    env = dict(os.environ, SELECTED=json.dumps(selected), JOB_RESULTS=json.dumps(results))
+                    run = subprocess.run(command, cwd=ROOT, env=env, capture_output=True, text=True)
+                    self.assertEqual(run.returncode == 0, succeeds, run.stderr or run.stdout)
+
+    def test_non_pr_required_checks_reject_every_skip(self):
+        for workflow, gate in [('ci', 'ci-required'), ('arm64-windows', 'arm64-required')]:
+            doc = yaml.safe_load((ROOT / f'.github/workflows/{workflow}.yml').read_text(encoding='utf-8'))
+            job = doc['jobs'][gate]
+            step = next(step for step in job['steps'] if step.get('if') == "github.event_name != 'pull_request'")
+            self.assertEqual(step['env']['JOB_RESULTS'], '${{ toJSON(needs) }}')
+            body = step['run'].split("<<'PY'\n", 1)[1].rsplit('\nPY', 1)[0]
+            outcomes = {name: {'result': 'success'} for name in job['needs']}
+            worker = next(name for name in job['needs'] if name != 'plan')
+            for result in ['success', 'skipped', 'failure', 'cancelled']:
+                with self.subTest(workflow=workflow, result=result):
+                    outcomes[worker]['result'] = result
+                    env = dict(os.environ, JOB_RESULTS=json.dumps(outcomes))
+                    run = subprocess.run([sys.executable, '-c', body], env=env, capture_output=True)
+                    self.assertEqual(run.returncode == 0, result == 'success', run.stderr)
 
     def test_release_publish_uses_only_protected_workflow_code(self):
         ci = yaml.safe_load((ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8'))
@@ -158,7 +269,7 @@ class QueueWorkflows(unittest.TestCase):
 
     def test_workflow_credential_is_separate_from_required_status_identity(self):
         doc = yaml.safe_load((ROOT / '.github/workflows/automerge.yml').read_text())
-        checkout, repo, flag, token, reader, controller = doc['jobs']['automerge']['steps']
+        checkout, repo, flag, token, reader, controller, reporter = doc['jobs']['automerge']['steps']
         self.assertEqual(checkout['with']['ref'], '${{ github.event.repository.default_branch }}')
         self.assertFalse(checkout['with']['persist-credentials'])
         self.assertEqual(token['if'], "vars.GESHER_BOT_APP_ID != ''")
@@ -172,6 +283,7 @@ class QueueWorkflows(unittest.TestCase):
                          {'permission-contents': 'write', 'permission-issues': 'write',
                           'permission-pull-requests': 'write',
                           'permission-workflows': 'write',
+                          'permission-checks': "${{ steps.app-qa-flag.outputs.enabled == 'true' && 'write' || '' }}",
                           'permission-statuses': "${{ steps.app-qa-flag.outputs.enabled == 'true' && 'write' || '' }}"})
         self.assertNotIn('skip-token-revoke', token['with'])
         self.assertEqual(controller['env']['GESHER_BOT_TOKEN'], '${{ steps.gesher-bot.outputs.token }}')
@@ -192,7 +304,7 @@ class QueueWorkflows(unittest.TestCase):
 
     def test_evidence_reads_use_a_read_only_app_token_with_actions_fallback(self):
         doc = yaml.safe_load((ROOT / '.github/workflows/automerge.yml').read_text())
-        checkout, repo, flag, token, reader, controller = doc['jobs']['automerge']['steps']
+        checkout, repo, flag, token, reader, controller, reporter = doc['jobs']['automerge']['steps']
         self.assertEqual(reader['id'], 'gesher-read')
         self.assertEqual(reader['uses'], token['uses'])
         self.assertEqual(reader['if'], "vars.GESHER_BOT_APP_ID != ''")
@@ -215,12 +327,13 @@ class QueueWorkflows(unittest.TestCase):
     def test_exact_flag_controls_both_token_permission_and_status_writer(self):
         import os
         doc = yaml.safe_load((ROOT / '.github/workflows/automerge.yml').read_text())
-        checkout, repo, flag, token, reader, controller = doc['jobs']['automerge']['steps']
+        checkout, repo, flag, token, reader, controller, reporter = doc['jobs']['automerge']['steps']
         self.assertEqual(flag['id'], 'app-qa-flag')
         self.assertEqual(flag['uses'], 'actions/github-script@v7')
         self.assertEqual(flag['env'], {'GESHER_APP_QA_STATUS': '${{ vars.GESHER_APP_QA_STATUS }}'})
         self.assertEqual(token['with']['permission-statuses'],
                          "${{ steps.app-qa-flag.outputs.enabled == 'true' && 'write' || '' }}")
+        self.assertEqual(token['with']['permission-checks'], token['with']['permission-statuses'])
         self.assertEqual(controller['env']['GESHER_APP_QA_STATUS'], '${{ steps.app-qa-flag.outputs.enabled }}')
         # Execute the actual trusted flag script; Actions string equality is
         # case-insensitive and must see only this canonical boolean output.

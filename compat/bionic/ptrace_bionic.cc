@@ -326,6 +326,7 @@ Tracee* Find(int pid, bool any_state) {
       return nullptr;
     }
     it = tracees.emplace(pid, t).first;
+    ChildWaitStateChanged();
   }
   Tracee& t = it->second;
   if (t.remote.state->tracer != me) return nullptr;  // released meanwhile
@@ -431,9 +432,11 @@ int64_t Request(int request, int pid, uint64_t addr, uint64_t data, bool syscall
     case kTraceme:
       return Traceme();
     case kAttach:
-      return Attach(pid, false, addr, data);
-    case kSeize:
-      return Attach(pid, true, addr, data);
+    case kSeize: {
+      const int64_t result = Attach(pid, request == kSeize, addr, data);
+      if (result == 0) ChildWaitStateChanged();
+      return result;
+    }
     default:
       break;
   }

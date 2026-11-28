@@ -1,11 +1,27 @@
 // Copyright (C) 2026 The Gesher Authors
 // SPDX-License-Identifier: Apache-2.0
 #include "devsvc_win32.h"
+#include "device_admin_role.h"
 
 #include <windows.h>
+#include <shellapi.h>
 #include <wtsapi32.h>
 
 namespace gesher::devsvc {
+
+bool DeviceAdminServer() {
+  // Captured when WindowsHost natives register, before app bytecode executes.
+  // Never derive this authority from a mutable environment variable or Binder UID.
+  static const bool system_server = [] {
+    int count = 0;
+    LPWSTR* args = CommandLineToArgvW(GetCommandLineW(), &count);
+    if (args == nullptr) return false;
+    const bool allowed = GesherDeviceAdminServerMain(count, args);
+    LocalFree(args);
+    return allowed;
+  }();
+  return system_server;
+}
 
 bool ForegroundProcess(uint32_t* pid, uint64_t* created) {
   *pid = 0;
@@ -52,6 +68,20 @@ int SessionLockState() {
   }
   if (data != nullptr) WTSFreeMemory(data);
   return result;
+}
+
+bool LockWorkstation() {
+  if (!DeviceAdminServer()) return false;
+  if (SessionLockState() == 1) return true;
+  if (!::LockWorkStation()) return false;
+  // LockWorkStation's nonzero return only acknowledges an asynchronous request.
+  // Do not turn a rejected/blocked request into an Android lock success.
+  const ULONGLONG deadline = GetTickCount64() + 3000;
+  do {
+    if (SessionLockState() == 1) return true;
+    Sleep(20);
+  } while (GetTickCount64() < deadline);
+  return false;
 }
 
 }  // namespace gesher::devsvc

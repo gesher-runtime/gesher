@@ -1,0 +1,630 @@
+// Complete actual Track methods, ring, conversion and resampler are supplied by
+// the maintained audio-state generator. Engine attachment, clock transport and
+// CV scheduling are explicit host boundaries; no WASAPI or JNI VM runs here.
+#include <pthread.h>
+#include <array>
+#include <bit>
+#include <cstdlib>
+#include <limits>
+
+@PRODUCTION@
+@SINK_HEADER@
+
+// Group-volume lookup and the single-track Mixer attachment are supplied.
+// Capture Render, PCM rounding, WAV ownership/header and Analyze are unchanged.
+// Requests are explicitly driven: Windows clock/endpoint scheduling is outside
+// this host boundary.
+namespace gesher::media {
+@WAIT_REFILL@
+float StreamGain(int) { return 1.0f; }
+namespace {
+@CAPTURE_SOURCE@
+}
+}
+@ANALYZE@
+
+namespace {
+using namespace gesher::media;
+using namespace std::chrono_literals;
+int checks = 0, failures = 0;
+Engine engine;
+const char* capture_path = nullptr;
+void Check(bool ok, const char* reason) {
+  ++checks;
+  if (!ok) { ++failures; std::fprintf(stderr, "FAIL blocked audio write: %s\n", reason); }
+}
+std::shared_ptr<Track> NewTrack(size_t capacity = 4, uint32_t channels = 1,
+                              PcmFormat format = PcmFormat::kS16, bool fixed = false) {
+  TrackParams params;
+  params.capacity_frames = capacity;
+  params.channels = channels;
+  params.format = format;
+  params.is_static = fixed;
+  return std::shared_ptr<Track>(new Track(&engine, params));
+}
+std::vector<int16_t> Samples(size_t count, int seed = 0) {
+  std::vector<int16_t> out(count);
+  for (size_t i = 0; i < count; ++i)
+    out[i] = static_cast<int16_t>((i * 137 + seed * 31) % 30001 - 15000);
+  return out;
+}
+bool Same(const float* output, const int16_t* source, size_t frames) {
+  for (size_t i = 0; i < frames; ++i)
+    if (output[i] != static_cast<float>(source[i]) / 32768.0f) return false;
+  return true;
+}
+bool Silence(const float* output, size_t count) {
+  for (size_t i = 0; i < count; ++i) if (output[i] != 0.0f) return false;
+  return true;
+}
+bool NoPending(const std::shared_ptr<Track>& track) {
+#if HAS_PENDING_WRITE
+  std::lock_guard<std::mutex> lock(track->mu_);
+  return track->pending_write_head_ == nullptr && track->pending_write_tail_ == nullptr;
+#else
+  (void)track;
+  return true;
+#endif
+}
+void WaitBlocked(const std::shared_ptr<Track>& track, unsigned waits = 1) {
+  const auto deadline = std::chrono::steady_clock::now() + 2s;
+  while (track->room_.waits.load() < waits && std::chrono::steady_clock::now() < deadline)
+    std::this_thread::yield();
+  // Acquiring mu_ after observing the count ensures the CV actually released it.
+  std::lock_guard<std::mutex> lock(track->mu_);
+  Check(track->room_.waits.load() >= waits, "writer reached the observed wait boundary");
+}
+ssize_t Finish(const std::shared_ptr<Track>& track, std::future<ssize_t>& future) {
+  const bool ready = future.wait_for(2s) == std::future_status::ready;
+  Check(ready, "writer returns after real data has been committed or interrupted");
+  if (!ready) track->Release();
+  if (future.wait_for(2s) != std::future_status::ready) std::abort();
+  return future.get();
+}
+void Gap() {
+  // The actual failed capture differs by 446 inserted zero frames. This is a
+  // sufficient deterministic mechanism, not a reconstruction of its scheduler.
+  // ClockedSink permits a catch-up block up to 4,800 frames; default capacity is 960.
+  auto track = NewTrack(960);
+  auto input = Samples(14400, 7);
+  track->Start();
+  auto writer = std::async(std::launch::async, [&] {
+    return track->Write(input.data(), input.size() * sizeof(int16_t), true);
+  });
+  WaitBlocked(track);
+  std::vector<float> output(1406, 0);
+  track->MixInto(output.data(), output.size(), 48000, 1);
+  Check(Same(output.data(), input.data(), output.size()) && track->Position() == 1406 &&
+        track->underrun_frames() == 0,
+        "prepared blocking input remains continuous across a catch-up mix");
+  track->Release();
+  const auto committed = Finish(track, writer);
+  Check(committed >= 960 * 2 && committed <= static_cast<ssize_t>(input.size() * 2),
+        "interrupted catch-up reports only committed whole bytes");
+  Check(NoPending(track), "returned write leaves no borrowed input record");
+}
+void RealWaitComplete() {
+  for (size_t capacity : {size_t{1}, size_t{7}, size_t{17}, size_t{960}}) {
+    auto track = NewTrack(capacity);
+    auto input = Samples(14400, static_cast<int>(capacity));
+    const auto original = input;
+    track->Start();
+    auto writer = std::async(std::launch::async, [&] {
+      return track->Write(input.data(), input.size() * 2, true);
+    });
+    WaitBlocked(track);
+    std::vector<float> output(input.size(), 0);
+    for (size_t offset = 0; offset < output.size();) {
+      const size_t chunk = std::min<size_t>(4800, output.size() - offset);
+      track->MixInto(output.data() + offset, chunk, 48000, 1);
+      offset += chunk;
+    }
+    Check(Finish(track, writer) == static_cast<ssize_t>(input.size() * 2),
+          "whole blocking transfer completes across multiple capacity-bounded refills");
+    Check(Same(output.data(), original.data(), output.size()), "complete caught-up stream preserves every PCM frame");
+    Check(track->Position() == input.size() && track->underrun_frames() == 0,
+          "complete caught-up stream preserves source position without false underrun");
+    Check(track->data_.size() == capacity * 2 && track->Queued() <= capacity,
+          "assisted writer retains the original ring allocation and capacity");
+    Check(NoPending(track), "completed real waiter retires its record");
+    input.assign(input.size(), 0);
+    track->Stop();
+    std::array<float, 8> tail{};
+    track->MixInto(tail.data(), tail.size(), 48000, 1);
+    Check(Silence(tail.data(), tail.size()) && track->stopped(), "stop after full transfer drains without rereading retired input");
+  }
+}
+void RetainedTail() {
+  auto track = NewTrack(960);
+  auto input = Samples(1025, 21);
+  const auto expected = input;
+  track->Start();
+  auto writer = std::async(std::launch::async, [&] { return track->Write(input.data(), input.size() * 2, true); });
+  WaitBlocked(track);
+  std::vector<float> first(961, 0);
+  track->MixInto(first.data(), first.size(), 48000, 1);
+  Check(Finish(track, writer) == 2050, "assisted completion counts all bytes before caller retirement");
+  Check(NoPending(track), "mixer completion detaches the caller record before later reads");
+  input.clear();
+  input.shrink_to_fit();
+  std::array<float, 64> tail{};
+  track->MixInto(tail.data(), tail.size(), 48000, 1);
+  Check(Same(first.data(), expected.data(), first.size()) &&
+        Same(tail.data(), expected.data() + first.size(), tail.size()),
+        "remaining ring and resampler tail own their samples after Write returns");
+  track->Release();
+}
+void PartialAndInterrupt() {
+  for (int action = 0; action < 5; ++action) {
+    auto track = NewTrack();
+    auto input = Samples(20, 51 + action);
+    track->Start();
+    std::array<float, 8> first{};
+    std::array<float, 4> after{};
+    track->room_.before_reacquire = [&] {
+      // The callback only controls CV scheduling while the actual Write input
+      // remains live. Production MixInto/ReadSource and transitions run intact.
+      track->MixInto(first.data(), first.size(), 48000, 1);
+      if (action == 0 || action == 3) track->Pause();
+      else if (action == 1 || action == 4) track->Stop();
+      else track->Release();
+      if (action == 3 || action == 4) track->Start();
+      track->MixInto(after.data(), after.size(), 48000, 1);
+    };
+    auto writer = std::async(std::launch::async, [&] { return track->Write(input.data(), input.size() * 2, true); });
+    Check(Finish(track, writer) == 16, "interrupted assisted writer returns exactly its committed prefix");
+    Check(Same(first.data(), input.data(), first.size()), "partial assisted write keeps original frame order");
+    Check(Silence(after.data(), after.size()) && track->written_ == 8,
+          "old pending input is never resumed after its pause stop or release epoch");
+    Check(NoPending(track), "interrupted writer retires every intrusive link");
+    track->Release();
+  }
+  auto track = NewTrack();
+  auto input = Samples(20, 93);
+  track->Start();
+  std::array<float, 8> output{};
+  track->room_.before_reacquire = [&] {
+    track->Stop();
+    track->MixInto(output.data(), output.size(), 48000, 1);
+  };
+  auto writer = std::async(std::launch::async, [&] { return track->Write(input.data(), input.size() * 2, true); });
+  Check(Finish(track, writer) == 8 && track->written_ == 4 && track->stop_end_ == 4,
+        "stop freezes its original committed drain boundary");
+  Check(Same(output.data(), input.data(), 4) && Silence(output.data() + 4, 4),
+        "stopping never admits old waiting payload beyond its drain");
+  Check(NoPending(track), "stopping writer removes its live input record");
+}
+void EpochControl() {
+  auto track = NewTrack();
+  const auto input = Samples(20, 49);
+  std::array<float, 8> first{};
+  std::array<float, 4> later{};
+  track->Start();
+  track->room_.before_reacquire = [&] {
+    track->MixInto(first.data(), first.size(), 48000, 1);
+    track->Pause();
+    track->Start();
+    track->MixInto(later.data(), later.size(), 48000, 1);
+  };
+  auto writer = std::async(std::launch::async, [&] { return track->Write(input.data(), input.size() * 2, true); });
+  const ssize_t count = Finish(track, writer);
+  Check(count == 16 && track->written_ == 8 && Silence(later.data(), later.size()),
+        "a restarted stream cannot borrow an interrupted writer's remaining input");
+  Check(NoPending(track), "epoch control retires its caller record");
+  track->Release();
+}
+void ProgressControl() {
+  auto track = NewTrack();
+  const auto input = Samples(20, 31);
+  std::array<float, 8> output{};
+  track->Start();
+  track->room_.before_reacquire = [&] {
+    track->MixInto(output.data(), output.size(), 48000, 1);
+    track->Pause();
+  };
+  auto writer = std::async(std::launch::async, [&] { return track->Write(input.data(), input.size() * 2, true); });
+  Check(Finish(track, writer) == 16, "assisted byte progress is counted once when interrupted");
+  Check(NoPending(track), "progress control retires its caller record");
+  track->Release();
+}
+void ShrinkAndWrap() {
+  auto track = NewTrack(7);
+  const auto prefix = Samples(3, 20);
+  track->Write(prefix.data(), prefix.size() * 2, false);
+  track->Start();
+  std::array<float, 3> head{};
+  track->MixInto(head.data(), head.size(), 48000, 1);
+  auto input = Samples(37, 44);
+  std::vector<float> output(input.size(), 0);
+  track->room_.before_reacquire = [&] {
+    Check(track->SetBufferSizeFrames(2) == 2, "live buffer limit can shrink below already queued data");
+    std::lock_guard<std::mutex> lock(track->mu_);
+    bool ended = false;
+    for (size_t i = 0; i < input.size(); ++i) {
+      Check(track->ReadSource(output.data() + i, 1, &ended) == 1 && !ended,
+            "wrapped pending source supplies one genuine frame");
+      const size_t queued = static_cast<size_t>(track->written_ - track->read_);
+      Check(queued <= (i < 7 ? 6 - i : 1), "assisted commit respects the smaller current ring limit");
+    }
+  };
+  auto writer = std::async(std::launch::async, [&] { return track->Write(input.data(), input.size() * 2, true); });
+  Check(Finish(track, writer) == static_cast<ssize_t>(input.size() * 2), "wrapped and resized blocking write reports full transfer");
+  Check(Same(head.data(), prefix.data(), prefix.size()) && Same(output.data(), input.data(), input.size()),
+        "ring wrap and limit changes preserve full source byte order");
+  Check(track->data_.size() == 14 && NoPending(track), "resizing preserves original storage and retires borrowed input");
+  track->Release();
+}
+void MultipleWaiters() {
+  for (size_t writers : {size_t{2}, size_t{8}, size_t{32}}) {
+    auto track = NewTrack();
+    const auto prefix = Samples(4, 6);
+    track->Write(prefix.data(), 8, false);
+    track->Start();
+    std::vector<std::vector<int16_t>> inputs;
+    inputs.reserve(writers);
+    for (size_t i = 0; i < writers; ++i) inputs.push_back(Samples(i % 5 + 3, static_cast<int>(i + 40)));
+    std::vector<std::future<ssize_t>> futures;
+    std::vector<int16_t> expected = prefix;
+    for (size_t i = 0; i < writers; ++i) {
+      const unsigned waits = track->room_.waits.load();
+      futures.push_back(std::async(std::launch::async, [&, i] {
+        return track->Write(inputs[i].data(), inputs[i].size() * 2, true);
+      }));
+      WaitBlocked(track, waits + 1);
+      expected.insert(expected.end(), inputs[i].begin(), inputs[i].end());
+    }
+    std::vector<float> output(expected.size(), 0);
+    track->MixInto(output.data(), output.size(), 48000, 1);
+    for (size_t i = 0; i < writers; ++i)
+      Check(Finish(track, futures[i]) == static_cast<ssize_t>(inputs[i].size() * 2), "each blocked caller receives its own committed count");
+    Check(Same(output.data(), expected.data(), expected.size()), "currently registered waiters are refilled in their list order");
+    Check(NoPending(track) && track->underrun_frames() == 0, "all registered waiter links retire without a false underrun");
+    track->Release();
+  }
+}
+void PartialWaiters() {
+  auto track = NewTrack();
+  const auto one = Samples(7, 60), two = Samples(8, 91);
+  std::promise<void> held, resume;
+  auto resume_future = resume.get_future();
+  track->Start();
+  track->room_.before_reacquire = [&] { held.set_value(); resume_future.wait(); };
+  auto first = std::async(std::launch::async, [&] { return track->Write(one.data(), one.size() * 2, true); });
+  Check(held.get_future().wait_for(2s) == std::future_status::ready, "first partial writer is held outside the mutex");
+  std::array<float, 2> start{};
+  track->MixInto(start.data(), start.size(), 48000, 1);
+  const unsigned waits = track->room_.waits.load();
+  auto second = std::async(std::launch::async, [&] { return track->Write(two.data(), two.size() * 2, true); });
+  WaitBlocked(track, waits + 1);
+  std::vector<int16_t> expected(one.begin() + 2, one.begin() + 4);
+  expected.insert(expected.end(), two.begin(), two.begin() + 4);
+  expected.insert(expected.end(), one.begin() + 4, one.end());
+  expected.insert(expected.end(), two.begin() + 4, two.end());
+  std::vector<float> output(expected.size(), 0);
+  track->MixInto(output.data(), output.size(), 48000, 1);
+  resume.set_value();
+  Check(Finish(track, first) == 14 && Finish(track, second) == 16,
+        "two partially committed callers keep separate progress records");
+  Check(Same(start.data(), one.data(), start.size()) && Same(output.data(), expected.data(), expected.size()),
+        "pending FIFO preserves existing committed ring order across concurrent writes");
+  Check(NoPending(track), "both partial caller records retire exactly once");
+  track->Release();
+}
+void SpuriousWake() {
+  auto track = NewTrack();
+  auto input = Samples(17, 72);
+  track->Start();
+  int wakes = 0;
+  std::vector<float> output(input.size(), 0);
+  std::function<void()> hook;
+  hook = [&] {
+    ++wakes;
+#if HAS_PENDING_WRITE
+    {
+      std::lock_guard<std::mutex> lock(track->mu_);
+      auto* pending = track->pending_write_head_;
+      Check(pending != nullptr && pending == track->pending_write_tail_ &&
+            pending->previous == nullptr && pending->next == nullptr && pending->committed == 0,
+            "spurious wake unregisters before the next borrowed registration");
+    }
+#endif
+    if (wakes < 4) track->room_.before_reacquire = hook;
+    else track->MixInto(output.data(), output.size(), 48000, 1);
+  };
+  track->room_.before_reacquire = hook;
+  auto writer = std::async(std::launch::async, [&] { return track->Write(input.data(), input.size() * 2, true); });
+  Check(Finish(track, writer) == 34 && wakes == 4, "spurious wakeups do not duplicate or lose committed progress");
+  Check(Same(output.data(), input.data(), input.size()) && NoPending(track), "spurious wakeups preserve every sample and caller retirement");
+  track->Release();
+}
+void ReleaseWhileBorrowed() {
+  auto track = NewTrack();
+  auto input = Samples(20, 37);
+  const auto expected = input;
+  std::promise<void> held, resume, release_started;
+  auto resume_future = resume.get_future();
+  track->Start();
+  track->room_.before_reacquire = [&] { held.set_value(); resume_future.wait(); };
+  auto writer = std::async(std::launch::async, [&] { return track->Write(input.data(), input.size() * 2, true); });
+  Check(held.get_future().wait_for(2s) == std::future_status::ready, "release control holds the live blocking caller outside the mutex");
+  std::array<float, 8> first{}, next{};
+  track->MixInto(first.data(), first.size(), 48000, 1);
+  std::unique_lock<std::mutex> lock(track->mu_);
+  bool ended = false;
+  Check(track->ReadSource(next.data(), 4, &ended) == 4 && !ended,
+        "mixer reads real borrowed bytes while holding the common owner mutex");
+  auto release = std::async(std::launch::async, [&] { release_started.set_value(); track->Release(); });
+  Check(release_started.get_future().wait_for(2s) == std::future_status::ready,
+        "release contender reaches the actual production operation");
+  Check(release.wait_for(20ms) == std::future_status::timeout,
+        "release cannot retire an input owner during the protected source access");
+  Check(track->ReadSource(next.data() + 4, 4, &ended) == 4 && !ended,
+        "already-owned mixer interval can finish its genuine source access");
+  lock.unlock();
+  Check(release.wait_for(2s) == std::future_status::ready, "release finishes once the source owner mutex is released");
+  release.get();
+  resume.set_value();
+  Check(Finish(track, writer) == 32 && track->written_ == 16,
+        "release reports exactly the prefix committed before its ownership transition");
+  Check(Same(first.data(), expected.data(), first.size()) &&
+        Same(next.data(), expected.data() + first.size(), next.size()) && NoPending(track),
+        "release preserves the consumed prefix and retires the caller record");
+  input.clear();
+  input.shrink_to_fit();
+  std::array<float, 8> after{};
+  Check(!track->MixInto(after.data(), after.size(), 48000, 1) && Silence(after.data(), after.size()),
+        "released track never reads caller storage after Write has returned");
+}
+void Cancellation() {
+  auto track = NewTrack();
+  auto input = Samples(20, 74);
+  track->Start();
+  struct Args { std::shared_ptr<Track> track; const std::vector<int16_t>* input; } args{track, &input};
+  pthread_t worker{};
+  Check(pthread_create(&worker, nullptr, +[](void* opaque) -> void* {
+    auto& a = *static_cast<Args*>(opaque);
+    a.track->Write(a.input->data(), a.input->size() * 2, true);
+    return nullptr;
+  }, &args) == 0, "native cancellation control creates its actual writer");
+  WaitBlocked(track);
+  Check(pthread_cancel(worker) == 0, "native cancellation interrupts the actual CV waiter");
+  void* result = nullptr;
+  Check(pthread_join(worker, &result) == 0 && result == PTHREAD_CANCELED, "cancelled waiter exits through real C++ scope cleanup");
+  Check(NoPending(track), "cancelled writer unlinks borrowed input before caller storage can retire");
+#if HAS_PENDING_WRITE
+  // An unlink mutation must fail at the ownership assertion without deliberately
+  // dereferencing its now-dead stack record in the remaining cleanup path.
+  { std::lock_guard<std::mutex> lock(track->mu_);
+    track->pending_write_head_ = track->pending_write_tail_ = nullptr; }
+#endif
+  input.clear();
+  input.shrink_to_fit();
+  track->Release();
+}
+void TrueUnderrunAndNonblocking() {
+  for (bool fixed : {false, true}) {
+    auto track = NewTrack(7, 2, PcmFormat::kS16, fixed);
+    const auto input = Samples(24, 11);
+    Check(track->Write(input.data(), 35, false) == 28, "nonblocking and static writes retain whole-frame truncation");
+    Check(track->room_.waits.load() == 0 && NoPending(track), "nonblocking and static writes never publish borrowed input");
+    if (fixed) {
+      Check(track->Write(input.data(), 3, true) == 0, "partial static frame remains uncommitted");
+    } else {
+      track->Start();
+      std::array<float, 14> output{};
+      track->MixInto(output.data(), output.size(), 48000, 1);
+      Check(track->underrun_frames() == 7 && track->underrun_count() == 1 &&
+            Silence(output.data() + 7, 7), "genuine unprepared input still produces and reports an underrun");
+      Check(track->Write(input.data(), 3, false) == 0 && track->Queued() == 0,
+            "partial streaming frame remains uncommitted after a real underrun");
+    }
+    track->Release();
+  }
+  for (bool paused : {false, true}) {
+    auto track = NewTrack();
+    if (paused) { track->Start(); track->Pause(); }
+    const auto input = Samples(9, 21);
+    Check(track->Write(input.data(), input.size() * 2 + 1, true) == 8 &&
+          track->room_.waits.load() == 0 && NoPending(track),
+          "inactive blocking priming stays short and publishes no pending input");
+    track->Release();
+  }
+}
+void ReferenceStreams() {
+  // The reference owns the entire source in its original ring before playback;
+  // the candidate has only 17 ring slots and an active blocking caller. Complete
+  // actual conversion/resampling/channel mapping/state/callbacks must agree.
+  constexpr size_t frames = 1033, guard = 32;
+  for (PcmFormat format : {PcmFormat::kU8, PcmFormat::kS16, PcmFormat::kS24Packed,
+                           PcmFormat::kS32, PcmFormat::kFloat}) {
+    for (uint32_t channels : {1u, 2u, 8u, 24u}) {
+      for (uint32_t rate : {24000u, 48000u, 96000u}) {
+        const size_t bps = BytesPerSample(format), frame_bytes = bps * channels;
+        std::vector<uint8_t> input(guard + frames * frame_bytes + guard, 0xA7);
+        for (size_t i = 0; i < frames * channels; ++i) {
+          const int32_t sample = static_cast<int32_t>(i * 131 % 30001) - 15000;
+          uint8_t* p = input.data() + guard + i * bps;
+          if (format == PcmFormat::kU8) *p = static_cast<uint8_t>(128 + sample / 256);
+          if (format == PcmFormat::kS16) { const int16_t v = static_cast<int16_t>(sample); std::memcpy(p, &v, 2); }
+          if (format == PcmFormat::kS24Packed) {
+            const uint32_t v = static_cast<uint32_t>(sample * 256);
+            for (size_t b = 0; b < 3; ++b) p[b] = static_cast<uint8_t>(v >> (8 * b));
+          }
+          if (format == PcmFormat::kS32) { const int32_t v = sample * 65536; std::memcpy(p, &v, 4); }
+          if (format == PcmFormat::kFloat) { const float v = sample / 32768.0f; std::memcpy(p, &v, 4); }
+        }
+        const auto original = input;
+        auto track = NewTrack(17, channels, format);
+        auto reference = NewTrack(frames, channels, format);
+        track->SetSampleRate(rate);
+        reference->SetSampleRate(rate);
+        reference->Write(input.data() + guard, frames * frame_bytes, false);
+        std::vector<uint64_t> events, expected_events;
+        auto attach = [](const std::shared_ptr<Track>& t, std::vector<uint64_t>& e) {
+          TrackEvents callbacks;
+          callbacks.marker = [&](uint32_t p) { e.push_back((uint64_t{1} << 32) | p); };
+          callbacks.new_position = [&](uint32_t p) { e.push_back((uint64_t{2} << 32) | p); };
+          callbacks.end = [&] { e.push_back(uint64_t{3} << 32); };
+          callbacks.underrun = [&] { e.push_back(uint64_t{4} << 32); };
+          t->SetEvents(std::move(callbacks));
+          t->SetMarker(317);
+          t->SetUpdatePeriod(61);
+        };
+        attach(track, events);
+        attach(reference, expected_events);
+        track->Start();
+        reference->Start();
+        track->room_.before_reacquire = [&] {
+          int64_t time_ns = 0;
+          for (size_t chunk : {size_t{1}, size_t{31}, size_t{409}, size_t{4800}, size_t{17}}) {
+            for (uint32_t out_channels : {1u, 2u}) {
+              std::vector<float> actual(chunk * out_channels, 0), expected(actual.size(), 0);
+              // The new starvation grace uses elapsed playback time. Give
+              // both real mixers the same nominal clock, including empty
+              // periods, instead of comparing separate wall-clock instants.
+              gesher::fixture_playback_ns = time_ns;
+              const bool a = track->MixInto(actual.data(), chunk, 48000, out_channels);
+              const bool b = reference->MixInto(expected.data(), chunk, 48000, out_channels);
+              time_ns += static_cast<int64_t>(chunk) * 1000000000 / 48000;
+              Check(a == b && std::memcmp(actual.data(), expected.data(), actual.size() * sizeof(float)) == 0,
+                    "full pending stream matches already-owned PCM across formats rates channels and chunks");
+              Check(track->Position() == reference->Position() &&
+                    track->underrun_frames() == reference->underrun_frames() &&
+                    track->underrun_count() == reference->underrun_count() &&
+                    track->Queued() <= 17 && track->read_ <= track->written_ &&
+                    track->written_ <= frames && events == expected_events,
+                    "pending transport preserves position underrun callbacks and its bounded ring state");
+            }
+          }
+          gesher::fixture_playback_ns = -1;
+        };
+        auto writer = std::async(std::launch::async, [&] {
+          return track->Write(input.data() + guard, frames * frame_bytes + frame_bytes - 1, true);
+        });
+        Check(Finish(track, writer) == static_cast<ssize_t>(frames * frame_bytes),
+              "all source formats commit only whole caller frames");
+        Check(input == original, "blocking refill never writes caller input or its guards");
+        input.clear();
+        input.shrink_to_fit();
+        track->Stop();
+        reference->Stop();
+        std::array<float, 1024> actual{}, expected{};
+        track->MixInto(actual.data(), 512, 48000, 2);
+        reference->MixInto(expected.data(), 512, 48000, 2);
+        Check(std::memcmp(actual.data(), expected.data(), sizeof actual) == 0 &&
+              track->Position() == reference->Position() && events == expected_events,
+              "source retirement and stop retain complete resampler tail and event parity");
+        Check(NoPending(track) && track->data_.size() == 17 * frame_bytes,
+              "reference workload releases all borrowed input without expanding ring storage");
+        track->Release();
+        reference->Release();
+      }
+    }
+  }
+}
+void CapturePipeline() {
+  Check(capture_path != nullptr, "capture fixture has a concrete output file");
+  if (capture_path == nullptr) return;
+  auto track = NewTrack(960);
+  std::vector<int16_t> input(14400);
+  for (size_t i = 0; i < input.size(); ++i)
+    input[i] = static_cast<int16_t>(12345 * std::sin(2 * 3.14159265358979323846 * 750 * i / 48000));
+  const auto original = input;
+  class OneTrack final : public Mixer {
+   public:
+    explicit OneTrack(std::shared_ptr<Track> value) : track(std::move(value)) {}
+    bool MixGroup(int group, float* output, size_t frames) override {
+      std::fill(output, output + frames * 2, 0.0f);
+      return group == GroupOfStream(3) && track->MixInto(output, frames, 48000, 2);
+    }
+    bool GroupWanted(int group) override { return group == GroupOfStream(3); }
+    std::shared_ptr<Track> track;
+  } mixer(track);
+  class DrivenCapture final : public CaptureSink {
+   public:
+    using CaptureSink::CaptureSink;
+    using CaptureSink::Render;
+  };
+  FILE* file = std::fopen(capture_path, "w+b");
+  Check(file != nullptr, "capture fixture opens its real WAV file");
+  if (!file) return;
+  track->Start();
+  auto writer = std::async(std::launch::async, [&] { return track->Write(input.data(), input.size() * 2, true); });
+  WaitBlocked(track);
+  {
+    DrivenCapture sink(file, capture_path);
+    // ClockedSink permits this request under its unchanged 4,800-frame cap.
+    sink.Render(&mixer, 1406);
+    bool stopped = false;
+    for (size_t rendered = 1406; rendered < 14846;) {
+      const auto deadline = std::chrono::steady_clock::now() + 2s;
+      bool ready = false, complete = false;
+      do {
+        { std::lock_guard<std::mutex> lock(track->mu_);
+          complete = track->written_ == input.size();
+          ready = complete || track->written_ - track->read_ >= 256; }
+        if (ready) break;
+        std::this_thread::yield();
+      } while (std::chrono::steady_clock::now() < deadline);
+      Check(ready, "ordinary capture periods wait only in the fixture for the real producer");
+      if (!ready) { track->Release(); break; }
+      if (complete && !stopped) { track->Stop(); stopped = true; }
+      const size_t chunk = std::min<size_t>(240, 14846 - rendered);
+      sink.Render(&mixer, chunk);
+      rendered += chunk;
+    }
+  }
+  Check(Finish(track, writer) == 28800, "capture transfer reports all original source bytes");
+  Check(input == original && NoPending(track), "capture leaves caller bytes intact and retires borrowed ownership");
+  input.clear();
+  input.shrink_to_fit();
+  FILE* read = std::fopen(capture_path, "rb");
+  Check(read != nullptr, "complete actual capture WAV can be reopened");
+  if (read) {
+    std::vector<uint8_t> bytes(44 + 14846 * 4);
+    const size_t received = std::fread(bytes.data(), 1, bytes.size(), read);
+    const bool end = std::fgetc(read) == EOF;
+    std::fclose(read);
+    Check(received == bytes.size() && end && std::memcmp(bytes.data(), "RIFF", 4) == 0,
+          "actual capture retains its exact stereo PCM WAV length and header");
+    bool equal = true;
+    for (size_t i = 0; i < 14846; ++i) {
+      // Independent integer rounding; this bounded amplitude has no half ties.
+      // Actual capture uses float clamp/lrint.
+      int64_t product = i < original.size() ? int64_t(original[i]) * 32767 : 0;
+      const int16_t expected = static_cast<int16_t>(product < 0 ?
+          -((-product + 16384) / 32768) : (product + 16384) / 32768);
+      for (size_t channel = 0; channel < 2; ++channel) {
+        int16_t actual;
+        std::memcpy(&actual, bytes.data() + 44 + (i * 2 + channel) * 2, 2);
+        equal &= actual == expected;
+      }
+    }
+    Check(equal, "actual capture writes every prepared tone frame without an inserted interruption");
+    Check(Analyze(capture_path) == 0, "unchanged production Analyze reads the actual capture output");
+  }
+  track->Release();
+}
+}
+
+int main(int argc, char** argv) {
+  const char* selected = argc > 1 ? argv[1] : "all";
+  capture_path = argc > 2 ? argv[2] : nullptr;
+  const std::pair<const char*, void (*)()> cases[] = {
+      {"gap", Gap}, {"complete", RealWaitComplete}, {"retained", RetainedTail},
+      {"interrupt", PartialAndInterrupt}, {"shrink", ShrinkAndWrap},
+      {"epoch", EpochControl}, {"progress", ProgressControl},
+      {"multiple", MultipleWaiters}, {"partial", PartialWaiters},
+      {"spurious", SpuriousWake}, {"release", ReleaseWhileBorrowed}, {"cancel", Cancellation},
+      {"unchanged", TrueUnderrunAndNonblocking}, {"reference", ReferenceStreams},
+      {"capture", CapturePipeline}};
+  bool found = false;
+  for (auto [name, run] : cases) {
+    if (std::strcmp(selected, "all") != 0 && std::strcmp(selected, name) != 0) continue;
+    found = true;
+    run();
+  }
+  if (!found) return 2;
+  std::printf("blocked audio write contracts: %d checks, %d failures\n", checks, failures);
+  return failures ? 1 : 0;
+}

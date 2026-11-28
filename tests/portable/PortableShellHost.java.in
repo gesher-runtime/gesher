@@ -57,6 +57,7 @@ final class AppShell {
     static String installDir() { return "C:\\Runtime"; }
     static ActivityInfo launcherActivity(ApkPackage pkg) { return new ActivityInfo(); }
     static void writeWindowIcon(ApkPackage pkg, String name, boolean changed) { }
+    static void removeDesktopLink(Properties shortcut) { }
     static String linkPath(String folder, String label, String pkg, String old) { return folder + "\\fixture.lnk"; }
     static Set<String> customSchemes(ApkPackage pkg) { return Set.of("fixture"); }
     static boolean ownedDynamicLink(String pkg, String id, String link) { return true; }

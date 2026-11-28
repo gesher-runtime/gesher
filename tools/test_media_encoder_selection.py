@@ -9,11 +9,10 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+from codec_contract_source import method
 ROOT = Path(__file__).resolve().parents[1]
 source = (ROOT / 'compat/media/jni/media_codec_jni.cc').read_text()
-start = source.index('std::vector<std::pair<int, int>> ProfileLevels(')
-end = source.index('\njobject JNICALL MCL_getCodecCapabilities', start)
-function = source[start:end]
+function = method(source, 'std::vector<std::pair<int, int>> ProfileLevels(')
 print('ProfileLevels SHA256 ' + hashlib.sha256(function.encode()).hexdigest(), flush=True)
 with tempfile.TemporaryDirectory(prefix='gesher-encoder-selection-') as temporary:
     work = Path(temporary)

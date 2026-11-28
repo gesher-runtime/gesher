@@ -315,7 +315,7 @@ public final class SoftwareServiceContractTest {
         } catch (IllegalArgumentException expected) { }
 
         IDevicePolicyManager policy = strict(IDevicePolicyManager.class,
-                construct("DeviceServices$DevicePolicyService", new Class<?>[0]));
+                construct("DeviceAdminPolicyService", new Class<?>[] {pmType}, pm));
         require(!policy.isDeviceManaged() && !policy.hasDeviceOwner(), "invented owner");
         require(policy.getDeviceOwnerUserId() == UserHandle.USER_NULL, "user 0 is not an owner");
         require(policy.getActiveAdmins(0) == null, "Android no-admin representation changed");

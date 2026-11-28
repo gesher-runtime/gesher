@@ -43,6 +43,9 @@ const PROPERTYKEY kAppUserModelId = {
 // FOLDERID_Programs (knownfolders.h).
 const GUID kFolderIdPrograms = {0xA77F5D77, 0x2E2B, 0x44C3,
                                 {0xA6, 0xA2, 0xAB, 0xA6, 0x01, 0x05, 0x4A, 0x51}};
+// FOLDERID_Desktop (knownfolders.h).
+const GUID kFolderIdDesktop = {0xB4BFCC3A, 0xDB2C, 0x424C,
+                               {0xB0, 0x29, 0x7F, 0xE9, 0x9A, 0x87, 0xC6, 0x41}};
 
 // shell32's functions are looked up when first used: dalvikvm does not link
 // shell32, and most of its processes never need it.
@@ -110,17 +113,25 @@ HRESULT SetAppId(IShellLinkW* link, const std::u16string& app_id) {
 
 }  // namespace
 
-std::u16string ProgramsFolder() {
+namespace {
+
+std::u16string KnownFolder(const GUID& id) {
   auto get = reinterpret_cast<SHGetKnownFolderPathFn>(Shell32("SHGetKnownFolderPath"));
   if (get == nullptr) return std::u16string();
   PWSTR path = nullptr;
   std::u16string result;
-  if (SUCCEEDED(get(&kFolderIdPrograms, 0 /* KF_FLAG_DEFAULT */, nullptr, &path))) {
+  if (SUCCEEDED(get(&id, 0 /* KF_FLAG_DEFAULT */, nullptr, &path))) {
     result = U(path);
   }
   CoTaskMemFree(path);
   return result;
 }
+
+}  // namespace
+
+std::u16string ProgramsFolder() { return KnownFolder(kFolderIdPrograms); }
+
+std::u16string DesktopFolder() { return KnownFolder(kFolderIdDesktop); }
 
 long CreateShortcut(const std::u16string& link_path, const std::u16string& target,
                     const std::u16string& arguments, const std::u16string& work_dir,

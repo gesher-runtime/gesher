@@ -58,7 +58,8 @@ in; the question is which process serves it.
   (`scheduleExit`). In a single process, gesher-app's driver does the same
   steps itself.
 - **Window mode per launch**: `gesher-app` (the Launcher) takes `--window`
-  (the default, also for a double-clicked .apk), `--hidden-window` (off the
+  (the default, also for an APK opened from Explorer and Open),
+  `--hidden-window` (off the
   desktop: CI reads windows back with PrintWindow), or `--headless` (no Win32
   windows: the system server's `StandInWindowSession`, no surface, no
   renderer; the task is removed once the activity is idle, as before);

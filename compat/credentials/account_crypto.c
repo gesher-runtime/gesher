@@ -114,6 +114,43 @@ Java_com_gesher_server_AccountSecretStore_nativeUnprotect(JNIEnv* env, jclass cl
 #include "permission_dialog.inc"
 #include "background_permission_dialog.inc"
 #include "exact_alarm_dialog.inc"
+#include "device_admin_dialog.inc"
+
+/* Administration is available only inside the trusted system server library. */
+JNIEXPORT jboolean GESHER_NATIVE
+Java_com_gesher_server_DeviceAdminRequests_nativeAvailable(JNIEnv* env, jclass cls) {
+  (void)env; (void)cls;
+  return server_process ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jboolean GESHER_NATIVE
+Java_com_gesher_server_DeviceAdminRequests_nativeConfirm(JNIEnv* env, jclass cls,
+        jstring label, jstring description, jboolean supported) {
+  (void)cls;
+  if (!RequireServer(env) || label == NULL || description == NULL) return JNI_FALSE;
+  jsize label_length = (*env)->GetStringLength(env, label);
+  jsize description_length = (*env)->GetStringLength(env, description);
+  if (label_length > 4096 || description_length > 16384) return JNI_FALSE;
+  const jchar* label_chars = (*env)->GetStringChars(env, label, NULL);
+  if (label_chars == NULL) return JNI_FALSE;
+  const jchar* description_chars = (*env)->GetStringChars(env, description, NULL);
+  if (description_chars == NULL) { (*env)->ReleaseStringChars(env, label, label_chars); return JNI_FALSE; }
+  /* JNI strings need their own NUL termination before passing to native controls. */
+  WCHAR* label_copy = (WCHAR*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, ((SIZE_T)label_length + 1) * sizeof(WCHAR));
+  WCHAR* description_copy = (WCHAR*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, ((SIZE_T)description_length + 1) * sizeof(WCHAR));
+  BOOL accepted = FALSE;
+  if (label_copy != NULL && description_copy != NULL) {
+    memcpy(label_copy, label_chars, label_length * sizeof(WCHAR));
+    memcpy(description_copy, description_chars, description_length * sizeof(WCHAR));
+  }
+  (*env)->ReleaseStringChars(env, description, description_chars);
+  (*env)->ReleaseStringChars(env, label, label_chars);
+  if (label_copy != NULL && description_copy != NULL)
+    accepted = DeviceAdminDialog(GesherUiCurrentLanguage(), label_copy, description_copy, supported);
+  if (label_copy != NULL) HeapFree(GetProcessHeap(), 0, label_copy);
+  if (description_copy != NULL) HeapFree(GetProcessHeap(), 0, description_copy);
+  return supported && accepted ? JNI_TRUE : JNI_FALSE;
+}
 
 JNIEXPORT jboolean GESHER_NATIVE
 Java_com_gesher_server_ExactAlarmAccessRequests_nativeAvailable(JNIEnv* env, jclass cls) {
@@ -228,10 +265,45 @@ Java_com_gesher_server_AccountManagerService_nativeConfirmToken(JNIEnv* env, jcl
   // The shared host prompt keeps No as the default, including Esc and close.
   BOOL allowed = GesherHostPrompt(GesherUiText(lang, "account_title"), text,
       GesherUiText(lang, "permission_allow"), GesherUiText(lang, "permission_deny"),
-      GesherUiRtl(lang), NULL);
+      GesherUiRtl(lang), NULL, MB_ICONQUESTION);
   SecureZeroMemory(text, total * sizeof(WCHAR));
   HeapFree(GetProcessHeap(), 0, text);
   return allowed ? JNI_TRUE : JNI_FALSE;
 }
 
 #include "account_chooser.inc"
+
+JNIEXPORT jboolean GESHER_NATIVE
+Java_com_gesher_server_WindowsLocation_nativePromptEnable(JNIEnv* env, jclass cls,
+    jstring app_label) {
+  (void)cls;
+  if (!RequireServer(env) || app_label == NULL) return JNI_FALSE;
+  enum GesherUiLanguage lang = GesherUiCurrentLanguage();
+  const WCHAR* pattern = GesherUiText(lang, "location_off_prompt");
+  jsize label_len = (*env)->GetStringLength(env, app_label);
+  if (label_len <= 0 || label_len > 256) return JNI_FALSE;
+  SIZE_T pattern_len = (SIZE_T)wcslen(pattern);
+  SIZE_T total = pattern_len + (SIZE_T)label_len + 1;
+  WCHAR* text = (WCHAR*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, total * sizeof(WCHAR));
+  if (text == NULL) return JNI_FALSE;
+  SIZE_T at = 0;
+  BOOL replaced = FALSE;
+  for (SIZE_T i = 0; i < pattern_len;) {
+    if (!replaced && i + 2 < pattern_len
+        && pattern[i] == L'{' && pattern[i + 1] == L'0' && pattern[i + 2] == L'}') {
+      (*env)->GetStringRegion(env, app_label, 0, label_len, (jchar*)(text + at));
+      if ((*env)->ExceptionCheck(env)) { HeapFree(GetProcessHeap(), 0, text); return JNI_FALSE; }
+      at += (SIZE_T)label_len;
+      i += 3;
+      replaced = TRUE;
+    } else {
+      text[at++] = pattern[i++];
+    }
+  }
+  text[at] = 0;
+  BOOL open = GesherHostPrompt(GesherUiText(lang, "brand"), text,
+      GesherUiText(lang, "location_off_open"), GesherUiText(lang, "location_off_later"),
+      GesherUiRtl(lang), NULL, MB_ICONINFORMATION);
+  HeapFree(GetProcessHeap(), 0, text);
+  return open ? JNI_TRUE : JNI_FALSE;
+}
