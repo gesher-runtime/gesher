@@ -9,6 +9,7 @@
 #include <atomic>
 #include <cerrno>
 #include <chrono>
+#include <climits>
 #include <condition_variable>
 #include <cstdint>
 #include <cstdio>
@@ -20,6 +21,7 @@
 #include <mutex>
 #include <new>
 #include <optional>
+#include <set>
 #include <poll.h>
 #include <sys/epoll.h>
 #include <sys/eventfd.h>
@@ -196,6 +198,8 @@ class NativeFence;
 static std::shared_ptr<NativeFence> LookupNativeFence(int) { return {}; }
 static short PollNativeFence(const std::shared_ptr<NativeFence>&, short, HANDLE*) { std::abort(); }
 void WakePollers();
+// A pipe registration is keyed by its open description (defined below).
+struct OpenFileDescription;
 @EVENTFD_STATE@
 @EPOLL_STATE@
 @EPOLL_CONVERSION@
@@ -271,7 +275,7 @@ static DescriptorSnapshotPtr CaptureDescriptor(int fd) {
 }
 using ULONG = uint32_t;
 enum FILE_INFORMATION_CLASS { FilePipeLocalInformation };
-struct FILE_PIPE_LOCAL_INFORMATION { ULONG NamedPipeState, ReadDataAvailable, WriteQuotaAvailable; };
+struct FILE_PIPE_LOCAL_INFORMATION { ULONG NamedPipeState, ReadDataAvailable, WriteQuotaAvailable, InboundQuota; };
 static int QueryPipe(HANDLE handle, void* output, ULONG size, FILE_INFORMATION_CLASS kind) {
   ++pipe_queries;
   query_outside_guard &= descriptor_depth == 0;
@@ -283,11 +287,12 @@ static int QueryPipe(HANDLE handle, void* output, ULONG size, FILE_INFORMATION_C
   if (capacity < 0 || ::ioctl(fd, FIONREAD, &bytes) < 0 || ::poll(&descriptor, 1, 0) < 0) return -1;
   *static_cast<FILE_PIPE_LOCAL_INFORMATION*>(output) = {
       (descriptor.revents & (POLLERR | POLLHUP)) ? 4u : 3u,
-      static_cast<ULONG>(bytes), static_cast<ULONG>(capacity - bytes)};
+      static_cast<ULONG>(bytes), static_cast<ULONG>(capacity - bytes), static_cast<ULONG>(capacity)};
   return 0;
 }
 // FIFO descriptors (fifo.cc) are outside this host pipe boundary.
 [[maybe_unused]] static int PollFifo(const DescriptorSnapshotPtr&, short, short*) { std::abort(); }
+[[maybe_unused]] static int FifoCapacity(const DescriptorSnapshotPtr&) { std::abort(); }
 @PIPE_ADMISSION@
 @PIPE_POLL@
 #endif
