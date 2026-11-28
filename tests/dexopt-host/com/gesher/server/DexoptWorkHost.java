@@ -153,7 +153,12 @@ public final class DexoptWorkHost {
         Files.writeString(profile, "NEW-profile");
         Files.setLastModifiedTime(profile, originalTime);
         until(() -> Zygote.compiles.get() > before + 2, "same-size same-timestamp profile write notified");
-        until(() -> Zygote.active.get() == 0, "profile update finished");
+        Path reference = Dexopt.referenceProfile("scheduled").toPath();
+        // The compiler can exit before the queue publishes the new code/profile pair.
+        until(() -> {
+            try { return Files.readString(reference).equals("NEW-profile"); }
+            catch (java.io.IOException failure) { return false; }
+        }, "profile update published");
 
         Zygote.entered = new CountDownLatch(1); Zygote.release = new CountDownLatch(1);
         Zygote.blockCompiler = true;

@@ -1085,6 +1085,7 @@ struct In {
   const uint8_t* p;
   const uint8_t* end;
   bool Read(void* out, size_t n) {
+    if (n == 0) return true;
     if (static_cast<size_t>(end - p) < n) return false;
     memcpy(out, p, n);
     p += n;
@@ -1109,9 +1110,8 @@ struct Out {
   }
 };
 
-// Only complete pipe replies own the length prefix. Nested command streams
-// stay plain Out values so their offsets and command-replacement rules do not
-// change. Reserve room for the small status/handshake headers in one allocation.
+// Complete pipe replies own the length prefix. Reserve room for the small
+// status/handshake headers in one allocation.
 struct WireReply : Out {
   WireReply() {
     bytes.reserve(32);
@@ -1335,12 +1335,15 @@ int ThreadWrite(Proc* proc, Thread* thread, In in, uint32_t* consumed) {
   return 0;
 }
 
-// The read stream: the wire bytes, and the size it will have in the
-// process's read buffer.
+// The read stream appends directly to its connection's complete reply. Its
+// command start follows the wire status/consumed header; size still counts only
+// the bytes that will occupy the process's Binder read buffer.
 struct ReadStream {
-  Out out;
+  Out& out;
+  const size_t command_start;
   size_t size = 0;
   size_t limit = 0;
+  explicit ReadStream(Out& output) : out(output), command_start(output.bytes.size()) {}
   void Put32(uint32_t v) {
     out.Put(v);
     size += 4;
@@ -1517,11 +1520,11 @@ done:
   if (proc->requested_threads == 0 && proc->waiting_threads.empty() &&
       proc->requested_threads_started < proc->max_threads &&
       (thread->looper & (kLooperRegistered | kLooperEntered)) != 0 && first &&
-      rs->out.bytes.size() >= 4) {
+      rs->out.bytes.size() >= rs->command_start + 4) {
     proc->requested_threads++;
     TRACE("proc %u: BR_SPAWN_LOOPER", proc->id);
     uint32_t spawn = BR_SPAWN_LOOPER;
-    memcpy(rs->out.bytes.data(), &spawn, 4);  // in place of the BR_NOOP
+    memcpy(rs->out.bytes.data() + rs->command_start, &spawn, 4);  // in place of the BR_NOOP
   }
   return 0;
 }
@@ -1986,7 +1989,9 @@ void ServeThread(HANDLE pipe, In in) {
       if (!req.Get(&read_size) || !req.Get(&first) || !req.Get(&non_block)) break;
       uint32_t consumed = 0;
       int ret = thread->pending_buffer == 0 ? ThreadWrite(proc, thread, req, &consumed) : -EINVAL;
-      ReadStream rs;
+      reply.Put<int32_t>(ret);
+      reply.Put<uint32_t>(consumed);
+      ReadStream rs(reply);
       rs.limit = static_cast<size_t>(read_size);
       if (ret == 0 && read_size > 0) {
         ret = ThreadRead(lock, proc, thread, &rs, first != 0, non_block != 0);
@@ -1994,9 +1999,8 @@ void ServeThread(HANDLE pipe, In in) {
       }
       thread->looper_need_return = false;
       lock.unlock();
-      reply.Put<int32_t>(ret);
-      reply.Put<uint32_t>(consumed);
-      reply.Write(rs.out.bytes.data(), rs.out.bytes.size());
+      // ThreadRead may have changed the status after the header was reserved.
+      memcpy(reply.bytes.data() + sizeof(uint32_t), &ret, sizeof(int32_t));
     } else if (op == wire::kClaimBuffer || op == wire::kFinishBuffer) {
       uint64_t id;
       uint32_t accepted = 0;

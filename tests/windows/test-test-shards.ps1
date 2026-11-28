@@ -14,12 +14,59 @@ foreach ($track in $tracks) {
     $node -is [Management.Automation.Language.FunctionDefinitionAst]
   }, $false)) { $functions[$definition.Name] = $track.Name }
 }
-# Every manifest shard must run in CI and be accepted by the runner.
+# Every manifest shard must run in full CI and be accepted by the runner.
 $shards = @($manifest.PSObject.Properties.Name)
-$workflow = Get-Content -LiteralPath (Join-Path $PSScriptRoot '../../.github/workflows/ci.yml') -Raw
-$matrix = [regex]::Matches($workflow, '(?m)^\s+shard: \[([^\]]+)\]\s*$')
-if ($matrix.Count -ne 1) { throw 'Expected one test-shards matrix in ci.yml' }
-if (Compare-Object $shards @($matrix[0].Groups[1].Value -split ',\s*')) { throw "ci.yml shard matrix differs from test-shards.json: $($shards -join ', ')" }
+# Read the real workflow and invoke its planner for every full-plan entry point.
+$python = (Get-Command python3, python -ErrorAction SilentlyContinue | Select-Object -First 1).Source
+if (-not $python) { throw 'Python is required for the CI shard contract' }
+$repository = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
+$contractJson = @'
+import json
+import os
+from pathlib import Path
+import sys
+import yaml
+root = Path(sys.argv[1])
+sys.path.insert(0, str(root / 'tools/ci'))
+import select_pr_jobs as planner
+workflow = yaml.safe_load((root / '.github/workflows/ci.yml').read_text(encoding='utf-8'))
+job = workflow['jobs']['test-shards']
+plans = []
+for event in ('push', 'workflow_dispatch', 'pull_request'):
+    os.environ['GITHUB_EVENT_NAME'] = event
+    os.environ['GITHUB_EVENT_PATH'] = str(root / 'absent-shard-contract-event.json')
+    os.environ['GITHUB_SHA'] = '0' * 40
+    _, reason, shards, _ = planner.plan_details(planner.load_workflow('ci'), 'ci')
+    plans.append({'event': event, 'reason': reason, 'shards': shards})
+print(json.dumps({
+    'matrix': job['strategy']['matrix']['shard'],
+    'os': job['strategy']['matrix']['os'],
+    'output': workflow['jobs']['plan']['outputs']['shards'],
+    'plans': plans,
+}))
+'@ | & $python - $repository
+if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect the actual CI shard plan' }
+$matrixContract = $contractJson | ConvertFrom-Json
+function Assert-TestShardMatrix($Contract, [string[]] $ExpectedShards) {
+  $expression = '${{ fromJSON(needs.plan.outputs.shards != ''[]'' && needs.plan.outputs.shards || ''["native"]'') }}'
+  if ($Contract.matrix -cne $expression) { throw 'test-shards matrix must consume the actual planner shard output' }
+  if ($Contract.output -cne '${{ steps.selection.outputs.shards }}') { throw 'plan.shards output is not wired to the planner' }
+  if (@($Contract.os).Count -ne 2 -or (Compare-Object $Contract.os @('windows-2022', 'windows-2025'))) {
+    throw 'test-shards must cover both supported Windows runners'
+  }
+  if (@($Contract.plans).Count -ne 3 -or
+      (Compare-Object @($Contract.plans.event) @('push', 'workflow_dispatch', 'pull_request'))) {
+    throw 'Missing full-plan entry point'
+  }
+  foreach ($fullPlan in $Contract.plans) {
+    if ($fullPlan.reason -cnotlike 'full CI*' -or
+        @($fullPlan.shards).Count -ne $ExpectedShards.Count -or
+        (Compare-Object $ExpectedShards @($fullPlan.shards))) {
+      throw "Full plan omits or repeats manifest shards: $($fullPlan.event)"
+    }
+  }
+}
+Assert-TestShardMatrix $matrixContract $shards
 $runnerSet = (Get-Command (Join-Path $PSScriptRoot 'run-tests.ps1')).Parameters['Shard'].Attributes |
   Where-Object { $_ -is [Management.Automation.ValidateSetAttribute] }
 if (Compare-Object $shards @($runnerSet.ValidValues | Where-Object { $_ -ne 'all' })) { throw 'run-tests.ps1 Shard values differ from test-shards.json' }
@@ -90,6 +137,24 @@ function Reject([string] $Name, [scriptblock] $Action) {
   Write-Host "PASS  rejects $Name"
 }
 try {
+  $changed = $contractJson | ConvertFrom-Json
+  $changed.matrix = '[native]'
+  Reject 'matrix bypasses the planner' { Assert-TestShardMatrix $changed $shards }
+  $changed = $contractJson | ConvertFrom-Json
+  $changed.output = '${{ steps.selection.outputs.selected }}'
+  Reject 'wrong planner output' { Assert-TestShardMatrix $changed $shards }
+  $changed = $contractJson | ConvertFrom-Json
+  $changed.os = @('windows-2022')
+  Reject 'missing Windows runner' { Assert-TestShardMatrix $changed $shards }
+  $changed = $contractJson | ConvertFrom-Json
+  $changed.plans[0].shards = @($changed.plans[0].shards | Where-Object { $_ -ne 'native' })
+  Reject 'full plan omits a shard' { Assert-TestShardMatrix $changed $shards }
+  $changed = $contractJson | ConvertFrom-Json
+  $changed.plans[1].shards += @($changed.plans[1].shards[0])
+  Reject 'full plan repeats a shard' { Assert-TestShardMatrix $changed $shards }
+  $changed = $contractJson | ConvertFrom-Json
+  $changed.plans = @($changed.plans | Where-Object event -ne 'workflow_dispatch')
+  Reject 'missing full-plan entry point' { Assert-TestShardMatrix $changed $shards }
   $fixtureManifest = Join-Path $temp 'shards.json'
   $fixtureTracks = Join-Path $temp 'tracks'
   New-Item -ItemType Directory $fixtureTracks | Out-Null

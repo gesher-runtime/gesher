@@ -3,7 +3,6 @@ package android.net.http;
 
 import android.net.Network;
 import java.io.*;
-import java.lang.reflect.Field;
 import java.net.*;
 import java.util.*;
 import java.util.concurrent.*;
@@ -40,10 +39,9 @@ final class Http2SessionPool implements Closeable {
             this.network = network;
             tlsFactory = scheme.equals("https") ? HttpsURLConnection.getDefaultSSLSocketFactory() : null;
             if (tlsFactory == null) {
-                Class<?> type = Class.forName("android.security.NetworkSecurityPolicy");
-                Object policy = Http2Transport.call(type, null, "getInstance", new Class<?>[0]);
-                if (!(Boolean) Http2Transport.call(type, policy, "isCleartextTrafficPermitted",
-                        new Class<?>[]{String.class}, host)) {
+                Http2Bindings api=Http2Bindings.get();
+                Object policy = Http2Transport.invoke(api.policyInstance, null);
+                if (!(Boolean) Http2Transport.invoke(api.cleartextPermitted, policy, host)) {
                     throw new IOException("Cleartext traffic is not permitted");
                 }
             }
@@ -80,13 +78,15 @@ final class Http2SessionPool implements Closeable {
         final Object starts = new Object();
         private volatile Socket socket;
         volatile Object connection;
-        private Field shutdown, nextStreamId;
+        private final Http2Bindings api;
         private volatile boolean closed, ready;
         // The pool monitor owns these fields; each transport holds one lease.
         int leases = 1;
         long idleSince;
 
-        Session(Route route) { this.route = route; }
+        Session(Route route) throws ReflectiveOperationException {
+            this.route = route; api=Http2Bindings.get();
+        }
         private synchronized void retain(Socket value) throws IOException {
             if (closed) { value.close(); throw new IOException("HTTP/2 session closed"); }
             socket = value;
@@ -95,19 +95,18 @@ final class Http2SessionPool implements Closeable {
             Object value = connection;
             if (!ready || closed || socket.isClosed()) return false;
             synchronized (value) {
-                return !shutdown.getBoolean(value) && leases < streamLimit(value);
+                return !api.connectionShutdown.getBoolean(value) && leases < streamLimit(value);
             }
         }
         boolean healthy() {
             Object value = connection;
             if (!ready || closed || socket.isClosed()) return false;
-            try { synchronized (value) { return !shutdown.getBoolean(value); } }
+            try { synchronized (value) { return !api.connectionShutdown.getBoolean(value); } }
             catch (IllegalAccessException unavailable) { return false; }
         }
-        private static long streamLimit(Object connection) throws Exception {
+        private long streamLimit(Object connection) throws Exception {
             // SETTINGS_MAX_CONCURRENT_STREAMS is an unsigned 32-bit value.
-            return Integer.toUnsignedLong((Integer) Http2Transport.call(connection.getClass(),
-                    connection, "maxConcurrentStreams", new Class<?>[0]));
+            return Integer.toUnsignedLong((Integer) Http2Transport.invoke(api.connectionMaximumStreams,connection));
         }
         void connect() throws Exception {
             if (ready) return;
@@ -164,39 +163,22 @@ final class Http2SessionPool implements Closeable {
                 // Shared connections have independent per-stream I/O deadlines.
                 // A socket-wide read timeout would let one idle stream kill peers.
                 socket.setSoTimeout(0);
-                String framed = "com.android.okhttp.internal.framed.FramedConnection";
-                Class<?> builderType = Class.forName(framed + "$Builder");
-                Class<?> protocol = Class.forName("com.android.okhttp.Protocol");
-                Object builder = builderType.getConstructor(boolean.class).newInstance(true);
-                Class<?> okio = Class.forName("com.android.okhttp.okio.Okio");
-                Class<?> sourceType = Class.forName("com.android.okhttp.okio.Source");
-                Class<?> sinkType = Class.forName("com.android.okhttp.okio.Sink");
-                Object source = Http2Transport.call(okio, null, "source", new Class<?>[]{Socket.class}, socket);
-                Object sink = Http2Transport.call(okio, null, "sink", new Class<?>[]{Socket.class}, socket);
-                // Headers and connection-control frames are written outside a
-                // FramedStream's timeout. Keep a physical write deadline too:
-                // a peer that stops reading must not pin all owners forever.
-                Object timeout = Http2Transport.call(sinkType, sink, "timeout", new Class<?>[0]);
-                Http2Transport.call(Class.forName("com.android.okhttp.okio.Timeout"), timeout, "timeout",
-                        new Class<?>[]{long.class, TimeUnit.class}, 30L, TimeUnit.SECONDS);
-                Object bufferedSource = Http2Transport.call(okio, null, "buffer", new Class<?>[]{sourceType}, source);
-                Object bufferedSink = Http2Transport.call(okio, null, "buffer", new Class<?>[]{sinkType}, sink);
-                Http2Transport.call(builderType, builder, "socket", new Class<?>[]{Socket.class, String.class,
-                        Class.forName("com.android.okhttp.okio.BufferedSource"),
-                        Class.forName("com.android.okhttp.okio.BufferedSink")},
-                        socket, route.host, bufferedSource, bufferedSink);
-                Http2Transport.call(builderType, builder, "protocol", new Class<?>[]{protocol},
-                        protocol.getField("HTTP_2").get(null));
-                Object opened = Http2Transport.call(builderType, builder, "build", new Class<?>[0]);
+                Object builder = api.connectionBuilder.newInstance(true);
+                Object source = Http2Transport.invoke(api.socketSource,null,socket);
+                Object sink = Http2Transport.invoke(api.socketSink,null,socket);
+                // Headers/control frames retain their physical write deadline.
+                Object timeout = Http2Transport.invoke(api.sinkTimeout,sink);
+                Http2Transport.invoke(api.timeout,timeout,30L,TimeUnit.SECONDS);
+                Object bufferedSource = Http2Transport.invoke(api.bufferedSource,null,source);
+                Object bufferedSink = Http2Transport.invoke(api.bufferedSink,null,sink);
+                Http2Transport.invoke(api.builderSocket,builder,socket,route.host,bufferedSource,bufferedSink);
+                Http2Transport.invoke(api.builderProtocol,builder,api.http2);
+                Object opened = Http2Transport.invoke(api.builderBuild,builder);
                 synchronized (this) {
                     if (closed) { ((Closeable) opened).close(); throw new IOException("HTTP/2 session closed"); }
                     connection = opened;
                 }
-                shutdown = opened.getClass().getDeclaredField("shutdown");
-                shutdown.setAccessible(true);
-                nextStreamId = opened.getClass().getDeclaredField("nextStreamId");
-                nextStreamId.setAccessible(true);
-                Http2Transport.call(opened.getClass(), opened, "sendConnectionPreface", new Class<?>[0]);
+                Http2Transport.invoke(api.connectionPreface,opened);
                 ready = true;
             } catch (Exception | Error failure) {
                 try { close(); } catch (IOException cleanup) { failure.addSuppressed(cleanup); }
@@ -225,21 +207,19 @@ final class Http2SessionPool implements Closeable {
                     int allocated;
                     synchronized (connection) {
                         if (!healthy()) throw new SessionUnavailableException("HTTP/2 session shut down");
-                        int open = (Integer) Http2Transport.call(connection.getClass(), connection,
-                                "openStreamCount", new Class<?>[0]);
+                        int open = (Integer) Http2Transport.invoke(api.connectionOpenStreams,connection);
                         available = open < streamLimit(connection);
-                        allocated = nextStreamId.getInt(connection);
+                        allocated = api.connectionNextStreamId.getInt(connection);
                     }
                     if (available) {
                         try {
-                            return Http2Transport.call(connection.getClass(), connection, "newStream",
-                                    new Class<?>[]{List.class, boolean.class, boolean.class}, headers, hasBody, true);
+                            return Http2Transport.invoke(api.connectionNewStream,connection,headers,hasBody,true);
                         } catch (IOException failure) {
                             // Admission is serialized here. An unchanged stream id
                             // means the provider refused before allocating a stream
                             // or writing HEADERS (GOAWAY/close raced the check).
                             boolean unsent;
-                            synchronized (connection) { unsent = nextStreamId.getInt(connection) == allocated; }
+                            synchronized (connection) { unsent = api.connectionNextStreamId.getInt(connection) == allocated; }
                             if (unsent && !healthy()) {
                                 throw new SessionUnavailableException("HTTP/2 session shut down", failure);
                             }

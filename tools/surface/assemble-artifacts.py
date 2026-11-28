@@ -12,8 +12,10 @@ FRAMEWORK.update('orderedbroadcast-source.apk orderedbroadcast-target.apk webvie
 FRAMEWORK.update('packageevents-observer.apk packageevents-target-v1.apk packageevents-target-v2.apk packageevents-control.dex'.split())
 HOST.add('account-chooser-native-tests.dex')
 HOST.add('permission_dialog_test.exe')
+HOST.add('device_admin_dialog_test.exe')
 FRAMEWORK.update('icon-base.apk icon-density.apk icon-bundle.apks icon-bundle.xapk'.split())
 FRAMEWORK.add('crashnotice.apk')
+FRAMEWORK.update('deviceadmin-' + name + '.apk' for name in ('valid', 'unsupported', 'unprotected', 'updated'))
 FRAMEWORK.add('gesher-stt.apk')
 FRAMEWORK.add('gesher-tts.apk')
 

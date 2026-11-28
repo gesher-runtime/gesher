@@ -30,6 +30,7 @@ static int prompt_action;
 static const WCHAR* prompt_message = L"com.example.app\r\nandroid.permission.CAMERA";
 static BOOL prompt_scrolls;
 static BOOL prompt_truncated;
+static UINT prompt_icon;
 static WCHAR prompt_text[40002];
 static WCHAR huge_message[40001];
 
@@ -217,6 +218,35 @@ static void CALLBACK InspectHostPrompt(HWND dialog, UINT message, UINT_PTR timer
       "initial prompt focus follows the safe default");
   Check((GetWindowLongW(accept, GWL_STYLE) & BS_TYPEMASK) == BS_OWNERDRAW,
       "host prompt uses the shared modern action");
+  // The MessageBox icon kind shows the system icon, leading the text in reading order.
+  HWND icon = GetDlgItem(dialog, GESHER_HOST_MESSAGE_ICON);
+  if (prompt_icon != 0) {
+    RECT icon_bounds = {0}, text_bounds = {0};
+    HICON image = icon ? (HICON)SendMessageW(icon, STM_GETICON, 0, 0) : NULL;
+    Check(icon != NULL && (GetWindowLongW(icon, GWL_STYLE) & SS_TYPEMASK) == SS_ICON
+        && image != NULL, "host prompt shows its system icon");
+    if (icon != NULL) {
+      GetWindowRect(icon, &icon_bounds);
+      GetWindowRect(text, &text_bounds);
+      Check(GesherUiRtl(language) ? icon_bounds.left >= text_bounds.right
+          : icon_bounds.right <= text_bounds.left,
+          "host prompt icon leads the text in reading order");
+    }
+    // The icon is extracted at the window's DPI, not stretched from the system size.
+    ICONINFO info = {0};
+    BITMAP bitmap = {0};
+    HDC screen = GetDC(NULL);
+    int expected = MulDiv(32, GesherHostDpi(dialog, screen), 96);
+    ReleaseDC(NULL, screen);
+    if (image != NULL && GetIconInfo(image, &info)) {
+      GetObjectW(info.hbmColor ? info.hbmColor : info.hbmMask, sizeof(bitmap), &bitmap);
+      if (info.hbmColor) DeleteObject(info.hbmColor);
+      if (info.hbmMask) DeleteObject(info.hbmMask);
+    }
+    Check(bitmap.bmWidth == expected, "host prompt icon matches the window DPI");
+  } else {
+    Check(icon == NULL, "host prompt without an icon kind shows none");
+  }
   WCHAR klass[16] = {0};
   GetClassNameW(text, klass, 16);
   if (prompt_scrolls) {
@@ -398,24 +428,26 @@ int main(void) {
   for (int locale = 0; locale < 2; ++locale) {
     language = locale ? GESHER_UI_HE : GESHER_UI_EN;
     prompt_confirmation = TRUE;
+    prompt_icon = MB_ICONQUESTION;
     for (prompt_action = DENY; prompt_action <= TAB_ALLOW; ++prompt_action) {
       phase = 0;
       BOOL accepted = GesherHostPrompt(GesherUiText(language, "account_title"),
           L"com.example.app\r\nandroid.permission.CAMERA",
           GesherUiText(language, "permission_allow"),
           GesherUiText(language, "permission_deny"),
-          GesherUiRtl(language), NULL);
+          GesherUiRtl(language), NULL, prompt_icon);
       Check(accepted == (prompt_action == ALLOW || prompt_action == TAB_ALLOW),
           "only an explicit account-token Allow grants access");
     }
     // Launcher notices are informational: OK closes them, and X cancels safely.
     prompt_confirmation = FALSE;
+    prompt_icon = MB_ICONERROR;
     for (prompt_action = ALLOW; prompt_action <= CLOSE; ++prompt_action) {
       phase = 0;
       BOOL accepted = GesherHostPrompt(GesherUiText(language, "brand"),
           L"com.example.app\r\nandroid.permission.CAMERA",
           GesherUiText(language, "cp_dialog_ok"), NULL,
-          GesherUiRtl(language), NULL);
+          GesherUiRtl(language), NULL, prompt_icon);
       Check(accepted == (prompt_action == ALLOW), "information popup exits safely");
     }
   }
@@ -425,16 +457,26 @@ int main(void) {
   phase = 0;
   prompt_scrolls = TRUE;
   prompt_message = permissions;
+  prompt_icon = 0;
   Check(GesherHostPrompt(GesherUiText(language, "brand"), prompt_message,
-      GesherUiText(language, "cp_dialog_ok"), NULL, GesherUiRtl(language), NULL),
+      GesherUiText(language, "cp_dialog_ok"), NULL, GesherUiRtl(language), NULL, prompt_icon),
       "long information popup is presented");
   for (int i = 0; i < 40000; ++i) huge_message[i] = (i % 8 == 7) ? L' ' : L'a' + (i % 7);
   huge_message[40000] = 0;
   prompt_message = huge_message;
   prompt_truncated = TRUE;
+  prompt_icon = MB_ICONERROR;
   Check(GesherHostPrompt(GesherUiText(language, "brand"), prompt_message,
-      GesherUiText(language, "cp_dialog_ok"), NULL, GesherUiRtl(language), NULL),
+      GesherUiText(language, "cp_dialog_ok"), NULL, GesherUiRtl(language), NULL, prompt_icon),
       "oversized information popup is presented");
+  // A short message without an icon kind keeps the full-width static text.
+  prompt_message = L"com.example.app\r\nandroid.permission.CAMERA";
+  prompt_scrolls = FALSE;
+  prompt_truncated = FALSE;
+  prompt_icon = 0;
+  Check(GesherHostPrompt(GesherUiText(language, "brand"), prompt_message,
+      GesherUiText(language, "cp_dialog_ok"), NULL, GesherUiRtl(language), NULL, prompt_icon),
+      "short information popup without an icon is presented");
   if (fixture_icon) DeleteFileW(icon_path);
   UnhookWindowsHookEx(hook);
   SetThreadDesktop(original);

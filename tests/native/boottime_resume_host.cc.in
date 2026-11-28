@@ -74,6 +74,7 @@ static LinuxTimespec RealtimeNow() { return {wall / 1000000000, wall % 100000000
 class RelativeCondition {
  public:
   void notify_all() { ++notifications_; native_.notify_all(); }
+  void wait(std::unique_lock<std::mutex>& lock) { native_.wait(lock); }
   std::cv_status wait_for(std::unique_lock<std::mutex>& lock, std::chrono::milliseconds duration) {
     return Wait(lock, duration.count() * 1000000);
   }

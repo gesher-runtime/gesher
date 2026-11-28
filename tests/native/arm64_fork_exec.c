@@ -5,6 +5,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/memfd.h>
+#include <linux/netlink.h>
 #include <netdb.h>
 #include <poll.h>
 #include <pthread.h>
@@ -19,6 +20,7 @@
 #include <sys/prctl.h>
 #include <sys/ptrace.h>
 #include <sys/resource.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
@@ -864,6 +866,68 @@ static void test_fifo(void) {
   unlink(path);
 }
 
+static int netlink_request_ack(int fd, unsigned seq) {
+  struct nlmsghdr request = {
+    .nlmsg_len = NLMSG_LENGTH(0),
+    .nlmsg_type = NLMSG_NOOP,
+    .nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK,
+    .nlmsg_seq = seq,
+  };
+  return send(fd, &request, sizeof(request), 0) == sizeof(request);
+}
+
+static int netlink_read_ack(int fd, unsigned seq) {
+  struct {
+    struct nlmsghdr header;
+    struct nlmsgerr error;
+  } response;
+  return recv(fd, &response, sizeof(response), MSG_DONTWAIT) == sizeof(response) &&
+         response.header.nlmsg_type == NLMSG_ERROR && response.header.nlmsg_seq == seq &&
+         response.error.error == 0;
+}
+
+static void test_netlink_across_fork(void) {
+  const int sock = socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
+  if (sock < 0) { check(0, "fork: open NETLINK_ROUTE"); return; }
+  int ready[2];
+  if (pipe(ready) != 0) {
+    check(0, "fork: open pipe for the NETLINK_ROUTE test");
+    close(sock);
+    return;
+  }
+  check(netlink_request_ack(sock, 41), "fork: enqueue NETLINK_ROUTE reply in the parent");
+  const pid_t pid = fork();
+  if (pid == 0) {
+    close(ready[0]);
+    const int consumed = netlink_read_ack(sock, 41) &&
+                         fcntl(sock, F_SETFL, O_NONBLOCK) == 0;
+    if (!consumed || write(ready[1], "!", 1) != 1) _exit(1);
+    close(ready[1]);
+    usleep(50 * 1000);
+    _exit(netlink_request_ack(sock, 42) && close(sock) == 0 ? 0 : 1);
+  }
+  close(ready[1]);
+  int ok = 0;
+  if (pid > 0) {
+    char notified;
+    struct pollfd pipe_poll = {ready[0], POLLIN, 0};
+    const int child_read = poll(&pipe_poll, 1, 3000) == 1 &&
+                           read(ready[0], &notified, 1) == 1 && notified == '!';
+    struct pollfd socket_poll = {sock, POLLIN, 0};
+    const int reply = child_read && poll(&socket_poll, 1, 3000) == 1 &&
+                      (socket_poll.revents & POLLIN) && netlink_read_ack(sock, 42);
+    int status = 0;
+    if (!reply) kill(pid, SIGKILL);
+    const int exited = waitpid(pid, &status, 0) == pid && WIFEXITED(status) &&
+                       WEXITSTATUS(status) == 0;
+    ok = reply && exited && fcntl(sock, F_GETFL) == (O_RDWR | O_NONBLOCK) &&
+         poll(&socket_poll, 1, 0) == 0;
+  }
+  check(ok, "NETLINK_ROUTE replies and file status are shared across guest fork");
+  close(ready[0]);
+  close(sock);
+}
+
 // --- a forked child whose root (the process that forked first) has ended ------
 // The root (this program run again, in "killroot" mode) forks a child and
 // ends; the child spawns: the spawn fails at once with ENOTSUP (ADR 0092: an
@@ -1269,6 +1333,7 @@ static int run_all(void) {
   test_copy_on_write();
   test_pipe();
   test_raw_clone();
+  test_netlink_across_fork();
   test_vfork_and_status();
   test_ijiami_shape();
   test_atfork();

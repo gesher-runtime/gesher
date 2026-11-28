@@ -1045,6 +1045,12 @@ bool InitGuestLibc() {
   if (g_ftw) for (const char* name : {"ftw", "ftw64"}) Override(name, reinterpret_cast<void*>(&GuestFtw));
   if (g_nftw) for (const char* name : {"nftw", "nftw64"}) Override(name, reinterpret_cast<void*>(&GuestNftw));
 
+  // AAPCS64's >16-byte callback aggregate is indirect; generic scalar
+  // translation cannot feed System V's by-value stack argument.
+  if (void* codec_callback = Host("__gesher_AMediaCodec_setAsyncNotifyCallback")) {
+    Override("AMediaCodec_setAsyncNotifyCallback", codec_callback);
+  }
+
   g_epoll_ctl = Host("epoll_ctl");
   g_epoll_wait = Host("epoll_wait");
   g_epoll_pwait = Host("epoll_pwait");
