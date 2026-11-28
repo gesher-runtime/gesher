@@ -20,6 +20,7 @@ import android.system.OsConstants;
 import android.util.Size;
 
 import java.io.FileDescriptor;
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.Base64;
@@ -95,8 +96,12 @@ public final class MediaStoreThumbnailContractTest {
             try {
                 resolver.loadThumbnail(uri, new Size(44, 36), cancelled);
                 throw new AssertionError("pre-cancelled thumbnail returned a bitmap");
-            } catch (OperationCanceledException expected) {
-                // The client cancellation contract still applies.
+            } catch (IOException expected) {
+                // The client cancellation contract still applies. ImageDecoder's
+                // callable source reports the provider's cancellation as the
+                // cause of an IOException, as it does on Android.
+                require(expected.getCause() instanceof OperationCanceledException,
+                        "pre-cancelled thumbnail reports the provider cancellation");
             }
         } finally {
             resolver.delete(uri, null, null);
