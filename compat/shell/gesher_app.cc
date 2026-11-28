@@ -722,7 +722,7 @@ int RunProcessWait(const std::wstring& exe, const std::vector<std::wstring>& arg
 
 HANDLE StartProcessRedirected(const std::wstring& exe, const std::vector<std::wstring>& args,
                               const std::wstring& out_path, const std::wstring& err_path,
-                              DWORD* pid_out) {
+                              HANDLE job, DWORD* pid_out, DWORD* error_out) {
   SECURITY_ATTRIBUTES sa = {sizeof(sa), nullptr, TRUE};
   HANDLE out_h = CreateFileW(out_path.c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
                              &sa, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -736,11 +736,24 @@ HANDLE StartProcessRedirected(const std::wstring& exe, const std::vector<std::ws
   si.hStdError = err_h != INVALID_HANDLE_VALUE ? err_h : GetStdHandle(STD_ERROR_HANDLE);
   std::wstring cmd = BuildCommandLine(exe, args);
   PROCESS_INFORMATION pi = {};
-  BOOL ok = CreateProcessW(exe.c_str(), cmd.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW,
-                           nullptr, nullptr, &si, &pi);
+  // Started suspended: in `job` before it runs any code (or starts children of its own).
+  BOOL ok = CreateProcessW(exe.c_str(), cmd.data(), nullptr, nullptr, TRUE,
+                           CREATE_NO_WINDOW | CREATE_SUSPENDED, nullptr, nullptr, &si, &pi);
+  const DWORD error = ok ? ERROR_SUCCESS : GetLastError();
   if (out_h != INVALID_HANDLE_VALUE) CloseHandle(out_h);
   if (err_h != INVALID_HANDLE_VALUE) CloseHandle(err_h);
-  if (!ok) return nullptr;
+  if (!ok) {
+    if (error_out) *error_out = error;
+    return nullptr;
+  }
+  if (job != nullptr && !AssignProcessToJobObject(job, pi.hProcess)) {
+    if (error_out) *error_out = GetLastError();
+    TerminateProcess(pi.hProcess, 1);
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return nullptr;
+  }
+  ResumeThread(pi.hThread);
   CloseHandle(pi.hThread);
   if (pid_out) *pid_out = pi.dwProcessId;
   return pi.hProcess;
@@ -983,27 +996,30 @@ int wmain(int argc, wchar_t* argv[]) {
   // The run's device processes have their own (hidden) consoles: Ctrl+C or closing this
   // console ends this process without cleanup, so the job ends them with it.
   HANDLE job = CreateJobObjectW(nullptr, nullptr);
-  if (job != nullptr) {
-    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = {};
-    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-    SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof(limits));
+  JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = {};
+  limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+  if (job == nullptr ||
+      !SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof(limits))) {
+    PrintErrorLine(L"gesher-app: could not create the run's job object (error " +
+                   std::to_wstring(GetLastError()) + L")");
+    if (job != nullptr) CloseHandle(job);
+    SetEnvironmentVariableW(L"GESHER_BINDER", nullptr);
+    return 1;
   }
   std::vector<HANDLE> started;
-  auto track = [&](HANDLE h) {
-    if (job != nullptr) AssignProcessToJobObject(job, h);
-    started.push_back(h);
-  };
+  auto track = [&](HANDLE h) { started.push_back(h); };
+  DWORD start_error = ERROR_SUCCESS;
   auto cleanup = [&]() {
     for (HANDLE h : started) {
       if (WaitForSingleObject(h, 0) == WAIT_TIMEOUT) TerminateProcess(h, 1);
       CloseHandle(h);
     }
     SetEnvironmentVariableW(L"GESHER_BINDER", nullptr);
-    if (job != nullptr) CloseHandle(job);
+    CloseHandle(job);
   };
   auto start_failed = [&](const std::wstring& exe) {
     PrintErrorLine(L"gesher-app: could not start " + exe + L" (error " +
-                   std::to_wstring(GetLastError()) + L")");
+                   std::to_wstring(start_error) + L")");
     cleanup();
     return 1;
   };
@@ -1011,7 +1027,8 @@ int wmain(int argc, wchar_t* argv[]) {
   DWORD binder_pid = 0;
   HANDLE h_binder = StartProcessRedirected(JoinPath(here, L"binderd.exe"), {binder},
                                            JoinPath(logs, L"run-binderd.out"),
-                                           JoinPath(logs, L"run-binderd.log"), &binder_pid);
+                                           JoinPath(logs, L"run-binderd.log"), job, &binder_pid,
+                                           &start_error);
   if (h_binder == nullptr) return start_failed(JoinPath(here, L"binderd.exe"));
   track(h_binder);
 
@@ -1029,7 +1046,8 @@ int wmain(int argc, wchar_t* argv[]) {
 
   HANDLE h_sm = StartProcessRedirected(JoinPath(here, L"servicemanager.exe"), {},
                                        JoinPath(logs, L"run-servicemanager.out"),
-                                       JoinPath(logs, L"run-servicemanager.log"), nullptr);
+                                       JoinPath(logs, L"run-servicemanager.log"), job, nullptr,
+                                       &start_error);
   if (h_sm == nullptr) return start_failed(JoinPath(here, L"servicemanager.exe"));
   track(h_sm);
 
@@ -1038,7 +1056,8 @@ int wmain(int argc, wchar_t* argv[]) {
   srv_args.push_back(user_path(apk_full));
   std::wstring srv_out = JoinPath(logs, L"run-system_server.out");
   std::wstring srv_log = JoinPath(logs, L"run-system_server.log");
-  HANDLE h_srv = StartProcessRedirected(dalvikvm, srv_args, srv_out, srv_log, nullptr);
+  HANDLE h_srv =
+      StartProcessRedirected(dalvikvm, srv_args, srv_out, srv_log, job, nullptr, &start_error);
   if (h_srv == nullptr) return start_failed(dalvikvm);
   track(h_srv);
   {

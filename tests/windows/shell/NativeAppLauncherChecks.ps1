@@ -198,6 +198,21 @@ try {
     $r = Invoke-NativeApp $exe @('apk-info', $apk)
     Assert-NativeApp ($r.Code -eq 2) "apk-info without OUT is a usage error: $($r.Code)"
 
+    # --system-server: a device of this run (stand-in binderd and servicemanager), then the
+    # app in com.gesher.app.Main; the run's logs; a device program that cannot start fails.
+    foreach ($program in 'binderd.exe', 'servicemanager.exe') { Copy-Item -LiteralPath $standIn (Join-Path $install $program) -Force }
+    $r = Invoke-NativeApp $exe @($apk, '--system-server')
+    $main = Get-MainClassArguments $r
+    Assert-NativeApp ($r.Code -eq 0) "--system-server exits with the app's code: $($r.Code) $($r.Output)"
+    Assert-NativeApp (($main -join '|') -eq "com.gesher.app.Main|--system-server|$((& $noDrive $apk))") "--system-server runs the app last: $($main -join ' | ')"
+    foreach ($log in 'run-binderd.log', 'run-servicemanager.log', 'run-system_server.log') {
+        Assert-NativeApp (Test-Path -LiteralPath (Join-Path $profileDir "logs\$log") -PathType Leaf) "--system-server writes logs\$log"
+    }
+    Remove-Item -LiteralPath (Join-Path $install 'servicemanager.exe')
+    $r = Invoke-NativeApp $exe @($apk, '--system-server')
+    Assert-NativeApp ($r.Code -eq 1 -and $r.Output.Contains('could not start') -and $r.Output.Contains('servicemanager.exe')) "a missing servicemanager fails the run: $($r.Code) $($r.Output)"
+    Remove-Item -LiteralPath (Join-Path $install 'binderd.exe')
+
     # No arguments: usage, exit 2. Shutdown with no device: nothing to stop.
     $r = Invoke-NativeApp $exe @()
     Assert-NativeApp ($r.Code -eq 2 -and $r.Output.Contains('accounts')) "usage: $($r.Code) $($r.Output)"
