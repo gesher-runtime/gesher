@@ -189,7 +189,8 @@ int main(int argc, char** argv) {
   CHECK(recv(sv[1], buf, sizeof(buf), 0) == 3 && memcmp(buf, "dup", 3) == 0);
   CHECK(close(d) == 0);
 
-  // SO_REUSEADDR is recorded; SO_TYPE, SO_DOMAIN are Linux values.
+  // SO_REUSEADDR is recorded; SO_TYPE, SO_DOMAIN are Linux values: the pair is
+  // AF_UNIX to the application, whatever transport carries it.
   int one = 1, v = 0;
   socklen_t vl = sizeof(v);
   CHECK(setsockopt(sv[0], SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one)) == 0);
@@ -197,7 +198,7 @@ int main(int argc, char** argv) {
   vl = sizeof(v);
   CHECK(getsockopt(sv[0], SOL_SOCKET, SO_TYPE, &v, &vl) == 0 && v == SOCK_STREAM);
   vl = sizeof(v);
-  CHECK(getsockopt(sv[0], SOL_SOCKET, SO_DOMAIN, &v, &vl) == 0 && v == AF_INET);
+  CHECK(getsockopt(sv[0], SOL_SOCKET, SO_DOMAIN, &v, &vl) == 0 && v == AF_UNIX);
   vl = sizeof(v);
   CHECK(setsockopt(sv[0], IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one)) == 0);
   CHECK(getsockopt(sv[0], IPPROTO_TCP, TCP_NODELAY, &v, &vl) == 0 && v != 0);
@@ -287,8 +288,10 @@ int main(int argc, char** argv) {
   CHECK(send(sv[0], "dgram", 5, 0) == 5);
   sockaddr_storage from = {};
   socklen_t fl2 = sizeof(from);
+  // Truncated datagram: the part that fit. The sender of an unnamed pair has
+  // no address: Linux returns a zero name length and leaves the buffer alone.
   CHECK(recvfrom(sv[1], buf, 2, 0, reinterpret_cast<sockaddr*>(&from), &fl2) == 2 &&
-        from.ss_family == AF_INET);  // truncated datagram: the part that fit
+        fl2 == 0 && from.ss_family == 0);
   close(sv[0]);
   close(sv[1]);
 
