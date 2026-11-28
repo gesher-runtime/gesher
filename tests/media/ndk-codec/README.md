@@ -36,8 +36,11 @@ and the test does not measure achieved throughput. Android 16's ARM64 AVC
 provider returned success even for an idle submission and continued exposing
 the original bitrate in its output format. The documented NDK contract limits
 submissions to a running codec and permits controls to go unapplied. Gesher
-rejects inactive submissions and handles sync and positive bitrate requests
-for a running video encoder. [Android NDK parameter contract](https://developer.android.com/ndk/reference/group/media#amediacodec_setparameters).
+rejects a sync or bitrate control for a video encoder that is not running
+(with NdkMediaCodec's state error, `AMEDIA_ERROR_UNKNOWN`), hands sync and
+positive bitrate requests to a running video encoder, ignores keys a codec
+cannot apply, and reports input suspension (`drop-input-frames=1`) as
+unsupported. [Android NDK parameter contract](https://developer.android.com/ndk/reference/group/media#amediacodec_setparameters).
 
 A second decode sends the same AVC access units to a YUV ImageReader surface.
 The test compares each submitted render timestamp and luma with the acquired

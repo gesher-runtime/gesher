@@ -152,8 +152,25 @@ const std::vector<VideoCodecInfo>& VideoDecoder::Available() {
       {"video/avc", "fixture", false, 4096, 4096}};
   return v;
 }
+// Off by default; the callback-serialization contract decodes one fixture
+// frame per access unit so rendered frames reach the native callback.
+std::atomic<bool> video_decode_fixture{false};
+struct FixtureVideoDecoder final : VideoDecoder {
+  std::string Name() const override { return "fixture"; }
+  bool Decode(const Sample& in, std::vector<VideoFrame>* out) override {
+    if (in.data.empty()) return true;
+    VideoFrame frame;
+    frame.Allocate(16, 8);
+    frame.time_us = in.time_us;
+    out->push_back(std::move(frame));
+    return true;
+  }
+  void Flush() override {}
+  void Drain(std::vector<VideoFrame>*) override {}
+};
 std::unique_ptr<VideoDecoder> VideoDecoder::Create(const Format&,
                                                    std::string*) {
+  if (video_decode_fixture) return std::make_unique<FixtureVideoDecoder>();
   return nullptr;
 }
 const std::vector<EncoderInfo>& AvailableEncoders() {
@@ -530,11 +547,12 @@ void PersistentSurface() {
             AMEDIA_ERROR_INVALID_OPERATION,
         "configured surface encoder cannot signal successful EOS before start");
   Format parameters;
+  AMediaFormat_setInt32(parameters.get(), "request-sync", 0);
   Check(Invoke<media_status_t>(
             "AMediaCodec_setParameters", first,
             static_cast<const AMediaFormat*>(parameters.get())) ==
-            AMEDIA_ERROR_INVALID_OPERATION,
-        "parameters reject nonexecuting codec state");
+            AMEDIA_ERROR_UNKNOWN,
+        "live encoder controls reject nonexecuting codec state");
   // NdkMediaCodec reports MediaCodec's INVALID_OPERATION state errors as UNKNOWN.
   Check(Invoke<media_status_t>("AMediaCodec_setOutputSurface", first, window) ==
             AMEDIA_ERROR_UNKNOWN,
@@ -637,8 +655,19 @@ void AdapterContracts() {
   AMediaFormat_setInt32(sync.get(), "request-sync", 0);
   const auto* sync_format = static_cast<const AMediaFormat*>(sync.get());
   Check(Invoke<media_status_t>("AMediaCodec_setParameters", idle, sync_format) ==
-            AMEDIA_ERROR_INVALID_OPERATION,
-        "idle encoder refuses live controls");
+            AMEDIA_ERROR_UNKNOWN,
+        "idle encoder refuses live controls with NdkMediaCodec's state error");
+  Format advisory;
+  AMediaFormat_setInt32(advisory.get(), "low-latency", 1);
+  AMediaFormat_setInt32(advisory.get(), "vendor.gesher.unknown", 7);
+  const auto* advisory_format = static_cast<const AMediaFormat*>(advisory.get());
+  Check(Invoke<media_status_t>("AMediaCodec_setParameters", idle, advisory_format) == 0,
+        "keys a codec cannot apply are ignored, as components do");
+  auto* decoder = RawCodec();
+  Check(Invoke<media_status_t>("AMediaCodec_setParameters", decoder, sync_format) == 0 &&
+            Invoke<media_status_t>("AMediaCodec_setParameters", decoder, advisory_format) == 0,
+        "video encoder controls sent to a decoder are ignored");
+  Invoke<media_status_t>("AMediaCodec_delete", decoder);
   Check(Invoke<media_status_t>("AMediaCodec_setParameters",
                                static_cast<AMediaCodec*>(nullptr), sync_format) ==
             AMEDIA_ERROR_INVALID_PARAMETER,
@@ -667,7 +696,9 @@ void AdapterContracts() {
   Check(Invoke<media_status_t>("AMediaCodec_setParameters", encoder,
                                static_cast<const AMediaFormat*>(unknown.get())) ==
             AMEDIA_ERROR_UNSUPPORTED,
-        "a control the encoder cannot apply is not reported as applied");
+        "suspending encoder input is not reported as applied");
+  Check(Invoke<media_status_t>("AMediaCodec_setParameters", encoder, advisory_format) == 0,
+        "a running encoder ignores keys it cannot apply");
   Check(Invoke<media_status_t>("AMediaCodec_signalEndOfInputStream", encoder) == 0 &&
             Invoke<media_status_t>("AMediaCodec_signalEndOfInputStream", encoder) ==
                 AMEDIA_ERROR_INVALID_OPERATION,
@@ -687,6 +718,108 @@ void AdapterContracts() {
   Check(QueueSurface::live == 0, "replaced and retired input producers are released");
 }
 
+// NdkMediaCodec runs asynchronous and rendered-frame callbacks on one
+// CodecHandler looper: they share a thread and never overlap.
+struct SerializedState {
+  Signal done;
+  std::mutex mu;
+  std::thread::id thread;
+  std::atomic<int> inside{0}, overlaps{0}, other_thread{0}, rendered{0}, outputs{0};
+  std::atomic<int> next{0};
+  std::atomic<bool> eos{false};
+  void Enter() {
+    {
+      std::lock_guard lock(mu);
+      if (thread == std::thread::id()) thread = std::this_thread::get_id();
+      if (thread != std::this_thread::get_id()) ++other_thread;
+    }
+    if (inside.fetch_add(1) != 0) ++overlaps;
+    std::this_thread::sleep_for(2ms);  // widen any overlap window
+  }
+  void Leave() { --inside; }
+};
+SerializedState* serialized = nullptr;
+void GESHER_CODEC_GUEST_ABI SerialInput(AMediaCodec* c, void* opaque, int32_t index) {
+  auto* s = static_cast<SerializedState*>(opaque);
+  s->Enter();
+  size_t size = 0;
+  auto* data = Invoke<uint8_t*>("AMediaCodec_getInputBuffer", c, static_cast<size_t>(index), &size);
+  const int n = s->next++;
+  if (data != nullptr && size >= 4 && n <= 3) {
+    std::memcpy(data, "\0\0\0\1", 4);
+    Invoke<media_status_t>("AMediaCodec_queueInputBuffer", c, static_cast<size_t>(index),
+                           int64_t{0}, n < 3 ? size_t{4} : size_t{0}, uint64_t(1000 * n),
+                           n < 3 ? uint32_t{0} : uint32_t{4});
+  }
+  s->Leave();
+}
+void GESHER_CODEC_GUEST_ABI SerialOutput(AMediaCodec* c, void* opaque, int32_t index,
+                                         abi::BufferInfo* info) {
+  auto* s = static_cast<SerializedState*>(opaque);
+  s->Enter();
+  ++s->outputs;
+  const bool eos = info != nullptr && (info->flags & 4) != 0;
+  Invoke<media_status_t>("AMediaCodec_releaseOutputBuffer", c, static_cast<size_t>(index),
+                         info != nullptr && info->size > 0);
+  s->Leave();
+  if (eos) {
+    s->eos = true;
+    s->done.Set();
+  }
+}
+void GESHER_CODEC_GUEST_ABI SerialFormat(AMediaCodec*, void* opaque, AMediaFormat* format) {
+  auto* s = static_cast<SerializedState*>(opaque);
+  s->Enter();
+  AMediaFormat_delete(format);
+  s->Leave();
+}
+void GESHER_CODEC_GUEST_ABI SerialError(AMediaCodec*, void* opaque, media_status_t, int32_t,
+                                        const char*) {
+  Check(false, "serialized decode reports no error");
+  static_cast<SerializedState*>(opaque)->done.Set();
+}
+void GESHER_CODEC_GUEST_ABI SerialRendered(AMediaCodec*, void* opaque, int64_t, int64_t) {
+  auto* s = static_cast<SerializedState*>(opaque);
+  s->Enter();
+  ++s->rendered;
+  s->Leave();
+}
+void SerializedCallbacks() {
+  video_decode_fixture = true;
+  SerializedState state;
+  serialized = &state;
+  auto* c = Invoke<AMediaCodec*>("AMediaCodec_createDecoderByType",
+                                 static_cast<const char*>("video/avc"));
+  android::sp<QueueSurface> window(new QueueSurface(16, 8));
+  Format f;
+  AMediaFormat_setString(f.get(), "mime", "video/avc");
+  AMediaFormat_setInt32(f.get(), "width", 16);
+  AMediaFormat_setInt32(f.get(), "height", 8);
+  Check(Invoke<media_status_t>("AMediaCodec_configure", c,
+                               static_cast<const AMediaFormat*>(f.get()),
+                               static_cast<ANativeWindow*>(window.get()),
+                               static_cast<AMediaCrypto*>(nullptr), uint32_t{0}) == 0,
+        "surface decoder configured");
+  abi::OnAsyncNotifyCallback cb{SerialInput, SerialOutput, SerialFormat, SerialError};
+  Check(Invoke<media_status_t>("AMediaCodec_setAsyncNotifyCallback", c, cb,
+                               static_cast<void*>(&state)) == 0 &&
+            Invoke<media_status_t>("AMediaCodec_setOnFrameRenderedCallback", c,
+                                   abi::OnFrameRendered{SerialRendered},
+                                   static_cast<void*>(&state)) == 0,
+        "async and rendered-frame callbacks registered");
+  Check(Invoke<media_status_t>("AMediaCodec_start", c) == 0, "serialized decoder start");
+  state.done.Wait();
+  // Rendered-frame samples posted before EOS run before the stop drops them.
+  for (int i = 0; i < 100 && state.rendered == 0; ++i) std::this_thread::sleep_for(5ms);
+  Check(Invoke<media_status_t>("AMediaCodec_stop", c) == 0, "serialized decoder stop");
+  Invoke<media_status_t>("AMediaCodec_delete", c);
+  Check(state.rendered > 0 && state.outputs >= 3, "rendered frames and outputs were delivered");
+  Check(state.other_thread == 0, "rendered-frame and async callbacks share one thread");
+  Check(state.overlaps == 0, "rendered-frame and async callbacks never run concurrently");
+  video_decode_fixture = false;
+  serialized = nullptr;
+}
+
 #include "jni_codec_callbacks.inc"
 
 int main() {
@@ -703,6 +836,7 @@ int main() {
   Check(tls_entries == 35,
         "one loaded-code entry per native notification worker");
   AdapterContracts();
+  SerializedCallbacks();
   std::printf("NDK codec host: %d checks, %d failures\n", checks.load(),
               failures.load());
   return failures == 0 ? 0 : 1;

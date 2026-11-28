@@ -8,6 +8,7 @@
 #include <media/NdkMediaFormat.h>
 #include <utils/Errors.h>
 
+#include <atomic>
 #include <cerrno>
 #include <cstdlib>
 #include <cmath>
@@ -40,16 +41,20 @@ const char* AMEDIACODEC_KEY_SUSPEND_TIME = "drop-start-time-us";
 const char* AMEDIACODEC_KEY_VIDEO_BITRATE = "video-bitrate";
 }
 
+// As NdkMediaCodec's CodecHandler looper does, one notification thread per
+// codec runs every native callback: asynchronous buffer, format and error
+// events and rendered-frame samples are serialized and never run at once.
+// The thread is created with the first registration and runs with guest TLS.
+
 // Rendered-frame timing samples for AMediaCodec_setOnFrameRenderedCallback.
-// Android delivers them on one NDK thread and may omit intermediate samples,
-// so a slow callback coalesces to the latest sample instead of blocking the
-// caller of releaseOutputBuffer.
+// Android may omit intermediate samples, so a slow callback coalesces to the
+// latest sample instead of blocking the caller of releaseOutputBuffer.
 struct NativeFrameRendered : std::enable_shared_from_this<NativeFrameRendered> {
-  std::shared_ptr<gesher::media::CodecCallbackQueue> queue =
-      gesher::media::CodecCallbackQueue::Create(gesher::bionic::EnterLoadedCode);
+  std::shared_ptr<gesher::media::CodecCallbackQueue> queue;  // the codec's
   AMediaCodec* codec = nullptr;
   gesher::media::codec_abi::OnFrameRendered callback = nullptr;
   void* userdata = nullptr;
+  std::atomic<bool> active{true};
 
   void Post(int64_t media_time_us, int64_t system_nanos) {
     {
@@ -62,9 +67,11 @@ struct NativeFrameRendered : std::enable_shared_from_this<NativeFrameRendered> {
     queue->Post([self] { self->Deliver(); });
   }
 
+  // Stop and flush drop queued notifications, including a scheduled delivery.
   void Discard() {
     std::lock_guard<std::mutex> lock(mu_);
     latest_.reset();
+    scheduled_ = false;
   }
 
  private:
@@ -80,7 +87,7 @@ struct NativeFrameRendered : std::enable_shared_from_this<NativeFrameRendered> {
       sample = std::exchange(latest_, std::nullopt);
       scheduled_ = false;
     }
-    if (sample) callback(codec, userdata, sample->media_time_us, sample->system_nanos);
+    if (sample && active) callback(codec, userdata, sample->media_time_us, sample->system_nanos);
   }
 
   std::mutex mu_;
@@ -89,14 +96,15 @@ struct NativeFrameRendered : std::enable_shared_from_this<NativeFrameRendered> {
 };
 
 struct NativeCodecNotifications {
-  std::shared_ptr<gesher::media::CodecCallbackQueue> queue =
-      gesher::media::CodecCallbackQueue::Create(gesher::bionic::EnterLoadedCode);
+  std::shared_ptr<gesher::media::CodecCallbackQueue> queue;  // the codec's
   AMediaCodec* codec = nullptr;
   std::weak_ptr<gesher::media::CodecEngine> engine;
   gesher::media::codec_abi::OnAsyncNotifyCallback callback{};
   void* userdata = nullptr;
+  std::atomic<bool> active{true};
 
   bool IsCurrent(uint64_t generation) const {
+    if (!active) return false;
     const auto owner = engine.lock();
     return owner && owner->IsCallbackCurrent(generation);
   }
@@ -105,8 +113,10 @@ struct NativeCodecNotifications {
 struct AMediaCodec {
   std::shared_ptr<gesher::media::CodecEngine> engine;
   std::mutex async_mu;
+  // Guarded by async_mu: the codec's notification thread and registrations.
+  std::shared_ptr<gesher::media::CodecCallbackQueue> queue;
   std::shared_ptr<NativeCodecNotifications> notifications;
-  std::shared_ptr<NativeFrameRendered> frame_rendered;  // Guarded by async_mu.
+  std::shared_ptr<NativeFrameRendered> frame_rendered;
 };
 
 namespace gesher::media {
@@ -195,14 +205,27 @@ class NdkInputSource final : public InputFrameSource {
   const bool persistent_;
 };
 
-std::shared_ptr<NativeCodecNotifications> Notifications(AMediaCodec* codec) {
-  std::lock_guard<std::mutex> lock(codec->async_mu);
-  return codec->notifications;
-}
-
 std::shared_ptr<NativeFrameRendered> FrameRendered(AMediaCodec* codec) {
   std::lock_guard<std::mutex> lock(codec->async_mu);
   return codec->frame_rendered;
+}
+
+// The codec's notification thread, or null before any registration.
+std::shared_ptr<CodecCallbackQueue> Queue(AMediaCodec* codec) {
+  std::lock_guard<std::mutex> lock(codec->async_mu);
+  return codec->queue;
+}
+
+std::shared_ptr<CodecCallbackQueue> EnsureQueue(AMediaCodec* codec) {
+  std::lock_guard<std::mutex> lock(codec->async_mu);
+  if (codec->queue == nullptr) codec->queue = CodecCallbackQueue::Create(bionic::EnterLoadedCode);
+  return codec->queue;
+}
+
+// Stop and flush drop the notifications made before them.
+void PauseNotifications(AMediaCodec* codec) {
+  if (const auto queue = Queue(codec)) queue->Pause();
+  if (const auto frames = FrameRendered(codec)) frames->Discard();
 }
 
 // Android 16's NdkMediaCodec translate_error reports codec state errors,
@@ -258,9 +281,9 @@ AMediaCodec* CreateEncoderByType(const char* mime_type) {
 media_status_t Delete(AMediaCodec* codec) {
   if (codec == nullptr) return AMEDIA_OK;
   const auto engine = codec->engine;
-  const auto notifications = Notifications(codec);
-  if (notifications) notifications->queue->Close();
-  if (const auto frames = FrameRendered(codec)) frames->queue->Close();
+  // Close waits for a callback running on another thread; a callback that
+  // deletes its own codec returns without joining its own thread.
+  if (const auto queue = Queue(codec)) queue->Close();
   if (engine != nullptr) engine->Release();
   delete codec;
   return AMEDIA_OK;
@@ -310,8 +333,8 @@ media_status_t Start(AMediaCodec* codec) {
   // A native callback may release its codec before Start returns. Keep only
   // independent owners after notifications become runnable.
   const auto engine = codec->engine;
-  const auto notifications = Notifications(codec);
-  if (notifications) notifications->queue->Resume();
+  if (const auto frames = FrameRendered(codec)) frames->Discard();
+  if (const auto queue = Queue(codec)) queue->Resume();
   std::string error;
   // NdkMediaCodec reports MediaCodec's state error as AMEDIA_ERROR_UNKNOWN.
   return engine->Start(&error) ? AMEDIA_OK : AMEDIA_ERROR_UNKNOWN;
@@ -320,9 +343,7 @@ media_status_t Start(AMediaCodec* codec) {
 media_status_t Stop(AMediaCodec* codec) {
   if (codec == nullptr || codec->engine == nullptr) return AMEDIA_ERROR_INVALID_OBJECT;
   const auto engine = codec->engine;
-  const auto notifications = Notifications(codec);
-  if (notifications) notifications->queue->Pause();
-  if (const auto frames = FrameRendered(codec)) frames->Discard();
+  PauseNotifications(codec);
   int status = android::OK;
   engine->Stop(&status);
   return ToMediaStatus(status);
@@ -331,9 +352,7 @@ media_status_t Stop(AMediaCodec* codec) {
 media_status_t Flush(AMediaCodec* codec) {
   if (codec == nullptr || codec->engine == nullptr) return AMEDIA_ERROR_INVALID_OBJECT;
   const auto engine = codec->engine;
-  const auto notifications = Notifications(codec);
-  if (notifications) notifications->queue->Pause();
-  if (const auto frames = FrameRendered(codec)) frames->Discard();
+  PauseNotifications(codec);
   int status = android::OK;
   engine->Flush(&status);
   return ToMediaStatus(status);
@@ -552,9 +571,8 @@ media_status_t SetParameters(AMediaCodec* codec, const AMediaFormat* params) {
   if (AMediaFormat_copy(copy.get(), const_cast<AMediaFormat*>(params)) != AMEDIA_OK) {
     return AMEDIA_ERROR_UNKNOWN;
   }
-  const int status = codec->engine->SubmitLiveControls(copy);
-  if (status == android::INVALID_OPERATION) return AMEDIA_ERROR_INVALID_OPERATION;
-  return ToMediaStatus(status);
+  // NdkMediaCodec's translate_error reports MediaCodec's state error as UNKNOWN.
+  return ToMediaStatus(codec->engine->SubmitLiveControls(copy));
 }
 
 media_status_t GetName(AMediaCodec* codec, char** out_name) {
@@ -569,6 +587,17 @@ media_status_t GetName(AMediaCodec* codec, char** out_name) {
 }
 
 void ReleaseName(AMediaCodec*, char* name) { std::free(name); }
+
+// A retired registration delivers nothing more: its queued notifications see
+// it inactive, and a callback already running on another thread finishes
+// before the caller continues (a callback replacing its own registration
+// does not wait for itself).
+template <class Registration>
+void RetireNotifications(AMediaCodec* codec, Registration* retired) {
+  if (retired == nullptr) return;
+  retired->active = false;
+  if (const auto queue = Queue(codec)) queue->WaitIdle();
+}
 
 media_status_t SetAsyncNotifyCallback(AMediaCodec* codec, abi::OnAsyncNotifyCallback callback,
                                       void* userdata) {
@@ -591,6 +620,7 @@ media_status_t SetAsyncNotifyCallback(AMediaCodec* codec, abi::OnAsyncNotifyCall
     state->engine = engine;
     state->callback = callback;
     state->userdata = userdata;
+    state->queue = EnsureQueue(codec);
   }
   // MediaCodec::setCallback's state error reaches the NDK caller as UNKNOWN.
   if (!enable) {
@@ -600,7 +630,7 @@ media_status_t SetAsyncNotifyCallback(AMediaCodec* codec, abi::OnAsyncNotifyCall
       std::lock_guard<std::mutex> lock(codec->async_mu);
       retired = std::move(codec->notifications);
     }
-    if (retired) retired->queue->Close();
+    RetireNotifications(codec, retired.get());
     return AMEDIA_OK;
   }
   CodecCallbacks cbs;
@@ -639,7 +669,7 @@ media_status_t SetAsyncNotifyCallback(AMediaCodec* codec, abi::OnAsyncNotifyCall
     });
   };
   if (!engine->SetAsync(true, std::move(cbs))) {
-    state->queue->Close();
+    state->active = false;
     return AMEDIA_ERROR_UNKNOWN;
   }
   std::shared_ptr<NativeCodecNotifications> retired;
@@ -647,7 +677,7 @@ media_status_t SetAsyncNotifyCallback(AMediaCodec* codec, abi::OnAsyncNotifyCall
     std::lock_guard<std::mutex> lock(codec->async_mu);
     retired = std::exchange(codec->notifications, std::move(state));
   }
-  if (retired) retired->queue->Close();
+  RetireNotifications(codec, retired.get());
   return AMEDIA_OK;
 }
 
@@ -661,6 +691,7 @@ media_status_t SetOnFrameRenderedCallback(AMediaCodec* codec, abi::OnFrameRender
     state->codec = codec;
     state->callback = callback;
     state->userdata = userdata;
+    state->queue = EnsureQueue(codec);
     std::weak_ptr<NativeFrameRendered> weak = state;
     codec->engine->EnableFrameRendered(true, [weak](int64_t media_time_us, int64_t system_nanos) {
       if (auto current = weak.lock()) current->Post(media_time_us, system_nanos);
@@ -673,9 +704,8 @@ media_status_t SetOnFrameRenderedCallback(AMediaCodec* codec, abi::OnFrameRender
     std::lock_guard<std::mutex> lock(codec->async_mu);
     retired = std::exchange(codec->frame_rendered, std::move(state));
   }
-  // Close waits for a callback in flight on another thread, so no sample from
-  // the replaced registration is delivered after this returns.
-  if (retired) retired->queue->Close();
+  // No sample from the replaced registration is delivered after this returns.
+  RetireNotifications(codec, retired.get());
   return AMEDIA_OK;
 }
 

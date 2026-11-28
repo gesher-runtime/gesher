@@ -635,7 +635,8 @@ static int RunCodec(bool async_only) {
   const media_status_t idle_controls = AMediaCodec_setParameters(encoder, parameters);
   printf("NDK codec parameter submission while idle=%d\n", idle_controls);
 #ifdef CODEC_PARAMETER_CONTROL_COMPONENT
-  CHECK(idle_controls == AMEDIA_ERROR_INVALID_OPERATION, "idle encoder refuses live controls");
+  // NdkMediaCodec's translate_error reports MediaCodec's state error as UNKNOWN.
+  CHECK(idle_controls == AMEDIA_ERROR_UNKNOWN, "idle encoder refuses live controls");
 #endif
 
   configuration = AMediaFormat_new();

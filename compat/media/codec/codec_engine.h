@@ -139,9 +139,11 @@ class CodecEngine : public std::enable_shared_from_this<CodecEngine> {
                               bool reject_repeat = false);
 
   bool SetParameters(const Format& parameters);
-  // NDK live encoder controls (request-sync, video-bitrate). Returns OK after
-  // handing them to the worker, INVALID_OPERATION outside execution, -ENOTSUP
-  // when no supported control applies and BAD_VALUE for an invalid value.
+  // NDK setParameters. A running video encoder's request-sync and
+  // video-bitrate go to the worker (BAD_VALUE for an invalid value); keys a
+  // codec cannot apply are ignored with OK, as components do. A live encoder
+  // control outside execution (or a released codec) is INVALID_OPERATION, and
+  // suspending input (drop-input-frames=1) is -ENOTSUP.
   int SubmitLiveControls(const Format& parameters);
   bool SetVideoScalingMode(int mode);
   bool GetMetrics(std::optional<CodecMetrics>* out_metrics);
