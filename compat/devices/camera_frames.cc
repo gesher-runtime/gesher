@@ -698,7 +698,8 @@ jint CameraFrames_deliver(JNIEnv* env, jclass, jobject surface, jbyteArray nv12,
   if (surface == nullptr || nv12 == nullptr) return -1;
   const jsize size = env->GetArrayLength(nv12);
   const int64_t luma = static_cast<int64_t>(w) * h;
-  if (w <= 0 || h <= 0 || w % 2 != 0 || h % 2 != 0 || size < luma + luma / 2) return BAD_VALUE;
+  // Rejected before the array is pinned, with the same -1 as absent input.
+  if (w <= 0 || h <= 0 || w % 2 != 0 || h % 2 != 0 || size < luma + luma / 2) return -1;
   trace.Step(0);
   jbyte* frame = env->GetByteArrayElements(nv12, nullptr);
   if (frame == nullptr) return NO_MEMORY;
