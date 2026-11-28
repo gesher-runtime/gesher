@@ -1,0 +1,16 @@
+From: Gesher Authors
+Subject: [PATCH] Report the absence of kernel fs-verity on Windows
+
+The device's initial Android SDK level cannot imply Linux filesystem integrity
+support on Windows. The native operations report unsupported; keep the Java
+capability query consistent instead of claiming protection is available.
+
+diff --git a/core/java/com/android/internal/security/VerityUtils.java b/core/java/com/android/internal/security/VerityUtils.java
+--- a/core/java/com/android/internal/security/VerityUtils.java
++++ b/core/java/com/android/internal/security/VerityUtils.java
+@@ -59,3 +59,4 @@
+     public static boolean isFsVeritySupported() {
+-        return Build.VERSION.DEVICE_INITIAL_SDK_INT >= Build.VERSION_CODES.R;
++        // Gesher: Windows does not provide Linux kernel-enforced fs-verity.
++        return false;
+     }

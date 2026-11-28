@@ -340,7 +340,8 @@ std::vector<std::function<void(ICoreWebView2Environment*, HRESULT)>> g_env_waiti
 
 // ICoreWebView2EnvironmentOptions, as WebView2EnvironmentOptions.h would
 // give with WRL.
-class EnvironmentOptions final : public ICoreWebView2EnvironmentOptions {
+class EnvironmentOptions final : public ICoreWebView2EnvironmentOptions,
+                                 public ICoreWebView2EnvironmentOptions6 {
  public:
   explicit EnvironmentOptions(std::wstring args) : args_(std::move(args)) {}
 
@@ -348,6 +349,11 @@ class EnvironmentOptions final : public ICoreWebView2EnvironmentOptions {
     if (out == nullptr) return E_POINTER;
     if (IsEqualIID(riid, IID_IUnknown) || IsEqualIID(riid, IID_ICoreWebView2EnvironmentOptions)) {
       *out = static_cast<ICoreWebView2EnvironmentOptions*>(this);
+      AddRef();
+      return S_OK;
+    }
+    if (IsEqualIID(riid, IID_ICoreWebView2EnvironmentOptions6)) {
+      *out = static_cast<ICoreWebView2EnvironmentOptions6*>(this);
       AddRef();
       return S_OK;
     }
@@ -387,6 +393,12 @@ class EnvironmentOptions final : public ICoreWebView2EnvironmentOptions {
   HRESULT STDMETHODCALLTYPE put_AllowSingleSignOnUsingOSPrimaryAccount(BOOL) override {
     return S_OK;
   }
+  HRESULT STDMETHODCALLTYPE get_AreBrowserExtensionsEnabled(BOOL* enabled) override {
+    if (enabled == nullptr) return E_POINTER;
+    *enabled = TRUE;
+    return S_OK;
+  }
+  HRESULT STDMETHODCALLTYPE put_AreBrowserExtensionsEnabled(BOOL) override { return S_OK; }
 
  private:
   ~EnvironmentOptions() = default;
@@ -519,6 +531,36 @@ struct Host::Impl : std::enable_shared_from_this<Host::Impl> {
   }
   std::wstring main_document;  // the URL of the main frame's navigation
   std::set<UINT64> cancelled;  // navigations the Listener took
+  bool network_capture = false;
+  bool auth_setup_pending = false;
+  bool auth_ready = false;
+  ULONGLONG auth_setup_deadline = 0;
+  std::map<std::wstring, std::wstring> auth_sessions;
+  ULONGLONG network_setup_deadline = 0;
+  bool host_timer = false;
+  std::map<UINT64, bool> network_navigations;
+  void NetworkNavigationStarted(UINT64 nav, const std::wstring& url) {
+    if (network_navigations.size() >= 64) network_navigations.erase(network_navigations.begin());
+    network_navigations[nav] = network_capture &&
+        (url.rfind(L"http://", 0) == 0 || url.rfind(L"https://", 0) == 0);
+  }
+  struct NetworkFinish {
+    int http;
+    int32_t status;
+    std::wstring url;
+    int64_t number;
+    ULONGLONG deadline;
+  };
+  uint64_t network_finish_id = 0;
+  std::map<uint64_t, NetworkFinish> network_finishes;
+  void ReportNetworkFinish(uint64_t id) {
+    auto it = network_finishes.find(id);
+    if (it == network_finishes.end()) return;
+    NetworkFinish finish = std::move(it->second);
+    network_finishes.erase(it);
+    if (!destroyed && !closing) Report(kPageFinished, finish.http, finish.status,
+        finish.url, std::to_wstring(finish.number), network_capture ? L"network-errors" : L"");
+  }
   // Basic authentication of the main document: WebView2 ends the navigation
   // (401) while it waits for the answer, and starts it again with the
   // credentials; to the app it is one page load. The 401's completion is held
@@ -594,6 +636,7 @@ struct Host::Impl : std::enable_shared_from_this<Host::Impl> {
   Com<ICoreWebView2Find> find;
 
   std::vector<Com<ICoreWebView2DevToolsProtocolEventReceiver>> receivers;
+  bool network_observers = false;
   std::set<std::wstring> listened;  // ListenDevTools' events
   // Run once this (service) host is ready or has failed.
   std::vector<std::function<void(ICoreWebView2*)>> service_waiting;
@@ -625,6 +668,9 @@ std::set<Impl*> g_live;  // the WebView thread's: hosts with a controller
 // response before physically closing its controller. No Java arguments are in XHR.
 std::map<Impl*, std::shared_ptr<Impl>> g_retiring;
 bool FinishDestroy(const std::shared_ptr<Impl>& impl);
+void ReadyController(const std::shared_ptr<Impl>& impl);
+void StartNetworkObserver(const std::shared_ptr<Impl>& impl);
+void StartAuthBroker(const std::shared_ptr<Impl>& impl);
 std::shared_ptr<Impl> g_service;  // a hidden host for cookies and data, when no WebView exists
 
 // This path is reserved on every origin, including absent/stale capabilities.
@@ -675,6 +721,23 @@ void CancelBridgeRequests(Impl* impl) {
 void CALLBACK BridgeTimeouts(HWND, UINT, UINT_PTR, DWORD) {
   ULONGLONG now = GetTickCount64();
   for (Impl* impl : g_live) {
+    if (impl->auth_setup_pending && now >= impl->auth_setup_deadline) {
+      impl->auth_setup_pending = false;
+      impl->listener->OnNetworkEvent(L"auth-unavailable", L"{}");
+      impl->Report(kAuthExtension, 0, HRESULT_FROM_WIN32(ERROR_TIMEOUT));
+      StartNetworkObserver(impl->shared_from_this());
+    }
+    if (impl->network_setup_deadline && now >= impl->network_setup_deadline) {
+      impl->network_setup_deadline = 0;
+      impl->listener->OnNetworkEvent(L"clear", L"{}");
+      ReadyController(impl->shared_from_this());
+    }
+    for (auto it = impl->network_finishes.begin(); it != impl->network_finishes.end();) {
+      uint64_t id = it->first;
+      bool expired = it->second.deadline <= now;
+      ++it;
+      if (expired) impl->ReportNetworkFinish(id);
+    }
     for (auto it = impl->prepared_calls.begin(); it != impl->prepared_calls.end();) {
       if (it->second.deadline <= now) it = impl->prepared_calls.erase(it);
       else ++it;
@@ -1009,6 +1072,7 @@ void DoNavigation(const std::shared_ptr<Impl>& impl, std::function<void(Impl*)> 
 
 void StopNavigation(Impl* impl) {
   if (impl->destroyed || impl->closing) return;
+  if (impl->listener) impl->listener->OnNetworkEvent(L"auth-stop", L"{}");
   ++impl->navigation_generation;
   impl->CancelPendingNewWindows();
   if (impl->webview) impl->webview->Stop();
@@ -1292,7 +1356,8 @@ bool AddHandlers(const std::shared_ptr<Impl>& shared) {
           COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_ALL));
   // Shared/service-worker requests may reach multiple controllers in one environment;
   // each only denies them. DOCUMENT includes frames and dedicated workers.
-  if (SetTimer(g_task_window, 0x4742, 1000, BridgeTimeouts) == 0) impl->bridge_guarded = false;
+  impl->host_timer = SetTimer(g_task_window, 0x4742, 1000, BridgeTimeouts) != 0;
+  if (!impl->host_timer) impl->bridge_guarded = false;
 
   wv->add_NavigationStarting(
       GESHER_CALLBACK(ICoreWebView2NavigationStartingEventHandler,
@@ -1333,6 +1398,7 @@ bool AddHandlers(const std::shared_ptr<Impl>& shared) {
                           impl->main_document = url;
                           UINT64 nav = 0;
                           args->get_NavigationId(&nav);
+                          impl->NetworkNavigationStarted(nav, url);
                           impl->NavigationStarted(nav, started_number);
                           return S_OK;
                         }
@@ -1350,6 +1416,9 @@ bool AddHandlers(const std::shared_ptr<Impl>& shared) {
                           return S_OK;
                         }
                         impl->main_document = url;
+                        UINT64 download_nav = 0;
+                        args->get_NavigationId(&download_nav);
+                        if (!redirect) impl->NetworkNavigationStarted(download_nav, url);
                         if (!redirect) {
                           CancelBridgeRequests(impl.get());
                           UINT64 nav = 0;
@@ -1396,12 +1465,34 @@ bool AddHandlers(const std::shared_ptr<Impl>& shared) {
                             static_cast<long long>(started),
                             static_cast<long long>(impl->api_number), ok != FALSE,
                             static_cast<int>(status), http);
+                        auto network = impl->network_navigations.find(nav);
+                        bool network_owned = impl->network_capture && network != impl->network_navigations.end()
+                            && network->second && !ok && http < 400 && !auth_wait;
+                        if (network != impl->network_navigations.end()) impl->network_navigations.erase(network);
                         if (auth_wait) {
                           impl->auth_finish = {true, http, static_cast<int32_t>(status), url, started};
                           return S_OK;
                         }
-                        impl->Report(kPageFinished, http, ok ? -1 : static_cast<int32_t>(status), url,
-                                     std::to_wstring(started));
+                        if (network_owned) {
+                          // A read-only protocol round trip lets already queued network events
+                          // reach Java before the original COM terminal. No CDP/COM ID mapping.
+                          if (impl->network_finishes.size() >= 64) {
+                            impl->ReportNetworkFinish(impl->network_finishes.begin()->first);
+                          }
+                          uint64_t finish = ++impl->network_finish_id;
+                          impl->network_finishes.emplace(finish, Impl::NetworkFinish{
+                              http, static_cast<int32_t>(status), url, started, GetTickCount64() + 1000});
+                          HRESULT barrier = impl->webview->CallDevToolsProtocolMethod(L"Page.getFrameTree", L"{}",
+                              GESHER_CALLBACK(ICoreWebView2CallDevToolsProtocolMethodCompletedHandler,
+                                  [weak, finish](HRESULT, LPCWSTR) -> HRESULT {
+                                    if (auto impl = weak.lock()) impl->ReportNetworkFinish(finish);
+                                    return S_OK;
+                                  }).get());
+                          if (FAILED(barrier)) impl->ReportNetworkFinish(finish);
+                        } else {
+                          impl->Report(kPageFinished, http, ok ? -1 : static_cast<int32_t>(status), url,
+                                       std::to_wstring(started));
+                        }
                         return S_OK;
                       })
           .get(),
@@ -1765,17 +1856,30 @@ bool AddHandlers(const std::shared_ptr<Impl>& shared) {
             [weak](ICoreWebView2*, ICoreWebView2BasicAuthenticationRequestedEventArgs* args)
                 -> HRESULT {
               auto impl = weak.lock();
-              Com<ICoreWebView2Deferral> deferral;
-              if (!impl || impl->destroyed || FAILED(args->GetDeferral(deferral.Put()))) {
+              // This late WebView2 callback has already replaced the document.
+              // The packaged broker handles consent before that commit. If it
+              // cannot handle a challenge, cancel it rather than prompting a
+              // second time through a destructive fallback.
+              if (!impl || impl->destroyed || impl->closing || impl->listener->UsesAuthBroker()) {
                 args->put_Cancel(TRUE);
+              } else {
+                // Non-Android native embedders own the documented COM callback.
+                Com<ICoreWebView2Deferral> deferral;
+                if (FAILED(args->GetDeferral(deferral.Put()))) {
+                  args->put_Cancel(TRUE);
+                  return S_OK;
+                }
+                CoString uri, challenge;
+                args->get_Uri(uri.Put());
+                args->get_Challenge(challenge.Put());
+                if (uri.str() == impl->main_document) impl->auth_pending = uri.str();
+                int64_t id = impl->Defer(args, deferral.get());
+                impl->Report(kBasicAuth, id, 0, uri.str(), challenge.str());
                 return S_OK;
               }
-              CoString uri, challenge;
-              args->get_Uri(uri.Put());
-              args->get_Challenge(challenge.Put());
-              if (uri.str() == impl->main_document) impl->auth_pending = uri.str();
-              int64_t id = impl->Defer(args, deferral.get());
-              impl->Report(kBasicAuth, id, 0, uri.str(), challenge.str());
+              if (impl && !impl->destroyed && !impl->closing && impl->listener->UsesAuthBroker()) {
+                impl->Report(kFailed, 0, E_NOTIMPL, L"WebView authentication broker unavailable for this challenge");
+              }
               return S_OK;
             })
             .get(),
@@ -1819,6 +1923,12 @@ bool AddHandlers(const std::shared_ptr<Impl>& shared) {
                         COREWEBVIEW2_PROCESS_FAILED_KIND kind =
                             COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED;
                         args->get_ProcessFailedKind(&kind);
+                        impl->auth_ready = false;
+                        impl->auth_setup_pending = false;
+                        impl->listener->OnNetworkEvent(L"auth-unavailable", L"{}");
+                        impl->network_capture = false;
+                        impl->network_navigations.clear();
+                        impl->listener->OnNetworkEvent(L"clear", L"{}");
                         impl->Report(kProcessFailed, 0, static_cast<int32_t>(kind));
                         return S_OK;
                       })
@@ -1922,6 +2032,70 @@ bool AddHandlers(const std::shared_ptr<Impl>& shared) {
     impl->receivers.push_back(std::move(receiver));
   }
 
+  impl->network_observers = true;
+  for (const wchar_t* name : {L"Page.frameNavigated", L"Network.requestWillBeSent",
+          L"Network.responseReceived", L"Network.loadingFinished", L"Network.loadingFailed"}) {
+    Com<ICoreWebView2DevToolsProtocolEventReceiver> receiver;
+    if (FAILED(wv->GetDevToolsProtocolEventReceiver(name, receiver.Put())) || !receiver) {
+      impl->network_observers = false;
+      break;
+    }
+    std::wstring event = name;
+    HRESULT added = receiver->add_DevToolsProtocolEventReceived(
+        GESHER_CALLBACK(ICoreWebView2DevToolsProtocolEventReceivedEventHandler,
+            [weak, event](ICoreWebView2*, ICoreWebView2DevToolsProtocolEventReceivedEventArgs* args)
+                -> HRESULT {
+              auto impl = weak.lock();
+              if (!impl || impl->destroyed || impl->closing || !impl->network_capture) return S_OK;
+              CoString json;
+              int result = FAILED(args->get_ParameterObjectAsJson(json.Put())) ? 0
+                  : impl->listener->OnNetworkEvent(event, json.str());
+              if (result == 2) {
+                // Explicit local identity pressure: stop this view, remain reusable.
+                impl->webview->Stop();
+              } else if (result != 1) {
+                // Retain the original COM error path if the observer becomes unavailable.
+                impl->network_capture = false;
+                impl->listener->OnNetworkEvent(L"clear", L"{}");
+                impl->Report(kFailed, 0, E_FAIL, L"WebView network identity observer unavailable; using navigation errors");
+              }
+              return S_OK;
+            }).get(), &token);
+    if (FAILED(added)) { impl->network_observers = false; break; }
+    impl->receivers.push_back(std::move(receiver));
+  }
+
+  // Authentication is carried only on protocol sessions for the packaged
+  // extension worker. Never deliver this binding through page-world messages.
+  for (const wchar_t* name : {L"Target.targetCreated", L"Target.targetDestroyed",
+          L"Target.targetInfoChanged", L"Target.detachedFromTarget", L"Target.attachedToTarget",
+          L"Runtime.bindingCalled", L"Runtime.executionContextCreated",
+          L"Runtime.executionContextDestroyed", L"Runtime.executionContextsCleared",
+          L"Inspector.targetCrashed"}) {
+    Com<ICoreWebView2DevToolsProtocolEventReceiver> receiver;
+    if (FAILED(wv->GetDevToolsProtocolEventReceiver(name, receiver.Put())) || !receiver) continue;
+    std::wstring event = name;
+    HRESULT added = receiver->add_DevToolsProtocolEventReceived(
+        GESHER_CALLBACK(ICoreWebView2DevToolsProtocolEventReceivedEventHandler,
+            [weak, event](ICoreWebView2*, ICoreWebView2DevToolsProtocolEventReceivedEventArgs* args)
+                -> HRESULT {
+              auto impl = weak.lock();
+              if (!impl || impl->destroyed || impl->closing) return S_OK;
+              CoString json, session;
+              Com<ICoreWebView2DevToolsProtocolEventReceivedEventArgs> original(args);
+              Com<ICoreWebView2DevToolsProtocolEventReceivedEventArgs2> modern;
+              if (original.As(IID_ICoreWebView2DevToolsProtocolEventReceivedEventArgs2, &modern)) {
+                modern->get_SessionId(session.Put());
+              }
+              if (event.rfind(L"Runtime.", 0) == 0
+                  && impl->auth_sessions.count(session.str()) == 0) return S_OK;
+              if (FAILED(args->get_ParameterObjectAsJson(json.Put()))) return S_OK;
+              impl->Report(kAuthBridge, 0, S_OK, event, json.str(), session.str());
+              return S_OK;
+            }).get(), &token);
+    if (SUCCEEDED(added)) impl->receivers.push_back(std::move(receiver));
+  }
+
   // The JavaScript interfaces' host object.
   VARIANT bridge;
   VariantInit(&bridge);
@@ -1930,6 +2104,152 @@ bool AddHandlers(const std::shared_ptr<Impl>& shared) {
   wv->AddHostObjectToScript(L"gesherBridge", &bridge);
   VariantClear(&bridge);
   return true;
+}
+
+void ReadyController(const std::shared_ptr<Impl>& impl) {
+  if (impl->destroyed || impl->closing || impl->failed || impl->ready) return;
+  impl->network_setup_deadline = 0;
+  impl->ready = true;
+  if (impl->listener != &g_null_listener) g_live.insert(impl.get());
+  CoString version;
+  if (impl->env) impl->env->get_BrowserVersionString(version.Put());
+  impl->Report(kReady, 0, 0, version.str());
+  DrainPendingOperations(impl.get());
+  auto waiting = std::move(impl->service_waiting);
+  impl->service_waiting.clear();
+  for (auto& w : waiting) w(impl->webview.get());
+}
+
+void StartNetworkObserver(const std::shared_ptr<Impl>& impl) {
+  // All subscriptions and frame identity must exist before any queued API load.
+  if (!impl->network_observers || !impl->host_timer || impl->listener == &g_null_listener) {
+    ReadyController(impl);
+    return;
+  }
+  g_live.insert(impl.get());
+  impl->network_setup_deadline = GetTickCount64() + 5000;
+  std::weak_ptr<Impl> weak = impl;
+  HRESULT page = impl->webview->CallDevToolsProtocolMethod(L"Page.enable", L"{}",
+      GESHER_CALLBACK(ICoreWebView2CallDevToolsProtocolMethodCompletedHandler,
+          [weak](HRESULT hr, LPCWSTR) -> HRESULT {
+            auto impl = weak.lock();
+            if (!impl || impl->destroyed || impl->closing || impl->failed || impl->ready) return S_OK;
+            if (FAILED(hr)) { ReadyController(impl); return S_OK; }
+            HRESULT tree = impl->webview->CallDevToolsProtocolMethod(L"Page.getFrameTree", L"{}",
+                GESHER_CALLBACK(ICoreWebView2CallDevToolsProtocolMethodCompletedHandler,
+                    [weak](HRESULT hr, LPCWSTR json) -> HRESULT {
+                      auto impl = weak.lock();
+                      if (!impl || impl->destroyed || impl->closing || impl->failed || impl->ready) return S_OK;
+                      if (FAILED(hr) || json == nullptr
+                          || impl->listener->OnNetworkEvent(L"initialize", json) != 1) {
+                        ReadyController(impl);
+                        return S_OK;
+                      }
+                      // Zero response-body buffers; a positive 1-byte POST limit (0 is unlimited).
+                      HRESULT network = impl->webview->CallDevToolsProtocolMethod(L"Network.enable",
+                          L"{\"maxTotalBufferSize\":0,\"maxResourceBufferSize\":0,\"maxPostDataSize\":1}",
+                          GESHER_CALLBACK(ICoreWebView2CallDevToolsProtocolMethodCompletedHandler,
+                              [weak](HRESULT hr, LPCWSTR) -> HRESULT {
+                                auto impl = weak.lock();
+                                if (!impl || impl->destroyed || impl->closing || impl->failed) return S_OK;
+                                if (impl->ready) {
+                                  if (SUCCEEDED(hr)) impl->webview->CallDevToolsProtocolMethod(
+                                      L"Network.disable", L"{}", nullptr);
+                                  return S_OK;
+                                }
+                                impl->network_capture = SUCCEEDED(hr);
+                                ReadyController(impl);
+                                return S_OK;
+                              }).get());
+                      if (FAILED(network)) ReadyController(impl);
+                      return S_OK;
+                    }).get());
+            if (FAILED(tree)) ReadyController(impl);
+            return S_OK;
+          }).get());
+  if (FAILED(page)) ReadyController(impl);
+}
+
+constexpr wchar_t kAuthExtensionId[] = L"njmgmkjdhpmipobhjndpkbpegchdmpge";
+enum class AuthInstall { kNone, kPending, kReady, kFailed };
+AuthInstall g_auth_install = AuthInstall::kNone;
+HRESULT g_auth_install_error = S_OK;
+std::vector<std::weak_ptr<Impl>> g_auth_install_waiters;
+
+std::wstring AuthExtensionDirectory() {
+  std::wstring executable(32768, L'\0');
+  DWORD size = GetModuleFileNameW(nullptr, executable.data(), static_cast<DWORD>(executable.size()));
+  if (size == 0 || size >= executable.size()) return {};
+  executable.resize(size);
+  size_t slash = executable.find_last_of(L"\\/");
+  if (slash == std::wstring::npos) return {};
+  return executable.substr(0, slash + 1) + L"webview-auth-extension";
+}
+
+void AuthInstalled(HRESULT hr, ICoreWebView2BrowserExtension* extension) {
+  BOOL enabled = FALSE;
+  CoString id;
+  if (SUCCEEDED(hr) && (!extension || FAILED(extension->get_Id(id.Put()))
+      || id.str() != kAuthExtensionId || FAILED(extension->get_IsEnabled(&enabled)) || !enabled)) {
+    hr = E_ACCESSDENIED;
+  }
+  g_auth_install = SUCCEEDED(hr) ? AuthInstall::kReady : AuthInstall::kFailed;
+  g_auth_install_error = hr;
+  auto waiting = std::move(g_auth_install_waiters);
+  g_auth_install_waiters.clear();
+  for (auto& weak : waiting) {
+    auto impl = weak.lock();
+    if (impl && !impl->destroyed && !impl->closing && impl->auth_setup_pending) {
+      impl->Report(kAuthExtension, 0, hr, SUCCEEDED(hr) ? kAuthExtensionId : L"");
+    }
+  }
+}
+
+void StartAuthBroker(const std::shared_ptr<Impl>& impl) {
+  if (!impl->listener->UsesAuthBroker()) { StartNetworkObserver(impl); return; }
+  impl->auth_setup_pending = true;
+  impl->auth_setup_deadline = GetTickCount64() + 15000;
+  g_live.insert(impl.get());
+  if (!impl->host_timer) {
+    impl->auth_setup_pending = false;
+    impl->Report(kAuthExtension, 0, E_FAIL);
+    StartNetworkObserver(impl);
+    return;
+  }
+  if (g_auth_install == AuthInstall::kReady || g_auth_install == AuthInstall::kFailed) {
+    impl->Report(kAuthExtension, 0, g_auth_install_error,
+                 g_auth_install == AuthInstall::kReady ? kAuthExtensionId : L"");
+    return;
+  }
+  g_auth_install_waiters.erase(std::remove_if(g_auth_install_waiters.begin(),
+      g_auth_install_waiters.end(), [](const auto& weak) {
+        auto host = weak.lock();
+        return !host || host->destroyed || host->closing || !host->auth_setup_pending;
+      }), g_auth_install_waiters.end());
+  g_auth_install_waiters.emplace_back(impl);
+  if (g_auth_install == AuthInstall::kPending) return;
+  g_auth_install = AuthInstall::kPending;
+  Com<ICoreWebView2_13> modern;
+  Com<ICoreWebView2Profile> profile;
+  Com<ICoreWebView2Profile7> extensions;
+  if (!impl->webview.As(IID_ICoreWebView2_13, &modern)
+      || FAILED(modern->get_Profile(profile.Put())) || !profile
+      || !profile.As(IID_ICoreWebView2Profile7, &extensions)) {
+    AuthInstalled(E_NOINTERFACE, nullptr);
+    return;
+  }
+  auto directory = AuthExtensionDirectory();
+  if (directory.empty()) { AuthInstalled(HRESULT_FROM_WIN32(ERROR_PATH_NOT_FOUND), nullptr); return; }
+  // An unpacked extension's public ID is not proof of its source path. Install
+  // from the executable's trusted runtime directory once per native process,
+  // replacing an earlier same-ID registration rather than adopting its code.
+  HRESULT status = extensions->AddBrowserExtension(directory.c_str(),
+      GESHER_CALLBACK(ICoreWebView2ProfileAddBrowserExtensionCompletedHandler,
+          [](HRESULT hr, ICoreWebView2BrowserExtension* extension) -> HRESULT {
+            AuthInstalled(hr, extension);
+            return S_OK;
+          }).get());
+  if (FAILED(status)) AuthInstalled(status, nullptr);
 }
 
 void OnController(const std::shared_ptr<Impl>& impl, HRESULT hr,
@@ -1967,15 +2287,7 @@ void OnController(const std::shared_ptr<Impl>& impl, HRESULT hr,
   }
   if (impl->has_settings) ApplySettings(impl.get());
   ApplyBounds(impl.get());
-  impl->ready = true;
-  if (impl->listener != &g_null_listener) g_live.insert(impl.get());
-  CoString version;
-  if (impl->env) impl->env->get_BrowserVersionString(version.Put());
-  impl->Report(kReady, 0, 0, version.str());
-  DrainPendingOperations(impl.get());
-  auto waiting = std::move(impl->service_waiting);
-  impl->service_waiting.clear();
-  for (auto& w : waiting) w(impl->webview.get());
+  StartAuthBroker(impl);
 }
 
 // Controller creations waiting for the one in progress (the WebView thread).
@@ -2159,6 +2471,10 @@ bool FinishDestroy(const std::shared_ptr<Impl>& impl) {
     if (!impl->bridge_acknowledgments.empty()) return false;
     bool ok = true;
     impl->destroyed = true;
+    impl->network_capture = false;
+    impl->network_navigations.clear();
+    impl->network_finishes.clear();
+    impl->listener->OnNetworkEvent(L"clear", L"{}");
     impl->CancelPendingNewWindows();
     // Bridge deferrals have been denied while the controller was still alive;
     // JavaScript consumed their responses and acknowledged them before this close.
@@ -2275,6 +2591,17 @@ void Host::Destroy() {
   std::shared_ptr<Impl> impl = std::move(impl_);
   PostToWebViewThread([impl] {
     if (impl->destroyed || impl->closing) return;
+    if (impl->listener) impl->listener->OnNetworkEvent(L"auth-destroy", L"{}");
+    impl->auth_ready = false;
+    impl->auth_setup_pending = false;
+    Com<ICoreWebView2_11> auth_transport;
+    if (impl->webview && impl->webview.As(IID_ICoreWebView2_11, &auth_transport)) {
+      for (const auto& session : impl->auth_sessions) {
+        const std::wstring params = L"{\"sessionId\":" + JsonString(session.first) + L"}";
+        impl->webview->CallDevToolsProtocolMethod(L"Target.detachFromTarget", params.c_str(), nullptr);
+      }
+    }
+    impl->auth_sessions.clear();
     impl->closing = true;
     impl->CancelPendingNewWindows();
     impl->bridge_guarded = false;
@@ -2631,6 +2958,70 @@ void Host::CallDevTools(const std::wstring& method, const std::wstring& params_j
                         })
             .get());
     if (FAILED(hr)) impl->Report(kDevToolsResult, callback_id, static_cast<int32_t>(hr), L"null");
+  });
+}
+
+void Host::AuthCommand(const std::wstring& session, const std::wstring& method,
+                       const std::wstring& params, int64_t token) {
+  auto shared = impl_;
+  PostToWebViewThread([shared, session, method, params, token] {
+    if (shared->destroyed || shared->closing || !shared->webview) return;
+    bool root = session.empty() && (method == L"Target.getTargets"
+        || method == L"Target.getTargetInfo" || method == L"Target.attachToTarget"
+        || method == L"Target.detachFromTarget" || method == L"Target.setDiscoverTargets"
+        || method == L"ServiceWorker.enable" || method == L"ServiceWorker.startWorker");
+    bool worker = !session.empty() && shared->auth_sessions.count(session) != 0
+        && (method == L"Runtime.enable" || method == L"Runtime.addBinding"
+            || method == L"Runtime.removeBinding" || method == L"Runtime.evaluate");
+    if (!root && !worker) {
+      shared->Report(kAuthBridge, token, E_ACCESSDENIED, method, L"", session);
+      return;
+    }
+    std::weak_ptr<Impl> weak = shared;
+    auto callback = GESHER_CALLBACK(ICoreWebView2CallDevToolsProtocolMethodCompletedHandler,
+        [weak, token, method, session](HRESULT status, LPCWSTR json) -> HRESULT {
+          auto impl = weak.lock();
+          if (impl && !impl->destroyed && !impl->closing) {
+            impl->Report(kAuthBridge, token, status, method, json ? json : L"", session);
+          }
+          return S_OK;
+        });
+    HRESULT status = E_NOINTERFACE;
+    if (root) status = shared->webview->CallDevToolsProtocolMethod(method.c_str(), params.c_str(), callback.get());
+    else {
+      Com<ICoreWebView2_11> modern;
+      if (shared->webview.As(IID_ICoreWebView2_11, &modern)) {
+        status = modern->CallDevToolsProtocolMethodForSession(session.c_str(), method.c_str(),
+                                                             params.c_str(), callback.get());
+      }
+    }
+    if (FAILED(status)) shared->Report(kAuthBridge, token, status, method, L"", session);
+  });
+}
+
+void Host::AuthSession(const std::wstring& session, const std::wstring& worker) {
+  auto shared = impl_;
+  PostToWebViewThread([shared, session, worker] {
+    if (shared->destroyed || shared->closing || session.empty() || session.size() > 512) return;
+    if (worker.empty()) shared->auth_sessions.erase(session);
+    else if (worker.size() <= 512 && (shared->auth_sessions.count(session) != 0
+                                    || shared->auth_sessions.size() < 8)) {
+      // The Java coordinator authenticated the exact extension target before
+      // handing this opaque protocol session to the native transport.
+      shared->auth_sessions[session] = worker;
+    }
+  });
+}
+
+void Host::AuthReady(bool ready) {
+  auto shared = impl_;
+  PostToWebViewThread([shared, ready] {
+    if (shared->destroyed || shared->closing) return;
+    shared->auth_ready = ready;
+    if (!shared->auth_setup_pending) return;
+    shared->auth_setup_pending = false;
+    shared->auth_setup_deadline = 0;
+    StartNetworkObserver(shared);
   });
 }
 

@@ -1,5 +1,110 @@
 # WebView on WebView2 (roadmap phase 5)
 
+## Download navigation cancellation
+
+WebView2's download handoff can finish the main-frame navigation with
+`ConnectionAborted` while the actual download proceeds through Android's
+`DownloadListener`. This must not cause an app to replace its page with an
+offline screen. Android WebView excludes Chromium `ERR_ABORTED` from
+`onReceivedError` ([AwContents](https://chromium.googlesource.com/chromium/src/+/f08cb003ea22c8c126279a8de1ac604e4dd13b0f/android_webview/java/src/org/chromium/android_webview/AwContents.java)).
+WebView2's [DownloadStarting](https://learn.microsoft.com/en-us/microsoft-edge/webview2/reference/win32/icorewebview2_4)
+event supplies the download URI but no navigation ID, and its
+[error status](https://learn.microsoft.com/en-us/dotnet/api/microsoft.web.webview2.core.corewebview2weberrorstatus)
+alone does not establish a download.
+
+Gesher enables the CDP Network and Page observers before releasing queued API
+loads, initializes the root frame identity and retains only root HTTP(S)
+Document request metadata. A request ID owns its loader, frame, final URL,
+method and response status. Redirects update that same request ID; an iframe's
+identical URL and a later navigation's identical URL cannot cancel another
+request's real error. `loadingFailed` distinguishes Chromium `ERR_ABORTED`
+from a genuine `ERR_CONNECTION_ABORTED`. Canceled requests report no network
+error. HTTP errors (including authentication consent/retries) stay with the
+existing COM path. Successful downloads remain the app's operation through its
+DownloadListener; the observer never reports a download as completed.
+
+COM retains every existing page-start/page-finish, veto and API-load ownership
+rule. CDP reports only the exact noncanceled network errors. Failed captured
+COM finishes make a read-only `Page.getFrameTree` round trip before delivery;
+the original captured API number is preserved. An outstanding finish is bounded
+to one second plus the existing one-second sweep, and at most 64 are retained.
+Actual WebView2 158 probes observed canceled download and explicit stop events
+before COM completion; a truncated HTTP 200 body failed after COM completion
+but before the round-trip callback. This improves error-before-finish delivery
+without assuming a mapping between COM navigation IDs and CDP request IDs.
+The probes do not establish a formal ordering guarantee across all runtimes.
+
+Only 256 outstanding root document identities are retained. Local identity
+pressure reports `ERROR_TOO_MANY_REQUESTS` for the incoming request and stops
+the view; the view remains reusable and pending cancellations follow normal
+COM lifecycle delivery. Full browser-accepted URLs are kept without truncation.
+Setup failure or a five-second setup timeout keeps the existing COM error path;
+a malformed/unavailable observer restores that path and logs a diagnostic.
+Process loss and destruction clear the observer. No CDP JSON, headers or bodies
+are logged or retained by Gesher. Response-body buffers are explicitly zero;
+the POST serialization limit is one byte because zero means unlimited in
+[Chromium's inspector](https://raw.githubusercontent.com/chromium/chromium/main/third_party/blink/renderer/core/inspector/inspector_network_agent.cc).
+The [CDP schema](https://raw.githubusercontent.com/ChromeDevTools/devtools-protocol/master/pdl/domains/Network.pdl)
+defines the request/loader/frame identities and cancellation/error fields.
+
+`tools/test_webview_download_navigation.py` exercises production JSON identity
+handling and resource/lifecycle limits. The Windows `FeaturesActivity` fixture
+exercises attachments, unsupported MIME, redirects, Basic authentication,
+repeated same-URL main/frame downloads and adjacent real failures through
+WebView2. Host tests alone do not establish COM event order or app behavior.
+
+## HTTP authentication while retaining the live source
+
+WebView2's [Basic authentication sequence](https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/basic-authentication#navigations-for-basic-authentication)
+commits a blank document before requesting credentials. A subsequent successful
+download therefore leaves that blank document visible. Gesher handles the
+challenge earlier through a private packaged extension using
+[`webRequest.onAuthRequired`](https://developer.chrome.com/docs/extensions/reference/api/webRequest#event-onAuthRequired).
+The app still receives `WebViewClient.onReceivedHttpAuthRequest` on its WebView's
+Looper and chooses whether to proceed or cancel. The browser resumes the original
+request, including its method, upload body, redirects and credential retries.
+Gesher neither reconstructs the source DOM nor reloads its history entry.
+
+The extension receives authentication and request identity metadata only. Its
+`onBeforeRequest` listener requests no body access. CDP Fetch interception is
+deliberately unused: its request-stage implementation collects full form and
+blob upload bodies independently of Network's POST serialization limit. Actual
+isolated probes confirmed that overhead; the metadata-only extension preserves
+the original browser request without those additional body copies.
+
+`chrome.debugger.getTargets` maps the browser's real tab ID to the exact CDP
+target ID of the owning WebView. URL equality is never an ownership check. The
+native bridge installs the extension from the runtime's source-bound
+`webview-auth-extension/manifest.json` and `worker.js`, rather than an
+app-writable profile directory. The manifest public key gives it the stable ID
+`njmgmkjdhpmipobhjndpkbpegchdmpge`; installation rebinds that ID to the trusted
+runtime folder once per process. Only that worker's verified session and default
+execution context receive a unique per-owner native binding. A readiness and
+target-registration handshake precedes release of queued application loads.
+
+Owners sharing one browser profile have separate channels, epochs, bindings and
+pending responses. Stop and Destroy invalidate view generations; each actual
+request captures its generation before authentication so queued metadata and
+late consent cannot reopen a canceled request. Before prompting, the worker
+rechecks the live target/tab pair to reject recycled tab IDs. The Java broker
+serializes coordination on one Looper and dispatches prompts to each target
+WebView's own Looper. Restart retires old sessions and bindings; live-target
+inspection prunes orphaned owners without canceling another live owner.
+
+Cancellation supplies no credentials. The browser delivers the server's actual
+401/407 response; the implementation does not synthesize one. Credential denial
+and retries remain browser/server decisions. Pending identity and prompt maps
+are bounded, and stale replies are ignored. If the runtime, policy or bridge
+cannot provide early authentication, ordinary content remains usable and HTTP
+authentication fails closed; it does not silently claim a successful download
+or fall back to a second application consent prompt.
+
+Host tests exercise the production worker and Java coordinator, including
+identical URLs, multiple owners, asynchronous registration and stale replies.
+The Windows/ART fixture additionally covers real credential retries, cancellation,
+POST bodies, redirects, retained live DOM state, Stop and Destroy. Passing host
+tests does not by itself establish installed WebView2 extension/session behavior.
+
 Goal: `android.webkit.WebView` works in Gesher's apps, backed by Microsoft
 Edge WebView2 (the Chromium runtime Windows 10/11 ship), with no WebView APK.
 Work happens on branch `wip/webview`; the decision record is

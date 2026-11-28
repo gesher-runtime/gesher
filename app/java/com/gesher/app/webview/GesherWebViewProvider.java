@@ -346,6 +346,8 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
     }
     /** The WebView's own loads not started yet (onNavigationStarting). */
     private final ApiNavigations mApiNavigations = new ApiNavigations();
+    private final NetworkNavigationErrors mNetworkErrors = new NetworkNavigationErrors();
+    private final WebViewAuthBridge.Endpoint mAuthBridge;
     /** The WebView thread's last NavigationStarting was one of the WebView's own loads. */
     private boolean mStartingApi;
     /** A pending intent fallback cannot replace a newer navigation or stop request. */
@@ -379,6 +381,28 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
         mContext = view.getContext();
         Looper looper = Looper.myLooper() != null ? Looper.myLooper() : Looper.getMainLooper();
         mUi = new Handler(looper);
+        mAuthBridge = new WebViewAuthBridge.Endpoint(new WebViewAuthBridge.Transport() {
+            @Override public void command(String session, String method, String parameters, long token) {
+                WebView2Host host = mHost;
+                if (host != null) host.authCommand(session, method, parameters, token);
+            }
+            @Override public void session(String session, String target) {
+                WebView2Host host = mHost;
+                if (host != null) host.authSession(session, target);
+            }
+            @Override public void ready(boolean available) {
+                WebView2Host host = mHost;
+                if (host != null) host.authReady(available);
+                if (!available) GesherWebView.log("HTTP authentication bridge unavailable");
+            }
+        }, new WebViewAuthBridge.Scheduler() {
+            @Override public void post(Runnable work) { mUi.post(work); }
+            @Override public void later(Runnable work, long milliseconds) { mUi.postDelayed(work, milliseconds); }
+        }, new WebViewAuthBridge.Scheduler() {
+            private final Handler coordinator = new Handler(Looper.getMainLooper());
+            @Override public void post(Runnable work) { coordinator.post(work); }
+            @Override public void later(Runnable work, long milliseconds) { coordinator.postDelayed(work, milliseconds); }
+        }, this::promptHttpAuth);
         mRequireAnnotation = mContext.getApplicationInfo().targetSdkVersion >= 17;
         mBridgeDispatcher = new JsBridgeDispatcher(mInterfaces, mRequireAnnotation);
         GesherWebView.configure(mContext);
@@ -529,6 +553,8 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
 
     @Override
     public void destroy() {
+        mAuthBridge.close();
+        mNetworkErrors.clear();
         mNavigationGeneration.incrementAndGet();
         WebView2Host host;
         synchronized (mPagePorts) {
@@ -2061,6 +2087,54 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
     }
 
     @Override
+    public boolean usesAuthBroker() {
+        return true;
+    }
+
+    @Override
+    public int onNetworkEvent(String event, String json) {
+        if (event.equals("auth-stop")) { mAuthBridge.stop(); return 1; }
+        if (event.equals("auth-destroy")) { mAuthBridge.close(); return 1; }
+        if (event.equals("auth-unavailable")) { mAuthBridge.unavailable(); return 1; }
+        if (event.equals("initialize")) return mNetworkErrors.initialize(json) ? 1 : 0;
+        if (event.equals("clear")) { mNetworkErrors.clear(); return 1; }
+        try {
+            NetworkNavigationErrors.Result result = mNetworkErrors.event(event, json);
+            if (result != null) mUi.post(() -> reportNetworkFailure(result));
+            return result != null && result.limited ? 2 : 1;
+        } catch (IllegalArgumentException e) {
+            // Do not print protocol JSON or parse exception text: it may contain credentials.
+            mNetworkErrors.clear();
+            return 0;
+        }
+    }
+
+    private void reportNetworkFailure(NetworkNavigationErrors.Result failure) {
+        if (mDestroyed) return;
+        String url = FileUrls.fromWebView2(failure.url);
+        if (!failure.canceled) {
+            Request request = new Request(url, failure.mainFrame, false, false, failure.method, null);
+            String description = failure.error;
+            final int code = networkErrorCode(description);
+            mClient.onReceivedError(mView, request, new WebResourceError() {
+                @Override public int getErrorCode() { return code; }
+                @Override public CharSequence getDescription() { return description; }
+            });
+        }
+    }
+
+    private static int networkErrorCode(String error) {
+        if (error.equals("net::ERR_INSUFFICIENT_RESOURCES")) return WebViewClient.ERROR_TOO_MANY_REQUESTS;
+        for (int status = 0; status <= 18; status++) {
+            if (error.equals("net::" + errorName(status)) || error.equals(errorName(status))) {
+                return errorCode(status);
+            }
+        }
+        if (error.startsWith("net::ERR_CERT_")) return WebViewClient.ERROR_FAILED_SSL_HANDSHAKE;
+        return WebViewClient.ERROR_IO;
+    }
+
+    @Override
     public boolean onNavigationStarting(String url, boolean userInitiated, boolean redirect, long handed) {
         final long generation = mNavigationGeneration.incrementAndGet();
         // WebView2Host knows one outstanding load of the WebView's own at a time; a second
@@ -2322,6 +2396,12 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
         if (mDestroyed && type != WebView2Host.EVENT_SCRIPT_RESULT) return;
         WebChromeClient chrome = mChrome;
         switch (type) {
+            case WebView2Host.EVENT_AUTH_EXTENSION:
+                mAuthBridge.installed(arg, a);
+                break;
+            case WebView2Host.EVENT_AUTH_BRIDGE:
+                mAuthBridge.event(id, arg, a, b, c);
+                break;
             case WebView2Host.EVENT_READY:
                 if (GesherWebView.DEBUG) GesherWebView.log("WebView2 " + a + " ready");
                 break;
@@ -2347,7 +2427,8 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
                 if (http >= 400) {
                     mClient.onReceivedHttpError(mView, request, new WebResourceResponse(
                             "text/html", null, http, "HTTP " + http, null, null));
-                } else if (arg >= 0 && arg != 14 /* OPERATION_CANCELED */) {
+                } else if (arg >= 0 && arg != 14 /* OPERATION_CANCELED */
+                        && !"network-errors".equals(c)) {
                     final int code = errorCode(arg);
                     final String description = "net::" + errorName(arg);
                     mClient.onReceivedError(mView, request, new WebResourceError() {
@@ -2881,6 +2962,12 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
         java.util.regex.Matcher m = java.util.regex.Pattern.compile("realm=\"([^\"]*)\"",
                 java.util.regex.Pattern.CASE_INSENSITIVE).matcher(challenge != null ? challenge : "");
         if (m.find()) realm = m.group(1);
+        promptHttpAuth(url, hostName, realm, (proceed, user, password) ->
+                host.completeBasicAuth(id, proceed, user, password));
+    }
+
+    private void promptHttpAuth(String url, String hostName, String realm, WebViewAuthBridge.Reply reply) {
+        if (hostName == null || hostName.isEmpty()) hostName = Uri.parse(url).getHost();
         final String[] saved = getHttpAuthUsernamePassword(hostName, realm);
         final AtomicBoolean done = new AtomicBoolean();
         HttpAuthHandler handler = new HttpAuthHandler() {
@@ -2891,13 +2978,13 @@ final class GesherWebViewProvider implements WebViewProvider, WebViewProvider.Vi
 
             @Override
             public void cancel() {
-                if (done.compareAndSet(false, true)) host.completeBasicAuth(id, false, "", "");
+                if (done.compareAndSet(false, true)) reply.answer(false, "", "");
             }
 
             @Override
             public void proceed(String username, String password) {
                 if (done.compareAndSet(false, true)) {
-                    host.completeBasicAuth(id, true, username != null ? username : "",
+                    reply.answer(true, username != null ? username : "",
                             password != null ? password : "");
                 }
             }

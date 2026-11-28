@@ -385,8 +385,8 @@ public final class ApkPackage {
      * The APK's signers from its v3 or v2 signing block, unverified, as ApkSignatureVerifier
      * collects them (with v3's proof-of-rotation: GET_SIGNATURES answers the oldest key of a
      * rotated one); null (no signatures) for an unsigned or v1-only APK. Not
-     * ApkSignatureVerifier itself: it tries v4 first, through IncrementalManager's native
-     * code, which Gesher does not have.
+     * ApkSignatureVerifier itself: this metadata probe needs only the embedded signing
+     * blocks, without the v4 verifier's filesystem integrity/sidecar lookup.
      */
     private static SigningDetails signingDetails(String apkPath) {
         try {

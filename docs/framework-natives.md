@@ -49,6 +49,35 @@ and hwui). `compat/framework/android_runtime.cc` holds the host
 `AndroidRuntime` statics and a fixed table, registered as the builtin
 `libandroid_runtime.so` the way `compat/libcore/builtins.cc` does.
 
+## APK integrity capabilities on Windows
+
+`compat/framework/apk_integrity.cc` registers all five `IncrementalManager`
+native methods. Windows files are not IncFS files: the feature and v2 probes
+return false, path/fd probes return false and the raw IncFS signature query
+returns null. This lets `PackageManager.getPackageArchiveInfo` use AOSP's
+ordinary certificate verification instead of throwing `UnsatisfiedLinkError`
+before it can examine an APK. It does not return certificates or declare an
+APK verified.
+
+The same file registers `VerityUtils`' four filesystem native methods, reached
+when the v4 verifier finds an `.idsig` sidecar. Existing files have no fs-verity
+attribute or kernel digest, and enabling it returns `EOPNOTSUPP`, never success.
+Missing paths and invalid descriptors retain their actual lookup errors. The
+enable methods return positive errno and stat/measure return negative errno;
+measure never fills the caller's digest buffer. Framework patch 0788 also
+reports `isFsVeritySupported()` as false: Android's initial SDK version does
+not imply a Windows filesystem capability.
+
+The v4 verifier is unchanged: no IncFS metadata causes a sidecar lookup, and a
+sidecar cannot be accepted without a kernel-enforced fs-verity digest. AOSP's
+fallback rules still apply to embedded v3/v2 or JAR v1 signatures. Neither an
+APK certificate, signature scheme nor signing lineage is manufactured here.
+
+Contract sources (Android 16):
+[IncrementalManager JNI](https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r4/core/jni/android_os_incremental_IncrementalManager.cpp),
+[v4 verifier](https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r4/core/java/android/util/apk/ApkSignatureSchemeV4Verifier.java),
+[VerityUtils JNI](https://android.googlesource.com/platform/frameworks/base/+/android-16.0.0_r4/core/jni/com_android_internal_security_VerityUtils.cpp).
+
 ## Debug memory accounting on Windows
 
 The `android.os.Debug` memory natives use the Android 16 JNI signatures and kB

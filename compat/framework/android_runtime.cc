@@ -57,6 +57,9 @@ int register_gesher_attach_standins(JNIEnv* env);
 int register_gesher_input(JNIEnv* env);
 // android.os.SharedMemory over memfds: compat/framework/shared_memory.cc.
 int register_gesher_shared_memory(JNIEnv* env);
+// APK integrity capability queries on files without IncFS/fs-verity.
+int register_gesher_incremental(JNIEnv* env);
+int register_gesher_verity(JNIEnv* env);
 // android.app.NativeActivity's and android.view.InputQueue's natives for an
 // app's ELF libraries: compat/bionic/native_activity.cc, docs/native-libs.md.
 int register_gesher_native_activity(JNIEnv* env);
@@ -1218,6 +1221,8 @@ static const struct {
     {"android_os_Process", "android/os/Process", register_android_os_Process},
     {"android_os_Debug", "android/os/Debug", register_android_os_Debug},
     {"gesher_shared_memory", "android/os/SharedMemory", ::register_gesher_shared_memory},
+    {"gesher_incremental", "android/os/incremental/IncrementalManager", ::register_gesher_incremental},
+    {"gesher_verity", "com/android/internal/security/VerityUtils", ::register_gesher_verity},
     {"android_text_AndroidCharacter", "android/text/AndroidCharacter",
      register_android_text_AndroidCharacter},
     {"com_android_internal_util_VirtualRefBasePtr", "com/android/internal/util/VirtualRefBasePtr",

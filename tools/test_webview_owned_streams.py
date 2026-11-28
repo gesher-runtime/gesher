@@ -90,7 +90,8 @@ def main() -> int:
         "@NAVIGATION_STATE@": (
             "  unsigned long long trace_id = 1;\n" + state if "impl->trace_id" in source else state
         ),
-        "@NAV_START_CALLBACK@": callback,
+        "@NAV_START_CALLBACK@": "#define NETWORK_STARTED_BOUNDARY " +
+            ("1" if "NetworkNavigationStarted(" in callback else "0") + "\n" + callback,
         "@NUMBER_DECLARATION@": "void NumberNextNavigate(int64_t number);" if legacy_number else "",
         "@NUMBER_FUNCTION@": function(source, "void Host::NumberNextNavigate(") if legacy_number else "",
         "@NUMBERED_CALL@": numbered_call,

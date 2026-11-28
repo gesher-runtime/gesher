@@ -39,6 +39,21 @@ public final class WebViewOwnedResponsesHost {
     // A controlled worker dispatch boundary per fixture; production shares a pool.
     private final FixtureRequests sRequests = new FixtureRequests();
 
+    // CDP parsing has its own production executable suite; this fixture observes
+    // only the destroy boundary, while exercising the exact provider destroy method.
+    private static final class FixtureNetworkErrors {
+        boolean cleared;
+        void clear() { cleared = true; }
+    }
+    private final FixtureNetworkErrors mNetworkErrors = new FixtureNetworkErrors();
+    // The actual auth coordinator has its own transport/lifecycle contracts.
+    private static final class FixtureAuthBridge {
+        boolean closed;
+        void close() { closed = true; }
+        void installed(int status, String extension) {}
+        void event(long token, int status, String method, String json, String session) {}
+    }
+    private final FixtureAuthBridge mAuthBridge = new FixtureAuthBridge();
     private volatile WebView2Host mHost = new WebView2Host();
     private volatile Runnable beforeClaim;
     private String mOriginalUrl;
@@ -123,7 +138,7 @@ public final class WebViewOwnedResponsesHost {
         // compares the document URL with main_document (no fragment).
         static final int EVENT_FAILED = 2, EVENT_PAGE_STARTED = 3, EVENT_PAGE_FINISHED = 4,
                 EVENT_SOURCE_CHANGED = 5, EVENT_SCRIPT_RESULT = 10, EVENT_CAPTURE = 17,
-                EVENT_PARKED = 18, EVENT_DEVTOOLS_RESULT = 20;
+                EVENT_PARKED = 18, EVENT_DEVTOOLS_RESULT = 20, EVENT_AUTH_BRIDGE = 29, EVENT_AUTH_EXTENSION = 30;
         WebViewOwnedResponsesHost client;
         final ArrayDeque<Object[]> queued = new ArrayDeque<>();
         boolean apiNavigation;
@@ -892,7 +907,11 @@ public final class WebViewOwnedResponsesHost {
             case "back": provider.goBack(); break;
             case "forward": provider.goForward(); break;
             case "history": provider.goBackOrForward(2); break;
-            case "destroy": provider.destroy(); break;
+            case "destroy":
+                provider.destroy();
+                if (@NETWORK_CLEAR_GATE@) check(provider.mNetworkErrors.cleared, "destroy did not retire the network observer");
+                if (@AUTH_CLOSE_GATE@) check(provider.mAuthBridge.closed, "destroy did not retire the authentication endpoint");
+                break;
             default: throw new AssertionError(replacement);
         }
     }

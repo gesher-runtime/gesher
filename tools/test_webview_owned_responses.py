@@ -189,6 +189,8 @@ def main() -> None:
     ))
     template = (ROOT / 'tests/java-performance/WebViewOwnedResponsesHost.java.in').read_text(encoding='utf-8')
     generated = template.replace('@PRODUCTION@', exact).replace('@URL_MAPPINGS@', mappings)
+    generated = generated.replace('@NETWORK_CLEAR_GATE@', str('mNetworkErrors.clear();' in exact).lower())
+    generated = generated.replace('@AUTH_CLOSE_GATE@', str('mAuthBridge.close();' in exact).lower())
     # The native callback is a declared boundary in this Java test. Preserve its
     # old matching behavior for old-source controls; the actual C++ helper has
     # its own executable regression tests.

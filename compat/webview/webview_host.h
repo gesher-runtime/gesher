@@ -75,6 +75,9 @@ enum Event : int32_t {
   kFind = 27,          // id: active match index (WebView2's, -1 none); arg: match
                        // count; a: "count", "active", "done" or "unsupported"
   kFileDialog = 28,    // id: callback id; arg: HRESULT; a: the files, '\n'-separated
+  kAuthBridge = 29,    // internal auth CDP result/event: id token, arg HRESULT,
+                       // a method/event, b JSON, c actual protocol session.
+  kAuthExtension = 30, // internal setup: arg HRESULT, a trusted extension ID.
 };
 
 // Global results (Listener-less operations: cookies, browsing data).
@@ -96,6 +99,13 @@ class Listener {
   // WebView2 before this callback, excluding loads merely queued by the app.
   virtual bool OnNavigationStarting(const std::wstring& url, bool user_initiated,
                                     bool redirect, int64_t handed) = 0;
+  // Internal CDP document identity metadata, synchronously on the WebView STA.
+  // "initialize" accepts the initial frame tree; false retains COM fallback.
+  // 0: unavailable, 1: accepted, 2: accepted but stop this view for resource pressure.
+  virtual int OnNetworkEvent(const std::wstring&, const std::wstring&) { return 0; }
+  // Android's Java provider supplies the private packaged auth coordinator.
+  // Other native Host clients retain their own BasicAuth event handling.
+  virtual bool UsesAuthBroker() const { return false; }
   // A request the Listener asked to see (SetSettings' intercept_all, file
   // URLs, documents): answer with Host::RespondToRequest(id, ...), from any
   // thread, later. On the WebView thread.
@@ -241,6 +251,12 @@ class Host {
                     int64_t callback_id);
   // A DevTools protocol event comes as kDevToolsEvent from now on.
   void ListenDevTools(const std::wstring& event);
+  // Internal packaged authentication broker. JSON parsing and exact worker/
+  // target ownership live in the Java coordinator; no page-world transport.
+  void AuthCommand(const std::wstring& session, const std::wstring& method,
+                   const std::wstring& params, int64_t token);
+  void AuthSession(const std::wstring& session, const std::wstring& worker);
+  void AuthReady(bool ready);
 
   // Answers to the requests WebView2 holds a deferral for.
   // COREWEBVIEW2_PERMISSION_STATE; `remember`: the profile keeps it.

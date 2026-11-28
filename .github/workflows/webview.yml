@@ -113,6 +113,9 @@ jobs:
         run: |
           mkdir -p dist-webview
           cp out-webview/*.exe out-webview/WebView2Loader.dll dist-webview/
+          if [[ "${{ inputs.apk }}" != "true" ]]; then
+            cp -r out-webview/webview-auth-extension dist-webview/
+          fi
           ls -la dist-webview
 
       - name: Build agile content stream COM gate
@@ -121,6 +124,13 @@ jobs:
             -std=c++20 -Wall -Wextra -Werror -fno-exceptions -static \
             tests/native/webview_owned_stream_test.cc -lole32 -luuid \
             -o dist-webview/webview_owned_stream_test.exe
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Verify authentication worker lifecycle
+        run: node --test tests/webview/auth_worker.test.cjs
 
       - uses: actions/setup-java@v4
         if: inputs.apk

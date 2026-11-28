@@ -30,6 +30,20 @@ RETAIN = '''            if (false && sLookups.remove(this)) lookupOwned = false;
             error = systemError("resNetworkResult", OsConstants.ETIMEDOUT);'''
 OWNER = 'if (retired || preparing || lookupOwned || dispatchOwned || callbackOwned) return;'
 EARLY = 'if (retired || preparing || dispatchOwned || callbackOwned) return;'
+OBSERVED = '''        // A state such as TIMED_WAITING can change as soon as it is observed.
+        // Preserve that successful observation instead of sampling it again.
+        boolean observed = condition.getAsBoolean();
+        while (!observed && System.nanoTime() < end) {
+            Thread.sleep(2);
+            observed = condition.getAsBoolean();
+        }
+        Throwable failure = ASYNC_FAILURE.get();
+        if (failure != null) throw new AssertionError("asynchronous fixture failure", failure);
+        check(observed, message);'''
+REREAD = '''        while (!condition.getAsBoolean() && System.nanoTime() < end) Thread.sleep(2);
+        Throwable failure = ASYNC_FAILURE.get();
+        if (failure != null) throw new AssertionError("asynchronous fixture failure", failure);
+        check(condition.getAsBoolean(), message);'''
 
 
 def replace_once(source, before, after):
@@ -46,6 +60,8 @@ def run(work, java_home):
         original[Path(path).name] = content
     variants = [
         ('current', None, None, None, None),
+        ('transient_observation_reread', 'DnsResolverHost.java', OBSERVED, REREAD,
+         'a successful transient observation is preserved'),
         ('original_immediate_observation', 'DnsResolverHost.java', WAIT, IMMEDIATE,
          'callback notification is not Executor retirement'),
         ('queued_lookup_not_unlinked', 'DnsResolver.java', UNLINK, RETAIN,

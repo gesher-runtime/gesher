@@ -340,10 +340,54 @@ function FeaturesCheck {
     }
   }
   foreach ($want in $patterns) { if ("$text" -notmatch $want) { $problems += "missing /$want/" } }
+  foreach ($case in 'attachment','mime','redirect','auth') {
+    $want = "Features download $case handed off once without network error; source retained"
+    if (-not "$text".Contains($want)) { $problems += "missing '$want'" }
+  }
+  foreach ($case in 'retry','cancel','post','largepost','redirect','stop') {
+    $want = "Features download auth $case original request and consent preserved"
+    if (-not "$text".Contains($want)) { $problems += "missing '$want'" }
+  }
+  foreach ($case in 'http200-truncated','http500-truncated') {
+    $want = "Features download $case one ordered error and finish preserved"
+    if (-not "$text".Contains($want)) { $problems += "missing '$want'" }
+  }
+  foreach ($case in 'repeat-main','repeat-frame') {
+    $want = "Features download $case same URL network failure preserved"
+    if (-not "$text".Contains($want)) { $problems += "missing '$want'" }
+    $requests = [regex]::Matches([GesherWebTestServer]::Log, "(?m)^download repeat /download-repeat/$case request [0-9]+\r?$")
+    if ($requests.Count -lt 2) { $problems += "same-URL $case did not exercise a download followed by a real failed request" }
+  }
+  if (-not "$text".Contains('Features download auth same URL views kept independent consent')) {
+    $problems += 'identical URLs in two WebViews did not exercise independent auth ownership'
+  }
+  if (-not "$text".Contains('Features download auth destroy ignored late credentials')) {
+    $problems += 'destroyed authenticated request did not exercise a late handler reply'
+  }
+  if (-not "$text".Contains('Features download auth credentials requested')) {
+    $problems += 'authenticated download did not exercise the Basic-auth retry'
+  }
+  if (-not "$text".Contains('Features download adjacent network failure preserved')) {
+    $problems += 'download correlation hid a real network failure'
+  }
   if ("$text" -match 'page mousedown at 3[23]\d,3[23]\d') {
     $problems += 'the page got the click on the button'
   }
   $serverLog = [GesherWebTestServer]::Log
+  foreach ($case in 'retry','post','largepost','redirect') {
+    $method = if ($case -in 'post','largepost') { 'POST' } else { 'GET' }
+    if ($serverLog -notmatch "(?m)^auth fixture $case $method accepted=True\r?$") {
+      $problems += "authenticated $case did not reach its real endpoint with the original method"
+    }
+  }
+  foreach ($case in 'cancel','stop','destroy') {
+    if ($serverLog -notmatch "(?m)^auth fixture $case GET accepted=False\r?$") {
+      $problems += "auth $case did not exercise a real denied request"
+    }
+    if ($serverLog -match "(?m)^auth fixture $case GET accepted=True\r?$") {
+      $problems += "auth $case resumed a retired request with late credentials"
+    }
+  }
   foreach ($path in '/intent-source/default', '/intent-target/default',
                     '/intent-source/explicit', '/intent-target/explicit', '/intent-source/veto') {
     if ($serverLog -notmatch ("(?m)^http GET " + [regex]::Escape($path) + "(?: |\r?$)")) {

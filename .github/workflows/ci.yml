@@ -862,10 +862,15 @@ jobs:
         if: matrix.group == 'java'
         run: python3 tools/test_media_provider_contracts.py --java-home "$JAVA_HOME"
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
       - name: WebStorage origin, owned WebView responses and running-task contracts
         if: matrix.group == 'java'
         run: |
           python3 tools/test_webstorage_origin_contracts.py --java-home "$JAVA_HOME"
+          node --test tests/webview/auth_worker.test.cjs
           python3 tools/test_webview_owned_responses.py --java-home "$JAVA_HOME"
           python3 tools/test_webview_boundary_dispatch.py --java-home "$JAVA_HOME"
           python3 tools/test_webview_geometry.py --java-home "$JAVA_HOME" --sanitize
@@ -1267,6 +1272,7 @@ jobs:
           cp out/libgesher_account_crypto.so dist/
           cp out/libgesher_install_pipe.so dist/
           cp out/libgesher_webview_bridge.so dist/
+          cp -r out/webview-auth-extension dist/
           cp dist-web3-observer/web3_process_waits.exe dist/
           ls -la dist
 
@@ -1697,7 +1703,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Crash dialog host/Windows checks failed' }
           python tools/test_app_crash_runtime.py --runtime "$app" --fixture dist/crashnotice.apk --output out/crash-notice-art
           if ($LASTEXITCODE -ne 0) { throw 'Crash notice Windows/ART checks failed' }
-          foreach ($file in 'gesher-update.ps1', 'gesher-version.ini', 'gesher-runtime-files.ps1', 'gesher-panel-actions.ps1', 'gesher-panel-view.ps1', 'gesher-panel-dashboard.xaml', 'gesher-panel-confirm.xaml', 'gesher-panel-message.xaml') {
+          foreach ($file in 'webview-auth-extension/manifest.json', 'webview-auth-extension/worker.js', 'gesher-update.ps1', 'gesher-version.ini', 'gesher-runtime-files.ps1', 'gesher-panel-actions.ps1', 'gesher-panel-view.ps1', 'gesher-panel-dashboard.xaml', 'gesher-panel-confirm.xaml', 'gesher-panel-message.xaml') {
             if (-not (Test-Path -LiteralPath (Join-Path $app $file) -PathType Leaf)) { throw "The installer left out $file" }
           }
           powershell -NoProfile -STA -ExecutionPolicy Bypass -File tests/windows/shell/ControlPanelPresentationChecks.ps1 -PackageDirectory $app

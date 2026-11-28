@@ -70,6 +70,8 @@ Source: "{#BuildDir}\dalvikvm.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\libgesher_account_crypto.so"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\libgesher_install_pipe.so"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\libgesher_webview_bridge.so"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#BuildDir}\webview-auth-extension\manifest.json"; DestDir: "{app}\webview-auth-extension"; Flags: ignoreversion
+Source: "{#BuildDir}\webview-auth-extension\worker.js"; DestDir: "{app}\webview-auth-extension"; Flags: ignoreversion
 Source: "{#BuildDir}\core-oj.jar"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\core-libart.jar"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\core-icu4j.jar"; DestDir: "{app}"; Flags: ignoreversion
