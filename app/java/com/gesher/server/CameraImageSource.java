@@ -56,6 +56,36 @@ public final class CameraImageSource {
         Selection choose(String cameraId, boolean physical);
     }
 
+    /** User-adjusted zoom and pan applied when fitting the selected image into the frame. */
+    static final class Framing {
+        static final float MIN_SCALE = 0.30f;
+        static final float MAX_SCALE = 3.00f;
+        static final float MIN_OFFSET = -1.0f;
+        static final float MAX_OFFSET = 1.0f;
+        static final Framing DEFAULT = new Framing(1.0f, 0.0f, 0.0f);
+
+        final float scale;
+        final float offsetX;
+        final float offsetY;
+
+        private Framing(float scale, float offsetX, float offsetY) {
+            this.scale = scale;
+            this.offsetX = offsetX;
+            this.offsetY = offsetY;
+        }
+
+        static Framing of(float scale, float offsetX, float offsetY) {
+            float s = Float.isFinite(scale)
+                    ? Math.max(MIN_SCALE, Math.min(MAX_SCALE, scale)) : 1.0f;
+            float ox = Float.isFinite(offsetX)
+                    ? Math.max(MIN_OFFSET, Math.min(MAX_OFFSET, offsetX)) : 0.0f;
+            float oy = Float.isFinite(offsetY)
+                    ? Math.max(MIN_OFFSET, Math.min(MAX_OFFSET, offsetY)) : 0.0f;
+            if (s == 1.0f && ox == 0.0f && oy == 0.0f) return DEFAULT;
+            return new Framing(s, ox, oy);
+        }
+    }
+
     /** The user's answer: the camera, a selected image (its file's bytes) or a cancel. */
     static final class Selection {
         static final int CAMERA = 0, IMAGE = 1, CANCELLED = 2;
@@ -64,11 +94,17 @@ public final class CameraImageSource {
 
         final int kind;
         final byte[] image;
+        final Framing framing;
 
         Selection(int kind, byte[] image) {
+            this(kind, image, Framing.DEFAULT);
+        }
+
+        Selection(int kind, byte[] image, Framing framing) {
             if ((kind == IMAGE) != (image != null)) throw new IllegalArgumentException("selection");
             this.kind = kind;
             this.image = image;
+            this.framing = framing != null ? framing : Framing.DEFAULT;
         }
     }
 
@@ -171,7 +207,7 @@ public final class CameraImageSource {
                 try {
                     byte[] frame = choice.frame(w, h);
                     if (frame == null) {
-                        frame = toNv12(selection.image, w, h);
+                        frame = toNv12(selection.image, w, h, selection.framing);
                         choice.keepFrame(frame, w, h);
                     }
                     return WindowsCamera.Capture.ofFrame(frame, w, h);
@@ -190,16 +226,29 @@ public final class CameraImageSource {
      * kept and centred on black, as one NV12 frame of {@code width} x {@code height} (even).
      */
     static byte[] toNv12(byte[] encoded, int width, int height) throws IOException {
+        return toNv12(encoded, width, height, Framing.DEFAULT);
+    }
+
+    /**
+     * {@code encoded} framed with {@code framing} (zoom and pan relative to fit-to-frame) on
+     * black, as one NV12 frame of {@code width} x {@code height} (even).
+     */
+    static byte[] toNv12(byte[] encoded, int width, int height, Framing framing)
+            throws IOException {
         if (width <= 0 || height <= 0 || (width & 1) != 0 || (height & 1) != 0) {
             throw new IllegalArgumentException("NV12 dimensions must be positive and even: "
                     + width + "x" + height);
         }
+        Framing f = framing != null ? framing : Framing.DEFAULT;
         BitmapFactory.Options bounds = new BitmapFactory.Options();
         bounds.inJustDecodeBounds = true;
         BitmapFactory.decodeByteArray(encoded, 0, encoded.length, bounds);
         BitmapFactory.Options options = new BitmapFactory.Options();
+        int targetWidth = Math.max(width, Math.round(width * f.scale));
+        int targetHeight = Math.max(height, Math.round(height * f.scale));
         int sample = 1;
-        while (bounds.outWidth / (sample * 2) >= width && bounds.outHeight / (sample * 2) >= height) {
+        while (bounds.outWidth / (sample * 2) >= targetWidth
+                && bounds.outHeight / (sample * 2) >= targetHeight) {
             sample *= 2;
         }
         options.inSampleSize = sample;
@@ -222,11 +271,11 @@ public final class CameraImageSource {
             int sw = source.getWidth();
             int sh = source.getHeight();
             if (sw > 0 && sh > 0) {
-                float scale = Math.min((float) width / sw, (float) height / sh);
+                float scale = Math.min((float) width / sw, (float) height / sh) * f.scale;
                 float dw = sw * scale;
                 float dh = sh * scale;
-                float left = (width - dw) / 2;
-                float top = (height - dh) / 2;
+                float left = (width - dw) / 2f + f.offsetX * width;
+                float top = (height - dh) / 2f + f.offsetY * height;
                 canvas.drawBitmap(source, null, new RectF(left, top, left + dw, top + dh),
                         new Paint(Paint.FILTER_BITMAP_FLAG));
             }

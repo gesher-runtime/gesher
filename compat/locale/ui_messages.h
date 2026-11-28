@@ -83,6 +83,12 @@ static inline const wchar_t* GesherUiText(enum GesherUiLanguage lang, const char
   if (strcmp(key, "camera_source_camera") == 0) return lang == GESHER_UI_HE ? L"\u05e9\u05d9\u05de\u05d5\u05e9 \u05d1\u05de\u05e6\u05dc\u05de\u05ea \u05d4\u05de\u05d7\u05e9\u05d1" : L"Use the PC camera";
   if (strcmp(key, "camera_source_image") == 0) return lang == GESHER_UI_HE ? L"\u05d1\u05d7\u05d9\u05e8\u05ea \u05ea\u05de\u05d5\u05e0\u05d4 \u05de\u05d4\u05de\u05d7\u05e9\u05d1" : L"Choose an image from the PC";
   if (strcmp(key, "camera_pick_title") == 0) return lang == GESHER_UI_HE ? L"\u05d1\u05d7\u05d9\u05e8\u05ea \u05ea\u05de\u05d5\u05e0\u05d4 \u05e2\u05d1\u05d5\u05e8 \u05d4\u05de\u05e6\u05dc\u05de\u05d4" : L"Choose an image for the camera";
+  if (strcmp(key, "camera_frame_title") == 0) return lang == GESHER_UI_HE ? L"\u05d4\u05ea\u05d0\u05de\u05ea \u05d2\u05d1\u05d5\u05dc\u05d5\u05ea \u05d4\u05ea\u05de\u05d5\u05e0\u05d4" : L"Adjust image framing";
+  if (strcmp(key, "camera_frame_hint") == 0) return lang == GESHER_UI_HE ? L"\u05d4\u05e7\u05d8\u05df \u05dc\u05d4\u05d5\u05e1\u05e4\u05ea \u05e9\u05d5\u05dc\u05d9\u05d9\u05dd \u05e9\u05d7\u05d5\u05e8\u05d9\u05dd, \u05d0\u05d5 \u05d2\u05e8\u05d5\u05e8 \u05d0\u05ea \u05d4\u05ea\u05de\u05d5\u05e0\u05d4 \u05dc\u05d4\u05d6\u05d6\u05d4." : L"Zoom out to add black margins, or drag the image to reposition it.";
+  if (strcmp(key, "camera_frame_zoom") == 0) return lang == GESHER_UI_HE ? L"\u05d2\u05d5\u05d3\u05dc:" : L"Zoom:";
+  if (strcmp(key, "camera_frame_reset") == 0) return lang == GESHER_UI_HE ? L"\u05d0\u05d9\u05e4\u05d5\u05e1" : L"Reset";
+  if (strcmp(key, "camera_frame_use") == 0) return lang == GESHER_UI_HE ? L"\u05d0\u05d9\u05e9\u05d5\u05e8" : L"Use image";
+  if (strcmp(key, "camera_frame_cancel") == 0) return lang == GESHER_UI_HE ? L"\u05d1\u05d9\u05d8\u05d5\u05dc" : L"Cancel";
   if (strcmp(key, "no_device") == 0) return lang == GESHER_UI_HE ? L"\u05e1\u05d1\u05d9\u05d1\u05ea \u05d2\u05e9\u05e8 \u05d0\u05d9\u05e0\u05d4 \u05e4\u05d5\u05e2\u05dc\u05ea" : L"no Gesher device is running";
   if (strcmp(key, "device_stopped") == 0) return lang == GESHER_UI_HE ? L"\u05e1\u05d1\u05d9\u05d1\u05ea \u05d2\u05e9\u05e8 {0} \u05e0\u05e2\u05e6\u05e8\u05d4" : L"the Gesher device {0} stopped";
   if (strcmp(key, "same_drive") == 0) return lang == GESHER_UI_HE ? L"{0} \u05d7\u05d9\u05d9\u05d1 \u05dc\u05d4\u05d9\u05d5\u05ea \u05d1\u05db\u05d5\u05e0\u05df {1}, \u05e9\u05d1\u05d5 \u05de\u05d5\u05ea\u05e7\u05df \u05d2\u05e9\u05e8." : L"{0} must be on drive {1}, with Gesher.";

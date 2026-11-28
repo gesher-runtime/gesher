@@ -323,7 +323,11 @@ photograph a document such as a cheque. The Control Center's Camera card has
   (`CameraImageSource.DEVICE_ID`), a fixed-focus rear camera whose frames are an
   image the user selects with the Windows file picker when an app starts using
   it (offered at 2592x1944, 1920x1080, 1280x960, 1280x720 and 640x480; the image
-  is scaled into the configured size with its shape kept, on black). Opening one
+  is scaled into the configured size with its shape kept, on black). After picking
+  an image file, a native preview dialog lets the user adjust zoom (including
+  zooming out below 100% to add black margins for apps with viewfinder guides such
+  as cheque deposit) and drag to reposition before the image is sent to the app.
+  Opening one
   of the PC's cameras asks first: "Use the PC camera" or "Choose an image from
   the PC". Without the setting nothing changes. The image is shown as Windows
   shows the file (its EXIF orientation applied), and has nothing to focus: an

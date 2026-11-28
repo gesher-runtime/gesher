@@ -54,6 +54,16 @@ public final class CameraSourceService extends Binder {
          * not in Android/data, obb or sandbox (other apps' private storage).
          */
         File resolve(String windowsPath) throws IOException;
+
+        /**
+         * Shows the selected image so the user can adjust zoom and pan before it is sent to
+         * the app. Returns {@code null} when the user cancels, or
+         * {@link CameraImageSource.Framing#DEFAULT} when no preview dialog is available.
+         */
+        default CameraImageSource.Framing frame(String title, File file, int ownerPid,
+                BooleanSupplier active) {
+            return CameraImageSource.Framing.DEFAULT;
+        }
     }
 
     static final Ui WINDOWS = new Ui() {
@@ -85,6 +95,15 @@ public final class CameraSourceService extends Binder {
             }
             return file;
         }
+
+        @Override public CameraImageSource.Framing frame(String title, File file, int ownerPid,
+                BooleanSupplier active) {
+            float[] result = WindowsHost.frameCameraImage(title, Zygote.windowsPath(file.getPath()),
+                    ownerPid, active);
+            if (result == null) return CameraImageSource.Framing.DEFAULT;
+            if (result.length < 3) return null;
+            return CameraImageSource.Framing.of(result[0], result[1], result[2]);
+        }
     };
 
     /** At most one question at a time: each holds a binder thread until the user answers. */
@@ -105,10 +124,16 @@ public final class CameraSourceService extends Binder {
     static final class Answer {
         final int kind;  // CameraImageSource.Selection.CAMERA, IMAGE or CANCELLED
         final File image;
+        final CameraImageSource.Framing framing;
 
         Answer(int kind, File image) {
+            this(kind, image, CameraImageSource.Framing.DEFAULT);
+        }
+
+        Answer(int kind, File image, CameraImageSource.Framing framing) {
             this.kind = kind;
             this.image = image;
+            this.framing = framing != null ? framing : CameraImageSource.Framing.DEFAULT;
         }
     }
 
@@ -201,9 +226,13 @@ public final class CameraSourceService extends Binder {
                     + CameraImageSource.MAX_IMAGE_BYTES + " bytes");
             return new Answer(CameraImageSource.Selection.CANCELLED, null);
         }
+        CameraImageSource.Framing framing = mUi.frame(text("camera_frame_title"), file, pid, active);
+        if (framing == null || !active.getAsBoolean()) {
+            return new Answer(CameraImageSource.Selection.CANCELLED, null);
+        }
         SystemServer.log("camera source: " + requester + ", camera " + cameraId
                 + ": a selected image (" + file.length() + " bytes)");
-        return new Answer(CameraImageSource.Selection.IMAGE, file);
+        return new Answer(CameraImageSource.Selection.IMAGE, file, framing);
     }
 
     /** The file starts as a JPEG, PNG, GIF, BMP or WebP image does. */
@@ -246,7 +275,12 @@ public final class CameraSourceService extends Binder {
                     : ParcelFileDescriptor.open(answer.image, ParcelFileDescriptor.MODE_READ_ONLY);
             reply.writeNoException();
             reply.writeInt(answer.kind);
-            if (image != null) image.writeToParcel(reply, Parcelable.PARCELABLE_WRITE_RETURN_VALUE);
+            if (image != null) {
+                image.writeToParcel(reply, Parcelable.PARCELABLE_WRITE_RETURN_VALUE);
+                reply.writeFloat(answer.framing.scale);
+                reply.writeFloat(answer.framing.offsetX);
+                reply.writeFloat(answer.framing.offsetY);
+            }
         } catch (SecurityException e) {
             reply.writeException(e);
         } catch (IOException e) {
@@ -318,11 +352,15 @@ public final class CameraSourceService extends Binder {
                 }
                 if (kind != CameraImageSource.Selection.IMAGE) return CameraImageSource.Selection.NONE;
                 ParcelFileDescriptor image = ParcelFileDescriptor.CREATOR.createFromParcel(reply);
+                float scale = reply.readFloat();
+                float offsetX = reply.readFloat();
+                float offsetY = reply.readFloat();
                 long size = image.getStatSize();
                 // The stream owns the descriptor and closes it once.
                 try (InputStream in = new ParcelFileDescriptor.AutoCloseInputStream(image)) {
                     return new CameraImageSource.Selection(CameraImageSource.Selection.IMAGE,
-                            read(in, size));
+                            read(in, size),
+                            CameraImageSource.Framing.of(scale, offsetX, offsetY));
                 }
             } catch (SecurityException e) {
                 // Not an app the server knows, or no CAMERA grant: no question was asked, and

@@ -81,6 +81,12 @@ public final class UiMessages {
             case "camera_source_camera": value = lang.equals("he") ? "\u05e9\u05d9\u05de\u05d5\u05e9 \u05d1\u05de\u05e6\u05dc\u05de\u05ea \u05d4\u05de\u05d7\u05e9\u05d1" : "Use the PC camera"; break;
             case "camera_source_image": value = lang.equals("he") ? "\u05d1\u05d7\u05d9\u05e8\u05ea \u05ea\u05de\u05d5\u05e0\u05d4 \u05de\u05d4\u05de\u05d7\u05e9\u05d1" : "Choose an image from the PC"; break;
             case "camera_pick_title": value = lang.equals("he") ? "\u05d1\u05d7\u05d9\u05e8\u05ea \u05ea\u05de\u05d5\u05e0\u05d4 \u05e2\u05d1\u05d5\u05e8 \u05d4\u05de\u05e6\u05dc\u05de\u05d4" : "Choose an image for the camera"; break;
+            case "camera_frame_title": value = lang.equals("he") ? "\u05d4\u05ea\u05d0\u05de\u05ea \u05d2\u05d1\u05d5\u05dc\u05d5\u05ea \u05d4\u05ea\u05de\u05d5\u05e0\u05d4" : "Adjust image framing"; break;
+            case "camera_frame_hint": value = lang.equals("he") ? "\u05d4\u05e7\u05d8\u05df \u05dc\u05d4\u05d5\u05e1\u05e4\u05ea \u05e9\u05d5\u05dc\u05d9\u05d9\u05dd \u05e9\u05d7\u05d5\u05e8\u05d9\u05dd, \u05d0\u05d5 \u05d2\u05e8\u05d5\u05e8 \u05d0\u05ea \u05d4\u05ea\u05de\u05d5\u05e0\u05d4 \u05dc\u05d4\u05d6\u05d6\u05d4." : "Zoom out to add black margins, or drag the image to reposition it."; break;
+            case "camera_frame_zoom": value = lang.equals("he") ? "\u05d2\u05d5\u05d3\u05dc:" : "Zoom:"; break;
+            case "camera_frame_reset": value = lang.equals("he") ? "\u05d0\u05d9\u05e4\u05d5\u05e1" : "Reset"; break;
+            case "camera_frame_use": value = lang.equals("he") ? "\u05d0\u05d9\u05e9\u05d5\u05e8" : "Use image"; break;
+            case "camera_frame_cancel": value = lang.equals("he") ? "\u05d1\u05d9\u05d8\u05d5\u05dc" : "Cancel"; break;
             case "no_device": value = lang.equals("he") ? "\u05e1\u05d1\u05d9\u05d1\u05ea \u05d2\u05e9\u05e8 \u05d0\u05d9\u05e0\u05d4 \u05e4\u05d5\u05e2\u05dc\u05ea" : "no Gesher device is running"; break;
             case "device_stopped": value = lang.equals("he") ? "\u05e1\u05d1\u05d9\u05d1\u05ea \u05d2\u05e9\u05e8 {0} \u05e0\u05e2\u05e6\u05e8\u05d4" : "the Gesher device {0} stopped"; break;
             case "same_drive": value = lang.equals("he") ? "{0} \u05d7\u05d9\u05d9\u05d1 \u05dc\u05d4\u05d9\u05d5\u05ea \u05d1\u05db\u05d5\u05e0\u05df {1}, \u05e9\u05d1\u05d5 \u05de\u05d5\u05ea\u05e7\u05df \u05d2\u05e9\u05e8." : "{0} must be on drive {1}, with Gesher."; break;

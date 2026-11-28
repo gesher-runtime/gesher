@@ -232,6 +232,30 @@
       "en": "Choose an image for the camera",
       "he": "בחירת תמונה עבור המצלמה"
     },
+    "camera_frame_title": {
+      "en": "Adjust image framing",
+      "he": "התאמת גבולות התמונה"
+    },
+    "camera_frame_hint": {
+      "en": "Zoom out to add black margins, or drag the image to reposition it.",
+      "he": "הקטן להוספת שוליים שחורים, או גרור את התמונה להזזה."
+    },
+    "camera_frame_zoom": {
+      "en": "Zoom:",
+      "he": "גודל:"
+    },
+    "camera_frame_reset": {
+      "en": "Reset",
+      "he": "איפוס"
+    },
+    "camera_frame_use": {
+      "en": "Use image",
+      "he": "אישור"
+    },
+    "camera_frame_cancel": {
+      "en": "Cancel",
+      "he": "ביטול"
+    },
     "no_device": {
       "en": "no Gesher device is running",
       "he": "סביבת גשר אינה פועלת"

@@ -490,6 +490,34 @@ jboolean WindowsHost_isLocalDocument(JNIEnv* env, jclass, jstring path) {
   return dev::IsLocalDocument(value) ? JNI_TRUE : JNI_FALSE;
 }
 
+jfloatArray WindowsHost_frameCameraImage(JNIEnv* env, jclass, jstring title, jstring path,
+    jint owner_pid, jobject active) {
+  if (!path || !active) {
+    ThrowNullPointerException(env, "Camera framing path and lifetime are required");
+    return nullptr;
+  }
+  jclass cls = env->GetObjectClass(active);
+  if (!cls) return nullptr;
+  jmethodID get = env->GetMethodID(cls, "getAsBoolean", "()Z");
+  env->DeleteLocalRef(cls);
+  if (!get) return nullptr;
+  DocumentActivity activity{env, active, get};
+  auto text = title ? Str(env, title) : std::u16string();
+  if (env->ExceptionCheck()) return nullptr;
+  auto file = Str(env, path);
+  if (env->ExceptionCheck()) return nullptr;
+  auto result = dev::FrameCameraImage(text, file, static_cast<uint32_t>(owner_pid),
+      DocumentIsActive, &activity);
+  if (env->ExceptionCheck()) return nullptr;
+  if (!result.available) return nullptr;
+  if (!result.confirmed) return env->NewFloatArray(0);
+  jfloatArray out = env->NewFloatArray(3);
+  if (!out) return nullptr;
+  jfloat values[3] = {result.scale, result.offset_x, result.offset_y};
+  env->SetFloatArrayRegion(out, 0, 3, values);
+  return out;
+}
+
 // Defined JNIEXPORT ... JNICALL (clipboard_bridge.cc, notifications.cc): System V
 // under GESHER already, so they are declared JNICALL here too and registered as they
 // are (GESHER_JNI_SYSV). Declared without JNICALL, GESHER_JNI's thunk called them
@@ -577,6 +605,8 @@ const JNINativeMethod gWindowsHostMethods[] = {
     {"nativePickDocuments", "(I" DEVSVC_STRING DEVSVC_STRING DEVSVC_STRING DEVSVC_STRING
         DEVSVC_STRING "ZZILjava/util/function/BooleanSupplier;)[Ljava/lang/String;", GESHER_JNI(WindowsHost_pickDocuments)},
     {"nativeIsLocalDocument", "(" DEVSVC_STRING ")Z", GESHER_JNI(WindowsHost_isLocalDocument)},
+    {"nativeFrameCameraImage", "(" DEVSVC_STRING DEVSVC_STRING
+        "ILjava/util/function/BooleanSupplier;)[F", GESHER_JNI(WindowsHost_frameCameraImage)},
     {"nativeIanaZone", "(" DEVSVC_STRING ")" DEVSVC_STRING, GESHER_JNI(WindowsHost_ianaZone)},
     {"nativeRegisterActivator", "(Z)I", GESHER_JNI(WindowsHost_registerActivator)},
     {"nativeRevokeActivator", "()V", GESHER_JNI(WindowsHost_revokeActivator)},

@@ -540,6 +540,24 @@ public final class WindowsHost {
 
     private static native boolean nativeIsLocalDocument(String windowsPath);
 
+    /**
+     * Shows a native preview dialog letting the user adjust zoom and pan for a selected camera
+     * image. Returns {@code {scale, offsetX, offsetY}} when confirmed, an empty array when
+     * cancelled, or {@code null} when the dialog is unavailable.
+     */
+    static float[] frameCameraImage(String title, String windowsPath, int ownerPid,
+            java.util.function.BooleanSupplier active) {
+        if (!available()) return null;
+        try {
+            return nativeFrameCameraImage(title, windowsPath, ownerPid, active);
+        } catch (UnsatisfiedLinkError unavailable) {
+            return null;
+        }
+    }
+
+    private static native float[] nativeFrameCameraImage(String title, String windowsPath,
+            int ownerPid, java.util.function.BooleanSupplier active);
+
     /** AppsUseLightTheme: 0 dark, 1 light, -1 missing/unreadable; never launches a process. */
     public static int appsUseLightTheme() {
         if (!available()) return -1;

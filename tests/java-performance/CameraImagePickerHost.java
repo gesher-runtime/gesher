@@ -76,10 +76,18 @@ public final class CameraImagePickerHost {
 
         Runnable whilePicking;
         boolean refuse;
+        CameraImageSource.Framing framing = CameraImageSource.Framing.DEFAULT;
+        boolean cancelFraming;
 
         @Override public File resolve(String windowsPath) throws IOException {
             if (refuse) throw new IOException("Android data/obb is not selectable");
             return new File(windowsPath);
+        }
+
+        @Override public CameraImageSource.Framing frame(String title, File file, int ownerPid,
+                BooleanSupplier active) {
+            calls.add("frame:" + ownerPid);
+            return cancelFraming ? null : framing;
         }
     }
 
@@ -156,13 +164,20 @@ public final class CameraImagePickerHost {
         ui.path = image.getPath();
         a = service.answer(10, 10010, "0", true);
         check(a.kind == CameraImageSource.Selection.IMAGE && image.equals(a.image)
-                && ui.calls.equals(List.of("ask:com.example.bank:2", "pick:10")),
-                "the user chose an image: the file picker, owned by the app's process");
+                && ui.calls.equals(List.of("ask:com.example.bank:2", "pick:10", "frame:10")),
+                "the user chose an image: the file picker and framing preview, owned by the app's process");
 
         ui.calls.clear();
         a = service.answer(10, 10010, CameraImageSource.DEVICE_ID, false);
-        check(a.kind == CameraImageSource.Selection.IMAGE && ui.calls.equals(List.of("pick:10")),
-                "the selected-image camera goes straight to the file picker");
+        check(a.kind == CameraImageSource.Selection.IMAGE
+                && ui.calls.equals(List.of("pick:10", "frame:10")),
+                "the selected-image camera goes straight to the file picker and framing preview");
+
+        ui.cancelFraming = true;
+        a = service.answer(10, 10010, CameraImageSource.DEVICE_ID, false);
+        check(a.kind == CameraImageSource.Selection.CANCELLED,
+                "cancelling the framing preview cancels the selection");
+        ui.cancelFraming = false;
 
         ui.path = null;
         a = service.answer(10, 10010, CameraImageSource.DEVICE_ID, false);
@@ -201,7 +216,7 @@ public final class CameraImagePickerHost {
         ui.whilePicking = null;
         check(a.kind == CameraImageSource.Selection.IMAGE
                 && second[0].kind == CameraImageSource.Selection.CANCELLED
-                && ui.calls.equals(List.of("pick:10")),
+                && ui.calls.equals(List.of("pick:10", "frame:10")),
                 "a question while another is open is refused without a dialog");
         a = service.answer(11, 10011, CameraImageSource.DEVICE_ID, false);
         check(a.kind == CameraImageSource.Selection.IMAGE, "the next question is asked once the first is answered");
@@ -219,6 +234,7 @@ public final class CameraImagePickerHost {
         FakeUi ui = new FakeUi();
         ui.answer = 1;
         ui.path = image.getPath();
+        ui.framing = CameraImageSource.Framing.of(0.75f, 0.10f, -0.05f);
         boolean[] enabled = {true};
         CameraSourceService service = new CameraSourceService(new FakeCallers(), ui, () -> enabled[0]);
         ServiceManager.services.put(CameraSourceService.NAME, service);
@@ -228,8 +244,11 @@ public final class CameraImagePickerHost {
             check(client.enabled(), "the setting reaches the app's process over Binder");
             CameraImageSource.Selection s = client.choose("0", true);
             check(s.kind == CameraImageSource.Selection.IMAGE
-                    && java.util.Arrays.equals(bytes, s.image),
-                    "the selected file's bytes arrive through the read-only descriptor");
+                    && java.util.Arrays.equals(bytes, s.image)
+                    && Math.abs(s.framing.scale - 0.75f) < 1e-5f
+                    && Math.abs(s.framing.offsetX - 0.10f) < 1e-5f
+                    && Math.abs(s.framing.offsetY + 0.05f) < 1e-5f,
+                    "the selected file's bytes and framing arrive through Binder");
             check(android.os.ParcelFileDescriptor.OPEN.get() == 0,
                     "the descriptor is closed once read");
             ui.answer = 0;
@@ -361,6 +380,20 @@ public final class CameraImagePickerHost {
         android.media.ExifInterface.orientation = android.media.ExifInterface.ORIENTATION_NORMAL;
         CameraImageSource.toNv12(new byte[] {1, 2, 3}, 64, 48);
         check(android.graphics.Bitmap.transformed == transformed + 1, "an upright image is not transformed");
+
+        // Framing zoom-out and pan: 320x240 into 64x48 (base scale 0.2) with 0.5x zoom and +0.25x, -0.25y pan.
+        CameraImageSource.Framing zoomedOut = CameraImageSource.Framing.of(0.5f, 0.25f, -0.25f);
+        CameraImageSource.toNv12(new byte[] {1, 2, 3}, 64, 48, zoomedOut);
+        android.graphics.RectF dst = android.graphics.Canvas.lastDst;
+        check(dst != null
+                && Math.abs((dst.right - dst.left) - 32f) < 1e-3f
+                && Math.abs((dst.bottom - dst.top) - 24f) < 1e-3f
+                && Math.abs(dst.left - 32f) < 1e-3f
+                && Math.abs(dst.top - 0f) < 1e-3f,
+                "framing scale and pan position the image on black margins");
+        CameraImageSource.Framing clamped = CameraImageSource.Framing.of(Float.NaN, 5f, -5f);
+        check(clamped.scale == 1.0f && clamped.offsetX == 1.0f && clamped.offsetY == -1.0f,
+                "invalid or out-of-range framing values are clamped");
         int[] quad = {0xFFFF0000, 0xFF0000FF, 0xFF0000FF, 0xFFFF0000};
         byte[] q = CameraImageSource.argbToNv12(quad, 2, 2);
         byte[] red = CameraImageSource.argbToNv12(new int[] {0xFFFF0000, 0xFFFF0000, 0xFFFF0000, 0xFFFF0000}, 2, 2);

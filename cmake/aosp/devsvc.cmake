@@ -10,6 +10,7 @@
 target_sources(framework_runtime PRIVATE
   ${CMAKE_SOURCE_DIR}/compat/devsvc/devsvc_natives.cc
   ${CMAKE_SOURCE_DIR}/compat/devsvc/devsvc_win32.cc
+  ${CMAKE_SOURCE_DIR}/compat/devsvc/camera_image_framing_win.cc
   ${CMAKE_SOURCE_DIR}/compat/devsvc/url_handlers_win.cc
   ${CMAKE_SOURCE_DIR}/compat/devsvc/devsvc_hardware.cc
   ${CMAKE_SOURCE_DIR}/compat/devsvc/home_region_win.cc
@@ -20,9 +21,12 @@ target_sources(framework_runtime PRIVATE
 # allocating its immutable input fails; other framework sources keep AOSP flags.
 set_property(SOURCE ${CMAKE_SOURCE_DIR}/compat/devsvc/devsvc_natives.cc
   APPEND PROPERTY COMPILE_OPTIONS -fexceptions)
+# camera_image_framing_win.cc draws a GDI preview and uses host_dialog_theme.h.
+set_property(SOURCE ${CMAKE_SOURCE_DIR}/compat/devsvc/camera_image_framing_win.cc
+  APPEND PROPERTY COMPILE_OPTIONS -UNOGDI)
 target_include_directories(framework_runtime PRIVATE ${CMAKE_SOURCE_DIR}/compat/devsvc)
 # gesher/egl_angle.h: the OpenGL ES version of the default EGL display (egl_gles.cc).
 set_property(SOURCE ${CMAKE_SOURCE_DIR}/compat/devsvc/devsvc_natives.cc
   APPEND PROPERTY INCLUDE_DIRECTORIES ${CMAKE_SOURCE_DIR}/compat/bionic/include)
-target_link_libraries(framework_runtime PUBLIC ole32 oleaut32 uuid user32 advapi32 shell32 shlwapi wtsapi32
-  iphlpapi)
+target_link_libraries(framework_runtime PUBLIC ole32 oleaut32 uuid user32 gdi32 comctl32
+  windowscodecs advapi32 shell32 shlwapi wtsapi32 iphlpapi)

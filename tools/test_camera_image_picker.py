@@ -102,14 +102,21 @@ public final class Color { public static final int BLACK = 0xFF000000; }
 public final class Paint { public static final int FILTER_BITMAP_FLAG = 2; public Paint(int flags) {} }
 ''',
     'android/graphics/RectF.java': '''package android.graphics;
-public final class RectF { public RectF(float l, float t, float r, float b) {} }
+public final class RectF {
+    public final float left, top, right, bottom;
+    public RectF(float l, float t, float r, float b) { left = l; top = t; right = r; bottom = b; }
+}
 ''',
     'android/graphics/Canvas.java': '''package android.graphics;
 public final class Canvas {
+    public static volatile RectF lastDst;
     private final Bitmap target;
     public Canvas(Bitmap bitmap) { target = bitmap; }
     public void drawColor(int color) { target.fill(color); }
-    public void drawBitmap(Bitmap bitmap, Object src, RectF dst, Paint paint) { target.fill(0xFF336699); }
+    public void drawBitmap(Bitmap bitmap, Object src, RectF dst, Paint paint) {
+        lastDst = dst;
+        target.fill(0xFF336699);
+    }
 }
 ''',
     'android/os/RemoteException.java': '''package android.os;
@@ -156,6 +163,8 @@ public final class Parcel {
     public boolean readBoolean() { return (Boolean) next(); }
     public void writeInt(int i) { values.add(i); }
     public int readInt() { return (Integer) next(); }
+    public void writeFloat(float f) { values.add(f); }
+    public float readFloat() { return (Float) next(); }
     public void writeNoException() { values.add(0); }
     public void writeException(Exception e) { values.add(-1); values.add(e); }
     public void readException() {
@@ -253,6 +262,8 @@ final class WindowsHost {
         throw new java.io.IOException("no Windows picker in host tests");
     }
     static boolean isLocalDocument(String windowsPath) { return true; }
+    static float[] frameCameraImage(String title, String windowsPath, int ownerPid,
+            java.util.function.BooleanSupplier active) { return null; }
 }
 ''',
     'com/gesher/server/DocumentPicker.java': '''package com.gesher.server;

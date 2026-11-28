@@ -183,5 +183,17 @@ DocumentSelection PickDocuments(int mode, const std::u16string& title,
 // requires a resolved local volume and locally available data.
 bool IsLocalDocument(const std::u16string& path);
 
+// Modal Win32 preview dialog for adjusting zoom and pan of a selected camera image
+// (CameraSourceService / CameraImageSource).
+struct CameraImageFraming {
+  bool available = false;  // false: non-interactive desktop or decode failure -> caller uses default.
+  bool confirmed = false;  // true: user accepted; false (when available): user cancelled.
+  float scale = 1.0f;      // zoom relative to fit-to-frame (0.30..3.00).
+  float offset_x = 0.0f;   // horizontal pan in camera frame widths (-1.0..1.0).
+  float offset_y = 0.0f;   // vertical pan in camera frame heights (-1.0..1.0).
+};
+CameraImageFraming FrameCameraImage(const std::u16string& title, const std::u16string& path,
+    uint32_t owner_pid, bool (*active)(void*), void* context);
+
 }  // namespace devsvc
 }  // namespace gesher
