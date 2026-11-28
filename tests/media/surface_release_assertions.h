@@ -13,7 +13,7 @@
 namespace surface_release_contract {
 constexpr size_t kPixelsBytes = 3840u * 2160u * sizeof(uint32_t);
 std::atomic<size_t> live_pixels{0};
-struct alignas(std::max_align_t) Allocation { size_t bytes; };
+struct alignas(__STDCPP_DEFAULT_NEW_ALIGNMENT__) Allocation { size_t bytes; };
 }
 
 void* operator new(size_t bytes) {
@@ -122,13 +122,144 @@ int Run() {
     ANativeWindowBuffer* dequeued = nullptr;
     ANativeWindow_Buffer locked = {};
     int fence = -1;
-    Check(surface->lock(&locked, nullptr) == 0, "lock shared producer storage");
-    Check(window->dequeueBuffer(window, &dequeued, &fence) == 0, "dequeue shares locked storage");
+    Check(surface->lock(&locked, nullptr) == 0, "lock CPU producer storage");
+    Check(window->dequeueBuffer(window, &dequeued, &fence) == 0 &&
+              dequeued != nullptr && dequeued->reserved[0] != locked.bits,
+          "dequeue cannot alias a CPU lock");
     surface->Abandon();
+    Check(live_pixels == baseline + 2 * kPixelsBytes, "both producers retain separate storage");
     Check(surface->unlockAndPost() == -ENODEV && live_pixels == baseline + kPixelsBytes,
-          "unlock preserves outstanding dequeue ownership");
+          "unlock releases only the CPU producer storage");
     Check(window->cancelBuffer(window, dequeued, fence) == 0 && live_pixels == baseline,
-          "final dequeue return releases shared storage");
+          "final dequeue return releases its storage");
+  }
+  {
+    auto surface = android::sp<QueueSurface>::make(4, 2);
+    auto other = android::sp<QueueSurface>::make(4, 2);
+    ANativeWindow* window = surface.get();
+    ANativeWindow* foreign_window = other.get();
+    ANativeWindowBuffer *first = nullptr, *second = nullptr, *foreign = nullptr, *extra = nullptr;
+    int fence = 123;
+    Check(window->dequeueBuffer(window, &first, &fence) == 0 && first != nullptr && fence == -1,
+          "dequeue first writable buffer");
+    Check(window->dequeueBuffer(window, &second, &fence) == 0 && second != nullptr && second != first,
+          "same geometry native dequeues own distinct slots");
+    Check(window->dequeueBuffer(window, &extra, &fence) == -EAGAIN && extra == nullptr,
+          "initial writes have bounded capacity and use WOULD_BLOCK");
+    Check(foreign_window->dequeueBuffer(foreign_window, &foreign, &fence) == 0 && foreign != nullptr,
+          "other window owns its own producer");
+    Check(window->queueBuffer(window, foreign, fence) == -EINVAL &&
+              window->cancelBuffer(window, foreign, fence) == -EINVAL && surface->frames() == 0,
+          "foreign queue and cancel leave local producers and frame count alone");
+    if (first != nullptr && second != nullptr) {
+      static_cast<uint32_t*>(first->reserved[0])[0] = 0xff112233;
+      static_cast<uint32_t*>(second->reserved[0])[0] = 0xff445566;
+      Check(window->queueBuffer(window, first, fence) == 0 &&
+                surface->Latest() && surface->Latest()->pixels[0] == 0xff112233,
+            "queue publishes only the returned producer pixels");
+      Check(window->queueBuffer(window, first, fence) == -EINVAL,
+            "returning the same producer twice does not republish");
+      Check(window->dequeueBuffer(window, &extra, &fence) == -ENOSYS && extra == nullptr,
+            "default limit is one outstanding producer after the first queue");
+      Check(window->cancelBuffer(window, second, fence) == 0 && surface->frames() == 1,
+            "cancel returns a slot without publishing pixels");
+      Check(window->dequeueBuffer(window, &extra, &fence) == 0 && extra != nullptr,
+            "a returned slot allows the next producer to make progress");
+      if (extra != nullptr) {
+        auto published = surface->Latest();
+        static_cast<uint32_t*>(extra->reserved[0])[0] = 0xffaabbcc;
+        Check(window->cancelBuffer(window, extra, fence) == 0 &&
+                  published && published->pixels[0] == 0xff112233,
+              "cancelled writes cannot modify the published frame");
+        ANativeWindow_Buffer cpu = {};
+        ARect damage{1, 0, 2, 1};
+        const int status = surface->lock(&cpu, &damage);
+        Check(status == 0 && damage.left == 0 && damage.top == 0 &&
+                  damage.right == 4 && damage.bottom == 2,
+              "cancelled storage requires a complete CPU repaint");
+        if (status == 0) surface->unlockAndPost();
+      }
+    }
+    Check(window->perform(window, NATIVE_WINDOW_SET_BUFFER_COUNT, 3) == 0,
+          "producer can negotiate two writable slots after first publication");
+    ANativeWindowBuffer *negotiated_a = nullptr, *negotiated_b = nullptr;
+    Check(window->dequeueBuffer(window, &negotiated_a, &fence) == 0 &&
+              window->dequeueBuffer(window, &negotiated_b, &fence) == 0 &&
+              negotiated_a != nullptr && negotiated_b != nullptr && negotiated_a != negotiated_b,
+          "negotiated count allows two actual independent writes");
+    Check(window->perform(window, NATIVE_WINDOW_SET_BUFFER_COUNT, 0) == -EINVAL,
+          "cannot reduce capacity below the slots currently owned by producers");
+    if (negotiated_a != nullptr) window->cancelBuffer(window, negotiated_a, fence);
+    if (negotiated_b != nullptr) window->cancelBuffer(window, negotiated_b, fence);
+    Check(window->perform(window, NATIVE_WINDOW_SET_BUFFER_COUNT, 0) == 0,
+          "reset restores the default producer capacity");
+    Check(window->perform(window, NATIVE_WINDOW_SET_BUFFER_COUNT, 4) == -EINVAL,
+          "producer count above the backend capacity is rejected");
+    ANativeWindowBuffer *reset = nullptr, *over = nullptr;
+    Check(window->dequeueBuffer(window, &reset, &fence) == 0 &&
+              window->dequeueBuffer(window, &over, &fence) == -ENOSYS && over == nullptr,
+          "producer uses the restored one-slot limit");
+    if (reset != nullptr) window->cancelBuffer(window, reset, fence);
+    if (over != nullptr) window->cancelBuffer(window, over, fence);
+    if (foreign != nullptr)
+      Check(foreign_window->cancelBuffer(foreign_window, foreign, fence) == 0,
+            "a rejected foreign return leaves its real owner able to cancel");
+  }
+  {
+    auto surface = android::sp<QueueSurface>::make(4, 2);
+    ANativeWindow* window = surface.get();
+    ANativeWindow_Buffer cpu = {};
+    ANativeWindowBuffer* native = nullptr;
+    int fence = -1;
+    const int locked = surface->lock(&cpu, nullptr);
+    Check(locked == 0, "take writable CPU slot");
+    const int dequeued = window->dequeueBuffer(window, &native, &fence);
+    Check(dequeued == 0 && native != nullptr, "take another writable native slot");
+    if (locked == 0 && dequeued == 0 && native != nullptr) {
+      static_cast<uint32_t*>(cpu.bits)[0] = 0xff123456;
+      static_cast<uint32_t*>(native->reserved[0])[0] = 0xfffedcba;
+      Check(window->queueBuffer(window, native, fence) == 0 &&
+                surface->Latest() && surface->Latest()->pixels[0] == 0xfffedcba,
+            "native slot publishes while CPU owns a separate writable slot");
+      const auto earlier = surface->Latest();
+      Check(surface->unlockAndPost() == 0 &&
+                surface->Latest() && surface->Latest()->pixels[0] == 0xff123456 &&
+                earlier && earlier->pixels[0] == 0xfffedcba,
+            "CPU unlock publishes its own pixels and retains immutable native frame");
+    }
+  }
+  {
+    // Surface::cancelBuffer: BAD_VALUE for a buffer the queue does not own,
+    // OK for an owned one after the consumer is abandoned, single buffer too.
+    auto single = android::sp<QueueSurface>::make(4, 2, true);
+    auto other = android::sp<QueueSurface>::make(4, 2);
+    ANativeWindow* window = single.get();
+    ANativeWindow* foreign_window = other.get();
+    ANativeWindowBuffer *owned = nullptr, *foreign = nullptr;
+    int fence = -1;
+    Check(window->dequeueBuffer(window, &owned, &fence) == 0 && owned != nullptr,
+          "dequeue the single buffer");
+    Check(foreign_window->dequeueBuffer(foreign_window, &foreign, &fence) == 0 && foreign != nullptr,
+          "dequeue another window's buffer");
+    single->Abandon();
+    Check(window->queueBuffer(window, foreign, fence) == -EINVAL &&
+              window->cancelBuffer(window, foreign, fence) == -EINVAL,
+          "an abandoned queue still reports an unowned buffer as BAD_VALUE");
+    Check(window->cancelBuffer(window, owned, fence) == 0,
+          "an owned single buffer cancels successfully after abandonment");
+    if (foreign != nullptr) foreign_window->cancelBuffer(foreign_window, foreign, fence);
+
+    // A CPU lock is a dequeued slot: after publication it uses the one
+    // writable slot the default limit allows.
+    auto queue = android::sp<QueueSurface>::make(4, 2);
+    ANativeWindow* queue_window = queue.get();
+    ANativeWindow_Buffer cpu = {};
+    ANativeWindowBuffer* native = nullptr;
+    Check(queue->lock(&cpu, nullptr) == 0 && queue->unlockAndPost() == 0, "publish a first frame");
+    Check(queue->lock(&cpu, nullptr) == 0, "CPU lock after publication");
+    Check(queue_window->dequeueBuffer(queue_window, &native, &fence) == -ENOSYS && native == nullptr,
+          "a CPU lock counts against the dequeued-buffer limit");
+    Check(queue->unlockAndPost() == 0, "the CPU producer posts its frame");
   }
   std::printf("surface release contracts: %d checks, %d failures; 4K queue bytes=%zu\n",
               checks, failures, 2 * kPixelsBytes);

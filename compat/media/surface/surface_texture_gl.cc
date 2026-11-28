@@ -198,6 +198,10 @@ int GlTextureConsumer::UpdateTexImage(const std::shared_ptr<const SurfaceFrame>&
     ALOGE("SurfaceTexture: updateTexImage: SurfaceTexture is abandoned!");
     return kNoInit;
   }
+  if (mode_ != Mode::kAttached) {
+    ALOGE("SurfaceTexture: updateTexImage: SurfaceTexture is not attached to a GL context");
+    return kInvalidOperation;
+  }
   if (int err = CheckEglState(false); err != kOk) return err;
   const Angle* a = GetAngle();
   if (latest == nullptr || latest->number == latched_number_ || latest->width <= 0 ||
@@ -219,11 +223,12 @@ int GlTextureConsumer::UpdateTexImage(const std::shared_ptr<const SurfaceFrame>&
   current_ = latest;
   latched_number_ = latest->number;
   timestamp_ns_ = latest->timestamp_ns;
+  dataspace_ = latest->dataspace;
   std::memcpy(transform_, kFlipV, sizeof(transform_));
   return kOk;
 }
 
-int GlTextureConsumer::ReleaseTexImage() {
+int GlTextureConsumer::ReleaseTexImage(uint64_t* released_frame) {
   std::lock_guard<std::mutex> lock(mutex_);
   if (abandoned_) {
     ALOGE("SurfaceTexture: releaseTexImage: SurfaceTexture is abandoned!");
@@ -233,8 +238,10 @@ int GlTextureConsumer::ReleaseTexImage() {
     if (int err = CheckEglState(true); err != kOk) return err;
   }
   if (current_ == nullptr) return kOk;
+  *released_frame = current_->number;
   current_.reset();
   timestamp_ns_ = 0;
+  dataspace_ = 0;
   if (mode_ == Mode::kAttached) {
     static const uint32_t kBlack = 0xff000000u;
     return Bind(&kBlack, 1, 1);
@@ -316,6 +323,11 @@ void GlTextureConsumer::Abandon() {
 int64_t GlTextureConsumer::Timestamp() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return timestamp_ns_;
+}
+
+int32_t GlTextureConsumer::Dataspace() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return dataspace_;
 }
 
 void GlTextureConsumer::TransformMatrix(float out[16]) const {

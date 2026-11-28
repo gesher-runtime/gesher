@@ -1,0 +1,841 @@
+// Copyright 2026 The Gesher Authors
+// SPDX-License-Identifier: Apache-2.0
+#include <media/NdkMediaCodec.h>
+#include <media/NdkMediaFormat.h>
+#ifndef CODEC_BUFFER_COMPONENT
+#include <android/hardware_buffer.h>
+#include <android/native_window.h>
+#include <media/NdkImageReader.h>
+#ifdef _WIN32
+#include <gesher/awake_clock.h>
+#endif
+#include <pthread.h>
+#include <stdatomic.h>
+#include <time.h>
+#endif
+
+#ifndef _WIN32
+#include <dlfcn.h>
+#else
+void* CodecFixtureFindSymbol(const char* name);
+#endif
+
+#include <inttypes.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#ifndef CODEC_STANDALONE
+#include <jni.h>
+#endif
+
+enum { kWidth = 128, kHeight = 96, kLumaBytes = kWidth * kHeight, kFrameBytes = kLumaBytes * 3 / 2 };
+enum { kFrames = 3 };
+static const uint8_t kLuma[kFrames] = {48, 112, 192};
+static const uint64_t kFirstTime = UINT64_C(0x100001234);
+static const uint64_t kInterval = 33333;
+
+struct Packet {
+  uint8_t* data;
+  size_t size;
+  uint64_t time;
+};
+
+static bool Feed(AMediaCodec* codec, const uint8_t* data, size_t size, uint64_t time, uint32_t flags) {
+  const ssize_t slot = AMediaCodec_dequeueInputBuffer(codec, 2000000);
+  if (slot < 0) {
+    printf("input dequeue returned %zd\n", slot);
+    return false;
+  }
+  size_t capacity = 0;
+  uint8_t* bytes = AMediaCodec_getInputBuffer(codec, (size_t)slot, &capacity);
+  const size_t offset = size != 0 && capacity >= size + 8 ? 8 : 0;
+  if (bytes == NULL || capacity < offset + size) {
+    printf("input slot %zd provides %zu bytes for %zu\n", slot, capacity, size);
+    return false;
+  }
+  if (size != 0) memcpy(bytes + offset, data, size);
+  const media_status_t status = AMediaCodec_queueInputBuffer(codec, (size_t)slot, (int64_t)offset,
+                                                            size, time, flags);
+  if (status != AMEDIA_OK) printf("queue input returned %d\n", status);
+  return status == AMEDIA_OK;
+}
+
+static bool ContainsIdr(const uint8_t* bytes, size_t size) {
+  for (size_t i = 0; i + 3 < size; ++i) {
+    if (bytes[i] == 0 && bytes[i + 1] == 0 && bytes[i + 2] == 1 &&
+        (bytes[i + 3] & 0x1f) == 5) return true;
+  }
+  return false;
+}
+
+static bool FeedPicture(AMediaCodec* encoder, int ordinal) {
+  uint8_t frame[kFrameBytes];
+  memset(frame, kLuma[ordinal], kLumaBytes);
+  memset(frame + kLumaBytes, 128, sizeof(frame) - kLumaBytes);
+  return Feed(encoder, frame, sizeof(frame), kFirstTime + ordinal * kInterval, 0);
+}
+
+static bool CheckCodecKeys(void) {
+  struct CodecKey {
+    const char* name;
+    const char* value;
+    const char* const* imported;
+  };
+#define KEY(name, value) {#name, value, &name}
+  const struct CodecKey keys[] = {
+      KEY(AMEDIACODEC_KEY_HDR10_PLUS_INFO, "hdr10-plus-info"),
+      KEY(AMEDIACODEC_KEY_LOW_LATENCY, "low-latency"),
+      KEY(AMEDIACODEC_KEY_OFFSET_TIME, "time-offset-us"),
+      KEY(AMEDIACODEC_KEY_REQUEST_SYNC_FRAME, "request-sync"),
+      KEY(AMEDIACODEC_KEY_SUSPEND, "drop-input-frames"),
+      KEY(AMEDIACODEC_KEY_SUSPEND_TIME, "drop-start-time-us"),
+      KEY(AMEDIACODEC_KEY_VIDEO_BITRATE, "video-bitrate"),
+  };
+#undef KEY
+#ifndef _WIN32
+  void* library = dlopen("libmediandk.so", RTLD_NOW);
+  if (library == NULL) return false;
+#endif
+  int failures = 0;
+  for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); ++i) {
+    const struct CodecKey* key = &keys[i];
+#ifdef _WIN32
+    const char* const* slot = CodecFixtureFindSymbol(key->name);
+#else
+    const char* const* slot = dlsym(library, key->name);
+#endif
+    if (slot == NULL || slot != key->imported || *slot == NULL || strcmp(*slot, key->value) != 0) {
+      ++failures;
+      printf("NDK codec parameter key invalid: %s\n", key->name);
+    }
+  }
+#ifndef _WIN32
+  dlclose(library);
+#endif
+  if (failures != 0) return false;
+  puts("NDK codec parameter keys: all passed");
+  return true;
+}
+
+static bool IsEmptyCodecFormat(AMediaFormat* format) {
+  if (format == NULL) return false;
+  const char* mime = NULL;
+  int32_t width = 0;
+  const bool empty = !AMediaFormat_getString(format, "mime", &mime) &&
+                     !AMediaFormat_getInt32(format, "width", &width);
+  AMediaFormat_delete(format);
+  return empty;
+}
+
+static bool InvalidBufferSizesUnchanged(AMediaCodec* codec) {
+  size_t input_size = 123;
+  size_t output_size = 234;
+  return AMediaCodec_getInputBuffer(codec, SIZE_MAX, &input_size) == NULL && input_size == 123 &&
+         AMediaCodec_getOutputBuffer(codec, SIZE_MAX, &output_size) == NULL && output_size == 234;
+}
+
+static bool ActionCodesAgree(void) {
+  const int32_t codes[] = {INT32_MIN, -1, 0, 1, 2, 3, INT32_MAX};
+  for (size_t i = 0; i < sizeof(codes) / sizeof(codes[0]); ++i) {
+    const int32_t code = codes[i];
+    if (AMediaCodecActionCode_isRecoverable(code) != (code == 2) ||
+        AMediaCodecActionCode_isTransient(code) != (code == 1)) return false;
+  }
+  return true;
+}
+
+static bool Dimensions(AMediaFormat* format) {
+  int32_t width = 0, height = 0;
+  return format != NULL && AMediaFormat_getInt32(format, "width", &width) &&
+      AMediaFormat_getInt32(format, "height", &height) && width == kWidth && height == kHeight;
+}
+
+#ifndef CODEC_BUFFER_COMPONENT
+static bool CheckSurfaceImage(AImage* image, int ordinal, int64_t expected_time) {
+  int32_t width = 0, height = 0, stride = 0, length = 0, format = 0;
+  int64_t timestamp = -1;
+  uint8_t* plane = NULL;
+  if (AImage_getWidth(image, &width) != AMEDIA_OK || width != kWidth ||
+      AImage_getHeight(image, &height) != AMEDIA_OK || height != kHeight ||
+      AImage_getFormat(image, &format) != AMEDIA_OK || format != AIMAGE_FORMAT_YUV_420_888 ||
+      AImage_getTimestamp(image, &timestamp) != AMEDIA_OK || timestamp != expected_time ||
+      AImage_getPlaneRowStride(image, 0, &stride) != AMEDIA_OK || stride < kWidth ||
+      AImage_getPlaneData(image, 0, &plane, &length) != AMEDIA_OK ||
+      plane == NULL || length <= stride + kWidth / 2) {
+    printf("NDK codec surface image invalid: image=%d %dx%d stride=%d length=%d timestamp=%" PRId64
+           " expected=%" PRId64 "\n", ordinal, width, height, stride, length, timestamp, expected_time);
+    return false;
+  }
+  AHardwareBuffer* storage = NULL;
+  if (AImage_getHardwareBuffer(image, &storage) != AMEDIA_OK || storage == NULL) return false;
+  AHardwareBuffer_Desc desc = {0};
+  AHardwareBuffer_describe(storage, &desc);
+  const uint64_t read_usage = desc.usage & AHARDWAREBUFFER_USAGE_CPU_READ_MASK;
+  bool usable_read_usage = read_usage == AHARDWAREBUFFER_USAGE_CPU_READ_RARELY;
+#ifndef CODEC_PARAMETER_CONTROL_COMPONENT
+  usable_read_usage = usable_read_usage || read_usage == AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN;
+#endif
+  if (!usable_read_usage) {
+    printf("NDK codec surface image %d has unexpected buffer usage=0x%" PRIx64 "\n", ordinal, desc.usage);
+    return false;
+  }
+  const int luma = plane[stride + kWidth / 2];
+  printf("NDK codec surface frame=%d luma=%d timestamp=%" PRId64 "\n", ordinal, luma, timestamp);
+  return abs(luma - kLuma[ordinal]) <= 8;
+}
+
+static AImage* WaitForImage(AImageReader* reader) {
+  for (int i = 0; i < 200; ++i) {
+    AImage* image = NULL;
+    const media_status_t status = AImageReader_acquireNextImage(reader, &image);
+    if (status == AMEDIA_OK) return image;
+    if (status != AMEDIA_IMGREADER_NO_BUFFER_AVAILABLE) {
+      printf("NDK codec surface acquire returned %d\n", status);
+      return NULL;
+    }
+    const struct timespec pause = {.tv_nsec = 10000000};
+    nanosleep(&pause, NULL);
+  }
+  puts("NDK codec surface timed out waiting for a decoded image");
+  return NULL;
+}
+
+struct RenderEvents {
+  AMediaCodec* codec;
+  pthread_t caller;
+  atomic_int_fast64_t submitted_at, media_time_us, system_nanos;
+  atomic_bool right_codec, separate_thread;
+  atomic_int valid, invalid;
+};
+
+#if defined(_WIN32) && defined(__x86_64__)
+#define FRAME_CALLBACK_ABI __attribute__((sysv_abi))
+#else
+#define FRAME_CALLBACK_ABI
+#endif
+
+static void FRAME_CALLBACK_ABI OnFrameRendered(AMediaCodec* codec, void* context, int64_t media_time_us,
+                                              int64_t system_nanos) {
+  struct RenderEvents* events = context;
+  const bool right_codec = codec == events->codec;
+  const bool separate_thread = !pthread_equal(events->caller, pthread_self());
+  atomic_store(&events->right_codec, right_codec);
+  atomic_store(&events->separate_thread, separate_thread);
+  atomic_store(&events->media_time_us, media_time_us);
+  atomic_store(&events->system_nanos, system_nanos);
+  const bool valid = right_codec && separate_thread && media_time_us == (int64_t)kFirstTime &&
+      system_nanos >= atomic_load(&events->submitted_at);
+  atomic_fetch_add(valid ? &events->valid : &events->invalid, 1);
+}
+
+static bool VerifyRenderedCallback(struct RenderEvents* events) {
+  for (int i = 0; i < 100 && atomic_load(&events->valid) == 0 &&
+                        atomic_load(&events->invalid) == 0; ++i) {
+    const struct timespec pause = {.tv_nsec = 10000000};
+    nanosleep(&pause, NULL);
+  }
+  printf("NDK codec frame rendered: valid=%d invalid=%d\n",
+         atomic_load(&events->valid), atomic_load(&events->invalid));
+  if (atomic_load(&events->invalid) != 0) {
+    printf("NDK codec frame callback payload: right-codec=%d separate-thread=%d "
+           "pts=%" PRId64 " system-nanos=%" PRId64 " submitted-at=%" PRId64 "\n",
+           atomic_load(&events->right_codec), atomic_load(&events->separate_thread),
+           (int64_t)atomic_load(&events->media_time_us), (int64_t)atomic_load(&events->system_nanos),
+           (int64_t)atomic_load(&events->submitted_at));
+  }
+#ifdef CODEC_PARAMETER_CONTROL_COMPONENT
+  if (atomic_load(&events->valid) != 1) return false;
+#endif
+  // Android allows omission of timing samples for some output surfaces.
+  return atomic_load(&events->invalid) == 0;
+}
+
+static bool DecodeToReader(AMediaFormat* format, const struct Packet packets[kFrames]) {
+  AMediaCodec* codec = AMediaCodec_createDecoderByType("video/avc");
+  AImageReader* reader = NULL;
+  AImageReader* replacement = NULL;
+  AImageReader* abandoned = NULL;
+  ANativeWindow* replacement_window = NULL;
+  ANativeWindow* abandoned_window = NULL;
+  AImage* first = NULL;
+  ANativeWindow* window = NULL;
+  int64_t first_time = -1;
+  int count = 0;
+  bool eos = false, passed = false;
+  struct RenderEvents events = {.codec = codec, .caller = pthread_self()};
+  if (codec == NULL ||
+      AMediaCodec_setOnFrameRenderedCallback(codec, (AMediaCodecOnFrameRendered)OnFrameRendered,
+                                             &events) != AMEDIA_OK ||
+      AImageReader_newWithUsage(kWidth, kHeight, AIMAGE_FORMAT_YUV_420_888,
+                                AHARDWAREBUFFER_USAGE_CPU_READ_RARELY, 2, &reader) != AMEDIA_OK ||
+      AImageReader_getWindow(reader, &window) != AMEDIA_OK ||
+      AMediaCodec_configure(codec, format, window, NULL, 0) != AMEDIA_OK ||
+      AMediaCodec_start(codec) != AMEDIA_OK) {
+    puts("NDK codec surface could not start a decoder on its YUV reader");
+    goto cleanup;
+  }
+  if (AImageReader_newWithUsage(kWidth, kHeight, AIMAGE_FORMAT_YUV_420_888,
+                                AHARDWAREBUFFER_USAGE_CPU_READ_RARELY, 2, &replacement) != AMEDIA_OK ||
+      AImageReader_getWindow(replacement, &replacement_window) != AMEDIA_OK ||
+      AImageReader_newWithUsage(kWidth, kHeight, AIMAGE_FORMAT_YUV_420_888,
+                                AHARDWAREBUFFER_USAGE_CPU_READ_RARELY, 2, &abandoned) != AMEDIA_OK ||
+      AImageReader_getWindow(abandoned, &abandoned_window) != AMEDIA_OK) goto cleanup;
+  // The window outlives its consumer so the call can receive a valid pointer
+  // to an abandoned producer. The borrowed getWindow reference stays owned by the reader.
+  ANativeWindow_acquire(abandoned_window);
+  AImageReader_delete(abandoned);
+  abandoned = NULL;
+
+  for (int i = 0; i < kFrames; ++i) {
+    if (!Feed(codec, packets[i].data, packets[i].size, packets[i].time, 0)) goto cleanup;
+  }
+  if (!Feed(codec, NULL, 0, kFirstTime + kFrames * kInterval, AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM))
+    goto cleanup;
+
+  for (int attempt = 0; attempt < 24 && !eos; ++attempt) {
+    AMediaCodecBufferInfo info = {0};
+    const ssize_t index = AMediaCodec_dequeueOutputBuffer(codec, &info, 250000);
+    if (index < 0) {
+      if (index >= AMEDIACODEC_INFO_OUTPUT_BUFFERS_CHANGED) continue;
+      printf("NDK codec surface dequeue returned %zd\n", index);
+      goto cleanup;
+    }
+    eos = (info.flags & AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM) != 0;
+    if (count < kFrames && (uint64_t)info.presentationTimeUs == packets[count].time) {
+#ifdef _WIN32
+      // Native component builds bypass the guest clock_gettime shim.
+      const int64_t timestamp = gesher_monotonic_nanos();
+#else
+      struct timespec now;
+      if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) goto cleanup;
+      const int64_t timestamp = (int64_t)now.tv_sec * INT64_C(1000000000) + now.tv_nsec;
+#endif
+      if (count == 0) {
+        atomic_store(&events.submitted_at, timestamp);
+      } else if (count == 1) {
+        const media_status_t status = AMediaCodec_setOutputSurface(codec, replacement_window);
+        printf("NDK codec replace live surface: status=%d\n", status);
+        if (status != AMEDIA_OK) goto cleanup;
+      } else {
+        const media_status_t status = AMediaCodec_setOutputSurface(codec, abandoned_window);
+        printf("NDK codec replace abandoned surface: status=%d\n", status);
+        if (status != AMEDIA_ERROR_UNKNOWN) goto cleanup;
+      }
+      if (AMediaCodec_releaseOutputBufferAtTime(codec, (size_t)index, timestamp) != AMEDIA_OK)
+        goto cleanup;
+      AImage* image = WaitForImage(count == 0 ? reader : replacement);
+      if (image == NULL) goto cleanup;
+      const bool valid = CheckSurfaceImage(image, count, timestamp);
+      if (count == 0) {
+        first = image;
+        first_time = timestamp;
+        if (!VerifyRenderedCallback(&events) ||
+            AMediaCodec_setOnFrameRenderedCallback(codec, NULL, NULL) != AMEDIA_OK) goto cleanup;
+      } else {
+        AImage_delete(image);
+      }
+      if (!valid) goto cleanup;
+      ++count;
+    } else if (AMediaCodec_releaseOutputBuffer(codec, (size_t)index, false) != AMEDIA_OK) {
+      goto cleanup;
+    }
+  }
+  AImage* extra = NULL;
+  const media_status_t stale = AImageReader_acquireNextImage(reader, &extra);
+  if (extra != NULL) AImage_delete(extra);
+  passed = eos && count == kFrames && stale == AMEDIA_IMGREADER_NO_BUFFER_AVAILABLE &&
+           AMediaCodec_stop(codec) == AMEDIA_OK && CheckSurfaceImage(first, 0, first_time);
+
+cleanup:
+  if (first != NULL) AImage_delete(first);
+  if (codec != NULL) AMediaCodec_delete(codec);
+  if (reader != NULL) AImageReader_delete(reader);
+  if (replacement != NULL) AImageReader_delete(replacement);
+  if (abandoned != NULL) AImageReader_delete(abandoned);
+  if (abandoned_window != NULL && abandoned == NULL) ANativeWindow_release(abandoned_window);
+  passed = passed && atomic_load(&events.valid) <= 1 && atomic_load(&events.invalid) == 0;
+  if (passed) puts("NDK codec surface: all passed");
+  return passed;
+}
+#endif
+
+#if !defined(_WIN32) && !defined(CODEC_BUFFER_COMPONENT)
+enum AsyncEventType { ASYNC_INPUT, ASYNC_OUTPUT, ASYNC_FORMAT };
+struct AsyncEvent {
+  enum AsyncEventType type;
+  int32_t index;
+  AMediaCodecBufferInfo info;
+};
+struct AsyncDecode {
+  pthread_mutex_t mutex;
+  pthread_cond_t changed;
+  AMediaCodec* codec;
+  pthread_t submitting_thread;
+  pthread_t callback_thread;
+  struct AsyncEvent events[64];
+  size_t head, tail;
+  int received;
+  bool ok;
+};
+
+static void PostAsyncEvent(AMediaCodec* codec, struct AsyncDecode* test, struct AsyncEvent event) {
+  const pthread_t thread = pthread_self();
+  pthread_mutex_lock(&test->mutex);
+  if (test->received++ == 0) test->callback_thread = thread;
+  if (codec != test->codec || pthread_equal(thread, test->submitting_thread) ||
+      !pthread_equal(thread, test->callback_thread) ||
+      test->tail >= sizeof(test->events) / sizeof(test->events[0])) {
+    test->ok = false;
+  } else {
+    test->events[test->tail++] = event;
+  }
+  pthread_cond_broadcast(&test->changed);
+  pthread_mutex_unlock(&test->mutex);
+}
+
+static void OnAsyncInput(AMediaCodec* codec, void* userdata, int32_t index) {
+  PostAsyncEvent(codec, userdata, (struct AsyncEvent){.type = ASYNC_INPUT, .index = index});
+}
+
+static void OnAsyncOutput(AMediaCodec* codec, void* userdata, int32_t index,
+                          AMediaCodecBufferInfo* info) {
+  PostAsyncEvent(codec, userdata, (struct AsyncEvent){.type = ASYNC_OUTPUT, .index = index, .info = *info});
+}
+
+static void OnAsyncFormat(AMediaCodec* codec, void* userdata, AMediaFormat* format) {
+  const bool dimensions = Dimensions(format);
+  AMediaFormat_delete(format);
+  PostAsyncEvent(codec, userdata, (struct AsyncEvent){.type = ASYNC_FORMAT, .index = dimensions ? 1 : 0});
+}
+
+static void OnAsyncError(AMediaCodec* codec, void* userdata, media_status_t error,
+                         int32_t action, const char* detail) {
+  (void)codec;
+  struct AsyncDecode* test = userdata;
+  fprintf(stderr, "NDK async codec error %d, action %" PRId32 ": %s\n", error, action, detail);
+  pthread_mutex_lock(&test->mutex);
+  test->ok = false;
+  pthread_cond_broadcast(&test->changed);
+  pthread_mutex_unlock(&test->mutex);
+}
+
+static bool NextAsyncEvent(struct AsyncDecode* test, struct AsyncEvent* event) {
+  struct timespec deadline;
+  if (clock_gettime(CLOCK_REALTIME, &deadline) != 0) return false;
+  deadline.tv_sec += 5;
+  pthread_mutex_lock(&test->mutex);
+  while (test->ok && test->head == test->tail) {
+    if (pthread_cond_timedwait(&test->changed, &test->mutex, &deadline) != 0) {
+      test->ok = false;
+      break;
+    }
+  }
+  const bool ok = test->ok;
+  if (ok) *event = test->events[test->head++];
+  pthread_mutex_unlock(&test->mutex);
+  return ok;
+}
+
+static bool QueueAsyncInput(AMediaCodec* codec, int32_t index, const uint8_t* data,
+                            size_t size, uint64_t time, uint32_t flags) {
+  size_t capacity = 0;
+  uint8_t* input = AMediaCodec_getInputBuffer(codec, (size_t)index, &capacity);
+  if (input == NULL || size > capacity) return false;
+  if (size != 0) memcpy(input, data, size);
+  return AMediaCodec_queueInputBuffer(codec, (size_t)index, 0, size, time, flags) == AMEDIA_OK;
+}
+
+static bool CheckAsyncOutput(AMediaCodec* codec, const struct AsyncEvent* event,
+                             bool format_seen, unsigned* decoded) {
+  const AMediaCodecBufferInfo* info = &event->info;
+  if (info->size > 0) {
+    const uint8_t* bytes = AMediaCodec_getOutputBuffer(codec, (size_t)event->index, NULL);
+    const uint64_t time = (uint64_t)info->presentationTimeUs;
+    const uint64_t ordinal = (time - kFirstTime) / kInterval;
+    if (!format_seen || bytes == NULL || info->offset < 0 || info->size < kWidth ||
+        time < kFirstTime || ordinal >= kFrames || time != kFirstTime + ordinal * kInterval ||
+        (*decoded & (1U << ordinal)) != 0) return false;
+    if (abs(bytes[info->offset + kWidth / 2] - kLuma[ordinal]) > 8) return false;
+    *decoded |= 1U << ordinal;
+  }
+  return AMediaCodec_releaseOutputBuffer(codec, (size_t)event->index, false) == AMEDIA_OK;
+}
+
+static bool DecodeWithAsyncCallbacks(AMediaFormat* format, const struct Packet packets[kFrames],
+                                     bool lookup) {
+  AMediaCodec* codec = AMediaCodec_createDecoderByType("video/avc");
+  if (codec == NULL) return false;
+  struct AsyncDecode test = {
+    .mutex = PTHREAD_MUTEX_INITIALIZER,
+    .changed = PTHREAD_COND_INITIALIZER,
+    .codec = codec,
+    .submitting_thread = pthread_self(),
+    .ok = true,
+  };
+  const AMediaCodecOnAsyncNotifyCallback callbacks = {
+    OnAsyncInput, OnAsyncOutput, OnAsyncFormat, OnAsyncError,
+  };
+  const char* operation = "register";
+  void* library = NULL;
+  bool ok = false;
+  unsigned decoded = 0;
+  if (lookup) {
+    library = dlopen("libmediandk.so", RTLD_NOW);
+    if (library == NULL) goto cleanup;
+    media_status_t (*set_async)(AMediaCodec*, AMediaCodecOnAsyncNotifyCallback, void*) =
+        dlsym(library, "AMediaCodec_setAsyncNotifyCallback");
+    if (set_async == NULL || set_async(codec, callbacks, &test) != AMEDIA_OK) goto cleanup;
+  } else if (AMediaCodec_setAsyncNotifyCallback(codec, callbacks, &test) != AMEDIA_OK) {
+    goto cleanup;
+  }
+
+  operation = "configure and observe initially owned input";
+  struct AsyncEvent event;
+  if (AMediaCodec_configure(codec, format, NULL, NULL, 0) != AMEDIA_OK ||
+      AMediaCodec_start(codec) != AMEDIA_OK ||
+      !NextAsyncEvent(&test, &event) || event.type != ASYNC_INPUT) goto cleanup;
+
+  operation = "reject synchronous dequeue in callback mode";
+  AMediaCodecBufferInfo info = {0};
+  if (AMediaCodec_dequeueInputBuffer(codec, 0) != AMEDIA_ERROR_UNKNOWN ||
+      AMediaCodec_dequeueOutputBuffer(codec, &info, 0) != AMEDIA_ERROR_UNKNOWN) goto cleanup;
+
+  operation = "flush without starting new input callbacks";
+  if (AMediaCodec_flush(codec) != AMEDIA_OK) goto cleanup;
+  pthread_mutex_lock(&test.mutex);
+  const int input_count = test.received;
+  test.head = test.tail = 0;
+  pthread_mutex_unlock(&test.mutex);
+  const struct timespec quiet = {.tv_nsec = 50000000};
+  nanosleep(&quiet, NULL);
+  pthread_mutex_lock(&test.mutex);
+  const bool no_callbacks = test.received == input_count;
+  pthread_mutex_unlock(&test.mutex);
+  if (!no_callbacks) goto cleanup;
+
+  // A flush before the first output-format notification can discard the
+  // codec-specific data accepted at configure. Resubmit it with its flag.
+  void* csd[2] = {NULL, NULL};
+  size_t csd_size[2] = {0, 0};
+  AMediaFormat_getBuffer(format, "csd-0", &csd[0], &csd_size[0]);
+  AMediaFormat_getBuffer(format, "csd-1", &csd[1], &csd_size[1]);
+  int next_csd = 0;
+  operation = "restart and read decoded frames through callback slots";
+  if (AMediaCodec_start(codec) != AMEDIA_OK) goto cleanup;
+  bool format_seen = false;
+  bool eos = false;
+  int next = 0;
+  while (!eos) {
+    if (!NextAsyncEvent(&test, &event)) goto cleanup;
+    switch (event.type) {
+      case ASYNC_INPUT:
+        while (next_csd < 2 && csd_size[next_csd] == 0) ++next_csd;
+        if (next_csd < 2) {
+          if (!QueueAsyncInput(codec, event.index, csd[next_csd], csd_size[next_csd], 0,
+                               AMEDIACODEC_BUFFER_FLAG_CODEC_CONFIG)) goto cleanup;
+          ++next_csd;
+        } else if (next < kFrames) {
+          const struct Packet* packet = &packets[next++];
+          if (!QueueAsyncInput(codec, event.index, packet->data, packet->size, packet->time, 0)) {
+            goto cleanup;
+          }
+        } else if (next == kFrames) {
+          if (!QueueAsyncInput(codec, event.index, NULL, 0, kFirstTime + kFrames * kInterval,
+                               AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM)) goto cleanup;
+          ++next;
+        }
+        break;
+      case ASYNC_OUTPUT:
+        if (!CheckAsyncOutput(codec, &event, format_seen, &decoded)) goto cleanup;
+        eos = (event.info.flags & AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM) != 0;
+        break;
+      case ASYNC_FORMAT:
+        if (!event.index) goto cleanup;
+        format_seen = true;
+        break;
+    }
+  }
+  if (!format_seen || decoded != (1U << kFrames) - 1) goto cleanup;
+
+  operation = "stop then unregister callback";
+  if (AMediaCodec_stop(codec) != AMEDIA_OK ||
+      AMediaCodec_setAsyncNotifyCallback(codec, (AMediaCodecOnAsyncNotifyCallback){0}, NULL) != AMEDIA_OK) {
+    goto cleanup;
+  }
+  ok = true;
+
+cleanup:
+  AMediaCodec_delete(codec);
+  if (library != NULL) dlclose(library);
+  pthread_cond_destroy(&test.changed);
+  pthread_mutex_destroy(&test.mutex);
+  printf("NDK async AVC (%s): %s (%s), callbacks=%d frames=%#x\n",
+         lookup ? "dlsym" : "direct", ok ? "passed" : "failed", operation, test.received, decoded);
+  return ok;
+}
+#endif
+
+static int RunCodec(bool async_only) {
+  (void)async_only;
+  int checks = 0, failures = 0;
+#if defined(__aarch64__)
+  puts("NDK codec ABI: arm64-v8a");
+#elif defined(__x86_64__)
+  puts("NDK codec ABI: x86_64");
+#endif
+#define CHECK(expression, label) do { \
+  ++checks; \
+  if (!(expression)) { \
+    ++failures; \
+    printf("NDK codec failure: %s\n", label); \
+  } \
+} while (0)
+#define REQUIRED(expression, label) do { \
+  const int previous = failures; \
+  CHECK(expression, label); \
+  if (failures != previous) goto cleanup; \
+} while (0)
+
+  AMediaCodec* encoder = NULL;
+  AMediaCodec* decoder = NULL;
+  AMediaCodec* named = NULL;
+  AMediaFormat* configuration = NULL;
+  AMediaFormat* encoded = NULL;
+  AMediaFormat* parameters = NULL;
+#ifndef CODEC_BUFFER_COMPONENT
+  AMediaFormat* surface_format = NULL;
+#endif
+  char* name = NULL;
+  struct Packet packets[kFrames] = {{0}};
+  int packet_count = 0;
+  bool eos = false, wrote_config = false;
+  REQUIRED(CheckCodecKeys(), "parameter key data symbols match direct imports");
+  CHECK(ActionCodesAgree(), "recoverable and transient classify only the corresponding action codes");
+  encoder = AMediaCodec_createEncoderByType("video/avc");
+  decoder = AMediaCodec_createDecoderByType("video/avc");
+  REQUIRED(encoder != NULL && decoder != NULL, "create AVC encoder and decoder by MIME");
+  CHECK(AMediaCodec_createDecoderByType("application/gesher-fake-codec") == NULL, "unavailable MIME");
+  CHECK(AMediaCodec_createCodecByName("gesher.nonexistent.codec") == NULL, "unavailable codec name");
+  const media_status_t early_start = AMediaCodec_start(encoder);
+  const ssize_t early_dequeue = AMediaCodec_dequeueInputBuffer(encoder, 0);
+  printf("NDK codec idle state start=%d dequeue=%zd\n", early_start, early_dequeue);
+  CHECK(early_start == AMEDIA_ERROR_UNKNOWN, "start before configure reports the Android state error");
+  CHECK(early_dequeue == AMEDIA_ERROR_UNKNOWN, "dequeue before start reports the Android state error");
+  CHECK(InvalidBufferSizesUnchanged(encoder), "invalid idle buffer reads preserve caller sizes");
+  CHECK(IsEmptyCodecFormat(AMediaCodec_getInputFormat(encoder)), "idle input format is owned and empty");
+  CHECK(IsEmptyCodecFormat(AMediaCodec_getOutputFormat(encoder)), "idle output format is owned and empty");
+
+  parameters = AMediaFormat_new();
+  REQUIRED(parameters != NULL, "allocate live encoder controls");
+  AMediaFormat_setInt32(parameters, AMEDIACODEC_KEY_REQUEST_SYNC_FRAME, 0);
+  CHECK(AMediaCodec_setParameters(NULL, parameters) == AMEDIA_ERROR_INVALID_PARAMETER &&
+        AMediaCodec_setParameters(encoder, NULL) == AMEDIA_ERROR_INVALID_PARAMETER,
+        "reject missing parameter handles");
+  const media_status_t idle_controls = AMediaCodec_setParameters(encoder, parameters);
+  printf("NDK codec parameter submission while idle=%d\n", idle_controls);
+#ifdef CODEC_PARAMETER_CONTROL_COMPONENT
+  // NdkMediaCodec's translate_error reports MediaCodec's state error as UNKNOWN.
+  CHECK(idle_controls == AMEDIA_ERROR_UNKNOWN, "idle encoder refuses live controls");
+#endif
+
+  configuration = AMediaFormat_new();
+  REQUIRED(configuration != NULL, "allocate AVC configuration");
+  AMediaFormat_setString(configuration, "mime", "video/avc");
+  AMediaFormat_setInt32(configuration, "width", kWidth);
+  AMediaFormat_setInt32(configuration, "height", kHeight);
+  AMediaFormat_setInt32(configuration, "color-format", 0x7f420888);
+  AMediaFormat_setInt32(configuration, "bitrate", 200000);
+  AMediaFormat_setInt32(configuration, "frame-rate", 30);
+  AMediaFormat_setInt32(configuration, "i-frame-interval", 1);
+  AMediaFormat_setInt32(configuration, "profile", 1);
+  REQUIRED(AMediaCodec_configure(encoder, configuration, NULL, NULL,
+                                AMEDIACODEC_CONFIGURE_FLAG_ENCODE) == AMEDIA_OK, "configure AVC encoder");
+  AMediaFormat_delete(configuration);
+  configuration = AMediaCodec_getInputFormat(encoder);
+  REQUIRED(Dimensions(configuration), "copy accepted input format after freeing caller format");
+  REQUIRED(AMediaCodec_getName(encoder, &name) == AMEDIA_OK && name != NULL && *name != '\0',
+           "obtain actual codec component name");
+  named = AMediaCodec_createCodecByName(name);
+  REQUIRED(named != NULL, "reopen encoder by reported name");
+  AMediaCodec_releaseName(encoder, name);
+  name = NULL;
+  REQUIRED(AMediaCodec_start(encoder) == AMEDIA_OK, "start AVC encoder");
+  CHECK(InvalidBufferSizesUnchanged(encoder), "invalid running buffer reads preserve caller sizes");
+  CHECK(IsEmptyCodecFormat(AMediaCodec_getBufferFormat(encoder, SIZE_MAX)),
+        "invalid running output slot has an owned empty format");
+
+  AMediaFormat_setInt32(parameters, AMEDIACODEC_KEY_VIDEO_BITRATE, 360000);
+  REQUIRED(FeedPicture(encoder, 0) && FeedPicture(encoder, 1), "queue initial raw AVC frames");
+
+  for (int attempt = 0; attempt < 24 && !eos; ++attempt) {
+    AMediaCodecBufferInfo info = {0};
+    const ssize_t index = AMediaCodec_dequeueOutputBuffer(encoder, &info, 250000);
+    if (index == AMEDIACODEC_INFO_OUTPUT_FORMAT_CHANGED) {
+      AMediaFormat_delete(encoded);
+      encoded = AMediaCodec_getOutputFormat(encoder);
+      CHECK(Dimensions(encoded), "AVC output format change includes coded dimensions");
+      continue;
+    }
+    if (index == AMEDIACODEC_INFO_TRY_AGAIN_LATER || index == AMEDIACODEC_INFO_OUTPUT_BUFFERS_CHANGED) continue;
+    if (index < 0) printf("encoder dequeue returned %zd\n", index);
+    REQUIRED(index >= 0, "dequeue encoded buffer");
+    if (info.size > 0) {
+      size_t size = 0;
+      const uint8_t* bytes = AMediaCodec_getOutputBuffer(encoder, (size_t)index, &size);
+      // Android API 35 and earlier reported an invalid output size. This
+      // contract relies only on the documented per-buffer info range.
+      REQUIRED(bytes != NULL && info.offset >= 0, "access encoded bytes");
+      if (info.flags & AMEDIACODEC_BUFFER_FLAG_CODEC_CONFIG) {
+        wrote_config = true;
+      } else {
+        REQUIRED(packet_count < kFrames, "bounded number of AVC access units");
+        struct Packet* packet = &packets[packet_count++];
+        packet->size = (size_t)info.size;
+        packet->time = (uint64_t)info.presentationTimeUs;
+        packet->data = malloc(packet->size);
+        REQUIRED(packet->data != NULL, "retain independent compressed bytes");
+        memcpy(packet->data, bytes + info.offset, packet->size);
+        if (packet_count == 2) {
+          CHECK((info.flags & AMEDIACODEC_BUFFER_FLAG_KEY_FRAME) == 0 &&
+                !ContainsIdr(packet->data, packet->size), "ordinary picture before sync request is not an IDR");
+        } else if (packet_count == 3) {
+          const bool idr = (info.flags & AMEDIACODEC_BUFFER_FLAG_KEY_FRAME) &&
+                           ContainsIdr(packet->data, packet->size);
+          CHECK(idr, "running sync request produces a real AVC IDR picture");
+          AMediaFormat* changed_format = AMediaCodec_getOutputFormat(encoder);
+          int32_t target = 0;
+          if (changed_format != NULL) {
+            AMediaFormat_getInt32(changed_format, "bitrate", &target);
+            AMediaFormat_delete(changed_format);
+          }
+          printf("NDK codec live controls: idr=%d output-bitrate=%d\n", idr, target);
+#ifdef CODEC_PARAMETER_CONTROL_COMPONENT
+          CHECK(target == 360000, "encoder reports the accepted backend bitrate target");
+#endif
+        }
+      }
+    }
+    eos = (info.flags & AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM) != 0;
+    CHECK(AMediaCodec_releaseOutputBuffer(encoder, (size_t)index, false) == AMEDIA_OK, "release encoded buffer");
+    if (packet_count == 2 && parameters != NULL) {
+      REQUIRED(AMediaCodec_setParameters(encoder, parameters) == AMEDIA_OK, "submit running video encoder controls");
+      AMediaFormat_delete(parameters);
+      parameters = NULL;
+      REQUIRED(FeedPicture(encoder, 2), "queue picture after live encoder controls");
+      REQUIRED(Feed(encoder, NULL, 0, kFirstTime + kFrames * kInterval,
+                    AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM), "queue encoder EOS");
+    }
+  }
+  REQUIRED(eos && wrote_config && packet_count == kFrames, "real AVC config, access units and EOS");
+  void* sps = NULL;
+  size_t sps_size = 0;
+  REQUIRED(encoded != NULL && AMediaFormat_getBuffer(encoded, "csd-0", &sps, &sps_size)
+               && sps != NULL && sps_size > 4, "decoder receives encoded codec-specific data");
+  REQUIRED(AMediaCodec_stop(encoder) == AMEDIA_OK, "stop encoder");
+  CHECK(AMediaCodec_dequeueInputBuffer(encoder, 0) == AMEDIA_ERROR_UNKNOWN, "stop invalidates slots");
+  CHECK(InvalidBufferSizesUnchanged(encoder), "invalid stopped buffer reads preserve caller sizes");
+  CHECK(IsEmptyCodecFormat(AMediaCodec_getOutputFormat(encoder)), "stopped output format is owned and empty");
+
+#ifndef CODEC_BUFFER_COMPONENT
+  surface_format = AMediaFormat_new();
+  REQUIRED(surface_format != NULL && AMediaFormat_copy(surface_format, encoded) == AMEDIA_OK,
+           "retain a separate decoder format for the real ImageReader pass");
+#endif
+#if !defined(_WIN32) && !defined(CODEC_BUFFER_COMPONENT)
+  if (async_only) {
+    CHECK(DecodeWithAsyncCallbacks(surface_format, packets, false), "decode through direct NDK callbacks");
+    CHECK(DecodeWithAsyncCallbacks(surface_format, packets, true), "decode through dynamically resolved NDK callbacks");
+    goto cleanup;
+  }
+#endif
+  REQUIRED(AMediaCodec_configure(decoder, encoded, NULL, NULL, 0) == AMEDIA_OK, "configure AVC decoder");
+  AMediaFormat_delete(encoded);
+  encoded = NULL;
+  REQUIRED(AMediaCodec_start(decoder) == AMEDIA_OK, "start AVC decoder");
+  for (int i = 0; i < packet_count; ++i) {
+    CHECK(packets[i].time == kFirstTime + i * kInterval, "encoder preserves full-width timestamp");
+    REQUIRED(Feed(decoder, packets[i].data, packets[i].size, packets[i].time, 0), "queue encoded access unit");
+  }
+  REQUIRED(Feed(decoder, NULL, 0, kFirstTime + kFrames * kInterval,
+                AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM), "queue decoder EOS");
+
+  eos = false;
+  unsigned decoded = 0;
+  for (int attempt = 0; attempt < 24 && !eos; ++attempt) {
+    AMediaCodecBufferInfo info = {0};
+    const ssize_t index = AMediaCodec_dequeueOutputBuffer(decoder, &info, 250000);
+    if (index == AMEDIACODEC_INFO_OUTPUT_FORMAT_CHANGED) {
+      AMediaFormat* format = AMediaCodec_getOutputFormat(decoder);
+      CHECK(Dimensions(format), "decoded output reports visible dimensions");
+      AMediaFormat_delete(format);
+      continue;
+    }
+    if (index == AMEDIACODEC_INFO_TRY_AGAIN_LATER || index == AMEDIACODEC_INFO_OUTPUT_BUFFERS_CHANGED) continue;
+    if (index < 0) printf("decoder dequeue returned %zd\n", index);
+    REQUIRED(index >= 0, "dequeue decoded buffer");
+    if (info.size > 0) {
+      const uint8_t* bytes = AMediaCodec_getOutputBuffer(decoder, (size_t)index, NULL);
+      const uint64_t time = (uint64_t)info.presentationTimeUs;
+      const uint64_t ordinal = (time - kFirstTime) / kInterval;
+      REQUIRED(bytes != NULL && info.offset >= 0 && info.size >= kWidth, "access actual decoded pixels");
+      REQUIRED(time >= kFirstTime && ordinal < kFrames && time == kFirstTime + ordinal * kInterval &&
+                   (decoded & (1U << ordinal)) == 0, "one frame per submitted full-width timestamp");
+      decoded |= 1U << ordinal;
+      const int luma = bytes[info.offset + kWidth / 2];
+      printf("NDK codec AVC frame pts=%" PRIu64 " luma=%d bytes=%d\n", time, luma, info.size);
+      CHECK(abs(luma - kLuma[ordinal]) <= 8, "decoded luma agrees with supplied image");
+      AMediaFormat* format = AMediaCodec_getBufferFormat(decoder, (size_t)index);
+      CHECK(Dimensions(format), "owned output slot exposes its format");
+      AMediaFormat_delete(format);
+    }
+    eos = (info.flags & AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM) != 0;
+    CHECK(AMediaCodec_releaseOutputBuffer(decoder, (size_t)index, false) == AMEDIA_OK, "release decoded buffer");
+  }
+  CHECK(eos && decoded == (1U << kFrames) - 1, "all actual frames and EOS");
+  CHECK(AMediaCodec_flush(decoder) == AMEDIA_OK, "flush decoder after EOS");
+  const ssize_t reused = AMediaCodec_dequeueInputBuffer(decoder, 2000000);
+  CHECK(reused >= 0, "flushed decoder exposes input again");
+  CHECK(AMediaCodec_stop(decoder) == AMEDIA_OK, "stop decoder");
+#ifndef CODEC_BUFFER_COMPONENT
+  CHECK(DecodeToReader(surface_format, packets), "decode and render actual PTS to YUV reader");
+#endif
+
+cleanup:
+  if (name != NULL) AMediaCodec_releaseName(encoder, name);
+  if (configuration != NULL) AMediaFormat_delete(configuration);
+  if (encoded != NULL) AMediaFormat_delete(encoded);
+  if (parameters != NULL) AMediaFormat_delete(parameters);
+#ifndef CODEC_BUFFER_COMPONENT
+  if (surface_format != NULL) AMediaFormat_delete(surface_format);
+#endif
+  if (encoder != NULL) AMediaCodec_delete(encoder);
+  if (decoder != NULL) AMediaCodec_delete(decoder);
+  if (named != NULL) AMediaCodec_delete(named);
+  for (int i = 0; i < kFrames; ++i) free(packets[i].data);
+  printf("NDK codec AVC: %d checks, %d failures\n", checks, failures);
+  if (failures == 0) puts("NDK codec AVC: all passed");
+  return failures == 0 ? 0 : 1;
+#undef REQUIRED
+#undef CHECK
+}
+
+#ifdef CODEC_STANDALONE
+#ifdef _WIN32
+int main(void) { return RunCodec(false); }
+#else
+int main(int argc, char** argv) { return RunCodec(argc > 1 && strcmp(argv[1], "async") == 0); }
+#endif
+#else
+JNIEXPORT jint JNICALL Java_gesher_NdkCodecTest_runAsync(JNIEnv* env, jclass type) {
+  (void)env;
+  (void)type;
+  return RunCodec(true);
+}
+
+JNIEXPORT jint JNICALL Java_gesher_NdkCodecTest_run(JNIEnv* env, jclass type) {
+  (void)env;
+  (void)type;
+  return RunCodec(false);
+}
+#endif

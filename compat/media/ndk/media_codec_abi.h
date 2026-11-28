@@ -66,6 +66,9 @@ using OnAsyncError = void(GESHER_CODEC_GUEST_ABI*)(
     AMediaCodec* codec, void* userdata, media_status_t error, int32_t actionCode,
     const char* detail);
 
+using OnFrameRendered = void(GESHER_CODEC_GUEST_ABI*)(
+    AMediaCodec* codec, void* userdata, int64_t mediaTimeUs, int64_t systemNano);
+
 struct OnAsyncNotifyCallback {
   OnAsyncInputAvailable onAsyncInputAvailable;
   OnAsyncOutputAvailable onAsyncOutputAvailable;

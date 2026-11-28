@@ -69,9 +69,20 @@ def main() -> int:
     image_boundary = image_boundary.replace('  uint32_t pixel() const',
         '  int width() const { return info.width; }\n'
         '  int height() const { return info.height; }\n  uint32_t pixel() const')
-    reader = method(parcel, 'status_t ReadFrameVideoScalingMode(') if scaling else ''
-    writer = method(parcel, '    if (video_scaling_mode != 1) {') if scaling else '(void)data; (void)video_scaling_mode;'
-    version = re.search(r'constexpr int32_t kFrameScalingVersion = \d+;', parcel)
+    dataspace = 'status_t ReadFrameMetadata(' in parcel
+    reader = writer = ''
+    if dataspace:
+        reader = method(parcel, 'status_t ReadFrameMetadata(')
+        writer = method(parcel, 'void WriteFrameMetadata(')
+    elif scaling:
+        reader = method(parcel, 'status_t ReadFrameVideoScalingMode(') + """
+status_t ReadFrameMetadata(const Parcel& data, int* mode, int32_t* dataspace) {
+  *dataspace = 0;
+  return ReadFrameVideoScalingMode(data, mode);
+}"""
+        writer = ('void WriteFrameMetadata(Parcel& data, int video_scaling_mode, int32_t) {\n'
+                  + method(parcel, '    if (video_scaling_mode != 1) {') + '\n}')
+    versions = re.findall(r'constexpr int32_t kFrame(?:Scaling|Dataspace)Version = \d+;', parcel)
     reference = ''
     if args.android_reference:
         raw = args.android_reference.read_text()
@@ -96,11 +107,12 @@ def main() -> int:
         '@LAYER@': section(display, 'class TextureLayer :', 'TextureLayer* LayerOf('),
         '@COPY@': method(display, 'jboolean JNICALL HR_copyLayerInto('),
         '@VIEW@': section(display, 'class ViewSurfaceDrawable :', '// SurfaceView.nativeGesherDrawSurface'),
-        '@PARCEL_VERSION@': version[0] if version else '',
+        '@PARCEL_VERSION@': '\n'.join(versions),
         '@PARCEL_READER@': reader,
         '@PARCEL_WRITER@': writer,
         '@ANDROID_REFERENCE@': reference,
         '@HAS_SCALING@': str(int(scaling)),
+        '@HAS_DATASPACE@': str(int(dataspace)),
         '@HAS_ANDROID_REFERENCE@': str(int(bool(reference))),
     }
     fixture = (ROOT / 'tests/media/video_scaling_host.cc.in').read_text()

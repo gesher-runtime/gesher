@@ -32,6 +32,7 @@
 #include "core_jni_helpers.h"
 #include "camera_frames.h"
 #include "camera_trace.h"
+#include "../media/ndk/image_reader.h"
 #include "../media/surface/reader_surface.h"
 #include <gesher/rgba_buffers.h>
 #include "../media/video/video_decoder.h"
@@ -695,11 +696,18 @@ jint CameraFrames_deliver(JNIEnv* env, jclass, jobject surface, jbyteArray nv12,
                           jlong ts, jbyteArray jpeg) {
   gesher::devices::camera::TraceSample trace(gDeliveryTrace);
   if (surface == nullptr || nv12 == nullptr) return -1;
-  jsize size = env->GetArrayLength(nv12);
-  if (size < w * h * 3 / 2) return -1;
+  const jsize size = env->GetArrayLength(nv12);
+  const int64_t luma = static_cast<int64_t>(w) * h;
+  // Rejected before the array is pinned, with the same -1 as absent input.
+  if (w <= 0 || h <= 0 || w % 2 != 0 || h % 2 != 0 || size < luma + luma / 2) return -1;
   trace.Step(0);
   jbyte* frame = env->GetByteArrayElements(nv12, nullptr);
+  if (frame == nullptr) return NO_MEMORY;
   jbyte* jpegBytes = jpeg != nullptr ? env->GetByteArrayElements(jpeg, nullptr) : nullptr;
+  if (jpeg != nullptr && jpegBytes == nullptr) {
+    env->ReleaseByteArrayElements(nv12, frame, JNI_ABORT);
+    return NO_MEMORY;
+  }
   trace.Step(1);
   jint result = NO_INIT;
   auto r = ReaderForSurface(env, surface);
@@ -713,22 +721,28 @@ jint CameraFrames_deliver(JNIEnv* env, jclass, jobject surface, jbyteArray nv12,
     ANativeWindow* window = ANativeWindow_fromSurface(env, surface);
     trace.Step(2);
     if (window != nullptr) {
-      // A window: drawn at the window's size, RGBA.
-      int ww = ANativeWindow_getWidth(window), wh = ANativeWindow_getHeight(window);
-      if (ww <= 0 || wh <= 0) {
-        ww = w;
-        wh = h;
-      }
-      result = ANativeWindow_setBuffersGeometry(window, ww, wh, kHalRgba8888);
-      ANativeWindow_Buffer buffer;
-      if (result == OK) result = ANativeWindow_lock(window, &buffer, nullptr);
-      trace.Step(3);
-      if (result == OK) {
-        Nv12ToRgba(reinterpret_cast<uint8_t*>(frame), w, h, static_cast<uint8_t*>(buffer.bits),
-                   buffer.stride, std::min(buffer.width, ww), std::min(buffer.height, wh));
-        trace.Step(4);
-        result = ANativeWindow_unlockAndPost(window);
-        trace.Step(5);
+      const auto yuv = gesher::media::QueueNdkReaderCameraFrame(
+          window, reinterpret_cast<uint8_t*>(frame), size, w, h, ts);
+      if (yuv.has_value()) {
+        result = *yuv;
+      } else {
+        // A window: drawn at the window's size, RGBA.
+        int ww = ANativeWindow_getWidth(window), wh = ANativeWindow_getHeight(window);
+        if (ww <= 0 || wh <= 0) {
+          ww = w;
+          wh = h;
+        }
+        result = ANativeWindow_setBuffersGeometry(window, ww, wh, kHalRgba8888);
+        ANativeWindow_Buffer buffer;
+        if (result == OK) result = ANativeWindow_lock(window, &buffer, nullptr);
+        trace.Step(3);
+        if (result == OK) {
+          Nv12ToRgba(reinterpret_cast<uint8_t*>(frame), w, h, static_cast<uint8_t*>(buffer.bits),
+                     buffer.stride, std::min(buffer.width, ww), std::min(buffer.height, wh));
+          trace.Step(4);
+          result = ANativeWindow_unlockAndPost(window);
+          trace.Step(5);
+        }
       }
       ANativeWindow_release(window);
     }

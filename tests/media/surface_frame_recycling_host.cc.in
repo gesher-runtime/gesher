@@ -7,6 +7,7 @@
 #include <new>
 #include <thread>
 #include <array>
+#include <type_traits>
 
 @ADAPTERS@
 
@@ -135,6 +136,119 @@ void PixelsAndIdentity() {
   Check(accounting::live == 0, "all exact-format pixels released");
 }
 
+template<class Queue>
+android::sp<Queue> SingleBufferSurface() {
+  if constexpr (std::is_constructible_v<Queue, int, int, bool>) {
+    return android::sp<Queue>::make(16, 16, true);
+  } else {
+    // Replay the same behavior check against the prior queue implementation.
+    return android::sp<Queue>::make(16, 16);
+  }
+}
+
+template<class Queue>
+void ReleaseConsumerBuffer(Queue* surface, uint64_t frame_number) {
+  if constexpr (requires { surface->ReleaseFrame(frame_number); }) {
+    surface->ReleaseFrame(frame_number);
+  }
+}
+
+template<class Queue>
+int PostCopied(Queue* queue, const uint32_t* pixels, int64_t timestamp) {
+  auto status = queue->PostFrame(16, 16, 16, pixels, timestamp);
+  if constexpr (std::is_same_v<decltype(status), bool>) {
+    return status ? 0 : -ENODEV;
+  }
+  return status;
+}
+
+void SingleBufferOwnership() {
+  auto surface = SingleBufferSurface<QueueSurface>();
+  ANativeWindow* window = surface.get();
+  size_t notifications = 0;
+  surface->SetListener([&] { ++notifications; });
+  Post(surface.get(), 1);
+  auto first = surface->Latest();
+  if (first == nullptr) return;
+  ANativeWindow_Buffer cpu{};
+  const int occupied = surface->lock(&cpu, nullptr);
+  Check(occupied == -EAGAIN, "posted single buffer blocks another CPU producer");
+  if (occupied == 0) surface->unlockAndPost();
+  ANativeWindowBuffer* native = nullptr;
+  int fence = -1;
+  const int dequeued = window->dequeueBuffer(window, &native, &fence);
+  Check(dequeued == -EAGAIN, "posted single buffer blocks native dequeue");
+  if (dequeued == 0) window->cancelBuffer(window, native, fence);
+  std::array<uint32_t, 16 * 16> external{};
+  Check(PostCopied(surface.get(), external.data(), 22) == -EAGAIN,
+        "posted single buffer rejects another process's frame");
+  Check(notifications == 1 && surface->Latest() == first,
+        "rejected producers publish no frame or callback");
+  ReleaseConsumerBuffer(surface.get(), first->number + 1);
+  Check(surface->Latest() == first, "wrong frame number cannot return the consumer slot");
+  ReleaseConsumerBuffer(surface.get(), first->number);
+  Check(surface->Latest() == nullptr, "consumer returns its exact frame");
+  FramePixels(first, 1, HAL_PIXEL_FORMAT_RGBA_8888);
+
+  Check(window->dequeueBuffer(window, &native, &fence) == 0,
+        "native producer acquires the returned single buffer");
+  const int while_dequeued = surface->lock(&cpu, nullptr);
+  Check(while_dequeued == -EAGAIN, "CPU producer cannot acquire a native producer's single buffer");
+  if (while_dequeued == 0) surface->unlockAndPost();
+  Check(PostCopied(surface.get(), external.data(), 23) == -EAGAIN,
+        "a copied frame cannot steal the dequeued single buffer");
+  Check(window->queueBuffer(window, nullptr, -1) == -EINVAL,
+        "single buffer rejects an unowned native publication");
+  Check(window->cancelBuffer(window, native, fence) == 0,
+        "native cancel returns the single buffer without posting");
+  Check(PostCopied(surface.get(), external.data(), 24) == 0,
+        "the copied producer posts after native cancel");
+  auto second = surface->Latest();
+  Check(second != nullptr && second->timestamp_ns == 24 && notifications == 2,
+        "successfully posted copy publishes its timestamp and callback");
+  ReleaseConsumerBuffer(surface.get(), first->number);
+  Check(surface->Latest() == second, "stale release cannot retire a later frame");
+
+  surface->Abandon();
+  Check(!surface->Latest() && surface->lock(&cpu, nullptr) == -ENODEV
+        && window->dequeueBuffer(window, &native, &fence) == -ENODEV,
+        "abandon retires the frame and wakes producers with loss of the consumer");
+}
+
+template<class Queue>
+void ForwardedSingleBufferStatus() {
+  auto sink = SingleBufferSurface<Queue>();
+  auto forwarding = android::sp<Queue>::make(16, 16);
+  if constexpr (!requires { forwarding->SetForwardingListener(nullptr); }) {
+    Check(false, "forwarding publication must report the receiver's status");
+  } else {
+    // Use the complete queue owners and the bridge's frame/status contract.
+    // The transport layer between their publication methods is the fixture seam.
+    forwarding->SetForwardingListener([&](const SurfaceFrame& frame) {
+      return sink->PostFrame(frame.width, frame.height, frame.width,
+                             frame.pixels.data(), frame.timestamp_ns);
+    });
+    Post(forwarding.get(), 1);
+    auto first = sink->Latest();
+    FramePixels(first, 1, HAL_PIXEL_FORMAT_RGBA_8888);
+    auto published = forwarding->Latest();
+    ANativeWindow_Buffer cpu{};
+    Check(forwarding->lock(&cpu, nullptr) == 0, "forwarder acquires its staging buffer");
+    Check(forwarding->unlockAndPost() == -EAGAIN,
+          "receiver backpressure reaches the forwarding producer");
+    Check(sink->Latest() == first, "forwarding failure does not replace the receiver's buffer");
+    Check(forwarding->frames() == 1 && forwarding->Latest() == published,
+          "a refused forwarded frame is not counted or kept by the producer");
+    ReleaseConsumerBuffer(sink.get(), first->number);
+    Post(forwarding.get(), 2);
+    FramePixels(sink->Latest(), 2, HAL_PIXEL_FORMAT_RGBA_8888);
+    sink->Abandon();
+    Check(forwarding->lock(&cpu, nullptr) == 0, "forwarder still owns its staging buffer");
+    Check(forwarding->unlockAndPost() == -ENODEV,
+          "receiver abandonment is distinct from backpressure");
+  }
+}
+
 void GeometryAndRetirement() {
   constexpr size_t a = 64u * 64u * 4u, b = 96u * 96u * 4u;
   auto surface = android::sp<QueueSurface>::make(64, 64);
@@ -157,6 +271,8 @@ void GeometryAndRetirement() {
   ANativeWindow* window = surface.get();
   ANativeWindowBuffer* producer = nullptr;
   int fence = -1;
+  Check(window->perform(window, NATIVE_WINDOW_SET_BUFFER_COUNT, 3) == 0,
+        "negotiate two writers before overlapping resize");
   Check(window->dequeueBuffer(window, &producer, &fence) == 0, "hold dequeued old producer");
   surface->SetDefaultSize(96, 96);
   Post(surface.get(), 13);
@@ -291,6 +407,8 @@ void Measure(int width, int height, size_t posts, bool cache_images, bool gate) 
 int main(int argc, char** argv) {
   const bool gate = argc < 2 || std::strcmp(argv[1], "measure") != 0;
   PixelsAndIdentity();
+  SingleBufferOwnership();
+  ForwardedSingleBufferStatus<QueueSurface>();
   GeometryAndRetirement();
   OutstandingReaders();
   ConcurrentPublication();

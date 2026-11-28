@@ -15,8 +15,14 @@ namespace gesher::media {
 int RenderFrame(ANativeWindow* window, const VideoFrame& f, std::optional<int64_t> timestamp_ns,
                  int video_scaling_mode) {
   constexpr int kRgba8888 = 1, kRgbx8888 = 2;
-  const int w = f.visible_width(), h = f.visible_height();
   if (window == nullptr) return android::NO_INIT;
+  auto* surface = QueueSurface::From(window);
+  if (surface != nullptr) {
+    const auto yuv = surface->PostVideoFrame(f, timestamp_ns.value_or(
+        static_cast<int64_t>(static_cast<uint64_t>(f.time_us) * 1000)));
+    if (yuv.has_value()) return *yuv;
+  }
+  const int w = f.visible_width(), h = f.visible_height();
   if (w < 1 || h < 1) return android::BAD_VALUE;
   int status = ANativeWindow_setBuffersGeometry(window, w, h, kRgba8888);
   if (status != 0) return status;
@@ -32,12 +38,10 @@ int RenderFrame(ANativeWindow* window, const VideoFrame& f, std::optional<int64_
   }
   static gesher::perf::Site post_site("video frame: unlockAndPost (queue to the consumer)");
   const int64_t post_start = gesher::perf::Now();
-  if (timestamp_ns.has_value()) {
-    if (auto* surface = QueueSurface::From(window)) {
-      status = surface->UnlockAndPostWithTimestamp(*timestamp_ns, video_scaling_mode);
-      post_site.Add(gesher::perf::Now() - post_start);
-      return status != 0 ? status : drawable ? android::OK : android::BAD_VALUE;
-    }
+  if (timestamp_ns.has_value() && surface != nullptr) {
+    status = surface->UnlockAndPostWithTimestamp(*timestamp_ns, video_scaling_mode);
+    post_site.Add(gesher::perf::Now() - post_start);
+    return status != 0 ? status : drawable ? android::OK : android::BAD_VALUE;
   }
   status = ANativeWindow_unlockAndPost(window);
   post_site.Add(gesher::perf::Now() - post_start);

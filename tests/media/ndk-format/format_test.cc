@@ -84,10 +84,14 @@ std::string Run() {
     exports.Check(entry != nullptr && entry == dlsym(system, name) &&
                       entry == dlsym(RTLD_DEFAULT, name), name);
   }
-  // Library availability must describe its real subset, not add unimplemented NDK families.
-  exports.Check(dlsym(RTLD_DEFAULT, "AImageReader_new") == nullptr &&
-                    (library == nullptr || dlsym(library, "AImageReader_new") == nullptr),
-                "unimplemented image reader stays absent");
+  // Library availability must describe its real subset, not add unimplemented
+  // NDK families: AImageWriter and libcamera2ndk's capture sessions.
+  exports.Check(dlsym(RTLD_DEFAULT, "AImageWriter_new") == nullptr &&
+                    (library == nullptr || dlsym(library, "AImageWriter_new") == nullptr),
+                "unimplemented image writer stays absent");
+  exports.Check(dlsym(RTLD_DEFAULT, "ACameraCaptureSession_setRepeatingRequest") == nullptr &&
+                    dlopen("libcamera2ndk.so", RTLD_NOW) == nullptr,
+                "partial libcamera2ndk stays unavailable");
   exports.End("21 functions through bare/system/default handles; unimplemented families absent");
 
   Format format;

@@ -345,8 +345,8 @@ AInputQueue, AChoreographer). It builds in steps, each verified in CI
     `ALooper_addFd`'s System V callback is wrapped in a `LooperCallback` that
     sets the thread up for loaded code; `ALooper_pollOnce`/`pollAll`/`wake`/
     `removeFd`/`acquire`/`release`;
-  - `ASensorManager_*`/`ASensorEventQueue_*`/`ASensor_*`: a device with no
-    sensors (an empty list, queues that never deliver);
+  - `ASensorManager_*`/`ASensorEventQueue_*`/`ASensor_*`: the Windows sensor inventory and sampled events shared with Java
+    (docs/devices.md). Direct channels are unavailable;
   - `ATrace_*`: no-ops, `isEnabled` false;
   - `AStorageManager_*`: mounting OBBs is not supported (the callback gets
     `AOBB_STATE_ERROR_INTERNAL` from another thread, as the platform's comes
@@ -362,6 +362,14 @@ AInputQueue, AChoreographer). It builds in steps, each verified in CI
 - **Graphics** ([0023](decisions/0023-native-libs-ndk-graphics.md),
   `compat/bionic/ndk_graphics.cmake`: the OBJECT library
   `gesher_ndk_graphics`, linked into dalvikvm and `gl_window_test`):
+  - `vulkan_core.cc` exposes headless Vulkan 1.0 through typed guest ABI
+    thunks to the Windows system Vulkan loader. A real Windows ICD owns the
+    instances, devices, queues and memory. A missing loader returns
+    `VK_ERROR_INCOMPATIBLE_DRIVER` at instance creation. The bridge exposes zero
+    layers or extensions and supports the default allocator. Android surface
+    and swapchain presentation, external memory and synchronization, custom
+    allocation callbacks and framework Vulkan feature flags remain outside
+    this implementation. See [the focused contract](../tests/native/vulkan-core/README.md).
   - `libandroid_window.cc`: `ANativeWindow_acquire`/`release`/`getWidth`/
     `getHeight`/`getFormat`/`setBuffersGeometry`/`lock`/`unlockAndPost`/
     `setBuffersTransform`/`setBuffersDataSpace`/`getBuffersDataSpace`/

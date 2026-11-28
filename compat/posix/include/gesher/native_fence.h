@@ -26,6 +26,10 @@ HANDLE CreateNativeFenceEvent();
 std::shared_ptr<NativeFence> NativeFenceFromEvent(ID3D11Device* device, HANDLE owned_event);
 FenceStatus NativeFenceStatus(const std::shared_ptr<NativeFence>& fence);
 FenceStatus WaitNativeFence(const std::shared_ptr<NativeFence>& fence, uint64_t timeout_ns);
+// Takes ownership of resource and calls release after the fence completes
+// (immediately for a completed or absent fence, otherwise from its event wait).
+void ReleaseAfterNativeFence(const std::shared_ptr<NativeFence>& fence, void* resource,
+                             void (*release)(void*));
 // Called under ANGLE's submission mutex. Local fences on this very device
 // are already queue-ordered; imported fences have completed before export.
 HRESULT ServerWaitNativeFence(const std::shared_ptr<NativeFence>& fence,

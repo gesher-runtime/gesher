@@ -11,6 +11,7 @@
 //
 // Built with the NDK for API 31 (setCrop/setPosition/setOnCommit,
 // AHardwareBuffer_getId); setBufferWithRelease (API 36) is looked up with dlsym.
+#define _GNU_SOURCE
 #include <android/data_space.h>
 #include <android/hardware_buffer.h>
 #include <android/native_window.h>
@@ -23,12 +24,14 @@
 
 #include <dlfcn.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <poll.h>
 #include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 #include <sys/socket.h>
 #include <time.h>
 #include <unistd.h>
@@ -148,6 +151,79 @@ static int HasExtension(const char* list, const char* name) {
 
 // --- AHardwareBuffer -----------------------------------------------------------------------------
 
+static int SendBufferRecord(int socket, void* bytes, size_t size, const int* fds, size_t count) {
+  struct iovec iov = {bytes, size};
+  _Alignas(struct cmsghdr) char control[CMSG_SPACE(2 * sizeof(int))] = {0};
+  struct msghdr msg = {.msg_iov = &iov, .msg_iovlen = 1, .msg_control = control,
+                       .msg_controllen = CMSG_SPACE(count * sizeof(int))};
+  struct cmsghdr* ancillary = CMSG_FIRSTHDR(&msg);
+  ancillary->cmsg_level = SOL_SOCKET;
+  ancillary->cmsg_type = SCM_RIGHTS;
+  ancillary->cmsg_len = CMSG_LEN(count * sizeof(int));
+  memcpy(CMSG_DATA(ancillary), fds, count * sizeof(int));
+  return sendmsg(socket, &msg, 0) == (ssize_t)size;
+}
+
+static void ExpectRejectedBufferRecord(int socket, const char* description) {
+  AHardwareBuffer* result = NULL;
+  int rc = AHardwareBuffer_recvHandleFromUnixSocket(socket, &result);
+  CHECK(rc != 0 && result == NULL, "%s is rejected", description);
+  if (result != NULL) AHardwareBuffer_release(result);
+}
+
+static void TestBufferReceiveErrors(int sender, int receiver, AHardwareBuffer* buffer) {
+  // Capture a real export so the fixture uses the actual wire description.
+  char bytes[256];
+  struct iovec iov = {bytes, sizeof bytes};
+  _Alignas(struct cmsghdr) char control[CMSG_SPACE(sizeof(int))] = {0};
+  struct msghdr msg = {.msg_iov = &iov, .msg_iovlen = 1, .msg_control = control,
+                       .msg_controllen = sizeof control};
+  int rc = AHardwareBuffer_sendHandleToUnixSocket(buffer, sender);
+  ssize_t size = rc == 0 ? recvmsg(receiver, &msg, MSG_CMSG_CLOEXEC) : -1;
+  struct cmsghdr* ancillary = CMSG_FIRSTHDR(&msg);
+  int captured = -1;
+  if (size > 1 && ancillary != NULL && ancillary->cmsg_level == SOL_SOCKET &&
+      ancillary->cmsg_type == SCM_RIGHTS && ancillary->cmsg_len == CMSG_LEN(sizeof(int))) {
+    memcpy(&captured, CMSG_DATA(ancillary), sizeof captured);
+  }
+  CHECK(captured >= 0, "export exposes one backing descriptor");
+  if (captured < 0) return;
+  const int seals = fcntl(captured, F_GET_SEALS);
+  CHECK(seals >= 0 && (seals & (F_SEAL_SHRINK | F_SEAL_GROW)) == (F_SEAL_SHRINK | F_SEAL_GROW),
+        "exported backing storage has a fixed size");
+
+  int descriptors[2] = {captured, captured};
+  if (SendBufferRecord(sender, bytes, (size_t)size, descriptors, 2)) {
+    ExpectRejectedBufferRecord(receiver, "a buffer record with two descriptors");
+  } else {
+    CHECK(0, "send a record with two descriptors");
+  }
+  int short_fd = memfd_create("short-buffer-fixture", MFD_CLOEXEC | MFD_ALLOW_SEALING);
+  int short_ready = short_fd >= 0 && ftruncate(short_fd, 1) == 0 &&
+                    fcntl(short_fd, F_ADD_SEALS, F_SEAL_SHRINK | F_SEAL_GROW) == 0;
+  CHECK(short_ready, "allocate a one-byte fixed-size fixture");
+  if (short_ready && SendBufferRecord(sender, bytes, (size_t)size, &short_fd, 1)) {
+    ExpectRejectedBufferRecord(receiver, "a record with a backing file shorter than its description");
+  } else if (short_ready) {
+    CHECK(0, "send a record with a short backing file");
+  }
+  if (short_fd >= 0) close(short_fd);
+
+  int flags = fcntl(receiver, F_GETFL);
+  if (flags >= 0 && fcntl(receiver, F_SETFL, flags | O_NONBLOCK) == 0 &&
+      SendBufferRecord(sender, bytes, (size_t)size - 1, &captured, 1) &&
+      AHardwareBuffer_sendHandleToUnixSocket(buffer, sender) == 0) {
+    ExpectRejectedBufferRecord(receiver, "a short sequenced-packet record");
+    AHardwareBuffer* next = NULL;
+    rc = AHardwareBuffer_recvHandleFromUnixSocket(receiver, &next);
+    CHECK(rc == 0 && next != NULL, "a short record leaves the next valid packet intact");
+    if (next != NULL) AHardwareBuffer_release(next);
+  } else {
+    CHECK(0, "queue a short packet followed by a valid packet");
+  }
+  close(captured);
+}
+
 static void TestBuffers(void) {
   AHardwareBuffer_Desc d = {64, 32, 1, AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM, kCpu, 0, 0, 0};
   CHECK(AHardwareBuffer_isSupported(&d) == 1, "isSupported: RGBA8 64x32 CPU read/write");
@@ -162,7 +238,9 @@ static void TestBuffers(void) {
   CHECK(AHardwareBuffer_isSupported(&bad) == 0, "isSupported: two layers are not (not served)");
   bad = d;
   bad.format = AHARDWAREBUFFER_FORMAT_Y8Cb8Cr8_420;
-  CHECK(AHardwareBuffer_isSupported(&bad) == 0, "isSupported: YCbCr 4:2:0 is not (not served)");
+  CHECK(AHardwareBuffer_isSupported(&bad) == 1, "isSupported: CPU YCbCr 4:2:0");
+  bad.usage |= AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE;
+  CHECK(AHardwareBuffer_isSupported(&bad) == 0, "isSupported: GPU YCbCr 4:2:0 is unavailable");
   bad = d;
   bad.usage |= AHARDWAREBUFFER_USAGE_VIDEO_ENCODE;
   CHECK(AHardwareBuffer_isSupported(&bad) == 0, "isSupported: video encoder usage is not (not served)");
@@ -229,6 +307,10 @@ static void TestBuffers(void) {
         CHECK(Mismatches(r, -1, Pattern1) == 0, "the received buffer has the sender's contents");
         CHECK(Fill(r, Pattern2) == 0 && Mismatches(a, -1, Pattern2) == 0,
               "what the receiver writes, the sender reads (shared memory)");
+        TestBufferReceiveErrors(sv[0], sv[1], a);
+        AHardwareBuffer_release(a);
+        a = NULL;
+        CHECK(Mismatches(r, -1, Pattern2) == 0, "the receiver retains the mapping after sender release");
         AHardwareBuffer_release(r);
       }
     } else {
@@ -238,7 +320,7 @@ static void TestBuffers(void) {
     close(sv[0]);
     close(sv[1]);
   }
-  AHardwareBuffer_release(a);
+  if (a != NULL) AHardwareBuffer_release(a);
   AHardwareBuffer_release(b);
 }
 

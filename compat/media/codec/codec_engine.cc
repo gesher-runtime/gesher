@@ -299,11 +299,15 @@ void CodecEngine::AttachInputSource(std::unique_ptr<InputFrameSource> source,
   if (on_retire_old) on_retire_old();
 }
 
-bool CodecEngine::SignalEndOfInputStream(std::string* error, int* status) {
+bool CodecEngine::SignalEndOfInputStream(std::string* error, int* status, bool reject_repeat) {
   std::lock_guard<std::mutex> lock(mu_);
   if (status != nullptr) *status = android::INVALID_OPERATION;
   if (released_ || fatal_ || !started_ || flushed_ || flush_requested_ || input_source_ == nullptr) {
     if (error != nullptr) *error = "signalEndOfInputStream() requires an executing surface encoder";
+    return false;
+  }
+  if (reject_repeat && surface_eos_) {
+    if (error != nullptr) *error = "signalEndOfInputStream() after the end of stream was signaled";
     return false;
   }
   if (failed_) {
@@ -330,6 +334,36 @@ bool CodecEngine::SetParameters(const Format& parameters) {
   return true;
 }
 
+int CodecEngine::SubmitLiveControls(const Format& parameters) {
+  int32_t bitrate = 0, sync = 0;
+  const bool has_bitrate = parameters.GetInt32("video-bitrate", &bitrate);
+  const bool request_sync = parameters.GetInt32("request-sync", &sync);
+  int32_t suspend = 0;
+  const bool suspend_input = parameters.GetInt32("drop-input-frames", &suspend) && suspend != 0;
+  std::lock_guard<std::mutex> lock(mu_);
+  if (released_) return android::INVALID_OPERATION;
+  // MediaCodec forwards every parameter and a component ignores the ones it
+  // cannot apply: advisory or unknown keys (low-latency, vendor.*,
+  // time-offset-us, ...) and video encoder controls sent to another codec.
+  if (!entry_.video || !entry_.encoder || (!has_bitrate && !request_sync && !suspend_input)) {
+    return android::OK;
+  }
+  // A live video encoder control is held for the running worker only.
+  if (fatal_ || !configured_ || !started_ || flushed_ || flush_requested_ || failed_ ||
+      enc_eos_sent_) {
+    return android::INVALID_OPERATION;
+  }
+  // Suspending a surface encoder's input has a defined effect the worker does
+  // not provide, so it is not reported as applied.
+  if (suspend_input) return -ENOTSUP;
+  if ((has_bitrate && bitrate <= 0) || (request_sync && sync != 0)) return android::BAD_VALUE;
+  // Submission and application are separate. Only the worker interacts with
+  // the backend, and it records a new target only after the backend accepts it.
+  if (request_sync) force_key_ = true;
+  if (has_bitrate) pending_bitrate_ = bitrate;
+  return android::OK;
+}
+
 bool CodecEngine::SetVideoScalingMode(int mode) {
   std::lock_guard<std::mutex> lock(mu_);
   if (released_) return false;
@@ -347,6 +381,11 @@ bool CodecEngine::GetMetrics(std::optional<CodecMetrics>* out_metrics) {
 bool CodecEngine::IsReleasedOrFatal() {
   std::lock_guard<std::mutex> lock(mu_);
   return released_ || fatal_;
+}
+
+bool CodecEngine::IsConfigured() {
+  std::lock_guard<std::mutex> lock(mu_);
+  return configured_ && !released_ && !fatal_;
 }
 
 bool CodecEngine::IsCallbackCurrent(uint64_t generation) {

@@ -478,6 +478,17 @@ Part Dlopen() {
   }
   p.notes.push_back("present " + present);
   p.notes.push_back("absent " + absent);
+  // libcamera2ndk is offered by dlopen only with its whole capture surface:
+  // a partial library would make a probing app choose it and fail later.
+  const bool camera_sessions =
+      dlsym(RTLD_DEFAULT, "ACameraManager_getCameraCharacteristics") != nullptr &&
+      dlsym(RTLD_DEFAULT, "ACameraDevice_createCaptureRequest") != nullptr &&
+      dlsym(RTLD_DEFAULT, "ACameraDevice_createCaptureSession") != nullptr &&
+      dlsym(RTLD_DEFAULT, "ACameraCaptureSession_setRepeatingRequest") != nullptr;
+  void* camera = dlopen("libcamera2ndk.so", RTLD_NOW);
+  p.Check((camera != nullptr) == camera_sessions,
+          "dlopen(libcamera2ndk.so) succeeds only with characteristics, requests and sessions");
+  if (camera != nullptr) dlclose(camera);
 
   // Calls through the handles.
   if (void* z = dlopen("libz.so", RTLD_NOW)) {

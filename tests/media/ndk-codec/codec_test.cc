@@ -47,6 +47,7 @@ constexpr const char* kCodecSymbols[] = {
     "AMediaCodec_releaseOutputBufferAtTime",
     "AMediaCodec_setAsyncNotifyCallback",
     "AMediaCodec_setInputSurface",
+    "AMediaCodec_setOnFrameRenderedCallback",
     "AMediaCodec_setOutputSurface",
     "AMediaCodec_setParameters",
     "AMediaCodec_signalEndOfInputStream",
@@ -236,7 +237,7 @@ int RunCodecTests() {
         const size_t huge = (size_t{1} << 32) + static_cast<size_t>(idx);
         size_t rejected_capacity = 99;
         c.Check(AMediaCodec_getInputBuffer(enc, huge, &rejected_capacity) == nullptr &&
-                    rejected_capacity == 0,
+                    rejected_capacity == 99,
                 "LP64 input index does not alias an owned slot");
         c.Check(AMediaCodec_queueInputBuffer(enc, huge, 0, 0, 0, 0) == AMEDIA_ERROR_INVALID_PARAMETER,
                 "LP64 queue index is rejected before narrowing");
@@ -339,8 +340,13 @@ int RunCodecTests() {
                         AMediaFormat_getInt32(buffer_format, AMEDIAFORMAT_KEY_WIDTH, &width) && width == 64,
                     "owned output has its publication format");
             if (buffer_format != nullptr) AMediaFormat_delete(buffer_format);
-            c.Check(AMediaCodec_getBufferFormat(dec, (size_t{1} << 32) + out_idx) == nullptr,
+            // NdkMediaCodec wraps an unavailable format in an owned, empty one.
+            AMediaFormat* alias = AMediaCodec_getBufferFormat(dec, (size_t{1} << 32) + out_idx);
+            int32_t alias_width = 0;
+            c.Check(alias != nullptr &&
+                        !AMediaFormat_getInt32(alias, AMEDIAFORMAT_KEY_WIDTH, &alias_width),
                     "buffer format rejects LP64 alias");
+            if (alias != nullptr) AMediaFormat_delete(alias);
           }
           if (info.flags & AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM) saw_eos = true;
           c.Check(AMediaCodec_releaseOutputBuffer(dec, static_cast<size_t>(out_idx), false) ==

@@ -5,6 +5,7 @@ import java.util.*;
 
 public final class Camera2CaptureDispatchHost {
     private static final boolean SCAN_GATE = @SCAN_GATE@;
+    private static final boolean ADMITTED_TARGETS = @ADMITTED_TARGETS@;
     private static final List<String> EVENTS = new ArrayList<>();
     private static int checks;
     private static boolean record = true, openFails, readFails, deliverFails;
@@ -75,11 +76,26 @@ public final class Camera2CaptureDispatchHost {
         @Override public int hashCode() { return width * 31 + height; }
     }
     private static final class Device { final String id = "device", name = "fake"; }
+    private record Target(int streamId, Surface surface, int format, Size size) {}
     private static final class Request {
         final int requestId = 7;
         final CameraMetadataNative settings = new CameraMetadataNative();
-        final int[] streamIds, surfaceIds;
-        Request(int[] streams, int[] surfaces) { streamIds = streams; surfaceIds = surfaces; }
+        final int[] streamIds = {0, 2, 99}, surfaceIds = {1, 99};
+        final List<Target> targets = new ArrayList<>();
+
+        Request(Map<Integer, Stream> streams) {
+            // Admission is outside this extraction. Supply the resolved outputs
+            // the current owner stores, or the legacy indexes above for replay.
+            if (ADMITTED_TARGETS) {
+                for (int streamId : streamIds) {
+                    Stream stream = streams.get(streamId);
+                    if (stream == null) continue;
+                    int index = streamId == 0 ? 1 : 0;
+                    targets.add(new Target(streamId, stream.surfaces.get(index),
+                            stream.format, stream.size));
+                }
+            }
+        }
     }
     private final class Frame {
         final Request request;
@@ -201,7 +217,7 @@ public final class Camera2CaptureDispatchHost {
         return fixture;
     }
     private void enqueue(long number) {
-        frames.add(new Frame(new Request(new int[] {0, 2, 99}, new int[] {1, 99}), number));
+        frames.add(new Frame(new Request(mStreams), number));
     }
 
     private static void behavior() {
@@ -214,7 +230,12 @@ public final class Camera2CaptureDispatchHost {
                 "jpeg:320x240:81", "deliver:2:3", "result:1");
 
         f = fixture(); f.enqueue(0); f.mCallbacks.removeJpeg = true; f.captureFrames();
-        events("open:1280x720", "read:1382400", "started:0", "deliver:10:raw", "result:0");
+        if (ADMITTED_TARGETS) {
+            events("open:1280x720", "read:1382400", "started:0", "deliver:10:raw",
+                    "jpeg:320x240:81", "deliver:2:3", "result:0");
+        } else {
+            events("open:1280x720", "read:1382400", "started:0", "deliver:10:raw", "result:0");
+        }
 
         f = fixture(); f.enqueue(0); f.enqueue(1); openFails = true; f.captureFrames();
         check(opens == 2, "failed open retries subsequent admitted frame");
@@ -263,9 +284,12 @@ public final class Camera2CaptureDispatchHost {
         f.mStreams.remove(2);
         for (int n = 0; n < 1000; n++) f.enqueue(n);
         record = false;
+        int beforeCapture = f.mStreams.queries;
         f.captureFrames();
-        System.out.println("1000 admitted frames / 3 requested stream ids: map queries=" + f.mStreams.queries);
-        if (SCAN_GATE) check(f.mStreams.queries == 3000, "one live lookup per requested stream id");
+        int captureQueries = f.mStreams.queries - beforeCapture;
+        System.out.println("1000 admitted frames: capture-time stream map queries=" + captureQueries);
+        if (SCAN_GATE) check(captureQueries == (ADMITTED_TARGETS ? 0 : 3000),
+                "capture uses resolved targets without extra stream map lookups");
     }
 
     public static void main(String[] args) {

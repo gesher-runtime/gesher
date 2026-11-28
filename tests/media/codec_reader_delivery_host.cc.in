@@ -119,6 +119,12 @@ int ANativeWindow_setBuffersGeometry(ANativeWindow*, int, int, int) { return -19
 int ANativeWindow_lock(ANativeWindow*, ANativeWindow_Buffer*, void*) { return -19; }
 int ANativeWindow_unlockAndPost(ANativeWindow*) { return -19; }
 namespace gesher::media { struct ReaderSurface { void Close() {} }; }
+namespace gesher::media {
+[[maybe_unused]] std::optional<int> QueueNdkReaderCameraFrame(ANativeWindow*, const uint8_t*,
+                                                            size_t, int, int, int64_t) {
+  return std::nullopt;  // This fixture uses Java readers, not NDK reader windows.
+}
+}  // namespace gesher::media
 namespace gesher::devices::camera { struct TraceSample { explicit TraceSample(int) {} void Step(int) {} }; }
 
 // Host adapter for <gesher/rgba_buffers.h>: a real reference-counted CPU buffer

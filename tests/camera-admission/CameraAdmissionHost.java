@@ -4,8 +4,10 @@ package com.gesher.server;
 import android.hardware.ICameraService;
 import android.hardware.camera2.*;
 import android.hardware.camera2.impl.*;
+import android.hardware.camera2.params.OutputConfiguration;
 import android.hardware.camera2.utils.SubmitInfo;
 import android.os.*;
+import android.view.Surface;
 import java.lang.reflect.*;
 import java.util.*;
 import java.util.concurrent.*;
@@ -177,6 +179,7 @@ public final class CameraAdmissionHost {
         CaptureRequest active = request(128);
         active.streams = new int[] {
                 camera.createStream(new android.hardware.camera2.params.OutputConfiguration()) };
+        active.surfaces = new int[] {0};
         CountDownLatch delivered = new CountDownLatch(1);
         CountDownLatch release = new CountDownLatch(1);
         CameraFrames.afterDelivery = () -> {
@@ -206,7 +209,123 @@ public final class CameraAdmissionHost {
         check(target.terminals.get() == 2, "flush publishes no duplicate terminal result");
     }
 
+    private static CaptureRequest indexedRequest(int stream, int surface) {
+        CaptureRequest request = request(128);
+        request.streams = new int[] {stream};
+        request.surfaces = new int[] {surface};
+        return request;
+    }
+
+    private static void expectInvalidTarget(Runnable submit) {
+        try {
+            submit.run();
+            throw new AssertionError("invalid target was admitted");
+        } catch (ServiceSpecificException e) {
+            check(e.errorCode == ICameraService.ERROR_ILLEGAL_ARGUMENT,
+                    "bad target indices report the Android submission error");
+        }
+    }
+
+    private static void validateSurfaceIndices() throws Exception {
+        CameraDeviceUser camera = camera(new Target(), false);
+        int stream = camera.createStream(new android.hardware.camera2.params.OutputConfiguration());
+        CaptureRequest valid = indexedRequest(stream, 0);
+        CaptureRequest incomplete = indexedRequest(stream, 0);
+        incomplete.surfaces = new int[0];
+        CaptureRequest extra = indexedRequest(stream, 0);
+        extra.surfaces = new int[] {0, 0};
+        try {
+            int metadataCopies = CameraMetadataNative.copies;
+            for (CaptureRequest invalid : List.of(indexedRequest(stream, 1),
+                    indexedRequest(stream, -1), indexedRequest(stream + 1, 0),
+                    incomplete, extra)) {
+                expectInvalidTarget(() -> camera.submitRequest(invalid, false));
+            }
+            check(CameraMetadataNative.copies == metadataCopies,
+                    "invalid targets never copy capture metadata");
+            expectInvalidTarget(() -> camera.submitRequestList(
+                    new CaptureRequest[] {valid, indexedRequest(stream, 1)}, false));
+            check(number(camera, "mNextRequestId") == 0
+                    && number(camera, "mNextFrameNumber") == 0 && frames(camera) == 0,
+                    "invalid targets leave the entire burst unadmitted");
+
+            SubmitInfo repeating = camera.submitRequest(valid, true);
+            expectInvalidTarget(() -> camera.submitRequest(indexedRequest(stream, -1), true));
+            check(number(camera, "mRepeatingId") == repeating.getRequestId(),
+                    "an invalid repeating replacement preserves the existing sequence");
+            SubmitInfo single = camera.submitRequest(valid, false);
+            check(single.getLastFrameNumber() == 0 && frames(camera) == 1,
+                    "the configured surface is admitted on the normal path");
+        } finally {
+            camera.disconnect();
+        }
+        clean();
+    }
+
+    private static void expectBusyStream(CameraDeviceUser camera, int stream) {
+        try {
+            camera.deleteStream(stream);
+            throw new AssertionError("stream with pending targets was deleted");
+        } catch (ServiceSpecificException e) {
+            check(e.errorCode == ICameraService.ERROR_INVALID_OPERATION,
+                    "deleting a busy stream reports ERROR_INVALID_OPERATION");
+        }
+    }
+
+    private static void retainPendingSurfaces() throws Exception {
+        Target callbacks = new Target();
+        CameraDeviceUser camera = camera(callbacks, true);
+        Surface first = new Surface();
+        Surface unused = new Surface();
+        Surface selected = new Surface();
+        int stream = camera.createStream(new OutputConfiguration(first, unused, selected));
+        CaptureRequest target = indexedRequest(stream, 2);
+        WindowsCamera.readEntered = new CountDownLatch(1);
+        WindowsCamera.readRelease = new CountDownLatch(1);
+        CountDownLatch readRelease = WindowsCamera.readRelease;
+        try {
+            camera.submitRequestList(new CaptureRequest[] {target, target}, false);
+            check(WindowsCamera.readEntered.await(5, TimeUnit.SECONDS),
+                    "active capture is held at its native read boundary");
+            expectInvalidTarget(() -> camera.updateOutputConfiguration(stream,
+                    new OutputConfiguration(first, unused)));
+            expectBusyStream(camera, stream);
+
+            camera.updateOutputConfiguration(stream, new OutputConfiguration(first, selected));
+            readRelease.countDown();
+            camera.waitUntilIdle();
+            until(() -> callbacks.terminals.get() == 2, "both admitted requests complete");
+            check(CameraFrames.lastDelivery == selected,
+                    "removing an earlier unused surface does not redirect capture to index zero");
+            camera.updateOutputConfiguration(stream, new OutputConfiguration(first));
+            expectInvalidTarget(() -> camera.submitRequest(indexedRequest(stream, 1), false));
+            camera.deleteStream(stream);
+        } finally {
+            readRelease.countDown();
+            camera.disconnect();
+            WindowsCamera.readRelease = null;
+        }
+        clean();
+
+        CameraDeviceUser repeating = camera(new Target(), false);
+        int repeatingStream = repeating.createStream(new OutputConfiguration(first, selected));
+        try {
+            SubmitInfo info = repeating.submitRequest(indexedRequest(repeatingStream, 1), true);
+            expectInvalidTarget(() -> repeating.updateOutputConfiguration(repeatingStream,
+                    new OutputConfiguration(first)));
+            expectBusyStream(repeating, repeatingStream);
+            repeating.cancelRequest(info.getRequestId());
+            repeating.updateOutputConfiguration(repeatingStream, new OutputConfiguration(first));
+            repeating.deleteStream(repeatingStream);
+        } finally {
+            repeating.disconnect();
+        }
+        clean();
+    }
+
     public static void main(String[] args)throws Exception{
+        retainPendingSurfaces();
+        validateSurfaceIndices();
         flushDuringImageDelivery();
         admissionAndFlush();bytesAndAtomicBurst();repeatingBackpressure();controlsAndFailure();reentrantAndReopen();progressAndFailureRegressions();
         System.out.println("Camera admission production checks passed: "+checks);

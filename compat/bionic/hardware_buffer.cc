@@ -7,9 +7,9 @@
 // allocated is what this implementation can serve, and AHardwareBuffer_isSupported
 // answers the same:
 //  - formats R8G8B8A8, R8G8B8X8, R8G8B8, R5G6B5, R16G16B16A16_FLOAT,
-//    R10G10B10A2, R8 and BLOB, one layer (no arrays, cube maps or mipmaps);
+//    R10G10B10A2, R8, BLOB and CPU-only YUV 4:2:0, one layer;
 //  - CPU read/write usage; GPU sampling, GPU color output and composer overlay
-//    (SurfaceControl) for every format but BLOB, when ANGLE's device is there
+//    (SurfaceControl) for color formats, when ANGLE's device is there
 //    (the GPU thread, gpu_interop.h) and within its texture size; float color
 //    output only with float color buffers;
 //  - not protected content, video encoding, sensor data, GPU data buffers or
@@ -25,17 +25,20 @@
 #include "gpu_interop.h"  // first: the EGL/GL prototype macros
 #include "gpu_fence.h"
 #include "hardware_buffer.h"
+#include "hardware_buffer_transfer.h"
 
 #include "abi_types.h"
 
 #include <gesher/bionic_shim.h>
 #include <gesher/rgba_buffers.h>
+#include <gesher/yuv_buffers.h>
 
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -73,6 +76,8 @@ constexpr uint64_t kGpuUsage = AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE |
 constexpr uint64_t kVendorUsage = (0xFULL << 28) | (0xFFFFULL << 48);  // VENDOR_0..19
 // What this implementation serves.
 constexpr uint64_t kServedUsage = kCpuMask | kGpuUsage | kVendorUsage;
+constexpr uint64_t kMaxBufferBytes = 1ULL << 30;
+constexpr int kFixedSizeSeals = F_SEAL_GROW | F_SEAL_SHRINK;
 
 struct Format {
   uint32_t format;
@@ -94,6 +99,7 @@ const Format kFormats[] = {
     {AHARDWAREBUFFER_FORMAT_R10G10B10A2_UNORM, 4, true, gpu::TextureFormat::kRgb10a2, 4, 0, false},
     {AHARDWAREBUFFER_FORMAT_R8_UNORM, 1, true, gpu::TextureFormat::kR8, 1, 0, true},
     {AHARDWAREBUFFER_FORMAT_BLOB, 1, false, gpu::TextureFormat::kRgba8, 0, 0, true},
+    {AHARDWAREBUFFER_FORMAT_Y8Cb8Cr8_420, 1, false, gpu::TextureFormat::kRgba8, 0, 0, true},
 };
 
 const Format* FindFormat(uint32_t format) {
@@ -177,22 +183,51 @@ bool ValidDescription(const AHardwareBuffer_Desc* desc) {
   return true;
 }
 
+bool Planar420(uint32_t format) {
+  return format == AHARDWAREBUFFER_FORMAT_Y8Cb8Cr8_420;
+}
+
+uint32_t HalfRoundedUp(uint32_t extent) {
+  return extent / 2 + extent % 2;
+}
+
+// Take the bound before multiplying by pixel size or adding chroma storage.
+// The import path checks this as well as allocation.
+size_t BufferBytes(const AHardwareBuffer_Desc& desc, const Format* f) {
+  const uint64_t pixels = static_cast<uint64_t>(desc.stride) * desc.height;
+  if (pixels == 0 || pixels > kMaxBufferBytes) return 0;
+  uint64_t bytes = pixels * f->bytes;
+  if (Planar420(desc.format)) {
+    bytes += 2 * static_cast<uint64_t>(HalfRoundedUp(desc.stride)) *
+             HalfRoundedUp(desc.height);
+  }
+  return bytes <= kMaxBufferBytes ? static_cast<size_t>(bytes) : 0;
+}
+
+// The layout and usages supported by the shared CPU backing store.
+size_t StorageBytes(const AHardwareBuffer_Desc& desc) {
+  const Format* f = FindFormat(desc.format);
+  if (f == nullptr || desc.layers != 1 || desc.stride < desc.width ||
+      (desc.usage & ~kServedUsage) != 0 || (!f->gpu && (desc.usage & kGpuUsage) != 0)) {
+    return 0;
+  }
+  return BufferBytes(desc, f);
+}
+
 // Whether this implementation can allocate a valid description.
 bool Served(const AHardwareBuffer_Desc* desc) {
-  const Format* f = FindFormat(desc->format);
-  if (f == nullptr || desc->layers != 1) return false;
-  if ((desc->usage & ~kServedUsage) != 0) return false;
-  const uint64_t bytes = static_cast<uint64_t>(desc->width) * desc->height * f->bytes;
-  if (bytes > (1ULL << 30)) return false;
+  AHardwareBuffer_Desc tight = *desc;
+  tight.stride = tight.width;
+  if (StorageBytes(tight) == 0) return false;
   if ((desc->usage & kGpuUsage) != 0) {
-    if (!f->gpu) return false;
     gpu::Thread* thread = gpu::Thread::Get();
     if (thread == nullptr) return false;
     if (desc->width > static_cast<uint32_t>(thread->max_texture_size()) ||
         desc->height > static_cast<uint32_t>(thread->max_texture_size())) {
       return false;
     }
-    if (f->texture == gpu::TextureFormat::kRgba16f && (desc->usage & AHARDWAREBUFFER_USAGE_GPU_FRAMEBUFFER) != 0 &&
+    if (desc->format == AHARDWAREBUFFER_FORMAT_R16G16B16A16_FLOAT &&
+        (desc->usage & AHARDWAREBUFFER_USAGE_GPU_FRAMEBUFFER) != 0 &&
         !thread->color_buffer_float()) {
       return false;
     }
@@ -449,17 +484,19 @@ bool EnsureTexture(Buffer* b) {
 }
 
 // Reads rect `r` of the texture back into memory.
-void ReadbackRect(Buffer* b, const ARect& r) {
-  if (b->gpu.texture == nullptr || Empty(r)) return;
+bool ReadbackRect(Buffer* b, const ARect& r) {
+  if (Empty(r)) return true;
+  if (b->gpu.texture == nullptr) return false;
   const int w = r.right - r.left, h = r.bottom - r.top;
   const size_t row_bytes = static_cast<size_t>(w) * b->format->texture_bytes;
   std::vector<uint8_t> px(row_bytes * h);
   if (!gpu::ReadTexture(b->gpu.texture, r.left, r.top, w, h, px.data(), row_bytes)) {
     static std::atomic<bool> said{false};
     LogOnce(&said, "a buffer's texture could not be read back: CPU reads see the last CPU contents");
-    return;
+    return false;
   }
   FromTexture(b, r, px.data());
+  return true;
 }
 
 void FreeGpu(Buffer* b) {
@@ -542,10 +579,15 @@ Buffer* Create(const AHardwareBuffer_Desc& desc, int fd, size_t size, uint64_t i
   return b;
 }
 
-// The bytes a description takes.
-size_t BufferBytes(const AHardwareBuffer_Desc& desc, const Format* f) {
-  size_t bytes = static_cast<size_t>(desc.stride) * desc.height * f->bytes;
-  return bytes == 0 ? 1 : bytes;
+void GetPlanar420Planes(Buffer* b, AHardwareBuffer_Planes* planes) {
+  const uint32_t luma_stride = b->desc.stride;
+  const uint32_t chroma_stride = HalfRoundedUp(luma_stride);
+  const size_t luma_bytes = static_cast<size_t>(luma_stride) * b->desc.height;
+  const size_t chroma_bytes = static_cast<size_t>(chroma_stride) * HalfRoundedUp(b->desc.height);
+  planes->planeCount = 3;
+  planes->planes[0] = {b->data, 1, luma_stride};
+  planes->planes[1] = {b->data + luma_bytes, 1, chroma_stride};
+  planes->planes[2] = {b->data + luma_bytes + chroma_bytes, 1, chroma_stride};
 }
 
 // Waits for a fence fd (any pollable fd; ADR 0089: Gesher's fences signal once
@@ -699,11 +741,11 @@ int BIONIC_SYSV Allocate(const AHardwareBuffer_Desc* desc, AHardwareBuffer** out
   }
   AHardwareBuffer_Desc d = *desc;
   d.stride = d.width;
-  const Format* f = FindFormat(d.format);
-  const size_t size = BufferBytes(d, f);
-  int fd = memfd_create("AHardwareBuffer", MFD_CLOEXEC);
+  const size_t size = StorageBytes(d);
+  int fd = memfd_create("AHardwareBuffer", MFD_CLOEXEC | MFD_ALLOW_SEALING);
   if (fd < 0) return -errno;
-  if (ftruncate(fd, static_cast<off_t>(size)) != 0) {
+  if (ftruncate(fd, static_cast<off_t>(size)) != 0 ||
+      fcntl(fd, F_ADD_SEALS, kFixedSizeSeals | F_SEAL_SEAL) != 0) {
     int e = errno;
     close(fd);
     return -e;
@@ -758,8 +800,13 @@ int LockImpl(Buffer* b, uint64_t usage, int32_t fence, const ARect* rect, void**
     WaitFenceAndClose(fence);
     return kBadValue;
   }
+  // An invalid region never accepts the lock or takes ownership of its fence.
+  const ARect bounds = Clip(b, nullptr);
+  const ARect r = rect == nullptr ? bounds : *rect;
+  if (r.left < 0 || r.top < 0 || r.right > bounds.right || r.bottom > bounds.bottom)
+    return kBadValue;
+  if (Empty(r)) return kInvalidOperation;
   WaitFenceAndClose(fence);
-  const ARect r = Clip(b, rect);
   bool readback;
   {
     std::lock_guard<std::mutex> lock(b->mutex);
@@ -787,6 +834,11 @@ int BIONIC_SYSV Lock(AHardwareBuffer* buffer, uint64_t usage, int32_t fence, con
     WaitFenceAndClose(fence);
     return kBadValue;
   }
+  if (Planar420(b->desc.format)) {
+    *out = nullptr;
+    WaitFenceAndClose(fence);
+    return kInvalidOperation;
+  }
   return LockImpl(b, usage, fence, rect, out);
 }
 
@@ -799,6 +851,11 @@ int BIONIC_SYSV LockAndGetInfo(AHardwareBuffer* buffer, uint64_t usage, int32_t 
   if (b == nullptr) {
     WaitFenceAndClose(fence);
     return kBadValue;
+  }
+  if (Planar420(b->desc.format)) {
+    if (out != nullptr) *out = nullptr;
+    WaitFenceAndClose(fence);
+    return kInvalidOperation;
   }
   int result = LockImpl(b, usage, fence, rect, out);
   if (result == 0) {
@@ -820,7 +877,10 @@ int BIONIC_SYSV LockPlanes(AHardwareBuffer* buffer, uint64_t usage, int32_t fenc
   void* address = nullptr;
   int result = LockImpl(b, usage, fence, rect, &address);
   if (result != 0) return result;
-  // Every served format has one plane.
+  if (Planar420(b->desc.format)) {
+    GetPlanar420Planes(b, planes);
+    return 0;
+  }
   planes->planeCount = 1;
   planes->planes[0].data = address;
   planes->planes[0].pixelStride = static_cast<uint32_t>(b->format->bytes);
@@ -870,30 +930,18 @@ int BIONIC_SYSV GetId(const AHardwareBuffer* buffer, uint64_t* out_id) {
   return 0;
 }
 
-// What travels with the memfd.
-struct Wire {
-  uint32_t magic;
-  uint32_t version;
-  uint32_t width, height, layers, format;
-  uint64_t usage;
-  uint32_t stride, reserved;
-  uint64_t id;
-  uint64_t size;
-};
 constexpr uint32_t kWireMagic = 0x57424841;  // "AHBW"
 
+bool IsStreamSocket(int fd) {
+  int type = 0;
+  socklen_t len = sizeof type;
+  return getsockopt(fd, SOL_SOCKET, SO_TYPE, &type, &len) == 0 && type == SOCK_STREAM;
+}
+
 int BIONIC_SYSV SendHandle(const AHardwareBuffer* buffer, int socket_fd) {
-  Buffer* b = FromApp(buffer);
-  if (b == nullptr) return kBadValue;
-  bool readback;
-  {
-    std::lock_guard<std::mutex> lock(b->mutex);
-    readback = b->has_texture && b->gpu_written;
-  }
-  // The receiver maps the memory: it gets what the GPU drew so far.
-  if (readback) gpu::Thread::Get()->Run([&] { ReadbackRect(b, Clip(b, nullptr)); });
-  Wire wire{kWireMagic, 1, b->desc.width, b->desc.height, b->desc.layers, b->desc.format,
-            b->desc.usage, b->desc.stride, 0, b->id, b->size};
+  BufferTransfer wire{};
+  int fd = -1;
+  if (int status = PrepareBufferTransfer(buffer, &wire, &fd); status != 0) return status;
   iovec iov{&wire, sizeof wire};
   alignas(cmsghdr) char control[CMSG_SPACE(sizeof(int))] = {};
   msghdr msg{};
@@ -905,7 +953,7 @@ int BIONIC_SYSV SendHandle(const AHardwareBuffer* buffer, int socket_fd) {
   c->cmsg_level = SOL_SOCKET;
   c->cmsg_type = SCM_RIGHTS;
   c->cmsg_len = CMSG_LEN(sizeof(int));
-  std::memcpy(CMSG_DATA(c), &b->fd, sizeof(int));
+  std::memcpy(CMSG_DATA(c), &fd, sizeof(fd));
   ssize_t n;
   do {
     n = sendmsg(socket_fd, &msg, MSG_NOSIGNAL);
@@ -917,16 +965,26 @@ int BIONIC_SYSV SendHandle(const AHardwareBuffer* buffer, int socket_fd) {
     std::fflush(stderr);
     return -e;
   }
-  if (static_cast<size_t>(n) != sizeof wire) return kInvalidOperation;
-  return 0;
+  size_t sent = static_cast<size_t>(n);
+  if (sent == 0 || (sent < sizeof wire && !IsStreamSocket(socket_fd))) return kInvalidOperation;
+  // The first write carried the descriptor. Only send the remaining bytes.
+  while (sent < sizeof wire) {
+    const ssize_t more = send(socket_fd, reinterpret_cast<const char*>(&wire) + sent,
+                              sizeof wire - sent, MSG_NOSIGNAL);
+    if (more < 0 && errno == EINTR) continue;
+    if (more < 0) return -errno;
+    if (more == 0) return kInvalidOperation;
+    sent += static_cast<size_t>(more);
+  }
+  return sent == sizeof wire ? 0 : kInvalidOperation;
 }
 
 int BIONIC_SYSV RecvHandle(int socket_fd, AHardwareBuffer** out) {
   if (out == nullptr) return kBadValue;
   *out = nullptr;
-  Wire wire{};
+  BufferTransfer wire{};
   iovec iov{&wire, sizeof wire};
-  alignas(cmsghdr) char control[CMSG_SPACE(sizeof(int) * 4)] = {};
+  alignas(cmsghdr) char control[CMSG_SPACE(sizeof(int) * 4) + CMSG_SPACE(sizeof(ucred))] = {};
   msghdr msg{};
   msg.msg_iov = &iov;
   msg.msg_iovlen = 1;
@@ -938,31 +996,70 @@ int BIONIC_SYSV RecvHandle(int socket_fd, AHardwareBuffer** out) {
   } while (n < 0 && errno == EINTR);
   if (n < 0) return -errno;
   int fd = -1;
+  size_t fd_count = 0;
   for (cmsghdr* c = CMSG_FIRSTHDR(&msg); c != nullptr; c = CMSG_NXTHDR(&msg, c)) {
     if (c->cmsg_level != SOL_SOCKET || c->cmsg_type != SCM_RIGHTS) continue;
     const size_t count = (c->cmsg_len - CMSG_LEN(0)) / sizeof(int);
     for (size_t i = 0; i < count; ++i) {
       int received;
       std::memcpy(&received, CMSG_DATA(c) + i * sizeof(int), sizeof(int));
-      if (fd < 0) {
+      if (++fd_count == 1) {
         fd = received;
       } else {
-        close(received);  // only one belongs to a buffer
+        close(received);
       }
     }
   }
-  // A stream socket may deliver the rest of the description later.
+  if ((msg.msg_flags & (MSG_TRUNC | MSG_CTRUNC)) != 0 || fd_count != 1 || fd < 0) {
+    if (fd >= 0) close(fd);
+    return kInvalidOperation;
+  }
+  // A stream may split a description. A short packet is a malformed record,
+  // so leave the next packet for the next call.
   size_t got = static_cast<size_t>(n);
+  if (got > 0 && got < sizeof wire && !IsStreamSocket(socket_fd)) {
+    close(fd);
+    return kInvalidOperation;
+  }
   while (got > 0 && got < sizeof wire) {
     ssize_t more = recv(socket_fd, reinterpret_cast<char*>(&wire) + got, sizeof wire - got, 0);
     if (more < 0 && errno == EINTR) continue;
     if (more <= 0) break;
     got += static_cast<size_t>(more);
   }
-  if (got != sizeof wire || wire.magic != kWireMagic || wire.version != 1 || fd < 0) {
-    if (fd >= 0) close(fd);
-    std::fprintf(stderr, "gesher AHardwareBuffer: no buffer in what fd %d received\n", socket_fd);
-    std::fflush(stderr);
+  if (got != sizeof wire) {
+    close(fd);
+    return kInvalidOperation;
+  }
+  return ImportBufferTransfer(wire, fd, out);
+}
+
+}  // namespace
+
+int PrepareBufferTransfer(const AHardwareBuffer* buffer, BufferTransfer* transfer, int* fd) {
+  Buffer* b = FromApp(buffer);
+  if (b == nullptr) return kBadValue;
+  bool readback;
+  {
+    std::lock_guard<std::mutex> lock(b->mutex);
+    readback = b->has_texture && b->gpu_written && !b->memory_newer;
+  }
+  if (readback) {
+    bool copied = false;
+    gpu::Thread::Get()->Run([&] { copied = ReadbackRect(b, Clip(b, nullptr)); });
+    if (!copied) return -EIO;
+  }
+  *transfer = {kWireMagic, 1, b->desc.width, b->desc.height, b->desc.layers, b->desc.format,
+               b->desc.usage, b->desc.stride, 0, b->id, b->size};
+  *fd = b->fd;
+  return 0;
+}
+
+int ImportBufferTransfer(const BufferTransfer& wire, int fd, AHardwareBuffer** out) {
+  *out = nullptr;
+  if (fd < 0) return kBadValue;
+  if (wire.magic != kWireMagic || wire.version != 1 || wire.reserved != 0 || wire.id == 0) {
+    close(fd);
     return kInvalidOperation;
   }
   AHardwareBuffer_Desc desc{};
@@ -972,13 +1069,19 @@ int BIONIC_SYSV RecvHandle(int socket_fd, AHardwareBuffer** out) {
   desc.format = wire.format;
   desc.usage = wire.usage;
   desc.stride = wire.stride;
-  const Format* f = FindFormat(desc.format);
-  if (f == nullptr || desc.stride < desc.width || wire.size < BufferBytes(desc, f)) {
+  const size_t size = StorageBytes(desc);
+  const int seals = fcntl(fd, F_GET_SEALS);
+  struct stat info{};
+  // Windows may grow a short file when making a mapping. Check the received
+  // file before mapping so a claimed byte count cannot create backing storage.
+  if (!ValidDescription(&desc) || size == 0 || wire.size != size ||
+      seals < 0 || (seals & kFixedSizeSeals) != kFixedSizeSeals ||
+      fstat(fd, &info) != 0 || info.st_size != static_cast<off_t>(size)) {
     close(fd);
     return kInvalidOperation;
   }
   int error = 0;
-  Buffer* b = Create(desc, fd, static_cast<size_t>(wire.size), wire.id, /*foreign=*/true, &error);
+  Buffer* b = Create(desc, fd, size, wire.id, /*foreign=*/true, &error);
   if (b == nullptr) {
     close(fd);
     return error != 0 ? error : -ENOMEM;
@@ -986,6 +1089,8 @@ int BIONIC_SYSV RecvHandle(int socket_fd, AHardwareBuffer** out) {
   *out = ToApp(b);
   return 0;
 }
+
+namespace {
 
 void Register() {
   struct Entry {
@@ -1018,27 +1123,53 @@ void Register() {
 
 constexpr uint64_t kReleaseFenceTimeoutNs = 2000ull * 1000 * 1000;
 
+AHardwareBuffer* AllocateYuv420Buffer(int32_t width, int32_t height, uint64_t usage,
+                                      AHardwareBuffer_Planes* planes) {
+  AHardwareBuffer_Desc desc{};
+  desc.width = width;
+  desc.height = height;
+  desc.layers = 1;
+  desc.format = AHARDWAREBUFFER_FORMAT_Y8Cb8Cr8_420;
+  desc.usage = usage;
+  AHardwareBuffer* buffer = nullptr;
+  if (Allocate(&desc, &buffer) != 0) return nullptr;
+  GetPlanar420Planes(FromApp(buffer), planes);
+  return buffer;
+}
+
+void ReleaseImageBuffer(AHardwareBuffer* buffer) {
+  Release(FromApp(buffer));
+}
+
 void* AllocateRgbaBuffer(uint32_t width, uint32_t height, bool gpu_form) {
+  return AllocateRgbaBuffer(width, height, gpu_form, AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN);
+}
+
+static AHardwareBuffer_Desc RgbaDescription(uint32_t width, uint32_t height, uint64_t usage) {
   AHardwareBuffer_Desc desc{};
   desc.width = width;
   desc.height = height;
   desc.layers = 1;
   desc.format = AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM;
-  desc.usage = AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN;
-  // A reader nothing samples on the GPU (a camera QR scanner's) is CPU-only, and
-  // reports that usage: Served() would start ANGLE and the GPU thread for it.
-  if (!gpu_form) {
-    AHardwareBuffer* app = nullptr;
-    return Allocate(&desc, &app) == 0 ? app : nullptr;
-  }
-  desc.usage |= AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE;
-  if (!Served(&desc)) {
+  desc.usage = usage;
+  return desc;
+}
+
+bool SupportsGpuRgbaBuffer(uint32_t width, uint32_t height) {
+  auto desc = RgbaDescription(width, height, AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE);
+  return Served(&desc);
+}
+
+void* AllocateRgbaBuffer(uint32_t width, uint32_t height, bool gpu_form, uint64_t cpu_usage) {
+  const uint64_t gpu_usage = gpu_form ? AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE : 0;
+  auto desc = RgbaDescription(width, height, cpu_usage | gpu_usage);
+  if (gpu_form && cpu_usage != AHARDWAREBUFFER_USAGE_CPU_READ_NEVER && !Served(&desc)) {
     // No GPU device (ANGLE/Direct3D 11 unavailable) or a size it cannot take: the
     // reader still delivers frames, in a CPU-only buffer that an app's
     // eglCreateImageKHR refuses cleanly (no GPU usage).
     static std::atomic<bool> said{false};
     LogOnce(&said, "no GPU form for ImageReader buffers: they are CPU-only");
-    desc.usage = AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN;
+    desc.usage = cpu_usage;
   }
   AHardwareBuffer* app = nullptr;
   if (Allocate(&desc, &app) != 0) return nullptr;

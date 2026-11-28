@@ -38,7 +38,7 @@ def main() -> int:
                .replace('protected:', 'public:') for text in original]
     constants = set(re.findall(r'\bNATIVE_WINDOW_[A-Z0-9_]+\b', '\n'.join(original)))
     constants.discard('NATIVE_WINDOW_TIMESTAMP_AUTO')
-    constants.add('NATIVE_WINDOW_SET_SURFACE_DAMAGE')
+    constants.update(('NATIVE_WINDOW_SET_SURFACE_DAMAGE', 'NATIVE_WINDOW_SET_BUFFER_COUNT'))
     constants.update(('NATIVE_WINDOW_API_CONNECT', 'NATIVE_WINDOW_API_DISCONNECT',
                       'NATIVE_WINDOW_API_EGL', 'NATIVE_WINDOW_API_CPU'))
     enum = 'enum { ' + ', '.join(sorted(constants)) + ' };\n'

@@ -1,5 +1,6 @@
-// Actual QueueSurface and AOSP native-window dispatch; no display is required.
+// Actual QueueSurface timing and dataspace contracts. No display is required.
 #include "compat/media/surface/queue_surface.h"
+#include "compat/hwui/window/gesher_native_window.h"
 #include <cstdio>
 #include <cstdint>
 #include <cerrno>
@@ -22,6 +23,43 @@ void Post(gesher::media::QueueSurface* surface,
       ? surface->UnlockAndPostWithTimestamp(*timestamp_ns)
       : surface->unlockAndPost();
   Check(result == 0, "publish a real producer buffer");
+}
+
+void CheckDataspace() {
+  using gesher::media::QueueSurface;
+  auto surface = android::sp<QueueSurface>::make(2, 2);
+  ANativeWindow* window = surface.get();
+  Check(ANativeWindow_getBuffersDefaultDataSpace(window) == HAL_DATASPACE_UNKNOWN &&
+        ANativeWindow_getBuffersDataSpace(window) == HAL_DATASPACE_UNKNOWN,
+        "initial consumer and producer dataspaces are unknown");
+  Check(ANativeWindow_setBuffersDataSpace(window, HAL_DATASPACE_V0_SRGB) == 0 &&
+        ANativeWindow_getBuffersDataSpace(window) == HAL_DATASPACE_V0_SRGB &&
+        ANativeWindow_getBuffersDefaultDataSpace(window) == HAL_DATASPACE_UNKNOWN,
+        "the producer can change its tag independently of the consumer default");
+  Post(surface.get());
+  auto first = surface->Latest();
+  Check(first != nullptr && first->dataspace == HAL_DATASPACE_V0_SRGB,
+        "a CPU-posted frame carries the producer's dataspace");
+
+  ANativeWindowBuffer* buffer = nullptr;
+  int fence = -1;
+  if (Check(window->dequeueBuffer(window, &buffer, &fence) == 0 && buffer != nullptr,
+            "dequeue a native producer buffer")) {
+    Check(ANativeWindow_setBuffersDataSpace(window, HAL_DATASPACE_V0_SRGB_LINEAR) == 0,
+          "change the producer tag after dequeue");
+    Check(window->queueBuffer(window, buffer, fence) == 0 &&
+          surface->Latest()->dataspace == HAL_DATASPACE_V0_SRGB_LINEAR,
+          "native queue snapshots the tag at publication");
+  }
+  Check(first != nullptr && first->dataspace == HAL_DATASPACE_V0_SRGB,
+        "changing the producer tag leaves an earlier frame immutable");
+
+  constexpr uint32_t pixels[] = {0xff123456, 0xff234567, 0xff345678, 0xff456789};
+  Check(surface->PostFrame(2, 2, 2, pixels, 321, 1, HAL_DATASPACE_V0_SRGB) == 0 &&
+        surface->Latest()->dataspace == HAL_DATASPACE_V0_SRGB &&
+        surface->Latest()->pixels[0] == pixels[0] &&
+        ANativeWindow_getBuffersDataSpace(window) == HAL_DATASPACE_V0_SRGB_LINEAR,
+        "a forwarded publication carries its own tag and leaves local producer state alone");
 }
 }
 
@@ -75,6 +113,7 @@ int main() {
   Check(surface->lock(&abandoned, nullptr) == -ENOSYS, "CPU lock admission retains Surface's precedence after abandonment");
   Check(surface->unlockAndPost() == -ENODEV, "pending producer observes NO_INIT when posting after abandonment");
   Check(surface->lock(&abandoned, nullptr) == -ENODEV, "already abandoned consumer rejects a fresh lock with NO_INIT");
+  CheckDataspace();
   std::printf("surface timestamp contracts: %d checks, %d failures\n", checks, failures);
   return surface_release_contract::Run() != 0 || failures != 0;
 }

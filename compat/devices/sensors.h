@@ -83,6 +83,8 @@ class Sink {
 // minimum delay); again with another period changes it. Returns 0, or a
 // negative errno (no such sensor).
 int Enable(Sink* sink, int handle, int periodUs);
+// Changes the period of an already enabled sensor.
+int SetRate(Sink* sink, int handle, int periodUs);
 int Disable(Sink* sink, int handle);
 // Orders completions after samples already produced and snapshots the enabled
 // sensors under the sampler lock. A full completion queue returns -EAGAIN.

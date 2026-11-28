@@ -31,9 +31,11 @@ foreach ($abi in @('x86_64', 'arm64-v8a')) {
   $native = Join-Path $codecDir $abi
   foreach ($mode in @('executable', 'JNI')) {
     Check "NDK codec ($abi; $mode): exports, AVC round trip, Opus, ownership and callback lifecycle" {
+      # Check passes on the expected marker below, not on a returned value.
+      $global:LASTEXITCODE = 0
       if (-not (Test-Path "$native/ndk-codec-test") -or
           -not (Test-Path "$native/libndk_codec_test.so") -or
-          -not (Test-Path "$codecDir/ndk-codec-tests.dex")) { return $false }
+          -not (Test-Path "$codecDir/ndk-codec-tests.dex")) { return 'NDK codec fixture missing' }
       if ($mode -eq 'executable') {
         $result = InvokeNdkCodec "$codecHost/gesher-exec.exe" @('--elf', "$native/ndk-codec-test", 'ndk-codec-test') $native
       } else {
@@ -46,8 +48,53 @@ foreach ($abi in @('x86_64', 'arm64-v8a')) {
             $result.Text.Contains("ndk-codec caller: $mode") -and
             -not $result.Text.Contains('FAIL:')
       if ($mode -eq 'JNI') { $ok = $ok -and $result.Text.Contains('MediaCodecNdkTest: all passed') }
-      if (-not $ok) { Write-Host "NDK codec ($abi; $mode) exit $($result.Code): $($result.Text)" }
-      return $ok
-    }
+      if (-not $ok) { return "NDK codec ($abi; $mode) exit $($result.Code): $($result.Text)" }
+      return "NDK codec ($abi; $mode) contract verified"
+    } @("NDK codec ($abi; $mode) contract verified")
   }
+}
+
+# The real NDK AVC buffer, live-control, rendered-frame and input Surface paths
+# through dalvikvm's native-library loader.
+$codecDex = Join-Path $codecDir 'ndk-codec.dex'
+if (-not (Test-Path $codecDex)) {
+  Write-Host 'FAIL  NDK codec contract fixture DEX missing'
+  $script:failed++
+  return
+}
+foreach ($codecAbi in @(@{ Name = 'x86_64'; Triple = 'x86_64' },
+                        @{ Name = 'arm64-v8a'; Triple = 'aarch64' })) {
+  $codecDll = Join-Path $codecDir "libndk-codec-$($codecAbi.Triple).so"
+  if (-not (Test-Path $codecDll)) {
+    Write-Host "FAIL  NDK codec ($($codecAbi.Name)) guest fixture missing"
+    $script:failed++
+    continue
+  }
+  # Use the AVC backend whose live sync and bitrate controls the fixture checks.
+  $codecPreviousEncoders = $env:GESHER_VIDEO_ENCODERS
+  try {
+    $env:GESHER_VIDEO_ENCODERS = 'soft'
+    CheckTimed "NDK codec AVC ($($codecAbi.Name)): real encode/decode, buffers and lifecycle" "$Dir/dalvikvm.exe" `
+      ($codecVm + @('-cp', (NoDrive $codecDex), 'gesher.NdkCodecTest', (NoDrive $codecDll))) `
+      @("NDK codec ABI: $($codecAbi.Name)", 'NDK codec AVC frame pts=4294971956',
+        'NDK codec AVC frame pts=4295005289', 'NDK codec AVC frame pts=4295038622',
+        'NDK codec parameter keys: all passed',
+        'NDK codec live controls: idr=1 output-bitrate=360000',
+        'NDK codec frame rendered: valid=1 invalid=0',
+        'NDK codec replace live surface: status=0',
+        'NDK codec replace abandoned surface: status=-10000',
+        'NDK codec surface: all passed', 'NDK codec AVC: all passed') 45 -Publish
+  } finally {
+    $env:GESHER_VIDEO_ENCODERS = $codecPreviousEncoders
+  }
+  $codecInputDll = Join-Path $codecDir "libndk-codec-input-$($codecAbi.Triple).so"
+  if (-not (Test-Path $codecInputDll)) {
+    Write-Host "FAIL  NDK codec input Surface ($($codecAbi.Name)) guest fixture missing"
+    $script:failed++
+    continue
+  }
+  CheckTimed "NDK codec AVC input Surface ($($codecAbi.Name)): real picture and EOS" "$Dir/dalvikvm.exe" `
+    ($codecVm + @('-cp', (NoDrive $codecDex), 'gesher.NdkCodecTest', (NoDrive $codecInputDll))) `
+    @('NDK codec input encoded AVC picture:', 'NDK codec input Surface: all passed',
+      'NDK codec persistent input Surface: all passed') 45 -Publish
 }

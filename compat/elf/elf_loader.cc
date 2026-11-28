@@ -2294,6 +2294,22 @@ Library* Find(const char* name) {
 
 const char* Soname(Library* library) { return library ? library->soname.c_str() : ""; }
 
+Library* RetainForAddress(const void* address) {
+  if (address == nullptr) return nullptr;
+  auto a = reinterpret_cast<const uint8_t*>(address);
+  std::lock_guard<LoaderMutex> lock(g_mutex);
+  for (Library* lib : Loaded()) {
+    if (a >= lib->base && a < lib->base + lib->map_size) return lib;
+  }
+  return nullptr;
+}
+
+// This loader keeps no reference count: RetainForAddress names the containing
+// object and does not keep it mapped (an app's munmap or MAP_FIXED over its
+// reservation can still remove it, see ForgetReservedMappings). The reference
+// counting loader of the ELF lifetime work replaces both functions.
+void ReleaseLifetimePin(Library*) {}
+
 void Close(Library* library) {
   std::lock_guard<LoaderMutex> operation(g_mutex);
   if (library == nullptr) return;

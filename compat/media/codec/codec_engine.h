@@ -133,12 +133,23 @@ class CodecEngine : public std::enable_shared_from_this<CodecEngine> {
   void AttachInputSource(std::unique_ptr<InputFrameSource> source,
                          std::function<void()> on_retire_old = nullptr);
   void OnSurfaceFrame(const uint32_t* rgba, int w, int h, int64_t ts_ns);
-  bool SignalEndOfInputStream(std::string* error, int* status = nullptr);
+  // reject_repeat reports a second end-of-stream as INVALID_OPERATION, as
+  // Android's GraphicBufferSource does for the NDK caller.
+  bool SignalEndOfInputStream(std::string* error, int* status = nullptr,
+                              bool reject_repeat = false);
 
   bool SetParameters(const Format& parameters);
+  // NDK setParameters. A running video encoder's request-sync and
+  // video-bitrate go to the worker (BAD_VALUE for an invalid value); keys a
+  // codec cannot apply are ignored with OK, as components do. A live encoder
+  // control outside execution (or a released codec) is INVALID_OPERATION, and
+  // suspending input (drop-input-frames=1) is -ENOTSUP.
+  int SubmitLiveControls(const Format& parameters);
   bool SetVideoScalingMode(int mode);
   bool GetMetrics(std::optional<CodecMetrics>* out_metrics);
   bool IsReleasedOrFatal();
+  // Configured, started or flushed, as MediaCodec's format getters require.
+  bool IsConfigured();
   bool IsCallbackCurrent(uint64_t generation);
   // Serialize an adapter's enqueue with flush/stop/release invalidation. The
   // function must only enqueue an event; it must not run application code or

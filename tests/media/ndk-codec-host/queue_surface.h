@@ -36,6 +36,7 @@ class sp {
   T* ptr_ = nullptr;
 };
 }  // namespace android
+enum { NATIVE_WINDOW_IS_VALID = 17 };
 namespace gesher::media {
 struct SurfaceFrame {
   int width = 0, height = 0;
@@ -70,6 +71,12 @@ class QueueSurface : public ANativeWindow {
     abandoned_ = true;
     listener_ = {};
   }
+  int query(int what, int* value) const {
+    if (what != NATIVE_WINDOW_IS_VALID) return -22;
+    std::lock_guard lock(mu_);
+    *value = abandoned_ ? 0 : 1;
+    return 0;
+  }
   void Post() {
     std::function<void()> fn;
     {
@@ -89,7 +96,7 @@ class QueueSurface : public ANativeWindow {
  private:
   int width_, height_;
   bool abandoned_ = false;
-  std::mutex mu_;
+  mutable std::mutex mu_;
   std::function<void()> listener_;
   std::shared_ptr<SurfaceFrame> latest_;
 };

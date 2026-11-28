@@ -27,6 +27,11 @@ namespace gesher::bionic::ahb {
 // once) when there is no GPU form to give. Without: CPU_READ_OFTEN only, and
 // nothing GPU-side is started. Null only when memory runs out.
 void* AllocateRgbaBuffer(uint32_t width, uint32_t height, bool gpu_form);
+// Whether the current GPU can provide a sampled buffer at this size.
+bool SupportsGpuRgbaBuffer(uint32_t width, uint32_t height);
+// As above, preserving the consumer's explicit CPU read usage. An opaque GPU
+// consumer passes zero CPU usage and gets no CPU-only fallback.
+void* AllocateRgbaBuffer(uint32_t width, uint32_t height, bool gpu_form, uint64_t cpu_usage);
 void RetainRgbaBuffer(void* buffer);
 void ReleaseRgbaBuffer(void* buffer);
 // Only the caller holds a reference.

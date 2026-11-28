@@ -160,9 +160,19 @@ Tests: `tools/test_captioning_contracts.py`, `tests/captioning/caption_windows_t
   is a BitTube's fd; events are dispatched on the Looper's thread
   (`dispatchSensorEvent`, `dispatchFlushCompleteEvent`). No direct channels,
   no data injection, no dynamic sensors.
+- NDK sensor inventory and ordinary Looper event queues use the same sources,
+  handles and boot-time event timestamps as the Java path. Native accelerometer,
+  gyroscope and magnetic-field sampling requests use at least a 5 ms interval.
+  Elevated-rate access with `HIGH_SAMPLING_RATE_SENSORS` needs a permission-verified
+  native path. Native direct channels and additional-info events are unavailable.
 
 ## Cameras
 
+- NDK Camera2 (`compat/devices/camera_ndk.cc`) provides `ACameraManager_*`
+  enumeration and `ACameraDevice` open/close over the same Camera2 service.
+  Camera characteristics, capture requests and sessions are not implemented,
+  so `dlopen("libcamera2ndk.so")` stays unavailable and an app that probes the
+  library keeps using Java Camera2.
 - `media.camera` (`CameraService`, cameraserver's ICameraService) runs in the
   app's own process: `Services.installInProcess` (single process) and
   `GesherAppProcess` (each app process of the Gesher device) put it into the

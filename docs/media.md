@@ -22,6 +22,19 @@ that reports 0 whatever the source is: the parcel carries no such flag, so
 hwui in the producer's process does not pace its frames by vsync and the
 consumer paces what it shows.)
 
+Gesher's ordinary `QueueSurface` keeps two writable slots available before
+the first frame, with the Android default of one outstanding write after
+publication. A producer can request two outstanding writes with
+`NATIVE_WINDOW_SET_BUFFER_COUNT` of three, including the latest-frame slot.
+A count of zero restores the default. Reducing the count below current
+ownership or exceeding the backend capacity returns `EINVAL`. A foreign or
+double buffer return also returns `EINVAL`. A further dequeue returns
+`WOULD_BLOCK` (`EAGAIN`) when both initial slots are occupied, or
+`INVALID_OPERATION` (`ENOSYS`) at the negotiated limit after publication.
+CPU locks share the limit and keep their own pixel storage. Cancellation preserves the published
+frame and invalidates cancelled pixels for partial CPU redraw. Single-buffer
+SurfaceTexture still admits one producer until its consumer releases the frame.
+
 RGBA images (RGBA readers, PRIVATE readers, and what is drawn into either's
 Surface) live in a per-reader pool of `AHardwareBuffer`s that repeat across
 frames, the one released longest ago being written next. A reader whose usage
@@ -202,7 +215,23 @@ the app's ELF code) or players.
   stop or delete their codec. Flush invalidates notifications from the preceding
   execution, including events posted after a restart. The callback recipient
   owns each output-format object. Persistent NDK input surfaces keep one active
-  encoder lease and can be reused after that consumer stops.
+  encoder lease and can be reused after that consumer stops; each
+  `createInputSurface` makes a new producer. As on Android's CodecHandler
+  looper, one notification thread per codec runs both the asynchronous
+  callbacks and rendered-frame callbacks, which never overlap; rendered-frame
+  samples coalesce to the latest one. `setParameters` hands a running video
+  encoder's `request-sync` and `video-bitrate` to the worker and ignores keys
+  a codec cannot apply (`low-latency`, `vendor.*`, `time-offset-us` and
+  encoder controls sent to a decoder), as components do. It reports
+  `drop-input-frames=1` (suspending a surface encoder's input) as unsupported
+  and a sync or bitrate control for an encoder that is not running as
+  `AMEDIA_ERROR_UNKNOWN`. Gesher bounds what `configure` may allocate:
+  `max-input-size` above 64 MiB, and for video a missing width or height or
+  one above 8192, return `AMEDIA_ERROR_INVALID_PARAMETER`; these are Gesher
+  resource limits, not Android ones. The `AMEDIACODEC_KEY_*` parameter names are exported as data
+  objects. As in Android's NdkMediaCodec, codec state errors are reported as
+  `AMEDIA_ERROR_UNKNOWN`, an unavailable format is an owned empty
+  `AMediaFormat` and a rejected buffer index leaves the caller's size unchanged.
   `tests/media/ndk-codec` builds the public NDK contracts for x86_64 and
   arm64-v8a, as both an ELF executable and a JNI library. The Windows media
   shard's `88-ndk-codec.ps1` runs all four paths against real codec backends,

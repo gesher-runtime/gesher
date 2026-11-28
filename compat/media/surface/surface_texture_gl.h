@@ -23,7 +23,8 @@
 // turns into IllegalStateException); once released (abandoned) every call
 // gives NO_INIT. The transform matrix is the identity until a frame is
 // latched, then the vertical flip of a buffer with no crop or transform (rows
-// top-down, GL's coordinates bottom-up); the time stamp is the latched frame's.
+// top-down, GL's coordinates bottom-up). The timestamp and dataspace belong
+// to the latched frame.
 #pragma once
 
 #include <stdint.h>
@@ -55,14 +56,16 @@ class GlTextureConsumer {
   // to GL_TEXTURE_EXTERNAL_OES either way, as AOSP does.
   int UpdateTexImage(const std::shared_ptr<const SurfaceFrame>& latest);
   // releaseTexImage: drops the latched frame; an attached texture shows a
-  // 1x1 black image instead (AOSP binds a small debug image).
-  int ReleaseTexImage();
+  // 1x1 black image instead (AOSP binds a small debug image). Reports the
+  // frame number returned to the producer, even if binding the debug image fails.
+  int ReleaseTexImage(uint64_t* released_frame);
   int AttachToContext(uint32_t tex_name);
   int DetachFromContext();
   // SurfaceTexture.release: every later call gives NO_INIT.
   void Abandon();
 
   int64_t Timestamp() const;
+  int32_t Dataspace() const;
   void TransformMatrix(float out[16]) const;
 
  private:
@@ -82,6 +85,7 @@ class GlTextureConsumer {
   std::shared_ptr<const SurfaceFrame> current_;
   uint64_t latched_number_ = 0;
   int64_t timestamp_ns_ = 0;
+  int32_t dataspace_ = 0;  // HAL_DATASPACE_UNKNOWN
   float transform_[16];
 };
 

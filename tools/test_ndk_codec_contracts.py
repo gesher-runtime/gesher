@@ -74,7 +74,8 @@ def main() -> int:
         command = shlex.split(args.cxx) + ["-std=c++20", "-O1", "-g", "-pthread", "-Wall",
             "-Wextra", "-Werror", "-Wno-unused-parameter", "-DGESHER_MEDIA_STANDALONE",
             "-I", str(work), "-I", str(FIXTURE / "include"),
-            "-I", str(ROOT / "compat/bionic/include"), str(FIXTURE / "contracts.cc"),
+            "-I", str(ROOT / "compat/bionic/include"),
+            "-I", str(ROOT / "compat/arm64/include"), str(FIXTURE / "contracts.cc"),
             *[str(work / "compat/media" / p) for p in paths if p.endswith(".cc")],
             "-o", str(binary)]
         if args.sanitize:

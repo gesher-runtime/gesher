@@ -3,11 +3,12 @@
 
 #include "media_codec_abi.h"
 
+#include <gesher/arm64_runtime.h>
 #include <gesher/bionic_shim.h>
-#include <media/NdkMediaErrorPriv.h>
 #include <media/NdkMediaFormat.h>
 #include <utils/Errors.h>
 
+#include <atomic>
 #include <cerrno>
 #include <cstdlib>
 #include <cmath>
@@ -16,6 +17,7 @@
 #include <memory>
 #include <mutex>
 #include <new>
+#include <optional>
 #include <string>
 #include <utility>
 #include <unordered_map>
@@ -27,17 +29,82 @@
 extern "C" {
 void ANativeWindow_acquire(ANativeWindow* window);
 void ANativeWindow_release(ANativeWindow* window);
+
+// libmediandk's parameter-key data objects (NdkMediaCodec.h, API 31+). An app
+// imports each pointer object, not a function.
+const char* AMEDIACODEC_KEY_HDR10_PLUS_INFO = "hdr10-plus-info";
+const char* AMEDIACODEC_KEY_LOW_LATENCY = "low-latency";
+const char* AMEDIACODEC_KEY_OFFSET_TIME = "time-offset-us";
+const char* AMEDIACODEC_KEY_REQUEST_SYNC_FRAME = "request-sync";
+const char* AMEDIACODEC_KEY_SUSPEND = "drop-input-frames";
+const char* AMEDIACODEC_KEY_SUSPEND_TIME = "drop-start-time-us";
+const char* AMEDIACODEC_KEY_VIDEO_BITRATE = "video-bitrate";
 }
 
+// As NdkMediaCodec's CodecHandler looper does, one notification thread per
+// codec runs every native callback: asynchronous buffer, format and error
+// events and rendered-frame samples are serialized and never run at once.
+// The thread is created with the first registration and runs with guest TLS.
+
+// Rendered-frame timing samples for AMediaCodec_setOnFrameRenderedCallback.
+// Android may omit intermediate samples, so a slow callback coalesces to the
+// latest sample instead of blocking the caller of releaseOutputBuffer.
+struct NativeFrameRendered : std::enable_shared_from_this<NativeFrameRendered> {
+  std::shared_ptr<gesher::media::CodecCallbackQueue> queue;  // the codec's
+  AMediaCodec* codec = nullptr;
+  gesher::media::codec_abi::OnFrameRendered callback = nullptr;
+  void* userdata = nullptr;
+  std::atomic<bool> active{true};
+
+  void Post(int64_t media_time_us, int64_t system_nanos) {
+    {
+      std::lock_guard<std::mutex> lock(mu_);
+      latest_ = Sample{media_time_us, system_nanos};
+      if (scheduled_) return;
+      scheduled_ = true;
+    }
+    auto self = shared_from_this();
+    queue->Post([self] { self->Deliver(); });
+  }
+
+  // Stop and flush drop queued notifications, including a scheduled delivery.
+  void Discard() {
+    std::lock_guard<std::mutex> lock(mu_);
+    latest_.reset();
+    scheduled_ = false;
+  }
+
+ private:
+  struct Sample {
+    int64_t media_time_us;
+    int64_t system_nanos;
+  };
+
+  void Deliver() {
+    std::optional<Sample> sample;
+    {
+      std::lock_guard<std::mutex> lock(mu_);
+      sample = std::exchange(latest_, std::nullopt);
+      scheduled_ = false;
+    }
+    if (sample && active) callback(codec, userdata, sample->media_time_us, sample->system_nanos);
+  }
+
+  std::mutex mu_;
+  std::optional<Sample> latest_;
+  bool scheduled_ = false;
+};
+
 struct NativeCodecNotifications {
-  std::shared_ptr<gesher::media::CodecCallbackQueue> queue =
-      gesher::media::CodecCallbackQueue::Create(gesher::bionic::EnterLoadedCode);
+  std::shared_ptr<gesher::media::CodecCallbackQueue> queue;  // the codec's
   AMediaCodec* codec = nullptr;
   std::weak_ptr<gesher::media::CodecEngine> engine;
   gesher::media::codec_abi::OnAsyncNotifyCallback callback{};
   void* userdata = nullptr;
+  std::atomic<bool> active{true};
 
   bool IsCurrent(uint64_t generation) const {
+    if (!active) return false;
     const auto owner = engine.lock();
     return owner && owner->IsCallbackCurrent(generation);
   }
@@ -46,7 +113,10 @@ struct NativeCodecNotifications {
 struct AMediaCodec {
   std::shared_ptr<gesher::media::CodecEngine> engine;
   std::mutex async_mu;
+  // Guarded by async_mu: the codec's notification thread and registrations.
+  std::shared_ptr<gesher::media::CodecCallbackQueue> queue;
   std::shared_ptr<NativeCodecNotifications> notifications;
+  std::shared_ptr<NativeFrameRendered> frame_rendered;
 };
 
 namespace gesher::media {
@@ -135,17 +205,54 @@ class NdkInputSource final : public InputFrameSource {
   const bool persistent_;
 };
 
-std::shared_ptr<NativeCodecNotifications> Notifications(AMediaCodec* codec) {
+std::shared_ptr<NativeFrameRendered> FrameRendered(AMediaCodec* codec) {
   std::lock_guard<std::mutex> lock(codec->async_mu);
-  return codec->notifications;
+  return codec->frame_rendered;
 }
 
+// The codec's notification thread, or null before any registration.
+std::shared_ptr<CodecCallbackQueue> Queue(AMediaCodec* codec) {
+  std::lock_guard<std::mutex> lock(codec->async_mu);
+  return codec->queue;
+}
+
+std::shared_ptr<CodecCallbackQueue> EnsureQueue(AMediaCodec* codec) {
+  std::lock_guard<std::mutex> lock(codec->async_mu);
+  if (codec->queue == nullptr) codec->queue = CodecCallbackQueue::Create(bionic::EnterLoadedCode);
+  return codec->queue;
+}
+
+// Stop and flush drop the notifications made before them.
+void PauseNotifications(AMediaCodec* codec) {
+  if (const auto queue = Queue(codec)) queue->Pause();
+  if (const auto frames = FrameRendered(codec)) frames->Discard();
+}
+
+// Android 16's NdkMediaCodec translate_error reports codec state errors,
+// including INVALID_OPERATION, as AMEDIA_ERROR_UNKNOWN. Gesher's own argument
+// checks keep their specific parameter and unsupported-operation results.
 media_status_t ToMediaStatus(int status) {
   if (status == android::OK) return AMEDIA_OK;
-  if (status == android::INVALID_OPERATION) return AMEDIA_ERROR_INVALID_OPERATION;
   if (status == android::BAD_VALUE) return AMEDIA_ERROR_INVALID_PARAMETER;
   if (status == -ENOTSUP) return AMEDIA_ERROR_UNSUPPORTED;
-  return translate_error(status);
+  return AMEDIA_ERROR_UNKNOWN;
+}
+
+// A callback in translated ARM64 guest code is called through its host entry.
+template <class Callback>
+bool ResolveGuestCallback(Callback* callback) {
+  auto* address = reinterpret_cast<void*>(*callback);
+  if (address == nullptr || !gesher::arm64::IsGuestCode(address)) return true;
+  address = gesher::arm64::HostEntry(address);
+  if (address == nullptr) return false;
+  *callback = reinterpret_cast<Callback>(address);
+  return true;
+}
+
+// As AMediaFormat_fromMsg does for a missing format, an unavailable codec
+// format is an owned, empty AMediaFormat rather than null.
+AMediaFormat* OwnedFormat(Format* format, bool available) {
+  return available ? format->Release() : AMediaFormat_new();
 }
 
 AMediaCodec* CreateFromEntry(const CodecEntry* entry) {
@@ -174,8 +281,9 @@ AMediaCodec* CreateEncoderByType(const char* mime_type) {
 media_status_t Delete(AMediaCodec* codec) {
   if (codec == nullptr) return AMEDIA_OK;
   const auto engine = codec->engine;
-  const auto notifications = Notifications(codec);
-  if (notifications) notifications->queue->Close();
+  // Close waits for a callback running on another thread; a callback that
+  // deletes its own codec returns without joining its own thread.
+  if (const auto queue = Queue(codec)) queue->Close();
   if (engine != nullptr) engine->Release();
   delete codec;
   return AMEDIA_OK;
@@ -186,12 +294,31 @@ media_status_t Configure(AMediaCodec* codec, const AMediaFormat* format, ANative
   if (codec == nullptr || codec->engine == nullptr) return AMEDIA_ERROR_INVALID_OBJECT;
   if (format == nullptr) return AMEDIA_ERROR_INVALID_PARAMETER;
   if (crypto != nullptr) return AMEDIA_ERROR_UNSUPPORTED;
+  const CodecEntry& entry = codec->engine->entry();
   const bool encode_flag = (flags & abi::kConfigureFlagEncode) != 0;
-  if (encode_flag != codec->engine->entry().encoder) return AMEDIA_ERROR_INVALID_PARAMETER;
+  if (encode_flag != entry.encoder) return AMEDIA_ERROR_INVALID_PARAMETER;
+  // Only a video decoder renders into an output surface.
+  if (surface != nullptr && (entry.encoder || !entry.video)) return AMEDIA_ERROR_INVALID_PARAMETER;
 
   Format copy;
   if (AMediaFormat_copy(copy.get(), const_cast<AMediaFormat*>(format)) != AMEDIA_OK) {
     return AMEDIA_ERROR_UNKNOWN;
+  }
+  // Bound the slot allocation before the shared worker multiplies dimensions
+  // or reserves an app-controlled number of bytes. Current providers declare
+  // no video dimensions beyond this bound.
+  constexpr int32_t kMaxVideoDimension = 8192;
+  constexpr int32_t kMaxInputCapacity = 64 * 1024 * 1024;
+  int32_t max_input = 0;
+  if (copy.GetInt32("max-input-size", &max_input) && max_input > kMaxInputCapacity) {
+    return AMEDIA_ERROR_INVALID_PARAMETER;
+  }
+  if (entry.video) {
+    int32_t width = 0, height = 0;
+    if (!copy.GetInt32("width", &width) || !copy.GetInt32("height", &height) || width <= 0 ||
+        height <= 0 || width > kMaxVideoDimension || height > kMaxVideoDimension) {
+      return AMEDIA_ERROR_INVALID_PARAMETER;
+    }
   }
   std::string error;
   int status = android::OK;
@@ -206,17 +333,17 @@ media_status_t Start(AMediaCodec* codec) {
   // A native callback may release its codec before Start returns. Keep only
   // independent owners after notifications become runnable.
   const auto engine = codec->engine;
-  const auto notifications = Notifications(codec);
-  if (notifications) notifications->queue->Resume();
+  if (const auto frames = FrameRendered(codec)) frames->Discard();
+  if (const auto queue = Queue(codec)) queue->Resume();
   std::string error;
-  return engine->Start(&error) ? AMEDIA_OK : AMEDIA_ERROR_INVALID_OPERATION;
+  // NdkMediaCodec reports MediaCodec's state error as AMEDIA_ERROR_UNKNOWN.
+  return engine->Start(&error) ? AMEDIA_OK : AMEDIA_ERROR_UNKNOWN;
 }
 
 media_status_t Stop(AMediaCodec* codec) {
   if (codec == nullptr || codec->engine == nullptr) return AMEDIA_ERROR_INVALID_OBJECT;
   const auto engine = codec->engine;
-  const auto notifications = Notifications(codec);
-  if (notifications) notifications->queue->Pause();
+  PauseNotifications(codec);
   int status = android::OK;
   engine->Stop(&status);
   return ToMediaStatus(status);
@@ -225,23 +352,24 @@ media_status_t Stop(AMediaCodec* codec) {
 media_status_t Flush(AMediaCodec* codec) {
   if (codec == nullptr || codec->engine == nullptr) return AMEDIA_ERROR_INVALID_OBJECT;
   const auto engine = codec->engine;
-  const auto notifications = Notifications(codec);
-  if (notifications) notifications->queue->Pause();
+  PauseNotifications(codec);
   int status = android::OK;
   engine->Flush(&status);
   return ToMediaStatus(status);
 }
 
+// As in NdkMediaCodec, a rejected index leaves the caller's size unchanged.
 uint8_t* GetInputBuffer(AMediaCodec* codec, size_t idx, size_t* out_size) {
-  if (out_size != nullptr) *out_size = 0;
   if (codec == nullptr || codec->engine == nullptr) return nullptr;
   if (idx >= kCodecSlots) return nullptr;
   if (!codec->engine->OwnsBuffer(static_cast<int>(idx), true)) return nullptr;
-  return codec->engine->GetInputBuffer(static_cast<int>(idx), out_size);
+  size_t size = 0;
+  uint8_t* data = codec->engine->GetInputBuffer(static_cast<int>(idx), &size);
+  if (data != nullptr && out_size != nullptr) *out_size = size;
+  return data;
 }
 
 uint8_t* GetOutputBuffer(AMediaCodec* codec, size_t idx, size_t* out_size) {
-  if (out_size != nullptr) *out_size = 0;
   if (codec == nullptr || codec->engine == nullptr) return nullptr;
   if (idx >= kCodecSlots) return nullptr;
   if (!codec->engine->OwnsBuffer(static_cast<int>(idx), false)) return nullptr;
@@ -301,21 +429,23 @@ abi::guest_ssize_t DequeueOutputBuffer(AMediaCodec* codec, abi::BufferInfo* info
 AMediaFormat* GetOutputFormat(AMediaCodec* codec) {
   if (codec == nullptr || codec->engine == nullptr) return nullptr;
   Format f;
-  if (!codec->engine->GetOutputFormat(&f)) return nullptr;
-  return f.Release();
+  const bool available = codec->engine->IsConfigured() && codec->engine->GetOutputFormat(&f);
+  return OwnedFormat(&f, available);
 }
 
 AMediaFormat* GetInputFormat(AMediaCodec* codec) {
   if (codec == nullptr || codec->engine == nullptr) return nullptr;
   Format f;
-  if (!codec->engine->GetInputFormat(&f)) return nullptr;
-  return f.Release();
+  const bool available = codec->engine->IsConfigured() && codec->engine->GetInputFormat(&f);
+  return OwnedFormat(&f, available);
 }
 
 AMediaFormat* GetBufferFormat(AMediaCodec* codec, size_t idx) {
-  if (codec == nullptr || codec->engine == nullptr || idx >= kCodecSlots) return nullptr;
+  if (codec == nullptr || codec->engine == nullptr) return nullptr;
   Format format;
-  return codec->engine->GetBufferFormat(static_cast<int>(idx), &format) ? format.Release() : nullptr;
+  const bool available =
+      idx < kCodecSlots && codec->engine->GetBufferFormat(static_cast<int>(idx), &format);
+  return OwnedFormat(&format, available);
 }
 
 media_status_t ReleaseOutputBuffer(AMediaCodec* codec, size_t idx, bool render) {
@@ -343,26 +473,32 @@ media_status_t ReleaseOutputBufferAtTime(AMediaCodec* codec, size_t idx, int64_t
 
 media_status_t SetOutputSurface(AMediaCodec* codec, ANativeWindow* surface) {
   if (codec == nullptr || codec->engine == nullptr) return AMEDIA_ERROR_INVALID_OBJECT;
+  if (const QueueSurface* queue = surface != nullptr ? QueueSurface::From(surface) : nullptr) {
+    // An abandoned consumer cannot take over from the current output; Android
+    // fails to connect to it and reports AMEDIA_ERROR_UNKNOWN.
+    int valid = 1;
+    if (queue->query(NATIVE_WINDOW_IS_VALID, &valid) == 0 && valid == 0) {
+      return AMEDIA_ERROR_UNKNOWN;
+    }
+  }
   int status = android::OK;
   codec->engine->SetOutputSurface(surface, &status);
   return ToMediaStatus(status);
 }
 
 media_status_t CreateInputSurface(AMediaCodec* codec, ANativeWindow** surface) {
-  if (codec == nullptr || codec->engine == nullptr) return AMEDIA_ERROR_INVALID_OBJECT;
-  if (surface == nullptr) return AMEDIA_ERROR_INVALID_PARAMETER;
+  if (codec == nullptr || codec->engine == nullptr || surface == nullptr) {
+    return AMEDIA_ERROR_INVALID_PARAMETER;
+  }
   *surface = nullptr;
   std::lock_guard<std::mutex> lifecycle(codec->engine->lifecycle_mutex());
   int width = 0, height = 0;
   std::string error;
   if (!codec->engine->PrepareInputSurface(&width, &height, &error)) {
-    return AMEDIA_ERROR_INVALID_OPERATION;
+    return AMEDIA_ERROR_UNKNOWN;
   }
-  if (ANativeWindow* current = codec->engine->InputWindow()) {
-    ANativeWindow_acquire(current);
-    *surface = current;
-    return AMEDIA_OK;
-  }
+  // As MediaCodec::createInputSurface does, each call creates a new producer
+  // and the encoder retires the previous one.
   android::sp<QueueSurface> qs(new QueueSurface(width, height));
   auto state = std::make_shared<NdkInputState>();
   state->owner = state->next_owner++;
@@ -384,8 +520,9 @@ media_status_t CreatePersistentInputSurface(ANativeWindow** surface) {
 }
 
 media_status_t SetInputSurface(AMediaCodec* codec, ANativeWindow* surface) {
-  if (codec == nullptr || codec->engine == nullptr) return AMEDIA_ERROR_INVALID_OBJECT;
-  if (surface == nullptr) return AMEDIA_ERROR_INVALID_PARAMETER;
+  if (codec == nullptr || codec->engine == nullptr || surface == nullptr) {
+    return AMEDIA_ERROR_INVALID_PARAMETER;
+  }
   QueueSurface* qs = QueueSurface::From(surface);
   if (qs == nullptr) return AMEDIA_ERROR_INVALID_PARAMETER;
   std::shared_ptr<NdkInputState> state;
@@ -398,14 +535,16 @@ media_status_t SetInputSurface(AMediaCodec* codec, ANativeWindow* surface) {
   std::lock_guard<std::mutex> lifecycle(codec->engine->lifecycle_mutex());
   int width = 0, height = 0;
   std::string error;
+  // MediaCodec's state errors, including a producer another encoder still
+  // consumes, reach the NDK caller as AMEDIA_ERROR_UNKNOWN.
   if (!codec->engine->PrepareInputSurface(&width, &height, &error)) {
-    return AMEDIA_ERROR_INVALID_OPERATION;
+    return AMEDIA_ERROR_UNKNOWN;
   }
   if (codec->engine->InputWindow() == surface) return AMEDIA_OK;
   uint64_t owner;
   {
     std::lock_guard<std::recursive_mutex> lock(state->mu);
-    if (state->owner != 0 || state->next_owner == 0) return AMEDIA_ERROR_INVALID_OPERATION;
+    if (state->owner != 0 || state->next_owner == 0) return AMEDIA_ERROR_UNKNOWN;
     owner = state->owner = state->next_owner++;
     qs->SetDefaultSize(width, height);
   }
@@ -415,21 +554,25 @@ media_status_t SetInputSurface(AMediaCodec* codec, ANativeWindow* surface) {
 }
 
 media_status_t SignalEndOfInputStream(AMediaCodec* codec) {
-  if (codec == nullptr || codec->engine == nullptr) return AMEDIA_ERROR_INVALID_OBJECT;
+  if (codec == nullptr || codec->engine == nullptr) return AMEDIA_ERROR_INVALID_PARAMETER;
   std::string error;
   int status = android::OK;
-  codec->engine->SignalEndOfInputStream(&error, &status);
+  codec->engine->SignalEndOfInputStream(&error, &status, /*reject_repeat=*/true);
+  // NdkMediaCodec returns INVALID_OPERATION itself for this call.
+  if (status == android::INVALID_OPERATION) return AMEDIA_ERROR_INVALID_OPERATION;
   return ToMediaStatus(status);
 }
 
 media_status_t SetParameters(AMediaCodec* codec, const AMediaFormat* params) {
-  if (codec == nullptr || codec->engine == nullptr) return AMEDIA_ERROR_INVALID_OBJECT;
-  if (params == nullptr) return AMEDIA_ERROR_INVALID_PARAMETER;
+  if (codec == nullptr || codec->engine == nullptr || params == nullptr) {
+    return AMEDIA_ERROR_INVALID_PARAMETER;
+  }
   Format copy;
   if (AMediaFormat_copy(copy.get(), const_cast<AMediaFormat*>(params)) != AMEDIA_OK) {
     return AMEDIA_ERROR_UNKNOWN;
   }
-  return codec->engine->SetParameters(copy) ? AMEDIA_OK : AMEDIA_ERROR_INVALID_OPERATION;
+  // NdkMediaCodec's translate_error reports MediaCodec's state error as UNKNOWN.
+  return ToMediaStatus(codec->engine->SubmitLiveControls(copy));
 }
 
 media_status_t GetName(AMediaCodec* codec, char** out_name) {
@@ -445,9 +588,26 @@ media_status_t GetName(AMediaCodec* codec, char** out_name) {
 
 void ReleaseName(AMediaCodec*, char* name) { std::free(name); }
 
+// A retired registration delivers nothing more: its queued notifications see
+// it inactive, and a callback already running on another thread finishes
+// before the caller continues (a callback replacing its own registration
+// does not wait for itself).
+template <class Registration>
+void RetireNotifications(AMediaCodec* codec, Registration* retired) {
+  if (retired == nullptr) return;
+  retired->active = false;
+  if (const auto queue = Queue(codec)) queue->WaitIdle();
+}
+
 media_status_t SetAsyncNotifyCallback(AMediaCodec* codec, abi::OnAsyncNotifyCallback callback,
                                       void* userdata) {
   if (codec == nullptr || codec->engine == nullptr) return AMEDIA_ERROR_INVALID_OBJECT;
+  if (!ResolveGuestCallback(&callback.onAsyncInputAvailable) ||
+      !ResolveGuestCallback(&callback.onAsyncOutputAvailable) ||
+      !ResolveGuestCallback(&callback.onAsyncFormatChanged) ||
+      !ResolveGuestCallback(&callback.onAsyncError)) {
+    return AMEDIA_ERROR_UNKNOWN;
+  }
   const auto engine = codec->engine;
   const bool enable = callback.onAsyncInputAvailable != nullptr ||
                       callback.onAsyncOutputAvailable != nullptr ||
@@ -460,15 +620,17 @@ media_status_t SetAsyncNotifyCallback(AMediaCodec* codec, abi::OnAsyncNotifyCall
     state->engine = engine;
     state->callback = callback;
     state->userdata = userdata;
+    state->queue = EnsureQueue(codec);
   }
+  // MediaCodec::setCallback's state error reaches the NDK caller as UNKNOWN.
   if (!enable) {
-    if (!engine->SetAsync(false)) return AMEDIA_ERROR_INVALID_OPERATION;
+    if (!engine->SetAsync(false)) return AMEDIA_ERROR_UNKNOWN;
     std::shared_ptr<NativeCodecNotifications> retired;
     {
       std::lock_guard<std::mutex> lock(codec->async_mu);
       retired = std::move(codec->notifications);
     }
-    if (retired) retired->queue->Close();
+    RetireNotifications(codec, retired.get());
     return AMEDIA_OK;
   }
   CodecCallbacks cbs;
@@ -507,15 +669,43 @@ media_status_t SetAsyncNotifyCallback(AMediaCodec* codec, abi::OnAsyncNotifyCall
     });
   };
   if (!engine->SetAsync(true, std::move(cbs))) {
-    state->queue->Close();
-    return AMEDIA_ERROR_INVALID_OPERATION;
+    state->active = false;
+    return AMEDIA_ERROR_UNKNOWN;
   }
   std::shared_ptr<NativeCodecNotifications> retired;
   {
     std::lock_guard<std::mutex> lock(codec->async_mu);
     retired = std::exchange(codec->notifications, std::move(state));
   }
-  if (retired) retired->queue->Close();
+  RetireNotifications(codec, retired.get());
+  return AMEDIA_OK;
+}
+
+media_status_t SetOnFrameRenderedCallback(AMediaCodec* codec, abi::OnFrameRendered callback,
+                                          void* userdata) {
+  if (codec == nullptr || codec->engine == nullptr) return AMEDIA_ERROR_INVALID_OBJECT;
+  if (!ResolveGuestCallback(&callback)) return AMEDIA_ERROR_UNKNOWN;
+  std::shared_ptr<NativeFrameRendered> state;
+  if (callback != nullptr) {
+    state = std::make_shared<NativeFrameRendered>();
+    state->codec = codec;
+    state->callback = callback;
+    state->userdata = userdata;
+    state->queue = EnsureQueue(codec);
+    std::weak_ptr<NativeFrameRendered> weak = state;
+    codec->engine->EnableFrameRendered(true, [weak](int64_t media_time_us, int64_t system_nanos) {
+      if (auto current = weak.lock()) current->Post(media_time_us, system_nanos);
+    });
+  } else {
+    codec->engine->EnableFrameRendered(false);
+  }
+  std::shared_ptr<NativeFrameRendered> retired;
+  {
+    std::lock_guard<std::mutex> lock(codec->async_mu);
+    retired = std::exchange(codec->frame_rendered, std::move(state));
+  }
+  // No sample from the replaced registration is delivered after this returns.
+  RetireNotifications(codec, retired.get());
   return AMEDIA_OK;
 }
 
@@ -564,6 +754,7 @@ void Register() {
   CODEC_ENTRY(AMediaCodec_releaseOutputBuffer, ReleaseOutputBuffer);
   CODEC_ENTRY(AMediaCodec_releaseOutputBufferAtTime, ReleaseOutputBufferAtTime);
   CODEC_ENTRY(AMediaCodec_setOutputSurface, SetOutputSurface);
+  CODEC_ENTRY(AMediaCodec_setOnFrameRenderedCallback, SetOnFrameRenderedCallback);
   CODEC_ENTRY(AMediaCodec_createInputSurface, CreateInputSurface);
   CODEC_ENTRY(AMediaCodec_createPersistentInputSurface, CreatePersistentInputSurface);
   CODEC_ENTRY(AMediaCodec_setInputSurface, SetInputSurface);
@@ -577,6 +768,16 @@ void Register() {
   CODEC_ENTRY(AMediaCodecActionCode_isRecoverable, ActionCodeIsRecoverable);
   CODEC_ENTRY(AMediaCodecActionCode_isTransient, ActionCodeIsTransient);
 #undef CODEC_ENTRY
+  // Publish each pointer object's address for dlsym and ELF data relocations.
+#define CODEC_KEY(name) AddBionicSymbol(#name, static_cast<void*>(&name))
+  CODEC_KEY(AMEDIACODEC_KEY_HDR10_PLUS_INFO);
+  CODEC_KEY(AMEDIACODEC_KEY_LOW_LATENCY);
+  CODEC_KEY(AMEDIACODEC_KEY_OFFSET_TIME);
+  CODEC_KEY(AMEDIACODEC_KEY_REQUEST_SYNC_FRAME);
+  CODEC_KEY(AMEDIACODEC_KEY_SUSPEND);
+  CODEC_KEY(AMEDIACODEC_KEY_SUSPEND_TIME);
+  CODEC_KEY(AMEDIACODEC_KEY_VIDEO_BITRATE);
+#undef CODEC_KEY
 }
 
 [[maybe_unused]] const bool kRegistered = (Register(), true);

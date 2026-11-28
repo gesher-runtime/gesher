@@ -52,6 +52,7 @@
 #include <utils/LightRefBase.h>
 
 #include <atomic>
+#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <map>
@@ -159,10 +160,10 @@ SurfaceTextureState* StateOf(JNIEnv* env, jobject thiz) {
 }
 
 // SurfaceTexture.nativeInit(isDetached, texName, singleBufferMode, weakSelf).
-void JNICALL ST_init(JNIEnv* env, jobject thiz, jboolean detached, jint tex_name, jboolean,
-                     jobject weak_self) {
+void JNICALL ST_init(JNIEnv* env, jobject thiz, jboolean detached, jint tex_name,
+                     jboolean single_buffer_mode, jobject weak_self) {
   auto* s = new SurfaceTextureState();
-  s->surface = android::sp<QueueSurface>::make(1, 1);
+  s->surface = android::sp<QueueSurface>::make(1, 1, single_buffer_mode != JNI_FALSE);
   s->consumer = std::make_unique<gesher::media::GlTextureConsumer>(
       detached != JNI_FALSE, static_cast<uint32_t>(tex_name));
   s->weak_self = env->NewGlobalRef(weak_self);
@@ -226,8 +227,10 @@ void JNICALL ST_updateTexImage(JNIEnv* env, jobject thiz) {
 void JNICALL ST_releaseTexImage(JNIEnv* env, jobject thiz) {
   SurfaceTextureState* s = StateOf(env, thiz);
   if (s == nullptr) return;
-  ThrowForStatus(env, s->consumer->ReleaseTexImage(),
-                 "Unable to release texture contents (see logcat for details)");
+  uint64_t released_frame = 0;
+  const int status = s->consumer->ReleaseTexImage(&released_frame);
+  if (released_frame != 0) s->surface->ReleaseFrame(released_frame);
+  ThrowForStatus(env, status, "Unable to release texture contents (see logcat for details)");
 }
 
 jlong JNICALL ST_getTimestamp(JNIEnv* env, jobject thiz) {
@@ -235,7 +238,10 @@ jlong JNICALL ST_getTimestamp(JNIEnv* env, jobject thiz) {
   return s != nullptr ? s->consumer->Timestamp() : 0;
 }
 
-jint JNICALL ST_getDataSpace(JNIEnv*, jobject) { return 0; }
+jint JNICALL ST_getDataSpace(JNIEnv* env, jobject thiz) {
+  SurfaceTextureState* s = StateOf(env, thiz);
+  return s != nullptr ? s->consumer->Dataspace() : 0;
+}
 
 // The latched frame's transform: the identity before one is latched, then the
 // vertical flip of a buffer without crop or transform.
@@ -928,12 +934,13 @@ extern "C" bool gesher_surface_queue_size(jlong native_object, int* width, int* 
   return true;
 }
 
-extern "C" bool gesher_surface_post(jlong native_object, int width, int height, int stride,
+extern "C" int gesher_surface_post(jlong native_object, int width, int height, int stride,
                                     int64_t timestamp_ns, const uint32_t* pixels,
-                                    int video_scaling_mode) {
+                                    int video_scaling_mode, int32_t dataspace) {
   QueueSurface* queue = QueueOf(native_object);
-  return queue != nullptr && queue->PostFrame(width, height, stride, pixels, timestamp_ns,
-                                              video_scaling_mode);
+  if (queue == nullptr) return -ENODEV;
+  return queue->PostFrame(width, height, stride, pixels, timestamp_ns, video_scaling_mode,
+                          dataspace);
 }
 
 extern "C" jlong gesher_surface_create_forwarding(int width, int height,
@@ -951,12 +958,9 @@ extern "C" jlong gesher_surface_create_forwarding(int width, int height,
   // stays while a frame is being handed over, and goes with the last copy once
   // the surface is destroyed or abandoned (which drops its listener).
   std::shared_ptr<void> owner(context, release);
-  surface->SetListener([raw, self, on_frame, owner] {
-    std::shared_ptr<const SurfaceFrame> frame = raw->Latest();
-    if (frame != nullptr) {
-      on_frame(owner.get(), self, frame->width, frame->height, frame->timestamp_ns,
-               frame->pixels.data(), frame->video_scaling_mode);
-    }
+  surface->SetForwardingListener([self, on_frame, owner](const SurfaceFrame& frame) {
+    return on_frame(owner.get(), self, frame.width, frame.height, frame.timestamp_ns,
+                    frame.pixels.data(), frame.video_scaling_mode, frame.dataspace);
   });
   raw->incStrong(reinterpret_cast<void*>(&gesher_surface_create_forwarding));
   return self;

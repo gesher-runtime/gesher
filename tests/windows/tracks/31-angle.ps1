@@ -109,8 +109,12 @@ GraphicsDex 'OpenGL ES for Java apps: EGL10 and GLES20 draw a frame (pbuffer, Wi
 # different current context.
 GraphicsDex 'SurfaceTexture in OpenGL ES: updateTexImage latches frames into an external texture, attach/detach, releaseTexImage, the current-context errors' `
   SurfaceTextureGlTest @()
+GraphicsDex 'SurfaceTexture in OpenGL ES: producer dataspace follows the latched texture pixels' `
+  SurfaceTextureGlTest @((NoDrive (Resolve-Path "$Dir/reader_buffer_test.so").Path))
 GraphicsDex 'ImageReader native surface: EGL pixels, Canvas notification, queue overflow and close lifetime' `
   ImageReaderEglTest @()
+GraphicsDex 'HardwareBuffer Parcel: backing descriptor, independent lifetime and published pixels' `
+  HardwareBufferParcelTest @()
 # A PRIVATE, GPU-sampled reader, as Flutter's platform views create it: drawn into
 # through lockHardwareCanvas, lockCanvas and EGL, its images' HardwareBuffers imported
 # by an NDK library (AHardwareBuffer_fromHardwareBuffer, reader_buffer_test.so from

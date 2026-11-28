@@ -1484,7 +1484,10 @@ const PlatformLib kPlatformLibs[] = {
     {"libOpenSLES.so", "slCreateEngine"},
     {"libaaudio.so", "AAudio_createStreamBuilder"},
     {"libmediandk.so", "AMediaFormat_new"},
-    {"libcamera2ndk.so", "ACameraManager_create"},
+    // The manager and device entry points exist, but camera characteristics,
+    // capture requests and sessions do not yet. An app that probes the library
+    // by dlopen must keep using Java Camera2, so the probe is a session call.
+    {"libcamera2ndk.so", "ACameraCaptureSession_setRepeatingRequest"},
     {"libvulkan.so", "vkCreateInstance"},
     {"libsync.so", "sync_wait"},
     {"libneuralnetworks.so", "ANeuralNetworksModel_create"},

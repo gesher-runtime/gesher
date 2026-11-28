@@ -46,6 +46,14 @@ class CodecCallbackQueue {
     if (!closed_) paused_ = false;
   }
 
+  // Waits until no callback is running on the worker. A callback calling this
+  // on its own thread returns at once.
+  void WaitIdle() {
+    std::unique_lock<std::mutex> lock(mu_);
+    if (worker_ == std::this_thread::get_id()) return;
+    cv_.wait(lock, [this] { return !running_ || exited_; });
+  }
+
   void Close() {
     std::unique_lock<std::mutex> lock(mu_);
     closed_ = true;
@@ -64,10 +72,13 @@ class CodecCallbackQueue {
       if (closed_) break;
       auto callback = std::move(pending_.front());
       pending_.pop_front();
+      running_ = true;
       cv_.notify_all();
       lock.unlock();
       callback();
       lock.lock();
+      running_ = false;
+      cv_.notify_all();
     }
     exited_ = true;
     cv_.notify_all();
@@ -77,7 +88,7 @@ class CodecCallbackQueue {
   std::condition_variable cv_;
   std::deque<std::function<void()>> pending_;
   std::thread::id worker_;
-  bool paused_ = false, closed_ = false, exited_ = false;
+  bool paused_ = false, closed_ = false, exited_ = false, running_ = false;
 };
 
 }  // namespace gesher::media

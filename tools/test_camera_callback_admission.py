@@ -33,7 +33,12 @@ STUBS = {
 'android/hardware/common/fmq/MQDescriptor.java': 'package android.hardware.common.fmq; public class MQDescriptor {}',
 'android/hardware/camera2/params/SessionConfiguration.java': 'package android.hardware.camera2.params; public class SessionConfiguration {}',
 'android/hardware/camera2/params/OutputConfiguration.java': '''package android.hardware.camera2.params; import android.view.Surface;
- public class OutputConfiguration { public java.util.List<Surface> getSurfaces(){return java.util.List.of(new Surface());} }''',
+ public class OutputConfiguration {
+  private final java.util.List<Surface> surfaces;
+  public OutputConfiguration(){this(new Surface());}
+  public OutputConfiguration(Surface... surfaces){this.surfaces=java.util.List.of(surfaces);}
+  public java.util.List<Surface> getSurfaces(){return surfaces;}
+ }''',
 'android/hardware/camera2/utils/SurfaceUtils.java': '''package android.hardware.camera2.utils; import android.view.Surface; import android.util.Size;
  public class SurfaceUtils {public static int getSurfaceFormat(Surface s){return 1;} public static Size getSurfaceSize(Surface s){return new Size(16,16);} }''',
 'android/hardware/camera2/utils/SubmitInfo.java': '''package android.hardware.camera2.utils; public class SubmitInfo {
@@ -103,8 +108,9 @@ STUBS = {
  class CameraFrames {static final int OK=0;static boolean isReader(Surface s){return false;}
  static byte[] jpeg(byte[] a,int w,int h,int tw,int th,int q){return new byte[0];}
  static volatile Runnable afterDelivery;
+ static volatile Surface lastDelivery;
  static int deliver(Surface s,byte[] a,int w,int h,long t,byte[] j){
- Runnable hook=afterDelivery;if(hook!=null)hook.run();return OK;} }''',
+ lastDelivery=s;Runnable hook=afterDelivery;if(hook!=null)hook.run();return OK;} }''',
 'com/gesher/server/WindowsCamera.java': '''package com.gesher.server;
  class WindowsCamera {static final class Device{final String id="host",name="explicit capture adapter";final boolean autofocus=false;}
  static final class OpenException extends Exception{} static volatile boolean failRead;static volatile int reads,closes;

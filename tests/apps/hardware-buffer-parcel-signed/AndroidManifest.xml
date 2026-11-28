@@ -1,0 +1,13 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="gesher.contract.hardwareparcel">
+    <uses-sdk android:minSdkVersion="36" android:targetSdkVersion="36"/>
+    <application android:label="Hardware Parcel Contract">
+        <activity android:name=".ProbeActivity" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+        <service android:name=".Receiver" android:process=":receiver" android:exported="false"/>
+    </application>
+</manifest>

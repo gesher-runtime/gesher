@@ -5,6 +5,13 @@
 #include <functional>
 #include <memory>
 
+struct AHardwareBuffer;
+namespace gesher::bionic::ahb {
+struct BufferTransfer;
+void WriteHardwareBufferParcel(JNIEnv* env, jobject parcel, const AHardwareBuffer* buffer);
+AHardwareBuffer* ReadHardwareBufferParcel(JNIEnv* env, jobject parcel, BufferTransfer* transfer);
+}  // namespace gesher::bionic::ahb
+
 namespace gesher::media {
 using ReaderFrame = std::function<void(const uint32_t*, int, int, int64_t)>;
 class ReaderSurface {

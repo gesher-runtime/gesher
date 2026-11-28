@@ -153,6 +153,7 @@ target_link_libraries(media_annexb_contracts PRIVATE pthread)
 set_target_properties(media_annexb_contracts PROPERTIES CXX_STANDARD 23)
 
 add_library(gesher_media_player OBJECT
+  ${_media}/ndk/image_reader.cc
   ${_media}/jni/java_data_source.cc
   ${_media}/jni/media_codec_jni.cc
   ${_media}/jni/persistent_input_surface.cc
