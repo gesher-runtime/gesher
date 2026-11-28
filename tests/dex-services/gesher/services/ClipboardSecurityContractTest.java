@@ -225,7 +225,7 @@ public final class ClipboardSecurityContractTest {
         int read = Intent.FLAG_GRANT_READ_URI_PERMISSION;
         int write = Intent.FLAG_GRANT_WRITE_URI_PERMISSION;
         check(!grants.canAccess(h.privileged, uri, read, 0), "Metadata queries cannot issue image read grants");
-        Object provider = get(h.service, "mImages");
+        Object provider = call(h.atm, "clipboardImages", new Class<?>[0]);
         call(provider, "attachTo", new Class<?>[]{Context.class}, new ContextWrapper(null) {
             @Override public int getUserId() { return 0; }
             @Override public Object getSystemService(String name) { return null; }
