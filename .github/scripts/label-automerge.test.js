@@ -476,7 +476,12 @@ function lastStatus(w, context) {
 }
 
 function bothStates(w, state) {
-  assert.equal(lastStatus(w, appStatus.STATUS)?.state, state);
+  const checks = (w.rules || []).filter(rule => rule.type === 'required_status_checks')
+    .flatMap(rule => rule.parameters.required_status_checks);
+  const appOnly = checks.some(c => c.context === appStatus.APP_STATUS && c.integration_id === appStatus.APP_ID) &&
+    !checks.some(c => c.context === appStatus.STATUS);
+  if (w.appQaStatus && appOnly) assert.equal(w.did('status').length, 0, 'no legacy publication in App-only mode');
+  else assert.equal(lastStatus(w, appStatus.STATUS)?.state, state);
   assert.equal(lastStatus(w, appStatus.APP_STATUS)?.state, state);
 }
 
@@ -994,22 +999,71 @@ const APP_RULE = {type: 'required_status_checks', parameters: {required_status_c
   {context: appStatus.APP_STATUS, integration_id: appStatus.APP_ID}]}};
 const quotaError = () => Object.assign(new Error('API rate limit exceeded for installation'), {status: 403});
 
-test('a required App gate makes legacy status writes best-effort', async () => {
+test('an App-only required gate avoids the legacy credential entirely', async () => {
   const w = appStatusWorld({rules: [APP_RULE]});
   w.statusErrors = {status: quotaError()};
   await w.ciDone();
   assert.equal(lastStatus(w, appStatus.APP_STATUS).state, 'success');
   assert.equal(lastStatus(w, appStatus.STATUS), undefined);
-  assert.ok(w.warnings.some(s => s.includes('rate limit') && s.includes(appStatus.APP_STATUS)));
-  // The ruleset is read once, and only because a legacy write failed.
+  assert.equal(w.did('status').length, 0);
+  assert.equal(w.warnings.length, 0);
   assert.equal(w.did('rules').length, 1);
 });
 
-test('the ruleset is not read while legacy status writes succeed', async () => {
+test('the live ruleset is read once to suppress duplicate legacy publication', async () => {
   const w = appStatusWorld({rules: [APP_RULE]});
   await w.ciDone();
   bothStates(w, 'success');
-  assert.equal(w.did('rules').length, 0);
+  assert.equal(w.did('rules').length, 1);
+});
+
+for (const [name, over, expected] of [
+  ['success', {}, 'success'],
+  ['waiting for CI', {runs: [], checks: []}, 'pending'],
+  ['missing approval', {approved: false}, 'failure'],
+]) {
+  test(`App-only publication writes only the bot QA context for ${name}`, async () => {
+    const w = appStatusWorld({rules: [APP_RULE], ...over});
+    await w.fire('workflow_dispatch', {inputs: {pull_request_number: '7'}});
+    assert.equal(lastStatus(w, appStatus.APP_STATUS).state, expected);
+    assert.equal(w.did('status').length, 0);
+    assert.equal(w.did('nativeMerge').length, expected === 'success' ? 1 : 0);
+  });
+}
+
+for (const integration of [undefined, 15368, 999]) {
+  test(`a legacy requirement from ${integration ?? 'any source'} retains dual publication across rule sets`, async () => {
+    const w = appStatusWorld({rules: [APP_RULE, {type: 'required_status_checks', parameters: {
+      required_status_checks: [{context: appStatus.STATUS, ...(integration ? {integration_id: integration} : {})}]}}]});
+    await w.ciDone();
+    bothStates(w, 'success');
+    assert.ok(w.did('status').length > 0);
+  });
+}
+
+test('App-only rules changing approval during mode detection cannot release the PR', async () => {
+  const w = appStatusWorld({rules: [APP_RULE]});
+  w.hooks.rules = () => {w.reviews[0].state = 'DISMISSED';};
+  await w.ciDone();
+  assert.equal(lastStatus(w, appStatus.APP_STATUS).state, 'failure');
+  assert.equal(w.did('status').length, 0);
+  assert.equal(w.did('nativeMerge').length, 0);
+});
+
+test('unreadable publication rules fail closed without falling back to legacy success', async () => {
+  const w = appStatusWorld({rules: [APP_RULE], rulesError: new Error('rules unavailable')});
+  await assert.rejects(w.ciDone(), /rules unavailable/);
+  assert.equal(lastStatus(w, appStatus.APP_STATUS).state, 'failure');
+  assert.equal(w.did('status').length, 0);
+  assert.equal(w.did('nativeMerge').length, 0);
+});
+
+test('shadow deployments retain both statuses when the App is not the required source', async () => {
+  const w = appStatusWorld({rules: [{type: 'required_status_checks', parameters: {
+    required_status_checks: [{context: appStatus.APP_STATUS, integration_id: 999}]}}]});
+  await w.ciDone();
+  bothStates(w, 'success');
+  assert.ok(w.did('status').length > 0);
 });
 
 for (const [name, rules] of Object.entries({
@@ -1218,7 +1272,9 @@ for (const contexts of [[appStatus.STATUS], [appStatus.APP_STATUS], [appStatus.A
     'CI rerun': w => {Object.assign(w.runs[0], {run_attempt: 2, status: 'in_progress', conclusion: null});},
     'workflow disabled': w => {w.workflowOverride = {state: 'disabled_manually'};},
   })) {
-    for (const publication of [appStatus.APP_STATUS, appStatus.STATUS]) {
+    const publications = contexts.includes(appStatus.APP_STATUS) && !contexts.includes(appStatus.STATUS) ?
+      [appStatus.APP_STATUS] : [appStatus.APP_STATUS, appStatus.STATUS];
+    for (const publication of publications) {
       test(`native policy blocks ${name} at ${publication} publication (${contexts.length} gates)`, async () => {
         const w = nativeAppWorld(contexts, {nativeAutoMethod: 'SQUASH'});
         let changed = false;

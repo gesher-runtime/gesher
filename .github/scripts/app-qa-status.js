@@ -18,14 +18,15 @@ function trustedStatus(value, owner, repo, sha, context, state) {
     value.url === `https://api.github.com/repos/${owner}/${repo}/statuses/${sha}`;
 }
 
-// During migration the Actions context remains required. Never release it
-// before the independently authenticated App status has been read back.
+// During dual-gate migration keep publishing the Actions context. Once live
+// rules require only the App QA context, stop writing the duplicate legacy row.
+// Never release either mode before authenticated App readback and rechecks.
 // appRequired() resolves true only when the live branch ruleset requires the App
 // context from the App integration. It is consulted only after a legacy write
 // fails: then the legacy Actions context is redundant and its write is
 // best-effort, so an exhausted GITHUB_TOKEN quota cannot block the gate.
 module.exports = ({github, readGithub = github, appGithub, owner, repo, enabled = false, appId,
-  installationId, appRequired = async () => false, core}) => {
+  installationId, appRequired = async () => false, appOnly = async () => false, core}) => {
   if (typeof enabled !== 'boolean') throw new Error('App QA status requires an explicit boolean flag');
   if (enabled && (!appGithub || appGithub === github || appId !== APP_ID ||
       installationId !== INSTALLATION_ID ||
@@ -37,6 +38,9 @@ module.exports = ({github, readGithub = github, appGithub, owner, repo, enabled 
       'Authorized label recorded; waiting for required PR CI' : ok ?
       'Authorized exact-head label, QA and PR CI verified' : 'Fresh authorized automerge label/QA required'});
   const legacy = async (sha, ok) => {
+    // Stop shadow publication only after the live rules bind QA to our App
+    // and no longer require the legacy context (from any integration).
+    if (enabled && await appOnly()) return null;
     try { return await github.rest.repos.createCommitStatus(args(sha, ok, STATUS)); }
     catch (error) {
       if (!enabled || !await appRequired()) throw error;
@@ -88,7 +92,7 @@ module.exports = ({github, readGithub = github, appGithub, owner, repo, enabled 
   };
   return {
     enabled,
-    // With native waiting confirmed off, both credentials may be attempted.
+    // With native waiting confirmed off, the required credentials are attempted.
     // Otherwise the App must first block an actually required gate, with a
     // confirmed readback. An unrelated legacy write could wake an old green
     // App-only request when cancellation and revocation share a failed token.
@@ -125,5 +129,12 @@ async function appRequiredByRuleset(github, owner, repo) {
     (rule.parameters?.required_status_checks || []).some(check =>
       check?.context === APP_STATUS && check.integration_id === APP_ID));
 }
+async function appOnlyByRuleset(github, owner, repo) {
+  const rules = await list(github.rest.repos.getBranchRules, {owner, repo, branch: 'main'});
+  const checks = rules.filter(rule => rule?.type === 'required_status_checks')
+    .flatMap(rule => rule.parameters?.required_status_checks || []);
+  return checks.some(check => check?.context === APP_STATUS && check.integration_id === APP_ID) &&
+    !checks.some(check => check?.context === STATUS);
+}
 Object.assign(module.exports, {STATUS, APP_STATUS, APP_ID, INSTALLATION_ID,
-  appRequiredByRuleset, trustedStatus, READBACK});
+  appRequiredByRuleset, appOnlyByRuleset, trustedStatus, READBACK});

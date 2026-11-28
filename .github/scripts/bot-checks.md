@@ -4,6 +4,21 @@ The required signals are published by `gesher-runtime-automation` (App
 `5816428`, installation `183304638`), so GitHub displays its avatar. The
 underlying Actions jobs retain the GitHub Actions identity.
 
+After the live rules require `qa/gesher-label-approval` from App `5816428` and
+no longer require `qa/label-approval` from any source, the QA controller stops
+publishing the legacy status. It reads and caches this publication decision once
+per controller invocation. Dual-gate and shadow deployments retain legacy
+publication; an unreadable ruleset fails the invocation rather than assuming
+the migration is complete. App receipt readbacks, approval/CI rechecks and
+protected exact-head merge remain unchanged.
+
+Only QA had a redundant manual legacy writer. `CLA` already uses one context.
+`ci-required` and `arm64-required` are actual Actions aggregate jobs whose
+results the bot must verify; their run rows remain visible. Actions job rows
+cannot have their App identity replaced. Existing commit statuses are retained
+by GitHub, so the old QA row may remain on commits which already received it;
+new commits in App-only mode receive only the bot QA status.
+
 | Existing signal | Bot signal | Source |
 | --- | --- | --- |
 | `ci-required` | `ci/gesher-required` | Current `ci.yml` PR run and its `ci-required` aggregate job |

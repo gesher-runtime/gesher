@@ -352,8 +352,9 @@ async function reconcile(github, prGithub, owner, repo, number, core, mergeGithu
 
 // PR writes use the installed App. Evidence reads use a read-only App token
 // when available, so they do not exhaust the repository's GITHUB_TOKEN quota.
-// The legacy required status stays on the Actions token; the App status is
-// explicitly opt-in. A schedule recovers PRs whose CI finished while a
+// Legacy publication uses the Actions token while live rules still need it;
+// App-only rules suppress that duplicate. The App status is explicitly opt-in.
+// A schedule recovers PRs whose CI finished while a
 // controller run failed (for example on an exhausted API quota).
 module.exports = async ({github: actionsGithub, readGithub, context, core, prGithub,
   mergeGithub = prGithub ?? actionsGithub, appQaStatus = false, appId, appInstallationId, repositoryId}) => {
@@ -366,10 +367,12 @@ module.exports = async ({github: actionsGithub, readGithub, context, core, prGit
     throw new Error('The Gesher GitHub App is required for pull request updates');
   }
   let required;
+  let only;
   const appRequired = fresh => fresh ? qaStatuses.appRequiredByRuleset(github, owner, repo) :
     required ??= qaStatuses.appRequiredByRuleset(github, owner, repo);
   const statuses = qaStatuses({github: actionsGithub, readGithub: github, appGithub: prGithub, owner, repo,
-    enabled: appQaStatus, appId, installationId: appInstallationId, appRequired, core});
+    enabled: appQaStatus, appId, installationId: appInstallationId, appRequired,
+    appOnly: () => only ??= qaStatuses.appOnlyByRuleset(github, owner, repo), core});
   const outcomes = [];
   // Local job output only: protected release remains the final GitHub action
   // in this controller. A separate workflow step publishes advisory checks.

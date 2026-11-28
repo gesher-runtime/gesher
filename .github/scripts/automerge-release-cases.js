@@ -76,7 +76,7 @@ for (const [name, override] of Object.entries({
     await assert.rejects(w.ciDone(), /Native merge state/);
     noRelease(w);
     assert.equal(last(w, app.APP_STATUS).state, 'failure');
-    assert.equal(last(w, app.STATUS).state, 'failure');
+    assert.equal(w.did('status').length, 0, 'App-only gate must not publish legacy statuses');
   });
 }
 
