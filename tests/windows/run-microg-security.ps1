@@ -511,6 +511,13 @@ try {
         'account: attached probe made no authenticator request or owner secret mutation true',
         'account: owner PendingIntent capability and extras preserved true'
     ) 'account: owner PendingIntent capability and extras preserved'
+    $null = Activity 'authenticator-continuation-component-access' $probe '.ProbeActivity' @(
+        '--ez', 'account-continuation', 'true'
+    ) @(
+        'PASS exported authenticator continuation completed across UIDs',
+        'PASS private authenticator continuation denied across UIDs', 'all passed'
+    ) 'all passed'
+    $null = Tool 'stop-continuation-probe' @('am', 'force-stop', $probe)
     $env:GESHER_BINDER_UID = '2000'
     $text = InvokeVm 'explicit-account-grant' @('-cp', (AndroidPath $ServicesDex), 'gesher.services.AccountSecurityTest', 'grant-probe', 'true')
     RequireOutput 'explicit host credential grant' $text @('AccountSecurityTest all passed')

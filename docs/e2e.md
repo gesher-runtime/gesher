@@ -44,7 +44,11 @@ The first app that passes is also started through the `.apk` association's
 registered command (`HKCU\Software\Classes\Gesher.Apk\shell\open\command`,
 `%1` replaced, `GESHER_APP_WINDOW=hidden-window`) and through its Start menu
 shortcut's command line (`gesher-app.cmd launch <package>`), each to a drawn,
-not blank first frame and a clean close.
+not blank first frame and a clean close. Its APK's version is installed then, so
+the association's command launches the installed package directly (a
+`launching the installed package` line) with no install confirmation; a watch
+(`tests/windows/shell/InstallConfirmDialog.ps1`) fails the check if one comes up
+([installer.md](installer.md#opening-an-apk-from-explorer)).
 
 Each check prints a `PASS` or `FAIL` line; a `FAIL` carries the first
 exception or crash of the app's log. An app with `knownFailure` in the
@@ -245,7 +249,7 @@ PASS  e2e: org.billthefarmer.currency 1.58 (Currency) installs, draws its first 
 PASS  e2e: com.nononsenseapps.notepad 7.2.7 (NoNonsense Notes) installs, draws its first frame (not blank), reacts to input, closes and its process ends
 PASS  e2e: com.physphil.android.unitconverterultimate 5.7.3 (Unit Converter Ultimate) installs, draws its first frame (not blank), reacts to input, closes and its process ends
 KNOWN-FAIL  e2e: name.boyle.chris.sgtpuzzles 2025-09-12-1919-23762278-fdroid (Simon Tatham's Puzzles): click at 100,200 did not change the window (0 pixels). ... (known failure: ... libpuzzlesgen.so run as a separate executable ...)
-PASS  e2e: com.ath0.rpn starts through the .apk association's registered command, draws, closes
+PASS  e2e: com.ath0.rpn (its version installed) starts through the .apk association's registered command with no install dialog, draws, closes
 PASS  e2e: com.ath0.rpn starts through its Start menu shortcut 'RPN' ("...\Gesher\gesher-app.cmd" launch com.ath0.rpn), draws, closes
 INFO  e2e: 0 unexpected failures
 ```

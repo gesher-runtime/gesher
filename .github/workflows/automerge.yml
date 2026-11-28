@@ -91,6 +91,7 @@ jobs:
           # Empty input is omitted by the pinned action. Phase 1 installations
           # do not need Statuses permission until the shadow gate is enabled.
           permission-statuses: ${{ steps.app-qa-flag.outputs.enabled == 'true' && 'write' || '' }}
+          permission-checks: ${{ steps.app-qa-flag.outputs.enabled == 'true' && 'write' || '' }}
       # Evidence reads use the App installation's own API quota. Issue events and
       # comments on PRs are readable with pull-requests access. Without these read
       # permissions the step fails and reads fall back to GITHUB_TOKEN.
@@ -110,6 +111,7 @@ jobs:
           permission-pull-requests: read
           permission-statuses: ${{ steps.app-qa-flag.outputs.enabled == 'true' && 'read' || '' }}
       - uses: actions/github-script@v7
+        id: controller
         env:
           GESHER_READ_TOKEN: ${{ steps.gesher-read.outputs.token }}
           GESHER_BOT_TOKEN: ${{ steps.gesher-bot.outputs.token }}
@@ -141,3 +143,18 @@ jobs:
               appId: Number(process.env.GESHER_BOT_APP_ID),
               appInstallationId: Number(process.env.GESHER_BOT_INSTALLATION_ID),
               repositoryId: Number(process.env.GITHUB_REPOSITORY_ID)});
+      - name: Publish automerge outcome as the bot
+        if: ${{ always() && steps.app-qa-flag.outputs.enabled == 'true' && steps.controller.outputs.automerge-results != '' }}
+        uses: actions/github-script@v7
+        env:
+          RESULTS: ${{ steps.controller.outputs.automerge-results }}
+          APP_ID: ${{ vars.GESHER_BOT_APP_ID }}
+          INSTALLATION_ID: ${{ steps.gesher-bot.outputs.installation-id }}
+        with:
+          github-token: ${{ steps.gesher-bot.outputs.token }}
+          script: |
+            const report = require('./.github/scripts/app-automerge-check.js')({github,
+              enabled: true, appId: Number(process.env.APP_ID),
+              installationId: Number(process.env.INSTALLATION_ID),
+              ...context.repo, context, core});
+            for (const result of JSON.parse(process.env.RESULTS)) await report(result, result.outcome);

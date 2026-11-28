@@ -24,6 +24,7 @@ import subprocess
 import tempfile
 
 from test_codec_lifecycle_contracts import method
+from codec_contract_source import member, shared, read, ENGINE, HEADER
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -31,6 +32,8 @@ SOURCE = "compat/media/jni/media_codec_jni.cc"
 
 
 def source_text(ref: str | None) -> str:
+    if shared(ref):
+        return "\n// CONTRACT_ENGINE_SPLIT\n".join(read(path, ref) for path in (SOURCE, ENGINE, HEADER))
     if ref:
         return subprocess.run(["git", "show", ref + ":" + SOURCE], cwd=ROOT,
                               capture_output=True, text=True, check=True).stdout
@@ -38,6 +41,34 @@ def source_text(ref: str | None) -> str:
 
 
 def generate(source: str) -> str:
+    is_shared = "\n// CONTRACT_ENGINE_SPLIT\n" in source
+    if is_shared:
+        jni, engine, header = source.split("\n// CONTRACT_ENGINE_SPLIT\n")
+        slot = method(header, "struct CodecSlot {") + ";\nusing Slot = CodecSlot;\n"
+        copies = "\n".join(method(engine, marker) for marker in (
+            "void CopyOutputFramePixels(", "size_t OutputFrameBytes(",
+            "void CopyOutputFrameToBuffer(", "uint8_t* CpuOutputBytes("))
+        replacements = {
+            "SLOT_AND_COPY": slot + copies,
+            "SET_SURFACE": member(engine, "SetSurfaceLocked"),
+            "HAS_SURFACE": method(header, "  bool has_surface() const"),
+            "INITIALIZED": "\n".join(member(engine, name) for name in (
+                "IsReleasedOrFatal", "GetOutputBuffer", "GetVideoImageSlot")),
+            "OUTPUT_BUFFER": method(jni, "  jobject OutputBuffer("),
+            "OUTPUT_IMAGE": method(jni, "  jobject OutputImage("),
+            "BUFFERS": method(jni, "  jobjectArray Buffers("),
+        }
+        for key, name in {"FREE_OUTPUT": "FreeOutput", "PUBLISH": "Publish", "EMIT_FRAME": "EmitFrame", "EMIT_EOS": "EmitEos"}.items():
+            replacements[key] = member(engine, name)
+        template = (ROOT / "tests/media/codec_output_storage_host.cc.in").read_text()
+        for name, body in replacements.items():
+            marker = "@" + name + "@"
+            if template.count(marker) != 1:
+                raise ValueError("fixture boundary changed: " + marker)
+            template = template.replace(marker, body)
+        epoch = "uint64_t," if "IsCallbackCurrent(" in source else ""
+        return (f"#define CODEC_CALLBACK_EPOCH_ARGS {epoch}\n"
+                + "#define SHARED_CODEC_ENGINE 1\n#define HAS_DEFERRED_OUTPUT 1\n" + template)
     start, end = "struct Slot {", "class Codec {"
     if source.count(start) != 1 or source.count(end) != 1:
         raise ValueError("production Slot/copy boundaries changed")

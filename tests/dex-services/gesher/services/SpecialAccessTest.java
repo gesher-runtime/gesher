@@ -338,6 +338,9 @@ public final class SpecialAccessTest {
             Class<?> deviceType = type("GesherService$Device");
             Object device = Proxy.newProxyInstance(deviceType.getClassLoader(), new Class<?>[]{deviceType}, (proxy, method, args) -> {
                 switch (method.getName()) {
+                    case "deviceAdmin":
+                        check(APP.equals(args[0]), "Host admin request retains its package");
+                        return false;
                     case "specialAccess": return invoke(type("SpecialAccess"), "rows", invoke(type("SpecialAccess"), "query", pm, args[0]));
                     case "setSpecialAccess": return setAccess(pm, (String)args[0], (String)args[1], (Boolean)args[2]);
                     case "settingsScreensClosed": return ((String[])args[0]).length;
@@ -348,7 +351,27 @@ public final class SpecialAccessTest {
             IBinder gesher = (IBinder)make(type("GesherService"), new Class<?>[]{deviceType}, device);
             int setCode = (Integer)field(type("GesherService"), "SET_SPECIAL_ACCESS").get(null);
             int queryCode = (Integer)field(type("GesherService"), "SPECIAL_ACCESS").get(null);
+            int adminCode = (Integer)field(type("GesherService"), "DEVICE_ADMIN").get(null);
             String descriptor = (String)field(type("GesherService"), "DESCRIPTOR").get(null);
+            for (boolean revoke : new boolean[] {false, true}) {
+                as(APP_UID, APP_PID, () -> rejects(SecurityException.class, () -> {
+                    Parcel adminData = Parcel.obtain(), adminReply = Parcel.obtain();
+                    try {
+                        adminData.writeInterfaceToken(descriptor); adminData.writeString(APP);
+                        adminData.writeBoolean(revoke);
+                        gesher.transact(adminCode, adminData, adminReply, 0);
+                        adminReply.readException();
+                    } finally { adminData.recycle(); adminReply.recycle(); }
+                }));
+                Parcel adminData = Parcel.obtain(), adminReply = Parcel.obtain();
+                try {
+                    adminData.writeInterfaceToken(descriptor); adminData.writeString(APP);
+                    adminData.writeBoolean(revoke);
+                    check(gesher.transact(adminCode, adminData, adminReply, 0), "Host admin transaction exists");
+                    adminReply.readException();
+                    check(!adminReply.readBoolean(), "Host admin transaction returns the actual inactive answer");
+                } finally { adminData.recycle(); adminReply.recycle(); }
+            }
             as(APP_UID, APP_PID, () -> rejects(SecurityException.class, () -> {
                 Parcel data = Parcel.obtain(), reply = Parcel.obtain();
                 try {

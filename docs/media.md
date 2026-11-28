@@ -193,6 +193,32 @@ the app's ELF code) or players.
   scaling to the requested Bitmap size. Raw SurfaceTexture GL consumers and
   ImageReader pixel storage remain unchanged. See the [contract and validation
   report](research/codec-video-scaling-2026-11-22.md) for the bounded M05 scope.
+- **NDK MediaCodec** (`ndk/media_codec.cc`): `libmediandk.so` exposes creation,
+  synchronous buffers, asynchronous notifications, output formats and encoder
+  input surfaces through the same JNI-free `codec/codec_engine.{h,cc}` used by
+  Java MediaCodec. Decoder and encoder selection uses the actual shared codec
+  registry; encrypted input reports unsupported. Native callbacks run on one
+  serialized notification thread with guest TLS initialized, and may flush,
+  stop or delete their codec. Flush invalidates notifications from the preceding
+  execution, including events posted after a restart. The callback recipient
+  owns each output-format object. Persistent NDK input surfaces keep one active
+  encoder lease and can be reused after that consumer stops.
+  `tests/media/ndk-codec` builds the public NDK contracts for x86_64 and
+  arm64-v8a, as both an ELF executable and a JNI library. The Windows media
+  shard's `88-ndk-codec.ps1` runs all four paths against real codec backends,
+  covering AVC encode/decode, Opus, raw PCM, LP64 buffer indices, callback TLS
+  and callback-driven flush/restart/stop/delete. Separately,
+  `tools/test_ndk_codec_contracts.py --sanitize` compiles the complete production
+  engine and NDK adapter with explicit host metadata, codec and window seams;
+  that portable test checks lifetime, ownership, cancellation epochs and
+  malformed PCM layouts, and does not establish Windows or media-backend results.
+  It also executes the actual Java callback adapter bodies over declared JNI
+  seams: delayed input/output/format/error events cannot be posted after their
+  epoch retires. Java enqueue holds the listener monitor before the engine
+  epoch gate, preserving the public listener setter's lock order. An event
+  already enqueued before flush retains Android's documented outstanding-event
+  semantics. `CodecLifecycleContractTest` separately exercises the public Java
+  callback flush/restart/stop/release path through Windows ART/JNI.
 - **Surfaces without a compositor** (`compat/media/surface`, built into hwui):
   a SurfaceTexture's and a SurfaceView's Surface is a `QueueSurface` (frames
   stay in the process; a producer in another process, given the Surface in a

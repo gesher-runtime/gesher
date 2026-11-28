@@ -4,8 +4,8 @@
 # off-desktop window, wait for its first frame, check the window is not blank (PrintWindow:
 # non-background and text pixels), save a PNG, post input (a click, keys) and check the
 # window changes, close it (WM_CLOSE) and check the app's process ends. One app is also
-# started through the .apk association's registered command and the Start menu shortcut's
-# command line. Prints one PASS or FAIL line per check; a FAIL carries the first exception
+# started through the .apk association's registered command (its version installed: no
+# install dialog, the installed package launched) and the Start menu shortcut's command line. Prints one PASS or FAIL line per check; a FAIL carries the first exception
 # of the app's log. Apps with `knownFailure` print KNOWN-FAIL and do not fail the run.
 #
 #   pwsh tests/e2e/run-e2e.ps1 -Setup installer\gesher-setup-*.exe -Out e2e-results
@@ -259,10 +259,26 @@ if ($null -ne $first) {
   try {
     Set-E2eCheck $pkg 'association' 'running'
     $open = (Get-ItemProperty 'HKCU:\Software\Classes\Gesher.Apk\shell\open\command').'(default)'
-    $r = RunWindow $first $open.Replace('%1', $apk) 'association' -NoInput
+    # The APK's own version is installed (gesher-app install above): gesher-launch opens
+    # the installed package directly, as its Start menu shortcut does, with no install
+    # confirmation (docs/installer.md, "Opening an APK from Explorer"). A dialog would
+    # wait for a click nobody gives; the watch reports any that came up.
+    . (Join-Path $root 'tests\windows\shell\InstallConfirmDialog.ps1')
+    $dialogWatch = Start-GesherInstallDialogWatch
+    try {
+      $r = RunWindow $first $open.Replace('%1', $apk) 'association' -NoInput
+    } finally {
+      $dialogs = @(Stop-GesherInstallDialogWatch $dialogWatch)
+    }
+    if ($dialogs.Count) { $r.Problems += "an install dialog came up for the installed version: $($dialogs -join ', ')" }
+    $associationLog = ReadText (Join-Path $OutDir "$pkg.association.log")
+    if ($associationLog -notmatch "launching the installed package $([regex]::Escape($pkg))") {
+      $r.Problems += 'it did not launch the installed package (no "launching the installed package" line)'
+    }
+    if ($associationLog -match "installed $([regex]::Escape($pkg)) \(version") { $r.Problems += 'it installed the APK again' }
     foreach ($l in $r.Info) { Report "INFO  e2e: $pkg (.apk association): $l" }
     if ($r.Problems) { Report "FAIL  e2e: $pkg through the .apk association's command ($open): $($r.Problems -join '; ')"; $script:failed++ }
-    else { Report "PASS  e2e: $pkg starts through the .apk association's registered command, draws, closes" }
+    else { Report "PASS  e2e: $pkg (its version installed) starts through the .apk association's registered command with no install dialog, draws, closes" }
 
     Set-E2eCheck $pkg 'association' $(if ($r.Problems) { 'failed' } else { 'passed' }) $r.Problems
     Set-E2eCheck $pkg 'shortcut' 'running'

@@ -49,6 +49,7 @@ static void ok(const char* name, int cond, const char* detail) {
 
 #define GESHER_OFD_PROCESS_PARENT
 #include "ofd_process_contract.inc"
+#include "child_wait_contract.inc"
 
 static void fork_unsupported(void) {
   int p[2] = {-1, -1};
@@ -218,6 +219,8 @@ int main(int argc, char** argv) {
     waitpid(pid, &status, 0);
     ok("waitpid decodes an exit code", WIFEXITED(status) && WEXITSTATUS(status) == 9, "exit 9");
   }
+
+  child_wait_notification_contract(child);
 
   // --- signals to another process: SIGUSR1 then SIGTERM, to its handlers -----
   {

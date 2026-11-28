@@ -67,6 +67,7 @@ public final class Services {
         final ActivityTaskManagerService atm;
         final ActivityManagerService am;
         final ClipboardService clipboard;
+        AccountManagerService accounts;
         final Map<String, IBinder> services;
 
         Created(PackageManagerService pm, ActivityTaskManagerService atm,
@@ -305,6 +306,7 @@ public final class Services {
         // accounts), through their authenticators. Sync settings left for the Google
         // account Gesher once reported without an authenticator are retired (#335).
         AccountManagerService accounts = new AccountManagerService(am, pm, persistentAccounts);
+        created.accounts = accounts;
         accounts.setSyncRetirement(sync::accountsRemoved);
         accounts.retireSyntheticAccountResidue();
         services.put(Context.ACCOUNT_SERVICE, StandIn.of(android.accounts.IAccountManager.class,
@@ -325,9 +327,11 @@ public final class Services {
         services.put(Context.STORAGE_STATS_SERVICE, StandIn.of(
                 android.app.usage.IStorageStatsManager.class,
                 new StorageStatsService(pm, atm::authenticatedPackageCodeForPid)).asBinder());
-        services.put(Context.DEVICE_POLICY_SERVICE, StandIn.of(
+        pm.deviceAdminPolicy().configure(atm::authenticatedPackageCodeForPid, persistentAccounts,
+                intent -> am.sendBroadcastFor(null, intent, null));
+        services.put(Context.DEVICE_POLICY_SERVICE, StandIn.ofStrictDefaults(
                 android.app.admin.IDevicePolicyManager.class,
-                new DeviceServices.DevicePolicyService()).asBinder());
+                pm.deviceAdminPolicy()).asBinder());
         // Telephony over the host's cellular modem, if Windows reported one at boot
         // (docs/telephony.md); without one, AOSP's no-phone answers.
         TelephonyService.Endpoints telephony = TelephonyService.create(pm, am,

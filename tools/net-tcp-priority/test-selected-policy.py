@@ -720,6 +720,39 @@ PIPE_POLL_ERROR_REPLACEMENTS = (
 # exact main checkpoint before running EVERY original receipt and TCP check.
 # The helper pins bind the new references to their reviewed source bytes only:
 # neither this transition nor a passing source check qualifies native execution.
+# Route netlink extends the socket path covered by the existing receipts.
+# Reverse its exact delta before running those checks on their original inputs.
+NETLINK_PATCH='tools/net-tcp-priority/qualified/netlink-source.patch'
+NETLINK_RECEIPT='tools/net-tcp-priority/qualified/netlink-source.json'
+NETLINK_RECEIPT_SHA256='585c1908cd44fb873cf65f24f70c8b78f68ae15e170aae3134e7e4ae5b152ed1'
+
+def preceding_netlink_sources():
+ raw=(ROOT/NETLINK_RECEIPT).read_bytes()
+ assert hashlib.sha256(raw).hexdigest()==NETLINK_RECEIPT_SHA256,NETLINK_RECEIPT
+ receipt=json.loads(raw)
+ patch=(ROOT/NETLINK_PATCH).read_bytes()
+ assert hashlib.sha256(patch).hexdigest()==receipt['patch_sha256'],NETLINK_PATCH
+ paths=sorted(receipt['after_sha256'])
+ assert paths==sorted(receipt['before_sha256'])
+ assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==paths
+ current={path:(ROOT/path).read_bytes() for path in paths}
+ with tempfile.TemporaryDirectory(prefix='gesher-netlink-qualification-') as temporary:
+  work=Path(temporary)
+  for path,source in current.items():
+   assert hashlib.sha256(source).hexdigest()==receipt['after_sha256'][path],path
+   (work/path).parent.mkdir(parents=True,exist_ok=True)
+   (work/path).write_bytes(source)
+  subprocess.run(['git','apply','--reverse','--unidiff-zero','--check','-'],input=patch,cwd=work,check=True,capture_output=True)
+  subprocess.run(['git','apply','--reverse','--unidiff-zero','-'],input=patch,cwd=work,check=True,capture_output=True)
+  before={path:(work/path).read_bytes() for path in paths}
+  for path,source in before.items():
+   assert hashlib.sha256(source).hexdigest()==receipt['before_sha256'][path],path
+   assert source==subprocess.check_output(['git','-C',str(ROOT),'show',receipt['baseline']+':'+path]),path
+  subprocess.run(['git','apply','--unidiff-zero','-'],input=patch,cwd=work,check=True,capture_output=True)
+  for path,source in current.items():
+   assert (work/path).read_bytes()==source,path
+ return before
+
 STORAGE_POLICY_QUALIFICATION='tools/net-tcp-priority/qualified/storage-policy-source.json'
 STORAGE_POLICY_PATCH='tools/net-tcp-priority/qualified/storage-policy-source.patch'
 STORAGE_POLICY_QUALIFICATION_SHA256='1274a14dce7607f2ea1a6eea833f4036a48a8fe306b58e799cb04080e613cc41'
@@ -742,7 +775,7 @@ STORAGE_POLICY_HELPERS=[
  'compat/posix/src/storage_policy.cc',
  'compat/posix/src/storage_policy.h',
 ]
-def preceding_storage_policy_sources():
+def preceding_storage_policy_sources(before_netlink):
  raw=(ROOT/STORAGE_POLICY_QUALIFICATION).read_bytes()
  assert hashlib.sha256(raw).hexdigest()==STORAGE_POLICY_QUALIFICATION_SHA256,'storage policy source qualification changed'
  qualification=json.loads(raw)
@@ -759,7 +792,8 @@ def preceding_storage_policy_sources():
  patch=(ROOT/STORAGE_POLICY_PATCH).read_bytes()
  assert hashlib.sha256(patch).hexdigest()==qualification['patch_sha256'],'storage policy transition patch changed'
  assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==STORAGE_POLICY_PATHS
- current={path:(ROOT/path).read_bytes() for path in STORAGE_POLICY_PATHS}
+ current={path:before_netlink[path] if path in before_netlink else (ROOT/path).read_bytes()
+          for path in STORAGE_POLICY_PATHS}
  baseline={path:subprocess.check_output(['git','-C',str(ROOT),'show',STORAGE_POLICY_BASELINE+':'+path]) for path in STORAGE_POLICY_PATHS}
  for path in STORAGE_POLICY_PATHS:
   assert hashlib.sha256(current[path]).hexdigest()==qualification['source_sha256'][path],path
@@ -778,6 +812,30 @@ def preceding_storage_policy_sources():
   subprocess.run(['git','apply','-'],input=patch,cwd=work,check=True,capture_output=True)
   for path in STORAGE_POLICY_PATHS:
    assert (work/path).read_bytes()==current[path],('storage policy forward endpoint',path)
+ return baseline
+
+# Reverse the one process collector transition to the unchanged OFD digest.
+# This source check does not qualify Windows execution.
+CHILD_WAIT_PATH='compat/bionic/process_bionic.cc'
+CHILD_WAIT_PATCH='tools/net-tcp-priority/qualified/child-wait-source.patch'
+CHILD_WAIT_PATCH_SHA256='a2c8cecd2c71a63adee65f5c6339cb876ac288d0895bdad530035817e0fbb62e'
+CHILD_WAIT_SOURCE_SHA256='70222a932a0ea37339d8d5b320e838ae44ee5fc5ebf2d741baf39ae679ded59a'
+
+def preceding_child_wait_source():
+ current=(ROOT/CHILD_WAIT_PATH).read_bytes()
+ patch=(ROOT/CHILD_WAIT_PATCH).read_bytes()
+ assert hashlib.sha256(current).hexdigest()==CHILD_WAIT_SOURCE_SHA256,CHILD_WAIT_PATH
+ assert hashlib.sha256(patch).hexdigest()==CHILD_WAIT_PATCH_SHA256,CHILD_WAIT_PATCH
+ assert [line.decode().split(' b/',1)[1] for line in patch.splitlines() if line.startswith(b'diff --git ')]==[CHILD_WAIT_PATH]
+ with tempfile.TemporaryDirectory(prefix='gesher-child-wait-qualification-') as temporary:
+  work=Path(temporary)
+  source=work/CHILD_WAIT_PATH
+  source.parent.mkdir(parents=True)
+  source.write_bytes(current)
+  subprocess.run(['git','apply','--reverse','--unidiff-zero','-'],input=patch,cwd=work,check=True,capture_output=True)
+  baseline=source.read_bytes()
+  subprocess.run(['git','apply','--unidiff-zero','-'],input=patch,cwd=work,check=True,capture_output=True)
+  assert source.read_bytes()==current,CHILD_WAIT_PATH
  return baseline
 
 # Reverse only the reviewed adaptive stable-directory sort before the exact
@@ -860,7 +918,87 @@ def preceding_memrchr_source(qualification):
   assert (work/MEMRCHR_SOURCE).read_bytes()==current,'memrchr forward endpoint'
  return baseline
 
+# Issue #649 changes only mapped-file directory spelling. Keep the complete
+# reviewed source endpoints immutable; do not repin or omit any OFD source bytes.
+# This normalization grants no runtime or supplier authorization.
+MAPPED_PATH_BASE='20a3836c68388cc617ea9dc12d2af2e0b8a9b198'
+MAPPED_PATH_SHA256='526af75490819e8e746d420832ddad15f3b85709de68ad2bd29d0f0d235ef877'
+MAPPED_PATH_SOURCE='compat/posix/src/procfs.cc'
+MAPPED_PATH_BEFORE=br'''      const std::wstring windows = dm.drive + path.substr(t);
+      // Gesher's ELF loader, by its Android name (system_linker.h).
+      if (system_linker::IsFile(windows)) return system_linker::kPath;
+      return LinuxPath(windows.c_str());
+'''
+MAPPED_PATH_AFTER=br'''      std::wstring windows = dm.drive + path.substr(t);
+      // Gesher's ELF loader, by its Android name (system_linker.h).
+      if (system_linker::IsFile(windows)) return system_linker::kPath;
+      // GetMappedFileNameW returns the long name even if mmap opened an 8.3
+      // alias. Native ART symbol resolvers commonly scan maps with sscanf's
+      // %s (ADR 0086), so a space in the Windows profile hides libart.so from
+      // them. Prefer the file's real, whitespace-free alias when one exists.
+      // Keep the long name if short names are unavailable: never invent a
+      // pathname that callers could not open. map_files uses this name too.
+      if (windows.find_first_of(L" \t\r\n\v\f") != std::wstring::npos) {
+        // Keep the basename: resolvers also match names longer than 8.3,
+        // such as libdexfile.so, which must not become LIBDEX~1.SO.
+        const size_t slash = windows.find_last_of(L'\\');
+        const std::wstring directory = windows.substr(0, slash);
+        const DWORD size = GetShortPathNameW(directory.c_str(), nullptr, 0);
+        if (size != 0) {
+          std::wstring short_name(size, L'\0');
+          const DWORD length = GetShortPathNameW(directory.c_str(), short_name.data(), size);
+          if (length != 0 && length < size) {
+            short_name.resize(length);
+            if (short_name.find_first_of(L" \t\r\n\v\f") == std::wstring::npos) {
+              windows = short_name + windows.substr(slash);
+            }
+          }
+        }
+      }
+      return LinuxPath(windows.c_str());
+'''
+def preceding_mapped_path_source(current,qualification):
+ assert hashlib.sha256(current).hexdigest()==MAPPED_PATH_SHA256,'mapped-path reviewed endpoint changed'
+ assert current.count(MAPPED_PATH_AFTER)==1 and MAPPED_PATH_BEFORE not in current,'mapped-path exact repair changed'
+ baseline=subprocess.check_output(['git','-C',str(ROOT),'show',MAPPED_PATH_BASE+':'+MAPPED_PATH_SOURCE])
+ assert hashlib.sha256(baseline).hexdigest()==qualification['source_sha256'][MAPPED_PATH_SOURCE],'mapped-path predecessor changed'
+ assert current!=baseline,'empty mapped-path transition'
+ assert current.replace(MAPPED_PATH_AFTER,MAPPED_PATH_BEFORE,1)==baseline,'mapped-path reverse endpoint changed'
+ return baseline
+
+def mapped_path_negative_controls():
+ from unittest.mock import patch
+ current=(ROOT/MAPPED_PATH_SOURCE).read_bytes()
+ qualification=json.loads((ROOT/'tools/net-tcp-priority/qualified/ofd-stream-source.json').read_bytes())
+ baseline=preceding_mapped_path_source(current,qualification)
+ inside=b'windows = short_name + windows.substr(slash);'
+ outside=b'if (system_linker::IsFile(windows)) return system_linker::kPath;'
+ assert current.count(outside)==current.count(inside)==1
+ cases=[('missing repair',baseline,'mapped-path exact repair changed'),
+        ('duplicated repair',current+MAPPED_PATH_AFTER,'mapped-path exact repair changed'),
+        ('changed repair',current.replace(inside,b'windows = short_name;',1),'mapped-path exact repair changed'),
+        ('changed protected mapping',current.replace(b'if (n == 0) return "";',b'if (n == 1) return "";',1),'mapped-path reverse endpoint changed'),
+        ('extra source bytes',current+b'\n// undeclared source bytes\n','mapped-path reverse endpoint changed')]
+ for label,altered,expected in cases:
+  assert altered!=current,label
+  try:preceding_mapped_path_source(altered,qualification)
+  except AssertionError as error:assert str(error)=='mapped-path reviewed endpoint changed',(label,error)
+  else:raise AssertionError('mapped-path policy accepted '+label)
+  # Merely refreshing the outer current-source digest cannot authorize a
+  # changed repair fragment or any byte outside the reviewed transition.
+  with patch.dict(globals(),MAPPED_PATH_SHA256=hashlib.sha256(altered).hexdigest()):
+   try:preceding_mapped_path_source(altered,qualification)
+   except AssertionError as error:assert str(error)==expected,(label,error)
+   else:raise AssertionError('mapped-path policy accepted repinned '+label)
+ changed=dict(qualification,source_sha256=dict(qualification['source_sha256']))
+ changed['source_sha256'][MAPPED_PATH_SOURCE]='0'*64
+ try:preceding_mapped_path_source(current,changed)
+ except AssertionError as error:assert str(error)=='mapped-path predecessor changed',error
+ else:raise AssertionError('mapped-path policy accepted changed predecessor digest')
+ print('MAPPED_PATH_SOURCE_POLICY_PASS exact_repair=1 unchanged_ofd_digest=1 negative_controls='+str(2*len(cases)+1))
+
 def preceding_ofd_sources():
+ netlink=preceding_netlink_sources()
  stdio_main=preceding_stdio_feature_sources()
  historical=preceding_stdio_line_sources({path:subprocess.check_output(['git','-C',str(ROOT),'show',COMPOSED_STDIO_PRIOR_FEATURE+':'+path]) for path in COMPOSED_STDIO_PATHS})
  historical_scan=preceding_stdio_scan_source(subprocess.check_output(['git','-C',str(ROOT),'show',COMPOSED_SCAN_PRIOR_FEATURE+':'+COMPOSED_SCAN_PATHS[0]]))
@@ -888,16 +1026,18 @@ def preceding_ofd_sources():
    assert current==expected,('current main misc endpoint changed',path)
   else:
    assert current==previous,('historical stdio and current-main normalization disagree',path)
- storage_policy=preceding_storage_policy_sources()
+ storage_policy=preceding_storage_policy_sources(netlink)
  assert memfd_lease.keys().isdisjoint(shared_stdio.keys()|stdio_main.keys()),'source qualifications overlap'
  assert storage_policy.keys().isdisjoint(memfd_lease.keys()|shared_stdio.keys()|stdio_main.keys()),'source qualifications overlap'
- preceding={**memfd_lease,**stdio_main,**shared_stdio,**storage_policy}
+ preceding={**netlink,**memfd_lease,**stdio_main,**shared_stdio,**storage_policy}
  for path,digest in qualification['source_sha256'].items():
   actual=preceding[path] if path in preceding else (ROOT/path).read_bytes()
+  if path==CHILD_WAIT_PATH:actual=preceding_child_wait_source()
   if path=='compat/binder/binderd.cc':actual=preceding_composed_binder_output_source()
   if path=='compat/posix/src/system_properties.cc':actual=preceding_logging_property_source()
   if path=='compat/bionic/shim.cc':actual=preceding_memmem_source(actual)
   if path==MEMRCHR_SOURCE:actual=preceding_memrchr_source(qualification)
+  if path==MAPPED_PATH_SOURCE:actual=preceding_mapped_path_source(actual,qualification)
   assert hashlib.sha256(actual).hexdigest()==digest,path
  with tempfile.TemporaryDirectory(prefix='gesher-ofd-qualification-') as temporary:
   work=Path(temporary)
@@ -919,7 +1059,7 @@ def preceding_ofd_sources():
    'compat/posix/src/fd.cc':[b'bool Remove(',b'void Insert(',b'bool ReplaceSocket(',b'bool LookupSocket(',b'static int PollFdsImpl('],
    'compat/posix/src/system.cc':[b'bool SocketIo('],
  }.items():
-  current=(ROOT/path).read_bytes()
+  current=netlink.get(path,(ROOT/path).read_bytes())
   for marker in markers:
    actual=function(current,marker);expected=function(previous[path],marker)
    if marker==b'static int PollFdsImpl(':
@@ -1166,10 +1306,11 @@ def storage_policy_negative_controls():
  from unittest.mock import patch
  original=Path.read_bytes
  qualification=json.loads(original(ROOT/STORAGE_POLICY_QUALIFICATION))
+ before_netlink=preceding_netlink_sources()
  checked=repinned=0
  for name in STORAGE_POLICY_PATHS+STORAGE_POLICY_HELPERS+[STORAGE_POLICY_PATCH]:
   target=ROOT/name
-  source=original(target)
+  source=before_netlink.get(name,original(target))
   data=source.replace(b'@@',b'@x',1) if name==STORAGE_POLICY_PATCH else source+b'\n'
   assert data!=source,name
   for repin in (False,True) if name in STORAGE_POLICY_PATHS or name==STORAGE_POLICY_PATCH else (False,):
@@ -1188,7 +1329,7 @@ def storage_policy_negative_controls():
     return original(path)
    rejected=None
    with patch.object(Path,'read_bytes',reads),patch.dict(globals(),pins):
-    try:preceding_storage_policy_sources()
+    try:preceding_storage_policy_sources({path:source for path,source in before_netlink.items() if path!=name})
     except (AssertionError,subprocess.CalledProcessError) as error:rejected=error
    assert rejected is not None,'unqualified storage source accepted: '+name+' repin='+str(repin)
    if repin:
@@ -1203,7 +1344,7 @@ def storage_policy_negative_controls():
   def reads(path):return receipt if path==ROOT/STORAGE_POLICY_QUALIFICATION else original(path)
   rejected=None
   with patch.object(Path,'read_bytes',reads),patch.dict(globals(),{'STORAGE_POLICY_QUALIFICATION_SHA256':hashlib.sha256(receipt).hexdigest()}):
-   try:preceding_storage_policy_sources()
+   try:preceding_storage_policy_sources(before_netlink)
    except (AssertionError,subprocess.CalledProcessError) as error:rejected=error
   assert rejected is not None,'storage historical endpoint changed: '+field
   checked+=1
@@ -1245,6 +1386,8 @@ def transition_negative_controls():
  from unittest.mock import patch
  original=Path.read_bytes
  cases=[
+  (CHILD_WAIT_PATH,b'needs_poll |= !child.watched;',b'needs_poll = false;'),
+  (CHILD_WAIT_PATCH,b'@@',b'@x'),
   ('compat/posix/src/fd.cc',b'--state->description->descriptor_refs == 0',b'--state->description->descriptor_refs == 1'),
   ('compat/posix/src/fd.cc',b'return TransferPipe(snapshot, bytes, count, false);',b'return 0;'),
   ('compat/posix/src/system.cc',b'gesher::ws::RecvOwned(state.socket,',b'gesher::ws::SendOwned(state.socket,'),
@@ -1269,6 +1412,8 @@ def transition_negative_controls():
   # #421's build.prop filter admits its exact reviewed delta only.
   ('compat/posix/src/system_properties.cc',b'if (!ServedBuildProperty(key, value)) continue;',b'if (!ServedBuildProperty(key, value)) {}'),
   (GLES_PROPERTY_PATCH,b'@@',b'@x'),
+  (NETLINK_PATCH,b'@@',b'@x'),
+  ('compat/posix/src/socket.cc',b'if (protocol != NETLINK_ROUTE)',b'if (protocol == NETLINK_ROUTE)'),
   # The memmem normalization admits its exact reviewed delta only. The old
   # whole-file digest must still reject any unrelated shim change afterwards.
   ('compat/bionic/shim.cc',b'size_t n = std::strlen(s) + 1;',b'size_t n = std::strlen(s) + 2;'),
@@ -1449,6 +1594,7 @@ def transition_negative_controls():
 if __name__=='__main__':
  import sys
  check()
+ mapped_path_negative_controls()
  if '--selftest' in sys.argv:
   storage_policy_negative_controls()
   transition_negative_controls()

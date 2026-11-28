@@ -35,3 +35,9 @@ add_executable(permission_dialog_test EXCLUDE_FROM_ALL
   "${CMAKE_SOURCE_DIR}/tests/native/permission_dialog_test.c")
 target_link_libraries(permission_dialog_test PRIVATE kernel32 user32 gdi32)
 target_compile_options(permission_dialog_test PRIVATE -UNOGDI -Wall -Wextra -Werror)
+
+# Isolated production enrollment controls; never installed in user runtimes.
+add_executable(device_admin_dialog_test EXCLUDE_FROM_ALL
+  "${CMAKE_SOURCE_DIR}/tests/native/device_admin_dialog_test.c")
+target_link_libraries(device_admin_dialog_test PRIVATE kernel32 user32 gdi32)
+target_compile_options(device_admin_dialog_test PRIVATE -UNOGDI -Wall -Wextra -Werror)

@@ -59,9 +59,33 @@ review the result and reapply the label; success alone does not restore approval
 label and keeps the QA gate pending. Approve and run both required PR workflows;
 their completion events recheck the existing exact-head approval automatically.
 
-`ci-required` covers every root production CI job, including Windows shards,
-packaging and e2e; failed, cancelled or skipped root jobs fail it. `arm64-required`
-covers source identity and the ARM64 build. The deployed configuration is
+Both PR workflows run a planner against the PR's change set. Approved
+documentation paths can skip production jobs. Scoped changes select their
+jobs and the dependencies that produce their inputs. Changes outside the
+planner's allowlist and runs on push or manual dispatch use full coverage.
+The plan and source identity must succeed, along with the automerge contract
+tests in `ci`. Windows track edits select the shards that execute the track
+and consume its exported helpers. Other source and supplier jobs remain
+selected for these edits because their receipts can inspect the track bytes.
+Audited preflight script edits select their owning host-test domains.
+Unknown inputs and shared production changes retain full coverage.
+
+The required checks recompute the selection from the merge checkout and PR
+event. They verify aggregate job results and the exact selected Windows and
+preflight matrix cells from GitHub, including successful cells retained when
+failed jobs are rerun. A missing, failed or unexpectedly executed cell fails
+the gate. The plan summary records selected jobs, shards and preflight groups.
+See [the planner](../../tools/ci/select_pr_jobs.py) and
+[preflight domains](../../tools/ci/preflight_plan.py) for the path rules.
+
+The framework host-tool workflow can restore Linux generators from a cache
+published by main when source inputs, build recipe, compiler dependencies and
+environment match. It verifies the cached file inventory and hashes, runs the
+existing smoke checks, and publishes an artifact for the current run and
+attempt. A missing or invalid cache triggers a rebuild. Self-hosted builds
+continue through their existing build path.
+
+The deployed configuration is
 `.github/automerge-ruleset.json`: PR review and resolved discussions are required,
 all three contexts are bound to GitHub Actions, force pushes/deletion are blocked,
 and there are no permanent bypass actors. Branch updates may need fresh CI;
@@ -316,6 +340,10 @@ workflow-permission change is part of this implementation.
 When explicitly enabled, the controller also writes
 `qa/gesher-label-approval` with the App token. The workflow then requests
 Statuses write permission, in addition to its existing permissions. The
+bot outcome reporter also requests Checks write and publishes the advisory
+`automerge` check in a separate step after the controller. Waiting is neutral;
+only an actual protected merge is success. See [bot-checks.md](bot-checks.md)
+for all required-check identities and rollout. The
 pinned token action omits an empty permission input, so installations without
 Statuses access continue to work while this feature is off. Verify the actual
 installation grant before enabling it; a missing grant fails the run, without
@@ -327,6 +355,10 @@ response and readback must match the exact repository, head, context, state,
 numeric status ID, and bot identity (`gesher-runtime-automation[bot]`, user
 `358279050`, account type `Bot`). A missing, replaced, pending, failed, or foreign
 status cannot release the existing Actions gate or native waiting. The readback
+authenticates the immutable ID from the full write receipt: GitHub's combined
+status response omits `creator`, so it checks the same ID/head/context/state/URL
+instead of requiring an absent writer field. Any supplied writer is checked too.
+The readback
 uses the configured read-only App client, with the Actions fallback, and
 paginates current combined-status contexts, avoiding full history scans without
 trusting a partial page.

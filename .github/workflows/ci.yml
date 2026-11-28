@@ -29,6 +29,27 @@ env:
   LLVM_MINGW_NAME: llvm-mingw-20261006-ucrt-ubuntu-22.04-x86_64
 
 jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      selected: ${{ steps.selection.outputs.selected }}
+      shards: ${{ steps.selection.outputs.shards }}
+      preflight_groups: ${{ steps.selection.outputs.preflight_groups }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: ${{ github.event_name == 'pull_request' && '0' || '1' }}
+          sparse-checkout: |
+            .github/workflows
+            tools/ci
+            tests/windows/test-shards.json
+      - name: Select checks for this change
+        id: selection
+        run: |
+          python3 -m pip install PyYAML==6.0.3
+          python3 tools/ci/select_pr_jobs.py plan --workflow ci
   source-identity:
     runs-on: ubuntu-24.04
     outputs:
@@ -65,12 +86,13 @@ jobs:
             .github/actions/runner-route
             .github/actions/local-build-cache
             .github/actions/setup-build
-            tools/ci
+            tools
+            tests/windows/test-shards.json
       - uses: actions/setup-node@v4
         with:
           node-version: 20
       - name: Label approval, fork and exact-head QA contracts
-        run: node --test .github/scripts/label-automerge.test.js
+        run: node --test .github/scripts/label-automerge.test.js .github/scripts/app-required-checks.test.js .github/scripts/app-automerge-check.test.js
       - name: Owner-only runner routing and source ancestry contracts
         run: node --test .github/actions/runner-route/route.test.cjs
       - name: Workflow coverage and failure propagation
@@ -80,12 +102,15 @@ jobs:
           python3 tools/ci/test_release_workflows.py
           python3 -m unittest discover -s tools/ci -p test_cache_policy.py
           python3 -m unittest discover -s tools/ci -p test_prune_caches.py
+          python3 -m unittest discover -s tools/ci -p test_select_pr_jobs.py
+          python3 -m unittest discover -s tools/ci -p test_preflight_plan.py
   # The hosted Server images can expose NLM without its cost backend. Their
   # contracts below prove that absence independently and check failed-start
   # cleanup. This client job unconditionally requires the real subscription.
   network-cost-client:
     name: Windows client network cost
-    needs: [source-identity]
+    needs: [plan, source-identity]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'network-cost-client') }}
     runs-on: windows-11-arm
     timeout-minutes: 10
     steps:
@@ -122,7 +147,8 @@ jobs:
   # Every check step runs even after an earlier one fails, so one failure
   # does not hide another.
   windows-host-contracts:
-    needs: [source-identity]
+    needs: [plan, source-identity]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'windows-host-contracts') }}
     strategy:
       fail-fast: false
       matrix:
@@ -147,6 +173,14 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Launch failure text test compilation failed' }
           & .\launch-failure-text-test.exe
           if ($LASTEXITCODE -ne 0) { throw 'Launch failure paragraph direction checks failed' }
+      - name: APK information file parsing for the install confirmation
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          cl /nologo /std:c++17 /EHsc /W4 /WX tests/native/apk_info_file_test.cc /Fe:apk-info-file-test.exe
+          if ($LASTEXITCODE -ne 0) { throw 'APK information file test compilation failed' }
+          & .\apk-info-file-test.exe
+          if ($LASTEXITCODE -ne 0) { throw 'APK information file parsing checks failed' }
       - name: Shared media log byte snapshots on PowerShell 7
         if: ${{ !cancelled() }}
         shell: pwsh
@@ -192,7 +226,9 @@ jobs:
       - name: DownloadManager provider, queue and transfer contracts on a Windows JVM
         if: ${{ !cancelled() }}
         shell: bash
-        run: python tools/test_download_manager_contracts.py --java-home "$JAVA_HOME"
+        run: |
+          python -m unittest discover -s tools/tests -p test_jdbc_fixture_download.py
+          python tools/test_download_manager_contracts.py --java-home "$JAVA_HOME"
       - name: Build actual app identity restart implementation
         shell: cmd
         run: cl /nologo /std:c++17 /EHsc /W4 /WX /D_WIN32_WINNT=0x0A00 compat\framework\services_zygote.cc compat\framework\app_container.cc tests\clipboard\standalone_restart_windows_test.cc /Fe:app-identity-restart.exe user32.lib advapi32.lib ole32.lib
@@ -388,6 +424,7 @@ jobs:
           tests/windows/shell/CameraImagePickerChecks.ps1
           tests/windows/shell/ControlPanelRequestChecks.ps1
           tests/windows/shell/ControlPanelSpecialAccessChecks.ps1
+          tests/windows/shell/ControlPanelAccountsChecks.ps1
           tests/windows/shell/UpdateChecks.ps1
           tests/windows/shell/UpdateTransportChecks.ps1
           tests/windows/shell/ControlPanelUpdateChecks.ps1
@@ -430,7 +467,8 @@ jobs:
           PYTHONIOENCODING: utf-8
         run: python tools/ci/run_api37_report_tests.py --profile windows
   api37-report-tests:
-    needs: [source-identity]
+    needs: [plan, source-identity]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'api37-report-tests') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
@@ -455,18 +493,27 @@ jobs:
         shell: bash
         run: python tools/ci/run_api37_report_tests.py --profile linux
   union-tsf:
-    needs: [source-identity]
+    needs: [plan, source-identity]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'union-tsf') }}
     uses: ./.github/workflows/tsf-format-component.yml
   union-services:
-    needs: [source-identity]
+    needs: [plan, source-identity]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'union-services') }}
     uses: ./.github/workflows/services-geocoder-worker-component.yml
   union-native-blocking:
-    needs: [source-identity]
+    needs: [plan, source-identity]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'union-native-blocking') }}
     uses: ./.github/workflows/native3-locks-blocking.yml
   # Host-only contract tests. Builds no longer wait for them: they run
   # alongside the build jobs and ci-required still requires them to pass.
   artifact-preflight:
-    needs: [source-identity]
+    name: artifact-preflight (${{ matrix.group }})
+    needs: [plan, source-identity]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'artifact-preflight') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        group: ${{ fromJSON(needs.plan.outputs.preflight_groups != '[]' && needs.plan.outputs.preflight_groups || '["metadata"]') }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -474,20 +521,30 @@ jobs:
           fetch-depth: 0
       - name: Install media contract encoder and decoder tools
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ffmpeg
+          # FFmpeg comes from Ubuntu. Keep third-party repositories out of this update.
+          ubuntu_sources=(
+            -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/ubuntu.sources
+            -o Dir::Etc::sourceparts=-
+          )
+          sudo apt-get "${ubuntu_sources[@]}" update
+          sudo apt-get "${ubuntu_sources[@]}" install -y --no-install-recommends ffmpeg
 
       - name: Windows test shard coverage, dependencies and failure controls
+        if: matrix.group == 'metadata'
         shell: pwsh
         run: |
+          python3 -m pip install PyYAML==6.0.3
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot install CI shard planner dependencies' }
           tests/windows/test-test-shards.ps1
           tests/windows/test-bitmap-shared-gate.ps1
 
       - name: Wi-Fi specifier native evidence checker contracts
+        if: matrix.group == 'metadata'
         shell: pwsh
         run: tests/windows/WifiNetworkSpecifierParcelChecks.ps1
 
       - name: Strict archive adversarial controls
+        if: matrix.group == 'metadata'
         run: |
           python3 tools/ci/receipt_identity.py
           python3 -m unittest discover -s tools/ci -p test_source_identity.py
@@ -509,6 +566,7 @@ jobs:
           python3 tools/surface/test-verified-artifact.py
 
       - name: Compatibility inventory parser tests
+        if: matrix.group == 'metadata'
         run: |
           python3 -m unittest discover -s tools/tests -p 'test_compatibility_*.py'
           python3 -m unittest discover -s tools/tests -p 'test_*api_inventory.py'
@@ -522,12 +580,15 @@ jobs:
           python3 tools/fonts/test-standalone-link.py
 
       - name: Notification image staging, cache, cancellation and encoder ownership
+        if: matrix.group == 'media'
         run: python3 tools/test_notification_images.py
 
       - name: Google client-library test fixtures report Play services' absence (#335)
+        if: matrix.group == 'platform'
         run: python3 tools/test_gms_client_fixtures.py
 
       - name: Native allocation, directory, semaphore, file-lock and socket-control contracts
+        if: matrix.group == 'native'
         run: |
           python3 tools/test_hwui_renderer_policy.py --sanitize
           python3 tools/test_egl_readback_layout.py --sanitize
@@ -547,6 +608,7 @@ jobs:
           python3 tools/test_search_delete_report.py
           python3 tools/test_scandir_sort.py --sanitize --negative-controls --output-dir scandir-sort-contracts
           python3 tools/test_scandir_report.py
+          python3 -m unittest discover -s tools/tests -p test_scandir_report.py
           python3 tools/test_bionic_semaphore_contracts.py --sanitize
           python3 tools/test_file_allocation_contracts.py --sanitize
           python3 tools/test_positioned_io_contracts.py --sanitize
@@ -566,6 +628,7 @@ jobs:
           python3 tools/test_sleep_contracts.py --sanitize
 
       - name: Native TLS, wait, DNS, clock, affinity, finalizer and media lifecycle contracts
+        if: matrix.group == 'native'
         run: |
           python3 tools/test_bionic_key_contracts.py --sanitize --negative-controls
           python3 tools/test_pthread_clock_contracts.py --sanitize
@@ -594,6 +657,7 @@ jobs:
           python3 tools/test_aaudio_lifecycle_contracts.py --sanitize
 
       - name: Timer, DNS and media lifetime contracts
+        if: matrix.group == 'native'
         run: |
           python3 tools/test_clock_domains.py --sanitize
           python3 tools/test_boottime_resume.py --sanitize
@@ -603,45 +667,56 @@ jobs:
           python3 tools/test_persistent_input_jni.py
           python3 tools/test_recorder_persistent_input.py --sanitize
           python3 tools/test_codec_lifecycle_contracts.py --sanitize
+          python3 tools/test_ndk_codec_contracts.py --sanitize
           python3 tools/test_dns_query_lifecycle.py --sanitize
           python3 tools/test_uia_query_retirement.py --sanitize
           python3 tools/test_dns_admission.py --sanitize
 
       - name: Stream device identity across close and reopen
+        if: matrix.group == 'native'
         run: python3 tools/test_stream_device_lifetime.py --sanitize
 
       - name: Bionic stream state across close and reopen failures
+        if: matrix.group == 'native'
         run: python3 tools/test_stdio_lifetime_contracts.py --sanitize
 
       - name: Native metadata reader contention and retirement contracts
+        if: matrix.group == 'native'
         run: |
           python3 tools/test_native_metadata_hot_paths.py --sanitize
           python3 tools/test_native_metadata_hot_paths.py --thread-sanitize
 
       - name: EGL fence asynchronous creation and ownership contracts
+        if: matrix.group == 'native'
         run: python3 tools/test_egl_fence_contracts.py --sanitize
 
       - name: Freopen contracts against the pinned glibc reference
+        if: matrix.group == 'native'
         run: bash tools/ci/test-freopen-reference.sh
 
       - name: Descriptor-backed stdio and stream lifetime contracts
+        if: matrix.group == 'native'
         run: |
           python3 tools/test_stdio_contracts.py --sanitize
           python3 tools/test_stdio_scanning.py --sanitize --negative-controls
           python3 tools/test_socket_registry_lifetime.py --sanitize
 
       - name: Guest snprintf bounded accumulation contracts
+        if: matrix.group == 'native'
         run: |
           python3 tools/test_snprintf_bounds.py --sanitize --negative-controls
           python3 tools/test_snprintf_bounds.py --observe-allocations --allocation-contracts
 
       - name: MediaPlayer PCM priming and playback lifecycle contracts
+        if: matrix.group == 'media'
         run: python3 tools/test_media_player_priming.py --sanitize
 
       - name: JNI GetEnv rejects unbridged interfaces before host allocation
+        if: matrix.group == 'native'
         run: python3 tools/test_jni_getenv_boundary.py --sanitize
 
       - name: JNI and mixer allocation bounds and surface image-cache lifetime
+        if: matrix.group == 'media'
         run: |
           python3 tools/test_symbol_lookup_allocations.py
           python3 tools/test_fnmatch_performance.py --sanitize
@@ -670,6 +745,7 @@ jobs:
           python3 tools/test_webview_owned_streams.py --sanitize
 
       - name: Host event loop, audio state and surface geometry contracts
+        if: matrix.group == 'media'
         run: |
           python3 tools/test_host_event_loop_contracts.py --sanitize
           python3 tools/net-tcp-priority/test-vector-policy.py
@@ -683,6 +759,7 @@ jobs:
           python3 tools/test_native_window_dispatch.py --sanitize
 
       - name: Physical keys, sensor flushes, directory walks and futex contracts
+        if: matrix.group == 'platform'
         run: |
           python3 tools/test_input_key_contracts.py --sanitize
           python3 tools/test_mouse_capture_contracts.py --sanitize
@@ -694,6 +771,7 @@ jobs:
             python3 tools/test_futex_contracts.py --group guest --group concurrency
 
       - name: Temporary directory, UNC namespace and reserved file-name contracts
+        if: matrix.group == 'native'
         run: |
           python3 tools/test_temp_directory.py
           c++ -std=c++17 -Wall -Wextra -Werror tests/paths/unc_paths_test.cc -o "$RUNNER_TEMP/gesher-unc-paths"
@@ -702,6 +780,7 @@ jobs:
           "$RUNNER_TEMP/gesher-reserved-names"
 
       - name: Anonymous mapping zeroing and protection contracts
+        if: matrix.group == 'native'
         run: |
           python3 tools/test_mman_zeroing_mappings.py --sanitize
           python3 tools/test_mmap_noreplace_contracts.py --sanitize
@@ -710,12 +789,15 @@ jobs:
           python3 tools/test_madvise_reference.py
 
       - name: Actual wide conversion, pinned Android and guard-page contracts
+        if: matrix.group == 'native'
         run: python3 tools/test_wide_ascii_contracts.py --sanitize
 
       - name: Validate wide conversion measurement evidence
+        if: matrix.group == 'native'
         run: python3 tools/test_wide_ascii_performance_evidence.py
 
       - name: Filesystem metadata and media source ownership contracts
+        if: matrix.group == 'media'
         run: |
           python3 tools/test_file_timestamp_contracts.py --sanitize
           python3 tools/test_directory_rename_contracts.py --sanitize
@@ -743,11 +825,15 @@ jobs:
           java-version: 21
 
       - name: Package enabled-state storage limits and crash contracts
+        if: matrix.group == 'java'
         run: |
           python3 tools/test_package_enabled_store.py --java-home "$JAVA_HOME"
+          python3 tools/test_device_admin_store.py --java-home "$JAVA_HOME"
+          python3 tools/test_device_admin_requests.py --java-home "$JAVA_HOME"
           python3 tools/test_zygote_child_lifetime.py --sanitize
 
       - name: Audio JNI buffer contracts with checked JNI and UBSan
+        if: matrix.group == 'media'
         run: |
           python3 tools/test_audio_buffer_contracts.py
           python3 tools/test_media_callback_contracts.py --java-home "$JAVA_HOME"
@@ -757,20 +843,27 @@ jobs:
           python3 tools/test_media_encoder_selection.py
 
       - name: Android HttpEngine requests over real HTTP sockets
+        if: matrix.group == 'java'
         run: python3 tools/test_http_engine.py --java-home "$JAVA_HOME"
 
       - name: DownloadManager provider, queue and transfer over real HTTP sockets
-        run: python3 tools/test_download_manager_contracts.py --java-home "$JAVA_HOME"
+        if: matrix.group == 'java'
+        run: |
+          python3 -m unittest discover -s tools/tests -p test_jdbc_fixture_download.py
+          python3 tools/test_download_manager_contracts.py --java-home "$JAVA_HOME"
 
       - name: Java DNS admission, cancellation, callback ownership and actual deadlines
+        if: matrix.group == 'java'
         run: |
           python3 tools/test_dns_resolver_admission.py --java-home "$JAVA_HOME"
           python3 tools/test_dns_deadline_retirement_controls.py --java-home "$JAVA_HOME"
 
       - name: MediaStore provider ownership, pending items, queries and scanning over real SQLite
+        if: matrix.group == 'java'
         run: python3 tools/test_media_provider_contracts.py --java-home "$JAVA_HOME"
 
       - name: WebStorage origin, owned WebView responses and running-task contracts
+        if: matrix.group == 'java'
         run: |
           python3 tools/test_webstorage_origin_contracts.py --java-home "$JAVA_HOME"
           python3 tools/test_webview_owned_responses.py --java-home "$JAVA_HOME"
@@ -782,6 +875,7 @@ jobs:
           python3 tools/test_running_tasks_contracts.py
 
       - name: Bluetooth cancellation, notifications and scan retention contracts
+        if: matrix.group == 'java'
         run: |
           python3 tools/test_bluetooth_native_contracts.py --sanitize
           python3 tools/test_bluetooth_gatt_contracts.py --java-home "$JAVA_HOME"
@@ -792,41 +886,54 @@ jobs:
           python3 tools/test_handwriting_callbacks_host.py --java-home "$JAVA_HOME"
 
       - name: Credential Manager passkey contracts (ADR 0093)
+        if: matrix.group == 'java'
         run: python3 tools/test_credential_manager_contracts.py --java-home "$JAVA_HOME"
       - name: Text-to-speech engine contracts (docs/tts.md)
+        if: matrix.group == 'java'
         run: python3 tools/test_tts_engine_contracts.py --java-home "$JAVA_HOME"
       - name: Speech recognition service contracts (docs/speech-recognition.md)
+        if: matrix.group == 'java'
         run: python3 tools/test_speech_recognition_engine_contracts.py --java-home "$JAVA_HOME"
       - name: Biometric and device-credential auth service contracts (ADR 0091)
+        if: matrix.group == 'java'
         run: python3 tools/test_auth_service_contracts.py --java-home "$JAVA_HOME"
 
       - name: MediaDataSource adapter contracts with checked JNI and UBSan
+        if: matrix.group == 'media'
         run: python3 tools/test_media_callback_adapter.py
 
       - name: Settings context bootstrap and deferred construction contracts
+        if: matrix.group == 'java'
         run: python3 tools/test_settings_context_bootstrap.py --java-home "$JAVA_HOME"
 
       - name: Control Center request publication and launcher cleanup
+        if: matrix.group == 'java'
         run: python3 tools/test_control_center_requests.py --java-home "$JAVA_HOME"
 
       - name: APK native library filename contracts
+        if: matrix.group == 'java'
         run: python3 tools/test_native_library_paths.py --java-home "$JAVA_HOME"
 
       - name: Windows mailto/tel/sms/geo handler intent contracts (AOSP android-16 Intent and IntentFilter)
+        if: matrix.group == 'java'
         run: python3 tools/test_uri_handler_contracts.py --java-home "$JAVA_HOME"
       - name: Caption style contracts (AOSP android-16 Settings.Secure and CaptionStyle)
+        if: matrix.group == 'java'
         run: python3 tools/test_captioning_contracts.py --java-home "$JAVA_HOME"
 
       - name: CountryDetector contracts (AOSP android-16 Country, CountryDetector and ICountryDetector)
+        if: matrix.group == 'java'
         run: python3 tools/test_country_detector_contracts.py --java-home "$JAVA_HOME"
 
       - name: Portable code relocation, shell ownership and native profile selection
+        if: matrix.group == 'java'
         run: |
           python3 tools/test_portable_paths.py --java-home "$JAVA_HOME"
           python3 tools/test_portable_shell.py --java-home "$JAVA_HOME"
           python3 tools/test_portable_launcher.py
 
       - name: Java service dispatch, durable settings, APK scans and bounded launcher logs
+        if: matrix.group == 'java'
         run: |
           python3 tools/test_java_performance_contracts.py --java-home "$JAVA_HOME"
           python3 tools/test_storage_stats_scans.py --java-home "$JAVA_HOME"
@@ -846,15 +953,18 @@ jobs:
           python3 tools/test_dexopt_work.py --java-home "$JAVA_HOME"
 
       - name: Validate user interface translations
+        if: matrix.group == 'platform'
         run: |
           python3 tools/i18n/check.py --check
           python3 tools/test_preferred_languages.py --sanitize
 
       - name: App crash diagnosis and best-effort reporting contracts
+        if: matrix.group == 'platform'
         run: python3 tools/test_app_crash_diagnostics.py
 
   build-framework-assets:
-    needs: [source-identity]
+    needs: [plan, source-identity]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'build-framework-assets') }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -881,8 +991,13 @@ jobs:
 
       - name: Recorder lifecycle and complete-container size budgets
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ffmpeg
+          # FFmpeg comes from Ubuntu. Keep third-party repositories out of this update.
+          ubuntu_sources=(
+            -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/ubuntu.sources
+            -o Dir::Etc::sourceparts=-
+          )
+          sudo apt-get "${ubuntu_sources[@]}" update
+          sudo apt-get "${ubuntu_sources[@]}" install -y --no-install-recommends ffmpeg
           python3 tools/test_media_recorder_lifecycle.py
           python3 tools/test_media_recorder_rollover.py --sanitize
           python3 tools/test_mp4_rollover_work.py
@@ -969,7 +1084,8 @@ jobs:
   # Everything is cross-compiled on Linux with llvm-mingw, then executed on
   # real Windows runners.
   build:
-    needs: [source-identity]
+    needs: [plan, source-identity]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'build') }}
     runs-on: ubuntu-24.04
     env:
       GESHER_HOST_PTHREAD_SELECTION: ${{ (github.ref == 'refs/heads/wip/pthread-production-factory' || github.ref == 'refs/heads/wip/coherent-selected-tcp') && 'selected-minimum' || 'publisher-cancel' }}
@@ -1092,7 +1208,7 @@ jobs:
           ninja -C out thread_watch_clock_test dlopen_errors_test
           ninja -C out
           # Native fixtures are CI-only; none is installed by gesher.iss.
-          ninja -C out install_pipe_test account_chooser_test window_promotion_test permission_dialog_test window_frame_test
+          ninja -C out install_pipe_test account_chooser_test window_promotion_test permission_dialog_test device_admin_dialog_test window_frame_test
           ninja -C out arm64_numeric_return_host arm64_numeric_fenv_test
           ninja -C out font_environment_test
 
@@ -1249,7 +1365,8 @@ jobs:
           if-no-files-found: error
 
   native3-locks-reference:
-    needs: [source-identity]
+    needs: [plan, source-identity]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'native3-locks-reference') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 8
     steps:
@@ -1263,7 +1380,8 @@ jobs:
           if-no-files-found: error
 
   native3-locks-regression:
-    needs: [build, native3-locks-reference]
+    needs: [plan, build, native3-locks-reference]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'native3-locks-regression') }}
     strategy:
       fail-fast: false
       matrix:
@@ -1315,7 +1433,8 @@ jobs:
   # tools/framework/build.py): .github/workflows/framework.yml, which also
   # runs on its own (gh workflow run framework --ref <branch>).
   framework:
-    needs: [source-identity]
+    needs: [plan, source-identity]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'framework') }}
     # A local call runs the framework.yml of the commit under test, so a
     # framework.yml change takes effect in the same PR. Hosted build runners;
     # see docs/self-hosted-ci.md before routing it to the restricted group.
@@ -1326,63 +1445,73 @@ jobs:
   # Phase 6 (native libraries): the Android NDK test .so files, built on the
   # Linux runner. .github/workflows/native-libs.yml, which also runs on its own.
   native-libs:
-    needs: [source-identity]
+    needs: [plan, source-identity]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'native-libs') }}
     uses: ./.github/workflows/native-libs.yml
 
   # The Bluetooth backend's probe (docs/bluetooth.md): built on the Linux
   # runner, run against Windows' real APIs (no radio) and the test radio.
   bluetooth:
-    needs: [source-identity]
+    needs: [plan, source-identity]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'bluetooth') }}
     uses: ./.github/workflows/bluetooth.yml
 
   # Android ELF executables run as processes (docs/exec.md): the NDK test
   # executable and gesher.ExecTest's dex: .github/workflows/exec.yml.
   exec:
-    needs: [source-identity]
+    needs: [plan, source-identity]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'exec') }}
     uses: ./.github/workflows/exec.yml
 
   # The core libraries' own unit tests (AOSP's cc_test modules), built for
   # the test job: .github/workflows/libs.yml.
   libs:
-    needs: [source-identity]
+    needs: [plan, source-identity]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'libs') }}
     uses: ./.github/workflows/libs.yml
 
   # Phase 7 (arm64 translation): gesher_arm64.dll, the arm64 translator
   # (dynarmic) dalvikvm LoadLibrary()s for arm64-v8a apps (docs/arm64.md,
   # ADR 0047). .github/workflows/arm64.yml, which also runs on its own.
   arm64:
-    needs: [source-identity]
+    needs: [plan, source-identity]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'arm64') }}
     uses: ./.github/workflows/arm64.yml
 
   # The native2 track's NDK test programs (shim extras, platform dlopen,
   # popular NDK libraries' self-tests): .github/workflows/native2.yml.
   native2:
-    needs: [source-identity]
+    needs: [plan, source-identity]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'native2') }}
     uses: ./.github/workflows/native2.yml
 
   # ART's own gtests for libartbase and libdexfile (docs/posix.md):
   # .github/workflows/posix.yml, which also runs on its own.
   posix:
-    needs: [source-identity]
+    needs: [plan, source-identity]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'posix') }}
     uses: ./.github/workflows/posix.yml
 
   # Skia, hwui and the graphics probes (docs/graphics.md):
   # .github/workflows/graphics.yml, which also runs on its own.
   graphics:
-    needs: [source-identity]
+    needs: [plan, source-identity]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'graphics') }}
     uses: ./.github/workflows/graphics.yml
 
   # ANGLE's libEGL.dll and libGLESv2.dll (GLES over Direct3D 11) and their
   # probe (docs/angle.md): .github/workflows/angle.yml, which also runs on its own.
   angle:
-    needs: [source-identity]
+    needs: [plan, source-identity]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'angle') }}
     uses: ./.github/workflows/angle.yml
 
   # android.webkit.WebView on WebView2 (docs/webview.md): the WebView2 probes
   # and webapp.apk (built from the framework job's artifacts):
   # .github/workflows/webview.yml, which also runs on its own.
   webview:
-    needs: [framework]
+    needs: [plan, framework]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'webview') }}
     uses: ./.github/workflows/webview.yml
     with:
       apk: true
@@ -1390,24 +1519,28 @@ jobs:
   # Gesher's boot image (docs/boot-image.md): dex2oat.exe from the build job
   # compiles the boot class path on Windows: .github/workflows/boot-image.yml.
   boot-image:
-    needs: [build, framework]
+    needs: [plan, build, framework]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'boot-image') }}
     uses: ./.github/workflows/boot-image.yml
 
   # Media (docs/media.md): the media track's test apps, built against this
   # run's framework classes: .github/workflows/media.yml.
   media:
-    needs: [framework]
+    needs: [plan, framework]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'media') }}
     uses: ./.github/workflows/media.yml
 
   # The surfaces track's NDK test app (surfacegl.apk: EGL into a SurfaceView):
   # .github/workflows/surfaces.yml.
   surfaces:
-    needs: [source-identity]
+    needs: [plan, source-identity]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'surfaces') }}
     uses: ./.github/workflows/surfaces.yml
 
   # What is left of porting ART's x86-64 assembly to Windows; informational.
   asm-port:
-    needs: [source-identity]
+    needs: [plan, source-identity]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'asm-port') }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -1443,7 +1576,8 @@ jobs:
   # The Windows installer (tools/package/gesher.iss), installed and tried on a
   # clean runner: Hello through the installed `gesher` command, then uninstall.
   package:
-    needs: [build, framework, graphics, angle, boot-image, media, arm64]
+    needs: [plan, build, framework, graphics, angle, boot-image, media, arm64]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'package') }}
     runs-on: windows-2022
     env:
       GH_TOKEN: ${{ github.token }}
@@ -1482,6 +1616,7 @@ jobs:
           tests/windows/shell/ControlPanelPresentationChecks.ps1
           tests/windows/shell/ControlPanelRequestChecks.ps1
           tests/windows/shell/ControlPanelSpecialAccessChecks.ps1
+          tests/windows/shell/ControlPanelAccountsChecks.ps1
           tests/windows/shell/UpdateChecks.ps1
           tests/windows/shell/UpdateTransportChecks.ps1
           tests/windows/shell/ControlPanelUpdateChecks.ps1
@@ -1839,8 +1974,11 @@ jobs:
             throw "The installed gesher-app --system-server did not take lifecycle.apk to onResume (exit $code)"
           }
           'PASS  installer: gesher-app --system-server runs the app with the services in a system server process' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
-          # The .apk association: run the open command the installer registered,
-          # with %1 set to the bundled APK, as Explorer would.
+          # The .apk association (docs/installer.md, "Opening an APK from Explorer"): run the
+          # open command the installer registered, with %1 set to the APK, as Explorer would,
+          # and answer gesher-launch's confirmation and installed dialogs as a user would
+          # (tests/windows/shell/InstallConfirmDialog.ps1: the dialogs' control IDs, BM_CLICK).
+          . tests\windows\shell\InstallConfirmDialog.ps1
           $cls = 'HKCU:\Software\Classes'
           $progId = (Get-ItemProperty "$cls\.apk" -ErrorAction SilentlyContinue).'(default)'
           if ($progId -ne 'Gesher.Apk') { throw ".apk's default ProgID is '$progId', not Gesher.Apk" }
@@ -1848,20 +1986,146 @@ jobs:
           $open = (Get-ItemProperty "$cls\Gesher.Apk\shell\open\command").'(default)'
           Write-Host "Gesher.Apk open command: $open"
           if ($open -notmatch '^"([^"]+)"\s*(.*)$' -or $Matches[1] -ne "$app\gesher-launch.exe") { throw "Gesher.Apk's open command does not start gesher-launch.exe: $open" }
-          $psi = [Diagnostics.ProcessStartInfo]::new($Matches[1], $Matches[2].Replace('%1', "$app\lifecycle.apk"))
-          $psi.UseShellExecute = $false
-          $psi.RedirectStandardOutput = $true
-          $psi.RedirectStandardError = $true
-          $p = [Diagnostics.Process]::Start($psi)
-          $errors = $p.StandardError.ReadToEndAsync()
-          $out = $p.StandardOutput.ReadToEnd()
-          $p.WaitForExit()
-          $out += $errors.Result
-          Write-Host (($out -split "`n" | Select-Object -Last 5) -join "`n")
-          if ($p.ExitCode -ne 0 -or $out -notmatch 'gesher-app: done' -or $out -notmatch 'started the Gesher device') {
-            throw "The .apk open command did not take lifecycle.apk to onResume on the Gesher device (exit $($p.ExitCode))"
+          $openExe = $Matches[1]
+          $openArgs = $Matches[2]
+          # Starts the registered command for $file (its output read as it comes).
+          function Start-ApkOpen([string] $file) {
+            $psi = [Diagnostics.ProcessStartInfo]::new($openExe, $openArgs.Replace('%1', $file))
+            $psi.UseShellExecute = $false
+            $psi.RedirectStandardOutput = $true
+            $psi.RedirectStandardError = $true
+            $p = [Diagnostics.Process]::Start($psi)
+            return [pscustomobject]@{ Process = $p; Out = $p.StandardOutput.ReadToEndAsync(); Err = $p.StandardError.ReadToEndAsync() }
           }
-          'PASS  installer: .apk opens with gesher-app through the registered command' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          # Waits for it (15 minutes at most) and returns its output.
+          function Complete-ApkOpen($run, [string] $what) {
+            if (-not $run.Process.WaitForExit(900000)) { $run.Process.Kill($true); throw "$what did not end within 15 minutes" }
+            $run.Process.WaitForExit()
+            $text = $run.Out.Result + $run.Err.Result
+            Write-Host "$what (exit $($run.Process.ExitCode)):"
+            Write-Host (($text -split "`n" | Select-Object -Last 8) -join "`n")
+            return $text
+          }
+          function Test-LifecycleListed {
+            $list = & "$app\gesher-app.cmd" list 2>&1 | Out-String
+            return $list -match 'package:com\.gesher\.lifecycle '
+          }
+          $desktopLnk = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Gesher Lifecycle.lnk'
+          $lifecycleRecord = "$env:LOCALAPPDATA\Gesher\data\data\com.gesher.lifecycle\gesher-shell\shortcut.properties"
+          if (Test-Path $desktopLnk) { throw "$desktopLnk exists before any APK was opened" }
+          # The same version is installed (the runs above): no dialog, the installed package
+          # is launched as its Start menu shortcut launches it (and the device started).
+          $run = Start-ApkOpen "$app\lifecycle.apk"
+          $seen = @(Watch-GesherNoInstallDialog $run.Process 900)
+          $out = Complete-ApkOpen $run 'gesher-launch lifecycle.apk (the same version installed)'
+          if ($run.Process.ExitCode -ne 0 -or $out -notmatch 'gesher-app: done' -or $out -notmatch 'started the Gesher device' -or
+              $out -notmatch 'launching the installed package com\.gesher\.lifecycle' -or $out -match 'installed com\.gesher\.lifecycle') {
+            throw "The .apk open command did not launch the installed lifecycle.apk (the same version) on the Gesher device (exit $($run.Process.ExitCode))"
+          }
+          if ($seen.Count) { throw "Opening the installed version of lifecycle.apk showed a dialog: $($seen -join ', ')" }
+          'PASS  installer: opening an APK whose version is installed launches the installed package through the registered command, with no dialog' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          # Not installed: the confirmation dialog (the desktop shortcut box shown, unchecked).
+          # Cancel installs nothing (exit 1223, ERROR_CANCELLED).
+          $out = & "$app\gesher-app.cmd" uninstall com.gesher.lifecycle 2>&1 | Out-String
+          $code = $LASTEXITCODE
+          if ($code -ne 0 -or (Test-Path $lnk) -or (Test-LifecycleListed)) { Write-Host $out; throw "gesher-app uninstall com.gesher.lifecycle failed (exit $code)" }
+          $run = Start-ApkOpen "$app\lifecycle.apk"
+          $answer = Invoke-GesherInstallConfirm -ProcessId $run.Process.Id -Process $run.Process -Answer Cancel -ExpectDesktopBox $true
+          $out = Complete-ApkOpen $run 'gesher-launch lifecycle.apk, Cancel'
+          Write-Host "confirmation dialog: '$($answer.ConfirmTitle)'"
+          $problems = @($answer.Problems)
+          if ($run.Process.ExitCode -ne 1223) { $problems += "exit $($run.Process.ExitCode), not 1223" }
+          if ($out -match 'installed com\.gesher\.lifecycle' -or $out -match 'gesher-app: done') { $problems += 'it installed or ran the app' }
+          if (Test-LifecycleListed) { $problems += 'gesher-app list shows com.gesher.lifecycle' }
+          if ((Test-Path $lnk) -or (Test-Path $desktopLnk)) { $problems += 'a shortcut was made' }
+          if ($problems) { throw "Cancel in the confirmation dialog: $($problems -join '; ')" }
+          'PASS  installer: an APK opened from Explorer asks first (install_confirm_title; Install/Cancel, an unchecked desktop shortcut box); Cancel installs nothing (exit 1223)' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          # Install with the desktop shortcut box checked, then Done: installed, not launched;
+          # <Desktop>\<label>.lnk made like the Start menu's and recorded as desktop_link.
+          $stageParent = "$env:LOCALAPPDATA\Gesher\data\system"
+          $previousStages = @(Get-ChildItem -LiteralPath $stageParent -Directory -Filter 'gesher-install-*' | ForEach-Object FullName)
+          $expectedApkHash = (Get-FileHash -LiteralPath "$app\lifecycle.apk").Hash
+          $checkSnapshot = {
+            $stages = @(Get-ChildItem -LiteralPath $stageParent -Directory -Filter 'gesher-install-*' |
+              Where-Object FullName -NotIn $previousStages)
+            if ($stages.Count -ne 1) { throw "expected one installation snapshot, saw $($stages.Count)" }
+            $snapshot = Join-Path $stages[0].FullName 'payload\lifecycle.apk'
+            if ((Get-FileHash -LiteralPath $snapshot).Hash -ne $expectedApkHash) {
+              throw 'the confirmation snapshot differs from the selected APK'
+            }
+            try {
+              $stream = [IO.File]::Open($snapshot, 'Open', 'Write', 'ReadWrite')
+              $stream.Dispose()
+              throw 'the confirmation snapshot allowed write access'
+            } catch [IO.IOException] {
+              if (($_.Exception.HResult -band 0xffff) -ne 32) { throw }
+            }
+          }
+          $run = Start-ApkOpen "$app\lifecycle.apk"
+          $answer = Invoke-GesherInstallConfirm -ProcessId $run.Process.Id -Process $run.Process -Answer Install -DesktopShortcut -ExpectDesktopBox $true -Done Done -BeforeAnswer $checkSnapshot
+          $out = Complete-ApkOpen $run 'gesher-launch lifecycle.apk, Install with a desktop shortcut, Done'
+          Write-Host "installed dialog: '$($answer.DoneTitle)'"
+          $problems = @($answer.Problems)
+          if ($run.Process.ExitCode -ne 0) { $problems += "exit $($run.Process.ExitCode)" }
+          if ($out -notmatch 'installed com\.gesher\.lifecycle') { $problems += 'no "installed com.gesher.lifecycle" line' }
+          if ($out -match 'gesher-app: done' -or $out -match 'LifecycleActivity' -or $out -match 'launching the installed package') { $problems += 'the app was launched without Open' }
+          if (-not (Test-LifecycleListed)) { $problems += 'gesher-app list does not show com.gesher.lifecycle' }
+          $installed = @(Get-Content -LiteralPath (Join-Path $stageParent 'packages.list') |
+            Where-Object { $_.StartsWith("com.gesher.lifecycle`t") })
+          if ($installed.Count -ne 1) {
+            $problems += 'packages.list lacks a unique installed lifecycle package'
+          } else {
+            $codeDir = (($installed[0] -split "`t")[1] -split '[/\\]')[-1]
+            $installedApk = "$env:LOCALAPPDATA\Gesher\data\app\$codeDir\base.apk"
+            if ((Get-FileHash -LiteralPath $installedApk).Hash -ne $expectedApkHash) {
+              $problems += 'installed APK differs from the one shown for confirmation'
+            }
+          }
+          $remainingStages = @(Get-ChildItem -LiteralPath $stageParent -Directory -Filter 'gesher-install-*' |
+            Where-Object FullName -NotIn $previousStages)
+          if ($remainingStages.Count) { $problems += 'the launcher left an installation snapshot behind' }
+          if (-not (Test-Path $lnk)) { $problems += "no Start menu shortcut $lnk" }
+          if (-not (Test-Path $desktopLnk)) { $problems += "no desktop shortcut $desktopLnk" } else {
+            $desk = $wsh.CreateShortcut($desktopLnk)
+            if ($desk.TargetPath -ne "$app\gesher-launch.exe" -or $desk.Arguments -ne 'launch com.gesher.lifecycle') { $problems += "the desktop shortcut runs $($desk.TargetPath) $($desk.Arguments)" }
+            if ($desk.IconLocation -ne "$lifecycleIco,0") { $problems += "the desktop shortcut's icon is $($desk.IconLocation)" }
+            $deskAumid = Get-LinkAppUserModelId $desktopLnk
+            if ($deskAumid -ne 'Gesher.App.com.gesher.lifecycle') { $problems += "the desktop shortcut's AppUserModelID is $deskAumid" }
+          }
+          $recorded = Get-GesherShortcutRecordValue $lifecycleRecord 'desktop_link'
+          if ($recorded -ne $desktopLnk) { $problems += "shortcut.properties records desktop_link '$recorded'" }
+          if ($problems) { throw "Install (desktop shortcut) and Done in the dialogs: $($problems -join '; ')" }
+          'PASS  installer: Install in the confirmation dialog installs the APK and does not launch it; the checked box makes <Desktop>\Gesher Lifecycle.lnk (gesher-launch launch com.gesher.lifecycle, its icon and AppUserModelID), recorded as desktop_link; Done ends' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          $out = & "$app\gesher-app.cmd" uninstall com.gesher.lifecycle 2>&1 | Out-String
+          if ($LASTEXITCODE -ne 0 -or (Test-Path $desktopLnk) -or (Test-Path $lnk)) { Write-Host $out; throw "gesher-app uninstall left the desktop shortcut $desktopLnk or the Start menu shortcut (exit $LASTEXITCODE)" }
+          'PASS  installer: gesher-app uninstall removes the recorded desktop shortcut' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          # A desktop shortcut the user deleted stays deleted: a later install and
+          # sync-shortcuts keep the record and make no new one.
+          $out = & "$app\gesher-app.cmd" install "$app\lifecycle.apk" --desktop-shortcut 2>&1 | Out-String
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path $desktopLnk)) { Write-Host $out; throw "gesher-app install --desktop-shortcut made no $desktopLnk (exit $LASTEXITCODE)" }
+          Remove-Item -LiteralPath $desktopLnk -Force
+          $out = (& "$app\gesher-app.cmd" install "$app\lifecycle.apk" 2>&1 | Out-String) + (& "$app\gesher-app.cmd" sync-shortcuts 2>&1 | Out-String)
+          $problems = @()
+          if (Test-Path $desktopLnk) { $problems += 'the deleted desktop shortcut was made again' }
+          if ((Get-GesherShortcutRecordValue $lifecycleRecord 'desktop_link') -ne $desktopLnk) { $problems += 'shortcut.properties lost desktop_link' }
+          if ($problems) { Write-Host $out; throw "A deleted desktop shortcut: $($problems -join '; ')" }
+          $out = & "$app\gesher-app.cmd" uninstall com.gesher.lifecycle 2>&1 | Out-String
+          $code = $LASTEXITCODE
+          if ($code -ne 0 -or (Test-LifecycleListed)) { Write-Host $out; throw "gesher-app uninstall com.gesher.lifecycle failed (exit $code)" }
+          'PASS  installer: a desktop shortcut the user deleted is not made again by a later install or sync-shortcuts (desktop_link kept)' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          # Install (the box left unchecked), then Open: launched as the Start menu launches it.
+          $run = Start-ApkOpen "$app\lifecycle.apk"
+          $answer = Invoke-GesherInstallConfirm -ProcessId $run.Process.Id -Process $run.Process -Answer Install -ExpectDesktopBox $true -Done Open
+          $out = Complete-ApkOpen $run 'gesher-launch lifecycle.apk, Install, Open'
+          $problems = @($answer.Problems)
+          if ($run.Process.ExitCode -ne 0) { $problems += "exit $($run.Process.ExitCode)" }
+          foreach ($want in 'installed com\.gesher\.lifecycle', 'launching the installed package com\.gesher\.lifecycle', 'LifecycleActivity onResume', 'gesher-app: done') {
+            if ($out -notmatch $want) { $problems += "no '$want'" }
+          }
+          if (Test-Path $desktopLnk) { $problems += 'a desktop shortcut was made with the box unchecked' }
+          if ($null -ne (Get-GesherShortcutRecordValue $lifecycleRecord 'desktop_link')) { $problems += 'shortcut.properties records a desktop_link' }
+          if ($problems) { throw "Install and Open in the dialogs: $($problems -join '; ')" }
+          'PASS  installer: Install, then Open in the installed dialog, launches the app; no desktop shortcut with the box unchecked' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           $bundleExtensions = '.apks', '.xapk', '.apkm', '.apk+'
           foreach ($ext in $bundleExtensions) {
             if ((Get-ItemProperty "$cls\$ext").'(default)' -ne 'Gesher.Xapk') { throw "$ext default ProgID is missing" }
@@ -1871,24 +2135,86 @@ jobs:
           }
           $bundleOpen = (Get-ItemProperty "$cls\Gesher.Xapk\shell\open\command").'(default)'
           if ($bundleOpen -ne $open) { throw "Bundle open command differs from the APK command: $bundleOpen" }
+          # A bundle of a package that is not installed asks first (Install, Open); one of the
+          # installed version launches it directly.
           Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $out = & "$app\gesher-app.cmd" uninstall com.gesher.lifecycle 2>&1 | Out-String
+          if ($LASTEXITCODE -ne 0) { Write-Host $out; throw "gesher-app uninstall com.gesher.lifecycle failed (exit $LASTEXITCODE)" }
           foreach ($ext in '.apkm', '.apk+') {
             $bundle = Join-Path $env:RUNNER_TEMP "shell launch$ext"
             $archive = [IO.Compression.ZipFile]::Open($bundle, 'Create')
             try {
               $null = [IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, "$app\lifecycle.apk", 'base.apk')
             } finally { $archive.Dispose() }
-            $psi.Arguments = '"{0}"' -f $bundle
-            $p = [Diagnostics.Process]::Start($psi)
-            $errors = $p.StandardError.ReadToEndAsync()
-            $out = $p.StandardOutput.ReadToEnd()
-            $p.WaitForExit()
-            $out += $errors.Result
-            if ($p.ExitCode -ne 0 -or $out -notmatch 'gesher-app: done') {
-              throw "$ext open command failed (exit $($p.ExitCode)): $out"
+            $run = Start-ApkOpen $bundle
+            if ($ext -eq '.apkm') {
+              $problems = @((Invoke-GesherInstallConfirm -ProcessId $run.Process.Id -Process $run.Process -Answer Install -ExpectDesktopBox $true -Done Open).Problems)
+            } else {
+              $problems = @(Watch-GesherNoInstallDialog $run.Process 900 | ForEach-Object { "a dialog '$_' for the installed version" })
+            }
+            $out = Complete-ApkOpen $run "gesher-launch on a $ext bundle"
+            if ($run.Process.ExitCode -ne 0 -or $out -notmatch 'gesher-app: done' -or $out -notmatch 'launching the installed package com\.gesher\.lifecycle') {
+              $problems += "exit $($run.Process.ExitCode); the app was not launched"
+            }
+            if ($problems) { throw "$ext open command: $($problems -join '; ')" }
+          }
+          'PASS  installer: split bundle associations; the registered open command asks before installing an APKM bundle and launches an installed APK+ bundle''s package directly' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          # The actual host install service must fail before installing unconfirmed input.
+          $loose = Join-Path $env:RUNNER_TEMP 'confirmed loose splits'
+          New-Item -ItemType Directory -Path $loose | Out-Null
+          $fixtures = [IO.Compression.ZipFile]::OpenRead("$PWD/dist/split-package-fixtures.zip")
+          $looseInputs = [ordered]@{
+            'base-signed.apk' = 'base.apk'
+            'core-signed.apk' = 'split_feature.core.apk'
+            'entry-signed.apk' = 'split_feature.entry.apk'
+          }
+          try {
+            foreach ($fixture in $looseInputs.Keys) {
+              [IO.Compression.ZipFileExtensions]::ExtractToFile($fixtures.GetEntry($fixture),
+                (Join-Path $loose $looseInputs[$fixture]))
+            }
+          } finally { $fixtures.Dispose() }
+          $dm = [IO.Compression.ZipFile]::Open((Join-Path $loose 'base.dm'), 'Create')
+          try {
+            $profile = $dm.CreateEntry('primary.prof').Open()
+            try { $profile.WriteByte(0) } finally { $profile.Dispose() }
+          } finally { $dm.Dispose() }
+          $baseApk = Join-Path $loose 'base.apk'
+          $splitPackage = 'com.gesher.splitcontract'
+          $wrong = & "$app\gesher-app.cmd" install $baseApk --confirmed $splitPackage 1 ('0' * 64) 2>&1 | Out-String
+          if ($LASTEXITCODE -eq 0 -or $wrong -notmatch 'files differ from the confirmed installation') {
+            throw "host service did not reject an incorrect confirmation digest: $wrong"
+          }
+          $registry = Join-Path $stageParent 'packages.list'
+          if (Select-String -LiteralPath $registry -Pattern '^com\.gesher\.splitcontract\t' -Quiet) {
+            throw 'a mismatched digest published an installed package'
+          }
+          $expectedHashes = @{}
+          foreach ($name in @($looseInputs.Values) + 'base.dm') {
+            $expectedHashes[$name] = (Get-FileHash -LiteralPath (Join-Path $loose $name)).Hash
+          }
+          $run = Start-ApkOpen $baseApk
+          $answer = Invoke-GesherInstallConfirm -ProcessId $run.Process.Id -Process $run.Process -Answer Install -Done Done -BeforeAnswer {
+            # These are disposable runner fixtures. The install should use the already
+            # confirmed snapshot even when the original input is no longer at its path.
+            Move-Item -LiteralPath $baseApk -Destination (Join-Path $loose 'original-base.saved') -ErrorAction Stop
+          }
+          $out = Complete-ApkOpen $run 'gesher-launch with loose splits and dex metadata'
+          if ($run.Process.ExitCode -ne 0 -or $answer.Problems.Count) {
+            throw "confirmed loose APK install failed: $out $($answer.Problems -join '; ')"
+          }
+          $row = @(Get-Content -LiteralPath $registry | Where-Object { $_.StartsWith("$splitPackage`t") })
+          if ($row.Count -ne 1) { throw 'confirmed loose APK did not publish an installed package' }
+          $codeDir = (($row[0] -split "`t")[1] -split '[/\\]')[-1]
+          $installedDir = "$env:LOCALAPPDATA\Gesher\data\app\$codeDir"
+          foreach ($name in @($looseInputs.Values) + 'base.dm') {
+            if ((Get-FileHash -LiteralPath (Join-Path $installedDir $name)).Hash -ne $expectedHashes[$name]) {
+              throw "confirmed loose APK install did not preserve $name"
             }
           }
-          'PASS  installer: split bundle associations and registered APKM/APK+ open commands' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          & "$app\gesher-app.cmd" uninstall $splitPackage
+          if ($LASTEXITCODE -ne 0) { throw 'could not uninstall the loose split fixture' }
+          'PASS  installer: confirmation rejects a mismatched digest and preserves loose APKs, splits and dex metadata' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           # Gesher's toast activator (ADR 0051): a local server running gesher-app toast-activated.
           $activator = (Get-ItemProperty "$cls\CLSID\{C18D9445-A7F0-472E-985F-AC354EBEB660}\LocalServer32" -ErrorAction SilentlyContinue).'(default)'
           Write-Host "toast activator: $activator"
@@ -1933,7 +2259,7 @@ jobs:
           # The device outlives the console that started it.
           $running = DevicePids
           if ($running.Count -ne 3) { throw "The Gesher device did not outlive the .apk open command's console: $running" }
-          'PASS  installer: the Gesher device started by a double-click keeps running after its console is gone' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          'PASS  installer: the Gesher device started by opening an APK from Explorer keeps running after its console is gone' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           # An app's window on the device (docs/graphics.md, ADR 0029): the
           # installed gesher-app launches uiapp.apk with a hidden window; the
           # app process the system server starts draws its UI into a Win32
@@ -2218,6 +2544,16 @@ jobs:
           Set-Content $sentinel 'not Gesher''s'
           # An app id as the system server registers one for an app's toasts (ADR 0038), which uninstalling must remove.
           $null = New-Item 'HKCU:\Software\Classes\AppUserModelId\Gesher.App.com.gesher.ci' -Force
+          # A recorded desktop shortcut, which uninstalling Gesher must remove ([Code]
+          # RemoveDesktopLinks), next to a user's own shortcut, which it must keep.
+          $desktop = [Environment]::GetFolderPath('Desktop')
+          $uninstallDesktopLnk = Join-Path $desktop 'Gesher Lifecycle.lnk'
+          $out = & "$app\gesher-app.cmd" install "$app\lifecycle.apk" --desktop-shortcut 2>&1 | Out-String
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path $uninstallDesktopLnk)) { Write-Host $out; throw "gesher-app install --desktop-shortcut made no $uninstallDesktopLnk before uninstalling Gesher (exit $LASTEXITCODE)" }
+          $desktopSentinel = Join-Path $desktop 'gesher-ci-user-shortcut.lnk'
+          $userLink = (New-Object -ComObject WScript.Shell).CreateShortcut($desktopSentinel)
+          $userLink.TargetPath = "$env:SystemRoot\notepad.exe"
+          $userLink.Save()
           Start-Process "$app\unins000.exe" -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES' -Wait
           # The uninstaller hands over to a copy of itself and returns at once.
           for ($i = 0; $i -lt 60 -and (Test-Path "$app\unins000.exe"); $i++) { Start-Sleep 1 }
@@ -2225,6 +2561,10 @@ jobs:
           if ($left) { throw "Uninstall left the Gesher device's processes running: $left" }
           if (Test-Path "$env:LOCALAPPDATA\Gesher") { throw "Uninstall left $env:LOCALAPPDATA\Gesher" }
           'PASS  installer: uninstall stops the Gesher device and removes its data' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          if (Test-Path $uninstallDesktopLnk) { throw "Uninstall left the recorded desktop shortcut $uninstallDesktopLnk" }
+          if (-not (Test-Path $desktopSentinel)) { throw "Uninstall removed the user's desktop shortcut $desktopSentinel" }
+          Remove-Item $desktopSentinel
+          'PASS  installer: uninstall removes the apps'' recorded desktop shortcuts and keeps the user''s own' | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
           if ($userPath -split ';' -contains $app) { throw 'Uninstall left Gesher on PATH' }
           if (Test-Path "$app\dalvikvm.exe") { throw 'Uninstall left dalvikvm.exe' }
@@ -2264,9 +2604,9 @@ jobs:
   # (tests/e2e/apps.json, pinned by SHA-256), each in an off-desktop window that is
   # read back, given input and closed: tests/e2e/run-e2e.ps1.
   e2e:
-    needs: [package]
+    needs: [plan, package]
     # The package job uploads the installer before its own checks.
-    if: ${{ !cancelled() && needs.package.result != 'skipped' }}
+    if: ${{ !cancelled() && needs.package.result != 'skipped' && needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'e2e') }}
     strategy:
       fail-fast: false
       matrix:
@@ -2283,6 +2623,7 @@ jobs:
             tools/ci
             tools/surface
             tests/windows/graphics
+            tests/windows/shell
 
       - name: Verify and assemble gesher-setup artifact
         shell: pwsh
@@ -2366,7 +2707,8 @@ jobs:
   # (20 API requests each) with one bundle receipt per shard (7 requests).
   # The repository's GITHUB_TOKEN quota is shared by every concurrent run.
   core-suppliers:
-    needs: [build, framework, native-libs, libs, graphics, angle, boot-image, webview, exec, media, posix, arm64, surfaces, native2]
+    needs: [plan, build, framework, native-libs, libs, graphics, angle, boot-image, webview, exec, media, posix, arm64, surfaces, native2]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'core-suppliers') }}
     runs-on: ubuntu-24.04
     # Room for a reachable wait on the shared hourly API quota.
     timeout-minutes: 90
@@ -2392,12 +2734,13 @@ jobs:
 
   test-shards:
     name: test-${{ matrix.shard }} (${{ matrix.os }})
-    needs: [core-suppliers, build, framework, native-libs, libs, graphics, angle, boot-image, webview, exec, media, posix, arm64, surfaces, native2, supplier-correlation]
+    needs: [plan, core-suppliers, build, framework, native-libs, libs, graphics, angle, boot-image, webview, exec, media, posix, arm64, surfaces, native2, supplier-correlation]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'test-shards') }}
     strategy:
       fail-fast: false
       matrix:
         os: [windows-2022, windows-2025]
-        shard: [native, desktop, windowing, services, contracts, media, compilation]
+        shard: ${{ fromJSON(needs.plan.outputs.shards != '[]' && needs.plan.outputs.shards || '["native"]') }}
     runs-on: ${{ matrix.os }}
     # A hung app or check fails the job instead of running for six hours.
     timeout-minutes: 120
@@ -2665,8 +3008,8 @@ jobs:
 
   test:
     name: test (${{ matrix.os }})
-    needs: [test-shards]
-    if: always()
+    needs: [plan, test-shards]
+    if: ${{ always() && needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'test') }}
     strategy:
       fail-fast: false
       matrix:
@@ -2681,7 +3024,8 @@ jobs:
   # Extra isolated jobs execute the real regression in the SAME canonical
   # full. Only these jobs download the separately named hook artifact.
   web3-query-regression:
-    needs: [build, framework, native-libs, graphics, angle, boot-image, webview, exec, media, arm64]
+    needs: [plan, build, framework, native-libs, graphics, angle, boot-image, webview, exec, media, arm64]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'web3-query-regression') }}
     strategy:
       fail-fast: false
       matrix:
@@ -2745,11 +3089,13 @@ jobs:
   # Ordinary Binder scope is mandatory and separate from production installer
   # payload and query-hook runtime. No raw/public-prefix transport-loss gate.
   binder2-sg-fixtures:
-    needs: [source-identity]
+    needs: [plan, source-identity]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'binder2-sg-fixtures') }}
     uses: ./.github/workflows/binder2-sg-full-fixtures.yml
 
   binder2-sg-regression:
-    needs: [build, framework, arm64, boot-image, binder2-sg-fixtures]
+    needs: [plan, build, framework, arm64, boot-image, binder2-sg-fixtures]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'binder2-sg-regression') }}
     strategy:
       fail-fast: false
       matrix:
@@ -2807,7 +3153,8 @@ jobs:
 
   # Current selected TCP role; historical canonical red remains separately preserved.
   compile:
-    needs: [source-identity]
+    needs: [plan, source-identity]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'compile') }}
     name: compile-${{ matrix.supplier }}
     strategy:
       fail-fast: false
@@ -2952,7 +3299,8 @@ jobs:
           if-no-files-found: error
           retention-days: 14
   linux-reference:
-    needs: [source-identity]
+    needs: [plan, source-identity]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'linux-reference') }}
     env:
       GH_TOKEN: ${{ github.token }}
       TCP_EVIDENCE_SCOPE: ${{ github.repository == 'gesher-runtime/gesher' && 'canonical' || 'fork-diagnostic' }}
@@ -2977,7 +3325,8 @@ jobs:
           g++ -std=c++20 -Wall -Wextra -Werror -pthread tests/net-tcp-priority/contract.cc -o /tmp/tcp-priority-reference
           timeout 20 /tmp/tcp-priority-reference
   supplier-correlation:
-    needs: [source-identity, build, compile]
+    needs: [plan, source-identity, build, compile]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'supplier-correlation') }}
     runs-on: ubuntu-24.04
     # +61 minutes: a quota-exhausted GitHub read may wait up to 61 minutes for the
     # published hourly reset instead of failing the job.
@@ -3014,7 +3363,8 @@ jobs:
           if [[ "$TCP_EVIDENCE_SCOPE" == fork-diagnostic ]]; then args+=(--fork-diagnostic); fi
           python3 tools/toolchain/coherent_supplier_correlation.py "${args[@]}"
   windows:
-    needs: [source-identity, compile, linux-reference, supplier-correlation]
+    needs: [plan, source-identity, compile, linux-reference, supplier-correlation]
+    if: ${{ needs.plan.result == 'success' && contains(fromJSON(needs.plan.outputs.selected || '[]'), 'windows') }}
     strategy:
       fail-fast: false
       matrix:
@@ -3057,10 +3407,31 @@ jobs:
   ci-required:
     name: ci-required
     if: always()
-    needs: [source-identity, automerge-script, network-cost-client, windows-host-contracts, api37-report-tests, union-tsf, union-services, union-native-blocking, artifact-preflight, build-framework-assets, build, native3-locks-reference, native3-locks-regression, framework, native-libs, bluetooth, exec, libs, arm64, native2, posix, graphics, angle, webview, boot-image, media, surfaces, asm-port, package, e2e, core-suppliers, test-shards, test, web3-query-regression, binder2-sg-fixtures, binder2-sg-regression, compile, linux-reference, supplier-correlation, windows]
+    needs: [plan, source-identity, automerge-script, network-cost-client, windows-host-contracts, api37-report-tests, union-tsf, union-services, union-native-blocking, artifact-preflight, build-framework-assets, build, native3-locks-reference, native3-locks-regression, framework, native-libs, bluetooth, exec, libs, arm64, native2, posix, graphics, angle, webview, boot-image, media, surfaces, asm-port, package, e2e, core-suppliers, test-shards, test, web3-query-regression, binder2-sg-fixtures, binder2-sg-regression, compile, linux-reference, supplier-correlation, windows]
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
-      - name: Require every production CI job
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          sparse-checkout: |
+            .github/workflows
+            tools/ci
+            tests/windows/test-shards.json
+      - name: Require successful selected jobs and intentional skips
+        env:
+          SELECTED: ${{ needs.plan.outputs.selected }}
+          SHARDS: ${{ needs.plan.outputs.shards }}
+          PREFLIGHT_GROUPS: ${{ needs.plan.outputs.preflight_groups }}
+          GH_TOKEN: ${{ github.token }}
+          JOB_RESULTS: ${{ toJSON(needs) }}
+        run: |
+          python3 -m pip install PyYAML==6.0.3
+          python3 tools/ci/select_pr_jobs.py verify --workflow ci
+      # Keep the full-run verdict in the workflow definition used by the release publisher.
+      - name: Require every job on push or manual runs
+        if: github.event_name != 'pull_request'
         env:
           JOB_RESULTS: ${{ toJSON(needs) }}
         run: |

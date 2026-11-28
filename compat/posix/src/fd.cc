@@ -33,6 +33,7 @@
 #include "native_fence_internal.h"
 #include "revocable_internal.h"
 #include "pipe_io.h"
+#include "netlink_internal.h"
 #include "poll_scratch.h"
 #include "record_lock_descriptors.h"
 #include "socket_internal.h"
@@ -165,6 +166,23 @@ int RegisterSocket(const SocketFd& state) {
     }
     registered.description->native_nonblocking_datagram = datagram != 0;
   }
+  Insert(fd, registered);
+  return fd;
+}
+
+int RegisterNetlinkSocket(bool nonblocking, int sock_type) {
+  record_locks::DescriptorGuard descriptor_guard;
+  auto netlink = CreateNetlinkState(sock_type, nonblocking);
+  if (!netlink) return -1;
+  int fd = ReserveFd();
+  if (fd < 0) return -1;
+  SocketFd registered;
+  registered.socket = ws::kInvalidSocket;
+  registered.initial_nonblocking = nonblocking;
+  registered.description = std::make_shared<ws::SocketDescription>();
+  registered.description->nonblocking.store(nonblocking);
+  registered.description->netlink = std::move(netlink);
+  registered.description->netlink_poll = &gesher::NetlinkPoll;
   Insert(fd, registered);
   return fd;
 }

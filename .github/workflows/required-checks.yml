@@ -1,0 +1,64 @@
+name: bot required checks
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, edited, ready_for_review]
+  workflow_run:
+    workflows: [ci, arm64-windows]
+    types: [requested, in_progress, completed]
+  schedule:
+    - cron: '17,37,57 * * * *'
+  workflow_dispatch:
+    inputs:
+      pull_request_number:
+        description: 'Republish real CI results for one PR; empty for all open PRs (never merges)'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+# Serialize all bridge publications, including fork runs with no PR metadata.
+concurrency:
+  group: gesher-bot-required-checks
+  queue: max
+
+jobs:
+  publish:
+    if: vars.GESHER_APP_REQUIRED_CHECKS == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+      - name: Resolve repository name
+        id: repo
+        shell: bash
+        run: echo "name=${GITHUB_REPOSITORY#*/}" >> "$GITHUB_OUTPUT"
+      - name: Create bot reporting token
+        id: bot
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ vars.GESHER_BOT_APP_ID }}
+          private-key: ${{ secrets.GESHER_BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ steps.repo.outputs.name }}
+          permission-actions: read
+          permission-checks: read
+          permission-pull-requests: read
+          permission-statuses: write
+      - name: Publish verified CI results as the bot
+        uses: actions/github-script@v7
+        env:
+          APP_ID: ${{ vars.GESHER_BOT_APP_ID }}
+          INSTALLATION_ID: ${{ steps.bot.outputs.installation-id }}
+          APP_SLUG: ${{ steps.bot.outputs.app-slug }}
+        with:
+          github-token: ${{ steps.bot.outputs.token }}
+          script: |
+            const publish = require('./.github/scripts/app-required-checks.js');
+            await publish({github, context, core, appId: Number(process.env.APP_ID),
+              installationId: Number(process.env.INSTALLATION_ID), appSlug: process.env.APP_SLUG});

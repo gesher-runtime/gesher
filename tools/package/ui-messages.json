@@ -8,6 +8,38 @@
     }
   },
   "messages": {
+    "device_admin_app_explanation": {
+      "en": "Information supplied by the app:",
+      "he": "מידע שנמסר על ידי האפליקציה:"
+    },
+    "device_admin_title": {
+      "en": "Device administration",
+      "he": "ניהול מכשיר"
+    },
+    "cp_admin_revoke": {
+      "en": "Revoke device administrator access",
+      "he": "ביטול הרשאת מנהל מכשיר"
+    },
+    "cp_admin_failed": {
+      "en": "Could not read or revoke device administrator access. Try again.",
+      "he": "לא ניתן לקרוא או לבטל את הרשאת מנהל המכשיר. נסה שוב."
+    },
+    "device_admin_activate": {
+      "en": "Activate",
+      "he": "הפעלה"
+    },
+    "device_admin_cancel": {
+      "en": "Cancel",
+      "he": "ביטול"
+    },
+    "device_admin_lock": {
+      "en": "This app will be allowed to lock your Windows session. Sign in to Windows to unlock it. Activate only if you trust this app.",
+      "he": "האפליקציה תוכל לנעול את ההפעלה שלך ב־Windows. כדי לבטל את הנעילה יש להיכנס שוב ל־Windows. יש לאשר רק אם האפליקציה מהימנה בעיניך."
+    },
+    "device_admin_unsupported": {
+      "en": "This app requests device administration policies that Gesher cannot enforce on this PC. Administration will not be activated.",
+      "he": "האפליקציה מבקשת סמכויות ניהול שגשר אינו יכול לאכוף במחשב הזה. הרשאת הניהול לא תופעל."
+    },
     "intent_chooser_title": {
       "en": "Gesher — choose an app",
       "he": "גשר — בחירת יישום"
@@ -816,6 +848,22 @@
       "en": "Ready",
       "he": "מוכן"
     },
+    "cp_btn_sponsor": {
+      "en": "Say thanks & support",
+      "he": "אומרים תודה ותומכים"
+    },
+    "cp_sponsor_title": {
+      "en": "Enjoying Gesher?",
+      "he": "נהנים מגשר?"
+    },
+    "cp_sponsor_description": {
+      "en": "Your support is a way to say thanks for Gesher and help me keep building and improving it.",
+      "he": "התמיכה שלכם היא דרך לומר תודה על גשר ולעזור לי להמשיך לפתח ולשפר אותו."
+    },
+    "cp_sponsor_open_failed": {
+      "en": "Could not open the sponsorship page: ⁨{0}⁩",
+      "he": "לא ניתן לפתוח את עמוד התמיכה: ⁨{0}⁩"
+    },
     "cp_btn_open_logs": {
       "en": "Open logs location",
       "he": "פתח את מיקום הלוגים"
@@ -1123,6 +1171,114 @@
     "cp_camera_image_picker_failed": {
       "en": "Could not save the camera setting: {0}",
       "he": "שמירת הגדרת המצלמה נכשלה: {0}"
+    },
+    "install_confirm_title": {
+      "en": "Install Android app",
+      "he": "התקנת יישום Android"
+    },
+    "install_confirm_question": {
+      "en": "Do you want to install this app?",
+      "he": "האם להתקין את היישום הזה?"
+    },
+    "update_confirm_question": {
+      "en": "This app is already installed. Do you want to update it?",
+      "he": "היישום הזה כבר מותקן. האם לעדכן אותו?"
+    },
+    "install_version": {
+      "en": "Version {0}",
+      "he": "גרסה {0}"
+    },
+    "install_button": {
+      "en": "Install",
+      "he": "התקנה"
+    },
+    "update_button": {
+      "en": "Update",
+      "he": "עדכון"
+    },
+    "install_desktop_shortcut": {
+      "en": "Create a desktop shortcut",
+      "he": "יצירת קיצור דרך בשולחן העבודה"
+    },
+    "install_unreadable": {
+      "en": "{0} cannot be installed: it is not an Android app that Gesher can read.",
+      "he": "לא ניתן להתקין את {0}: זה לא יישום Android שגשר יכול לקרוא."
+    },
+    "install_desktop_failed": {
+      "en": "The desktop shortcut was not created.",
+      "he": "קיצור הדרך בשולחן העבודה לא נוצר."
+    },
+    "install_reading": {
+      "en": "Reading…",
+      "he": "קורא…"
+    },
+    "install_installing": {
+      "en": "Installing {0}…",
+      "he": "מתקין את {0}…"
+    },
+    "install_done_title": {
+      "en": "Installation complete",
+      "he": "ההתקנה הושלמה"
+    },
+    "install_done_text": {
+      "en": "{0} was installed.",
+      "he": "{0} הותקן."
+    },
+    "update_done_text": {
+      "en": "{0} was updated.",
+      "he": "{0} עודכן."
+    },
+    "install_open_button": {
+      "en": "Open",
+      "he": "פתיחה"
+    },
+    "install_done_button": {
+      "en": "Done",
+      "he": "סיום"
+    },
+    "account_not_found": {
+      "en": "Account not found: {0}",
+      "he": "החשבון לא נמצא: {0}"
+    },
+    "cp_btn_manage_accounts": {
+      "en": "Manage Accounts",
+      "he": "ניהול חשבונות"
+    },
+    "cp_accounts_title": {
+      "en": "Accounts",
+      "he": "חשבונות"
+    },
+    "cp_accounts_desc": {
+      "en": "Remove a saved account from this Gesher device.",
+      "he": "הסרת חשבון שמור מסביבת גשר זו."
+    },
+    "cp_accounts_loading": {
+      "en": "Loading accounts...",
+      "he": "טוען חשבונות..."
+    },
+    "cp_accounts_empty": {
+      "en": "No accounts are currently signed in.",
+      "he": "אין כרגע חשבונות מחוברים."
+    },
+    "cp_accounts_error": {
+      "en": "Could not load accounts. Make sure the Gesher device can start and try again.",
+      "he": "לא ניתן לטעון את החשבונות. ודא שסביבת גשר פעילה ונסה שוב."
+    },
+    "cp_btn_remove_account": {
+      "en": "Remove",
+      "he": "הסר"
+    },
+    "cp_remove_account_title": {
+      "en": "Remove Account",
+      "he": "הסרת חשבון"
+    },
+    "cp_remove_account_confirm": {
+      "en": "Remove account {0} ({1}) from Gesher? Apps using this account will be signed out.",
+      "he": "להסיר את החשבון {0} ({1}) מגשר? אפליקציות המשתמשות בחשבון זה יתנתקו ממנו."
+    },
+    "cp_remove_account_failed": {
+      "en": "Could not remove account {0}.",
+      "he": "לא ניתן להסיר את החשבון {0}."
     }
   }
 }
